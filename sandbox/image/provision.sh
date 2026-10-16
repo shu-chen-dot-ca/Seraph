@@ -139,6 +139,10 @@ EOF
 # The desktop user may use Docker without sudo.
 usermod -aG docker "$desktop_user"
 
+# The desktop's network is run by NetworkManager. systemd-networkd manages no
+# link, so its wait-online job only holds up every boot for its 2 minute timeout.
+systemctl mask systemd-networkd-wait-online.service
+
 # --- Desktop: X11, logs in by itself, never locks ----------------------------
 
 cat > /etc/gdm3/custom.conf <<EOF
@@ -229,12 +233,16 @@ EOF
 # --- Warm the download caches for common project packages --------------------
 
 # Repos still install their own pinned versions; these just make the first
-# install in a session faster. Run as the desktop user so the caches are theirs.
-sudo -u "$desktop_user" -H npm cache add \
-    react react-dom next vite @vitejs/plugin-react typescript tailwindcss \
-    @tailwindcss/vite eslint express
-sudo -u "$desktop_user" -H uv pip install --target /tmp/uv-warm \
-    fastapi "uvicorn[standard]" pydantic sqlalchemy httpx flask django
+# install in a session faster. Run as the desktop user so the caches are theirs,
+# from their home: uv looks for a uv.toml in the current folder, and they can't read /root.
+(
+    cd "$desktop_home"
+    sudo -u "$desktop_user" -H npm cache add \
+        react react-dom next vite @vitejs/plugin-react typescript tailwindcss \
+        @tailwindcss/vite eslint express
+    sudo -u "$desktop_user" -H uv pip install --target /tmp/uv-warm \
+        fastapi "uvicorn[standard]" pydantic sqlalchemy httpx flask django
+)
 rm -rf /tmp/uv-warm
 
 # --- Clean up before publishing ---------------------------------------------

@@ -1,4 +1,4 @@
-import { AlertIcon, ArchiveIcon, ChevronLeftIcon, ChevronRightIcon, CheckIcon, FileDirectoryFillIcon, FileIcon, CodeIcon, GitBranchIcon, GitCommitIcon, LinkExternalIcon, PaperAirplaneIcon, SquareFillIcon, PlusCircleIcon, XIcon, HistoryIcon, IssueOpenedIcon, LawIcon, LinkIcon, RepoForkedIcon, SearchIcon, StarIcon } from "@primer/octicons-react";
+import { AlertIcon, ArchiveIcon, ChevronLeftIcon, ChevronRightIcon, CheckIcon, FileDirectoryFillIcon, FileIcon, CodeIcon, GitBranchIcon, GitCommitIcon, LinkExternalIcon, PaperAirplaneIcon, SquareFillIcon, PlusCircleIcon, TrashIcon, XIcon, HistoryIcon, IssueOpenedIcon, LawIcon, LinkIcon, RepoForkedIcon, SearchIcon, StarIcon } from "@primer/octicons-react";
 import { StrictMode, useEffect, useRef, useState, type MouseEvent } from "react";
 import { createRoot } from "react-dom/client";
 import Markdown from "react-markdown";
@@ -23,6 +23,33 @@ interface Repo {
   archived: boolean;
   fork: boolean;
   default_branch: string;
+}
+
+// One VM session from GET /api/vm/sessions: its record plus the VM's live state.
+interface VmSession {
+  id: string;
+  name: string;
+  repo: string;
+  vm: string;
+  cpus: number;
+  memory_gb: number;
+  disk_gb: number;
+  status: string; // creating, running, stopped, failed, missing
+  created_at: string;
+  on: boolean;
+  cpu_percent: number | null;
+  memory_used_gb: number | null;
+}
+
+// What the create dialog may offer, from GET /api/vm/options (set in .env).
+interface VmOptions {
+  cpus: number[];
+  cpus_default: number;
+  memory_gb: number[];
+  memory_gb_default: number;
+  disk_gb: number[];
+  disk_gb_default: number;
+  count_max: number;
 }
 
 interface Entry {
@@ -195,7 +222,166 @@ function App() {
   const [pageInput, setPageInput] = useState("1");
   const [result, setResult] = useState<SearchResult | null>(null);
   const [view, setView] = useState<"search" | "session">("session");
+  const [leftTab, setLeftTab] = useState<"explore" | "vm">("explore");
   const [leftView, setLeftView] = useState<"chat" | "query">("chat");
+  const [vmView, setVmView] = useState<"sessions" | "settings">("sessions");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [newRepoUrl, setNewRepoUrl] = useState("");
+  const [newVmName, setNewVmName] = useState("");
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [createBusy, setCreateBusy] = useState(false);
+  const [vmSessions, setVmSessions] = useState<VmSession[]>([]);
+  const [vmSessionsLoaded, setVmSessionsLoaded] = useState(false);
+  const [deletingIds, setDeletingIds] = useState<string[]>([]);
+  // The session whose desktop the right panel shows, and the noVNC page for it.
+  const [selectedVmId, setSelectedVmId] = useState<string | null>(null);
+  const [viewerUrl, setViewerUrl] = useState<string | null>(null);
+  const [viewerError, setViewerError] = useState<string | null>(null);
+  const selectedVm = vmSessions.find((session) => session.id === selectedVmId) ?? null;
+  const selectedVmReady = selectedVm !== null && selectedVm.on && selectedVm.status === "running";
+  const [deleteErrors, setDeleteErrors] = useState<Record<string, string>>({});
+
+  async function deleteVmSession(session: VmSession) {
+    if (!window.confirm(`Delete ${session.name}? Its VM and everything in it are removed.`)) {
+      return;
+    }
+    setDeletingIds((current) => [...current, session.id]);
+    setDeleteErrors((current) => ({ ...current, [session.id]: "" }));
+    try {
+      const response = await fetch(`/api/vm/sessions/${session.id}`, { method: "DELETE" });
+      if (response.ok) {
+        setVmSessions((current) => current.filter((item) => item.id !== session.id));
+        if (selectedVmId === session.id) {
+          setSelectedVmId(null);
+        }
+      } else {
+        const body = await response.json();
+        setDeleteErrors((current) => ({ ...current, [session.id]: body.detail ?? "Could not delete the session." }));
+      }
+    } catch {
+      setDeleteErrors((current) => ({ ...current, [session.id]: "Could not reach the backend." }));
+    } finally {
+      setDeletingIds((current) => current.filter((id) => id !== session.id));
+    }
+  }
+  const [vmOptions, setVmOptions] = useState<VmOptions | null>(null);
+  const [newCpus, setNewCpus] = useState(0);
+  const [newMemoryGb, setNewMemoryGb] = useState(0);
+  const [newDiskGb, setNewDiskGb] = useState(0);
+  const [newCount, setNewCount] = useState(1);
+
+  // Open the dialog with the defaults from .env.
+  async function openCreate() {
+    setCreateOpen(true);
+    setCreateError(null);
+    try {
+      const response = await fetch("/api/vm/options");
+      const options: VmOptions = await response.json();
+      setVmOptions(options);
+      setNewCpus(options.cpus_default);
+      setNewMemoryGb(options.memory_gb_default);
+      setNewDiskGb(options.disk_gb_default);
+      setNewCount(1);
+    } catch {
+      setCreateError("Could not reach the backend.");
+    }
+  }
+
+  function closeCreate() {
+    setCreateOpen(false);
+    setNewRepoUrl("");
+    setNewVmName("");
+    setCreateError(null);
+  }
+
+  // The backend starts creating and answers right away; the list below shows the progress.
+  async function createVmSession() {
+    setCreateBusy(true);
+    setCreateError(null);
+    try {
+      const response = await fetch("/api/vm/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repo: newRepoUrl, name: newVmName, cpus: newCpus, memory_gb: newMemoryGb, disk_gb: newDiskGb, count: newCount }),
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        setCreateError(body.detail ?? "Could not create the session.");
+        return;
+      }
+      const created: VmSession[] = body.map((session: VmSession) => ({ ...session, on: false, cpu_percent: null, memory_used_gb: null }));
+      setVmSessions((current) => [...current, ...created]);
+      closeCreate();
+    } catch {
+      setCreateError("Could not reach the backend.");
+    } finally {
+      setCreateBusy(false);
+    }
+  }
+
+  // Ask for the viewer page once the selected VM is on and set up; drop it when it goes off.
+  useEffect(() => {
+    if (selectedVmId === null || !selectedVmReady) {
+      setViewerUrl(null);
+      setViewerError(null);
+      return;
+    }
+    let stopped = false;
+    async function loadViewer() {
+      try {
+        const response = await fetch(`/api/vm/sessions/${selectedVmId}/viewer`);
+        const body = await response.json();
+        if (stopped) {
+          return;
+        }
+        if (response.ok) {
+          setViewerUrl(body.url);
+          setViewerError(null);
+        } else {
+          setViewerError(body.detail ?? "Could not open the desktop.");
+        }
+      } catch {
+        if (!stopped) {
+          setViewerError("Could not reach the backend.");
+        }
+      }
+    }
+    loadViewer();
+    return () => {
+      stopped = true;
+    };
+  }, [selectedVmId, selectedVmReady]);
+
+  // While the VM Sessions tab is open, ask for the latest list about every second.
+  // The next request starts only after the last one finished, so requests never pile up,
+  // and a failed request keeps the list we have instead of emptying it.
+  useEffect(() => {
+    if (leftTab !== "vm") {
+      return;
+    }
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    async function loadVmSessions() {
+      try {
+        const response = await fetch("/api/vm/sessions");
+        if (response.ok && !stopped) {
+          setVmSessions(await response.json());
+          setVmSessionsLoaded(true);
+        }
+      } catch {
+        // The backend is restarting; the next round tries again.
+      }
+      if (!stopped) {
+        timer = setTimeout(loadVmSessions, 1000);
+      }
+    }
+    loadVmSessions();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [leftTab]);
+  const chatShown = leftTab === "explore" && leftView === "chat";
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
   const resultsScroll = useRef<HTMLDivElement>(null);
@@ -406,7 +592,7 @@ function App() {
     function onKeyDown(event: KeyboardEvent) {
       if (event.ctrlKey && event.altKey && event.code === "KeyB") {
         event.preventDefault();
-        if (preview !== null) {
+        if (leftTab === "explore" && preview !== null) {
           setRightOpen(!rightOpen);
         }
         return;
@@ -487,10 +673,10 @@ function App() {
   if (!leftOpen) {
     layoutClass += " layout-folded";
   }
-  if (preview !== null && rightOpen) {
+  if (leftTab === "explore" && preview !== null && rightOpen) {
     layoutClass += " layout-right";
   }
-  if (preview !== null && !rightOpen) {
+  if (leftTab === "explore" && preview !== null && !rightOpen) {
     layoutClass += " layout-right-folded";
   }
 
@@ -547,16 +733,42 @@ function App() {
             >
               {leftOpen ? <ChevronLeftIcon size={12} /> : <ChevronRightIcon size={12} />}
             </button>
+            {/* Explore: chat and query. VM Sessions: the session cards. */}
+            <div className="view-toggle left-tabs">
+              <button className={leftTab === "explore" ? "view-toggle-on" : ""} type="button" aria-pressed={leftTab === "explore"} onClick={() => setLeftTab("explore")}>
+                Explore
+              </button>
+              <button className={leftTab === "vm" ? "view-toggle-on" : ""} type="button" aria-pressed={leftTab === "vm"} onClick={() => setLeftTab("vm")}>
+                VM Sessions
+              </button>
+            </div>
             <div className="left-panel-header">
-              <div className="view-toggle">
-                <button className={leftView === "chat" ? "view-toggle-on" : ""} type="button" aria-pressed={leftView === "chat"} onClick={() => setLeftView("chat")}>
-                  Chat
+              {leftTab === "explore" && (
+                <div className="view-toggle">
+                  <button className={leftView === "chat" ? "view-toggle-on" : ""} type="button" aria-pressed={leftView === "chat"} onClick={() => setLeftView("chat")}>
+                    Chat
+                  </button>
+                  <button className={leftView === "query" ? "view-toggle-on" : ""} type="button" aria-pressed={leftView === "query"} onClick={() => setLeftView("query")}>
+                    Query
+                  </button>
+                </div>
+              )}
+              {leftTab === "vm" && (
+                <div className="view-toggle">
+                  <button className={vmView === "sessions" ? "view-toggle-on" : ""} type="button" aria-pressed={vmView === "sessions"} onClick={() => setVmView("sessions")}>
+                    Sessions
+                  </button>
+                  <button className={vmView === "settings" ? "view-toggle-on" : ""} type="button" aria-pressed={vmView === "settings"} onClick={() => setVmView("settings")}>
+                    Settings
+                  </button>
+                </div>
+              )}
+              {leftTab === "vm" && (
+                <button className="btn btn-primary new-session" type="button" onClick={openCreate}>
+                  <PlusCircleIcon size={16} /> Create new session
                 </button>
-                <button className={leftView === "query" ? "view-toggle-on" : ""} type="button" aria-pressed={leftView === "query"} onClick={() => setLeftView("query")}>
-                  Query
-                </button>
-              </div>
-              {leftView === "chat" && (
+              )}
+              {chatShown && (
                 <>
                   <button className="mode-button new-session" type="button" disabled={chatBusy} onClick={newSession}>
                     New Session
@@ -580,7 +792,58 @@ function App() {
               </div>
             )}
 
-            {leftView === "chat" && (
+            {leftTab === "vm" && vmView === "sessions" && (
+              <div className="vm-session-list">
+                {!vmSessionsLoaded && <p className="side-empty muted">Loading sessions…</p>}
+                {vmSessionsLoaded && vmSessions.length === 0 && <p className="side-empty muted">No VM sessions yet.</p>}
+                {vmSessions.map((session) => (
+                  <article
+                    className={session.id === selectedVmId ? "vm-card vm-card-selected" : "vm-card"}
+                    key={session.id}
+                    onClick={() => setSelectedVmId(session.id)}
+                  >
+                    <div className="vm-card-title-row">
+                      <strong className="vm-card-name">{session.name}</strong>
+                      <span className={session.on ? "vm-state vm-state-on" : "vm-state"}>
+                        <span className="vm-state-dot" />
+                        {session.on ? "On" : "Off"}
+                      </span>
+                    </div>
+                    {session.name !== session.vm && <div className="vm-card-sub">{session.vm}</div>}
+                    {session.repo && <div className="vm-card-sub">{session.repo}</div>}
+                    <div className="vm-card-meta">
+                      <span>
+                        CPU {session.on && session.cpu_percent !== null ? `${Math.round(session.cpu_percent)}%` : "–"} of {session.cpus} cores
+                      </span>
+                      <span>
+                        Memory {session.on && session.memory_used_gb !== null ? session.memory_used_gb.toFixed(1) : "–"} / {session.memory_gb} GB
+                      </span>
+                      <span>Disk {session.disk_gb} GB</span>
+                    </div>
+                    {session.status !== "running" && session.status !== "stopped" && (
+                      <div className={session.status === "creating" ? "vm-card-status" : "vm-card-status vm-card-status-bad"}>
+                        {session.status === "creating" && "Creating…"}
+                        {session.status === "failed" && "Setup failed"}
+                        {session.status === "missing" && "VM is missing"}
+                      </div>
+                    )}
+                    {deleteErrors[session.id] && <div className="vm-card-status vm-card-status-bad">{deleteErrors[session.id]}</div>}
+                    <div className="vm-card-actions">
+                      <button className="btn btn-danger btn-sm" type="button" disabled={deletingIds.includes(session.id)} onClick={(event) => {
+                          event.stopPropagation();
+                          deleteVmSession(session);
+                        }}
+                      >
+                        <TrashIcon size={14} /> {deletingIds.includes(session.id) ? "Deleting…" : "Delete"}
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+            {leftTab === "vm" && vmView === "settings" && <p className="side-empty muted">No settings yet.</p>}
+
+            {chatShown && (
               <aside className="chat">
                 <div className="chat-messages">
                   {chatMessages.length === 0 && <p className="chat-empty">Describe the repos you want.</p>}
@@ -664,7 +927,7 @@ function App() {
               </aside>
             )}
 
-            {leftView === "query" && (
+            {leftTab === "explore" && leftView === "query" && (
               <aside className="sidebar">
                 <form
                   className="filter-panel"
@@ -739,7 +1002,7 @@ function App() {
           </div>
 
           <main className="results">
-            {error && (
+            {leftTab === "explore" && error && (
               <div className="flash-error">
                 <AlertIcon size={16} /> {error}
               </div>
@@ -747,6 +1010,8 @@ function App() {
 
             <div className="results-header">
               <div className="results-header-row">
+                {leftTab === "vm" && <strong>{selectedVm ? selectedVm.name : "Virtual Machine"}</strong>}
+                {leftTab === "explore" && (
                 <div className="results-counts">
                   {view === "search" && result !== null && (
                     <>
@@ -757,6 +1022,8 @@ function App() {
                   )}
                   {view === "session" && <strong>{sessionRepos.length} repos picked by the agent</strong>}
                 </div>
+                )}
+                {leftTab === "explore" && (
                 <div className="results-actions">
                   {view === "search" && result !== null && lastPage > 1 && pager}
                   <div className="view-toggle">
@@ -768,11 +1035,31 @@ function App() {
                     </button>
                   </div>
                 </div>
+                )}
               </div>
             </div>
 
+            {leftTab === "vm" && (
+              <div className="vm-viewer">
+                {selectedVm === null && <p className="vm-viewer-empty muted">Pick a session on the left to see its desktop.</p>}
+                {selectedVm !== null && !selectedVmReady && (
+                  <p className="vm-viewer-empty muted">
+                    {selectedVm.status === "creating" && "The VM is being set up. Its desktop shows here when it is ready."}
+                    {selectedVm.status === "failed" && "Setup failed, so there is no desktop to show."}
+                    {selectedVm.status === "missing" && "The VM is missing."}
+                    {(selectedVm.status === "running" || selectedVm.status === "stopped") && "The VM is off."}
+                  </p>
+                )}
+                {selectedVmReady && viewerError && <p className="vm-viewer-empty vm-card-status-bad">{viewerError}</p>}
+                {selectedVmReady && viewerUrl && !viewerError && (
+                  <iframe className="vm-viewer-frame" key={viewerUrl} src={viewerUrl} title={`Desktop of ${selectedVm.name}`} />
+                )}
+              </div>
+            )}
+
+            {leftTab === "explore" && (
             <div className="results-scroll" ref={resultsScroll}>
-              {preview !== null && (
+              {leftTab === "explore" && preview !== null && (
                 <div className="preview">
                   <div className="preview-actions">
                     <button className="btn" type="button" onClick={goBack}>
@@ -938,7 +1225,7 @@ function App() {
                 </div>
               )}
 
-              {preview === null && (
+              {leftTab === "explore" && preview === null && (
                 <>
                   {view === "search" && status === "searching" && (
                     <p className="status-line">
@@ -1045,9 +1332,10 @@ function App() {
                 </>
               )}
             </div>
+            )}
           </main>
 
-          {preview !== null && (
+          {leftTab === "explore" && preview !== null && (
             <aside className={rightOpen ? "right-panel" : "right-panel right-panel-folded"}>
               <button
                 className="fold-tab"
@@ -1124,6 +1412,88 @@ function App() {
           )}
         </div>
       </div>
+
+      {createOpen && (
+        <div className="modal-backdrop" onClick={closeCreate}>
+          <form
+            className="modal"
+            onClick={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              createVmSession();
+            }}
+          >
+            <h2 className="modal-title">Create new session</h2>
+            <label className="modal-field">
+              GitHub repo <span className="muted">(optional)</span>
+              <input className="form-control" value={newRepoUrl} placeholder="https://github.com/owner/name" spellCheck={false} autoFocus onChange={(event) => setNewRepoUrl(event.target.value)} />
+            </label>
+            <label className="modal-field">
+              VM name <span className="muted">(optional)</span>
+              <input className="form-control" value={newVmName} placeholder="my-vm" spellCheck={false} onChange={(event) => setNewVmName(event.target.value)} />
+            </label>
+            {vmOptions && (
+              <div className="modal-grid">
+                <label className="modal-field">
+                  CPU
+                  <select className="form-select" value={newCpus} onChange={(event) => setNewCpus(Number(event.target.value))}>
+                    {vmOptions.cpus.map((cpus) => (
+                      <option key={cpus} value={cpus}>
+                        {cpus} cores
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="modal-field">
+                  Memory
+                  <select className="form-select" value={newMemoryGb} onChange={(event) => setNewMemoryGb(Number(event.target.value))}>
+                    {vmOptions.memory_gb.map((gb) => (
+                      <option key={gb} value={gb}>
+                        {gb} GB
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="modal-field">
+                  Disk
+                  <select className="form-select" value={newDiskGb} onChange={(event) => setNewDiskGb(Number(event.target.value))}>
+                    {vmOptions.disk_gb.map((gb) => (
+                      <option key={gb} value={gb}>
+                        {gb} GB
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="modal-field">
+                  How many
+                  <input
+                    className="form-control"
+                    type="number"
+                    min={1}
+                    max={vmOptions.count_max}
+                    value={newCount}
+                    onChange={(event) => setNewCount(Math.max(1, Math.min(vmOptions.count_max, Number(event.target.value) || 1)))}
+                  />
+                </label>
+              </div>
+            )}
+            {vmOptions && newCount > 1 && (
+              <p className="modal-note muted">
+                Makes {newCount} sessions with these settings ({newCount * newMemoryGb} GB memory in total){newVmName ? `, named ${newVmName}-1 to ${newVmName}-${newCount}` : ""}.
+              </p>
+            )}
+            {createError && <p className="modal-error">{createError}</p>}
+            <div className="modal-actions">
+              <button className="btn" type="button" onClick={closeCreate}>
+                Cancel
+              </button>
+              <button className="btn btn-primary" type="submit" disabled={createBusy || !vmOptions}>
+                {createBusy ? "Creating…" : newCount > 1 ? `Create ${newCount}` : "Create"}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </>
   );
 }

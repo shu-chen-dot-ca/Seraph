@@ -2,13 +2,14 @@ import asyncio
 import base64
 import json
 import os
+import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -16,11 +17,15 @@ from claude_agent_sdk import get_session_info
 
 from github_searcher.agent.agent import SearchChatAgent
 from github_searcher.search import get_branches, get_commits, get_contents, get_contents_html, get_repository, search_repositories
+from sandbox.session import SessionBusyError, SessionError
+from sandbox.vm import VMError
+from sandbox.sessions import Sessions
 
 SESSIONS_FILE = Path(__file__).parent.parent / ".chat_sessions.json"
 
 agent = SearchChatAgent()
 agent_ready = None
+vm_sessions = Sessions()
 old_agent_stop = None
 
 
@@ -181,6 +186,92 @@ def commits(owner: str, name: str, ref: str = "", path: str = "") -> dict:
             }
         )
     return {"commits": result}
+
+
+class CreateVmSessionRequest(BaseModel):
+    repo: str = ""  # "owner/name" or a GitHub URL; empty for no repo.
+    name: str = ""  # Only for showing; empty uses the VM's name.
+    cpus: int
+    memory_gb: int
+    disk_gb: int
+    count: int = 1  # How many sessions to make with these settings.
+
+
+@app.get("/api/vm/options")
+def vm_options() -> dict:
+    """CPU, memory, disk and count choices for the create dialog (from .env)."""
+    return vm_sessions.options()
+
+
+@app.get("/api/vm/sessions")
+def list_vm_sessions() -> list[dict]:
+    """Every session with its live state: VM on or off, CPU % and memory in use.
+
+    Answers right away: the live state is what each session's watcher read last.
+    """
+    result = []
+    for session in vm_sessions.list():
+        result.append({**session.to_dict(), **session.latest_usage})
+    return result
+
+
+@app.post("/api/vm/sessions")
+def create_vm_session(body: CreateVmSessionRequest) -> list[dict]:
+    """Starts creating the sessions and returns right away; the list shows their progress."""
+    repo = body.repo.strip().removeprefix("https://").removeprefix("http://").removeprefix("github.com/")
+    repo = repo.removesuffix("/").removesuffix(".git")
+    if repo and not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
+        raise HTTPException(status_code=400, detail="The repo must be a GitHub URL or owner/name.")
+    try:
+        created = vm_sessions.create(
+            repo,
+            name=body.name.strip(),
+            cpus=body.cpus,
+            memory_gb=body.memory_gb,
+            disk_gb=body.disk_gb,
+            count=body.count,
+            background=True,
+        )
+    except SessionError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    result = []
+    for session in created:
+        result.append(session.to_dict())
+    return result
+
+
+@app.get("/api/vm/sessions/{session_id}/viewer")
+def vm_session_viewer(session_id: str) -> dict:
+    """The noVNC page that shows the session's desktop.
+
+    The browser loads it straight from the VM's address on the Incus bridge,
+    which only this machine can reach.
+    """
+    try:
+        session = vm_sessions.get(session_id)
+    except SessionError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    if session.vm.status() != "Running":
+        raise HTTPException(status_code=409, detail="The VM is off.")
+    address = session.vm.address()
+    if address is None:
+        raise HTTPException(status_code=409, detail="The VM has no address yet.")
+    port = os.environ["SANDBOX_VM_NOVNC_PORT"]
+    return {"url": f"http://{address}:{port}/vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=2000"}
+
+
+@app.delete("/api/vm/sessions/{session_id}")
+def delete_vm_session(session_id: str) -> dict:
+    """Deletes the VM, then the session's folder. Takes a few seconds."""
+    try:
+        vm_sessions.delete(session_id)
+    except SessionBusyError as error:
+        raise HTTPException(status_code=409, detail=f"{error}: wait until it finishes, then delete it.")
+    except SessionError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    except VMError as error:
+        raise HTTPException(status_code=500, detail=str(error))
+    return {}
 
 
 @app.exception_handler(httpx.HTTPStatusError)

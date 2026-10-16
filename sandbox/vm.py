@@ -4,6 +4,10 @@ Every call runs the `incus` command line. Commands inside the VM run as the
 desktop user (uid 1000) with the image's environment (/etc/environment).
 The VM's address comes from the host's DHCP leases, never from what the VM
 itself reports.
+
+Every incus call gets stdin=DEVNULL: `incus exec` reads stdin, and when the
+backend runs in the background of a terminal (run.sh), reading the terminal
+makes the system stop the whole backend (SIGTTIN).
 """
 
 import json
@@ -35,13 +39,26 @@ class VM:
         result = subprocess.run(
             ["incus", "query", f"/1.0/instances/{self.name}"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
         )
         if result.returncode != 0:
             return None
         return json.loads(result.stdout)["status"]
 
-    def launch(self, image: str, profile: str, cpus: str, memory_gb: int, disk: str) -> None:
+    def state(self) -> dict | None:
+        """Live state from Incus: status, CPU time used, memory in use, ... None if the VM doesn't exist."""
+        result = subprocess.run(
+            ["incus", "query", f"/1.0/instances/{self.name}/state"],
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            text=True,
+        )
+        if result.returncode != 0:
+            return None
+        return json.loads(result.stdout)
+
+    def launch(self, image: str, profile: str, cpus: int, memory_gb: int, disk: str) -> None:
         result = subprocess.run(
             [
                 "incus", "launch", image, self.name, "--vm",
@@ -51,6 +68,7 @@ class VM:
                 "--device", f"root,size={disk}",
             ],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
         )
         if result.returncode != 0:
@@ -59,7 +77,7 @@ class VM:
     def start(self) -> None:
         if self.status() == "Running":
             return
-        result = subprocess.run(["incus", "start", self.name], capture_output=True, text=True)
+        result = subprocess.run(["incus", "start", self.name], capture_output=True, stdin=subprocess.DEVNULL, text=True)
         if result.returncode != 0:
             raise VMError(f"Could not start {self.name}: {result.stderr.strip()}")
 
@@ -67,14 +85,14 @@ class VM:
         if self.status() != "Running":
             return
         # Ask the VM to shut down; force it off if it takes too long.
-        result = subprocess.run(["incus", "stop", self.name, "--timeout", "60"], capture_output=True)
+        result = subprocess.run(["incus", "stop", self.name, "--timeout", "60"], capture_output=True, stdin=subprocess.DEVNULL)
         if result.returncode != 0:
-            subprocess.run(["incus", "stop", self.name, "--force"], capture_output=True)
+            subprocess.run(["incus", "stop", self.name, "--force"], capture_output=True, stdin=subprocess.DEVNULL)
         if self.status() == "Running":
             raise VMError(f"Could not stop {self.name}")
 
     def delete(self) -> None:
-        subprocess.run(["incus", "delete", "--force", self.name], capture_output=True)
+        subprocess.run(["incus", "delete", "--force", self.name], capture_output=True, stdin=subprocess.DEVNULL)
         if self.status() is not None:
             raise VMError(f"Could not delete {self.name}")
 
@@ -83,6 +101,7 @@ class VM:
         result = subprocess.run(
             ["incus", "config", "get", self.name, "volatile.eth0.hwaddr"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
         )
         mac = result.stdout.strip()
@@ -91,6 +110,7 @@ class VM:
         result = subprocess.run(
             ["incus", "network", "list-leases", NETWORK, "--format", "json"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             check=True,
         )
@@ -107,6 +127,7 @@ class VM:
         return subprocess.run(
             ["incus", "exec", self.name, "--", "bash", "-c", as_user],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             timeout=timeout,
         )
@@ -116,7 +137,7 @@ class VM:
         deadline = time.monotonic() + timeout
 
         while True:
-            result = subprocess.run(["incus", "exec", self.name, "--", "true"], capture_output=True)
+            result = subprocess.run(["incus", "exec", self.name, "--", "true"], capture_output=True, stdin=subprocess.DEVNULL)
             if result.returncode == 0:
                 break
             if time.monotonic() > deadline:
