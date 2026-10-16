@@ -1,0 +1,15 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# Sandbox records and logs
+.sandboxes/
+
+# Chat sessions
+.chat_sessions.json
