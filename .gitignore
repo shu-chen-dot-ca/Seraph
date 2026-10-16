@@ -10,6 +10,7 @@ __pycache__/
 
 # Sandbox records and logs
 .sandboxes/
+sessions/
 
 # Chat sessions
 .chat_sessions.json
