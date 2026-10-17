@@ -1514,6 +1514,79 @@ code {
   background: #000000;
 }
 
+.vm-pane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.vm-pane-hidden {
+  display: none;
+}
+
+.terminal-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 4px 4px 0;
+  overflow-x: auto;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+}
+
+.terminal-tab {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  color: var(--fg-muted);
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+.terminal-tab-on {
+  color: var(--fg);
+  background: var(--bg);
+  border-color: var(--border);
+}
+
+.terminal-tab-name,
+.terminal-tab-close,
+.terminal-tab-add {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.terminal-tab-name {
+  padding: 6px 4px 6px 10px;
+  font-size: 12px;
+}
+
+.terminal-tab-close {
+  display: flex;
+  padding: 4px 6px;
+  border-radius: var(--radius);
+}
+
+.terminal-tab-close:hover,
+.terminal-tab-add:hover {
+  color: var(--fg);
+  background: var(--btn-hover-bg);
+}
+
+.terminal-tab-add {
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  color: var(--fg-muted);
+  border-radius: var(--radius);
+}
+
 .vm-viewer-empty {
   margin: auto;
   padding: 16px;
@@ -1623,4 +1696,89 @@ code {
 .modal-note {
   margin: 0;
   font-size: 12px;
+}
+
+/* Inside a pane the frame shares the height with the terminal tabs. */
+.vm-pane .vm-viewer-frame {
+  height: auto;
+  min-height: 0;
+}
+
+/* ---- VM settings (right panel) ------------------------------------------------- */
+
+.vm-settings {
+  gap: 0;
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+.vm-settings > .vm-card-status {
+  margin: 12px 16px 0;
+}
+
+.vm-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  border-bottom: 1px solid var(--border-muted);
+}
+
+.vm-settings-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.vm-settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.vm-settings-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.vm-settings-note {
+  margin: 0;
+  font-size: 12px;
+}
+
+.vm-settings-env-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.vm-settings-env-row .form-control {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.vm-settings-select {
+  width: auto;
+}
+
+.vm-settings-about {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.vm-settings-about dt {
+  color: var(--fg-muted);
+}
+
+.vm-settings-about dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
 }

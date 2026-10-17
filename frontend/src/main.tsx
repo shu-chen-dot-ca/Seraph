@@ -1,4 +1,4 @@
-import { AlertIcon, ArchiveIcon, ChevronLeftIcon, ChevronRightIcon, CheckIcon, FileDirectoryFillIcon, FileIcon, CodeIcon, GitBranchIcon, GitCommitIcon, LinkExternalIcon, PaperAirplaneIcon, SquareFillIcon, PlusCircleIcon, TrashIcon, XIcon, HistoryIcon, IssueOpenedIcon, LawIcon, LinkIcon, RepoForkedIcon, SearchIcon, StarIcon } from "@primer/octicons-react";
+import { AlertIcon, ArchiveIcon, ChevronLeftIcon, ChevronRightIcon, CheckIcon, FileDirectoryFillIcon, FileIcon, CodeIcon, GitBranchIcon, GitCommitIcon, LinkExternalIcon, PaperAirplaneIcon, SquareFillIcon, PlusCircleIcon, PlusIcon, SyncIcon, TrashIcon, XIcon, HistoryIcon, IssueOpenedIcon, LawIcon, LinkIcon, RepoForkedIcon, SearchIcon, StarIcon } from "@primer/octicons-react";
 import { StrictMode, useEffect, useRef, useState, type MouseEvent } from "react";
 import { createRoot } from "react-dom/client";
 import Markdown from "react-markdown";
@@ -34,7 +34,10 @@ interface VmSession {
   cpus: number;
   memory_gb: number;
   disk_gb: number;
-  status: string; // creating, running, stopped, failed, missing
+  internet: boolean;
+  env: Record<string, string>;
+  autostart: boolean;
+  status: string; // creating, starting, running, stopping, stopped, failed, missing
   created_at: string;
   on: boolean;
   cpu_percent: number | null;
@@ -235,8 +238,72 @@ function App() {
   const [deletingIds, setDeletingIds] = useState<string[]>([]);
   // The session whose desktop the right panel shows, and the noVNC page for it.
   const [selectedVmId, setSelectedVmId] = useState<string | null>(null);
-  const [viewerUrl, setViewerUrl] = useState<string | null>(null);
+  // Where the desktop (noVNC) and the terminals (ttyd) of the selected VM are.
+  const [viewerUrls, setViewerUrls] = useState<{ desktop: string; terminal: string } | null>(null);
   const [viewerError, setViewerError] = useState<string | null>(null);
+  const [vmPanel, setVmPanel] = useState<"desktop" | "terminal" | "settings">("desktop");
+  // Bumped by the Reconnect button: new iframe keys make the desktop and terminals load again.
+  const [viewerReload, setViewerReload] = useState(0);
+  // Terminal tabs of the selected VM: tmux session names "1", "2", ...
+  const [terminals, setTerminals] = useState<string[]>([]);
+  const [activeTerminal, setActiveTerminal] = useState<string | null>(null);
+  // Settings tab: drafts that are only sent when saved, and the last error.
+  const [envRows, setEnvRows] = useState<[string, string][]>([]);
+  const [settingsCpus, setSettingsCpus] = useState(0);
+  const [settingsMemoryGb, setSettingsMemoryGb] = useState(0);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+
+  // A new session picked: fill the drafts from it, and get the CPU and memory choices.
+  useEffect(() => {
+    setSettingsError(null);
+    const session = vmSessions.find((item) => item.id === selectedVmId);
+    if (!session) {
+      return;
+    }
+    setEnvRows(Object.entries(session.env ?? {}));
+    setSettingsCpus(session.cpus);
+    setSettingsMemoryGb(session.memory_gb);
+    if (vmOptions === null) {
+      fetch("/api/vm/options")
+        .then((response) => response.json())
+        .then((options) => setVmOptions(options))
+        .catch(() => setSettingsError("Could not reach the backend."));
+    }
+    // Only when the selection changes; the list refreshing every second must not reset the drafts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedVmId]);
+
+  // One settings change: start, stop, internet, autostart, resources or env.
+  async function vmSettingsCall(action: string, method: string, body?: object) {
+    setSettingsError(null);
+    try {
+      const response = await fetch(`/api/vm/sessions/${selectedVmId}/${action}`, {
+        method: method,
+        headers: { "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const answer = await response.json();
+      if (!response.ok) {
+        setSettingsError(answer.detail ?? "That did not work.");
+        return;
+      }
+      if (answer.id) {
+        setVmSessions((current) => current.map((item) => (item.id === answer.id ? { ...item, ...answer } : item)));
+      }
+    } catch {
+      setSettingsError("Could not reach the backend.");
+    }
+  }
+
+  function saveEnv() {
+    const env: Record<string, string> = {};
+    for (const [key, value] of envRows) {
+      if (key.trim() !== "") {
+        env[key.trim()] = value;
+      }
+    }
+    vmSettingsCall("env", "PUT", { env: env });
+  }
   const selectedVm = vmSessions.find((session) => session.id === selectedVmId) ?? null;
   const selectedVmReady = selectedVm !== null && selectedVm.on && selectedVm.status === "running";
   const [deleteErrors, setDeleteErrors] = useState<Record<string, string>>({});
@@ -319,10 +386,13 @@ function App() {
     }
   }
 
-  // Ask for the viewer page once the selected VM is on and set up; drop it when it goes off.
+  // Once the selected VM is on and set up, ask where its desktop and terminals are,
+  // and which terminals are still running (they survive page reloads). Drop it all when it goes off.
   useEffect(() => {
+    setTerminals([]);
+    setActiveTerminal(null);
     if (selectedVmId === null || !selectedVmReady) {
-      setViewerUrl(null);
+      setViewerUrls(null);
       setViewerError(null);
       return;
     }
@@ -334,12 +404,23 @@ function App() {
         if (stopped) {
           return;
         }
-        if (response.ok) {
-          setViewerUrl(body.url);
-          setViewerError(null);
-        } else {
-          setViewerError(body.detail ?? "Could not open the desktop.");
+        if (!response.ok) {
+          setViewerError(body.detail ?? "Could not open the VM.");
+          return;
         }
+        setViewerUrls(body);
+        setViewerError(null);
+
+        const terminalsResponse = await fetch(`/api/vm/sessions/${selectedVmId}/terminals`);
+        let names: string[] = terminalsResponse.ok ? await terminalsResponse.json() : [];
+        if (stopped) {
+          return;
+        }
+        if (names.length === 0) {
+          names = ["1"];
+        }
+        setTerminals(names);
+        setActiveTerminal(names[0]);
       } catch {
         if (!stopped) {
           setViewerError("Could not reach the backend.");
@@ -351,6 +432,25 @@ function App() {
       stopped = true;
     };
   }, [selectedVmId, selectedVmReady]);
+
+  function addTerminal() {
+    let next = 1;
+    for (const name of terminals) {
+      next = Math.max(next, Number(name) + 1);
+    }
+    setTerminals([...terminals, String(next)]);
+    setActiveTerminal(String(next));
+  }
+
+  // Closing a tab stops the terminal: its shell and whatever runs in it end.
+  function closeTerminal(name: string) {
+    const left = terminals.filter((item) => item !== name);
+    setTerminals(left);
+    if (activeTerminal === name) {
+      setActiveTerminal(left.length > 0 ? left[left.length - 1] : null);
+    }
+    fetch(`/api/vm/sessions/${selectedVmId}/terminals/${name}`, { method: "DELETE" });
+  }
 
   // While the VM Sessions tab is open, ask for the latest list about every second.
   // The next request starts only after the last one finished, so requests never pile up,
@@ -821,8 +921,10 @@ function App() {
                       <span>Disk {session.disk_gb} GB</span>
                     </div>
                     {session.status !== "running" && session.status !== "stopped" && (
-                      <div className={session.status === "creating" ? "vm-card-status" : "vm-card-status vm-card-status-bad"}>
+                      <div className={session.status === "failed" || session.status === "missing" ? "vm-card-status vm-card-status-bad" : "vm-card-status"}>
                         {session.status === "creating" && "Creating…"}
+                        {session.status === "starting" && "Starting…"}
+                        {session.status === "stopping" && "Stopping…"}
                         {session.status === "failed" && "Setup failed"}
                         {session.status === "missing" && "VM is missing"}
                       </div>
@@ -1010,7 +1112,24 @@ function App() {
 
             <div className="results-header">
               <div className="results-header-row">
-                {leftTab === "vm" && <strong>{selectedVm ? selectedVm.name : "Virtual Machine"}</strong>}
+                {leftTab === "vm" && (
+                  <div className="view-toggle">
+                    <button className={vmPanel === "desktop" ? "view-toggle-on" : ""} type="button" aria-pressed={vmPanel === "desktop"} onClick={() => setVmPanel("desktop")}>
+                      Desktop
+                    </button>
+                    <button className={vmPanel === "terminal" ? "view-toggle-on" : ""} type="button" aria-pressed={vmPanel === "terminal"} onClick={() => setVmPanel("terminal")}>
+                      Terminal
+                    </button>
+                    <button className={vmPanel === "settings" ? "view-toggle-on" : ""} type="button" aria-pressed={vmPanel === "settings"} onClick={() => setVmPanel("settings")}>
+                      Settings
+                    </button>
+                  </div>
+                )}
+                {leftTab === "vm" && selectedVmReady && vmPanel !== "settings" && (
+                  <button className="btn btn-sm" type="button" title="Connect the desktop and terminals again" onClick={() => setViewerReload(viewerReload + 1)}>
+                    <SyncIcon size={14} /> Reconnect
+                  </button>
+                )}
                 {leftTab === "explore" && (
                 <div className="results-counts">
                   {view === "search" && result !== null && (
@@ -1041,18 +1160,170 @@ function App() {
 
             {leftTab === "vm" && (
               <div className="vm-viewer">
-                {selectedVm === null && <p className="vm-viewer-empty muted">Pick a session on the left to see its desktop.</p>}
-                {selectedVm !== null && !selectedVmReady && (
+                {selectedVm === null && <p className="vm-viewer-empty muted">Pick a session on the left to open it.</p>}
+                {selectedVm !== null && !selectedVmReady && vmPanel !== "settings" && (
                   <p className="vm-viewer-empty muted">
-                    {selectedVm.status === "creating" && "The VM is being set up. Its desktop shows here when it is ready."}
-                    {selectedVm.status === "failed" && "Setup failed, so there is no desktop to show."}
+                    {selectedVm.status === "creating" && "The VM is being set up. It opens here when it is ready."}
+                    {selectedVm.status === "starting" && "The VM is starting."}
+                    {selectedVm.status === "stopping" && "The VM is shutting down."}
+                    {selectedVm.status === "failed" && "Setup failed, so there is nothing to open."}
                     {selectedVm.status === "missing" && "The VM is missing."}
-                    {(selectedVm.status === "running" || selectedVm.status === "stopped") && "The VM is off."}
+                    {(selectedVm.status === "running" || selectedVm.status === "stopped") && "The VM is off. Start it in Settings."}
                   </p>
                 )}
-                {selectedVmReady && viewerError && <p className="vm-viewer-empty vm-card-status-bad">{viewerError}</p>}
-                {selectedVmReady && viewerUrl && !viewerError && (
-                  <iframe className="vm-viewer-frame" key={viewerUrl} src={viewerUrl} title={`Desktop of ${selectedVm.name}`} />
+                {selectedVmReady && viewerError && vmPanel !== "settings" && <p className="vm-viewer-empty vm-card-status-bad">{viewerError}</p>}
+                {selectedVm !== null && vmPanel === "settings" && (
+                  <div className="vm-pane vm-settings">
+                    {settingsError && <p className="vm-card-status vm-card-status-bad">{settingsError}</p>}
+
+                    <section className="vm-settings-section">
+                      <h3 className="vm-settings-title">Power</h3>
+                      <div className="vm-settings-row">
+                        <span className={selectedVm.on ? "vm-state vm-state-on" : "vm-state"}>
+                          <span className="vm-state-dot" />
+                          {selectedVm.status === "starting" ? "Starting…" : selectedVm.status === "stopping" ? "Stopping…" : selectedVm.on ? "On" : "Off"}
+                        </span>
+                        {selectedVm.on ? (
+                          <button className="btn btn-sm" type="button" disabled={selectedVm.status !== "running" && selectedVm.status !== "failed"} onClick={() => vmSettingsCall("stop", "POST")}>
+                            Stop
+                          </button>
+                        ) : (
+                          <button className="btn btn-sm" type="button" disabled={selectedVm.status !== "stopped" && selectedVm.status !== "running"} onClick={() => vmSettingsCall("start", "POST")}>
+                            Start
+                          </button>
+                        )}
+                      </div>
+                      <p className="vm-settings-note muted">Stopping keeps the disk; starting brings everything back except what was only in memory.</p>
+                    </section>
+
+                    <section className="vm-settings-section">
+                      <h3 className="vm-settings-title">Network</h3>
+                      <label className="vm-settings-check">
+                        <input type="checkbox" checked={selectedVm.internet} onChange={(event) => vmSettingsCall("internet", "PUT", { enabled: event.target.checked })} />
+                        Internet
+                      </label>
+                      <p className="vm-settings-note muted">Off blocks everything the VM starts itself. The desktop and terminal keep working. This computer and your local network are never reachable from the VM.</p>
+                    </section>
+
+                    <section className="vm-settings-section">
+                      <h3 className="vm-settings-title">Environment variables</h3>
+                      {envRows.map((row, index) => (
+                        <div className="vm-settings-env-row" key={index}>
+                          <input
+                            className="form-control"
+                            value={row[0]}
+                            placeholder="NAME"
+                            spellCheck={false}
+                            onChange={(event) => setEnvRows(envRows.map((item, i) => (i === index ? [event.target.value, item[1]] : item)))}
+                          />
+                          <input
+                            className="form-control"
+                            value={row[1]}
+                            placeholder="value"
+                            spellCheck={false}
+                            onChange={(event) => setEnvRows(envRows.map((item, i) => (i === index ? [item[0], event.target.value] : item)))}
+                          />
+                          <button className="terminal-tab-close" type="button" aria-label="Remove variable" onClick={() => setEnvRows(envRows.filter((_, i) => i !== index))}>
+                            <XIcon size={14} />
+                          </button>
+                        </div>
+                      ))}
+                      <div className="vm-settings-row">
+                        <button className="btn btn-sm" type="button" onClick={() => setEnvRows([...envRows, ["", ""]])}>
+                          <PlusIcon size={14} /> Add variable
+                        </button>
+                        <button className="btn btn-sm btn-primary" type="button" onClick={saveEnv}>
+                          Save variables
+                        </button>
+                      </div>
+                      <p className="vm-settings-note muted">For every shell in the VM. Terminals opened after saving see them; close and reopen ones that are already open.</p>
+                    </section>
+
+                    <section className="vm-settings-section">
+                      <h3 className="vm-settings-title">Resources</h3>
+                      {vmOptions && (
+                        <div className="vm-settings-row">
+                          <select className="form-select vm-settings-select" value={settingsCpus} disabled={selectedVm.on} onChange={(event) => setSettingsCpus(Number(event.target.value))}>
+                            {vmOptions.cpus.map((cpus) => (
+                              <option key={cpus} value={cpus}>
+                                {cpus} cores
+                              </option>
+                            ))}
+                          </select>
+                          <select className="form-select vm-settings-select" value={settingsMemoryGb} disabled={selectedVm.on} onChange={(event) => setSettingsMemoryGb(Number(event.target.value))}>
+                            {vmOptions.memory_gb.map((gb) => (
+                              <option key={gb} value={gb}>
+                                {gb} GB memory
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            className="btn btn-sm"
+                            type="button"
+                            disabled={selectedVm.on || (settingsCpus === selectedVm.cpus && settingsMemoryGb === selectedVm.memory_gb)}
+                            onClick={() => vmSettingsCall("resources", "PUT", { cpus: settingsCpus, memory_gb: settingsMemoryGb })}
+                          >
+                            Apply
+                          </button>
+                        </div>
+                      )}
+                      <p className="vm-settings-note muted">{selectedVm.on ? "Stop the VM to change CPU and memory." : "Applies the next time the VM starts."} Disk: {selectedVm.disk_gb} GB (fixed).</p>
+                    </section>
+
+                    <section className="vm-settings-section">
+                      <h3 className="vm-settings-title">Startup</h3>
+                      <label className="vm-settings-check">
+                        <input type="checkbox" checked={selectedVm.autostart} onChange={(event) => vmSettingsCall("autostart", "PUT", { enabled: event.target.checked })} />
+                        Start this VM when the computer starts
+                      </label>
+                    </section>
+
+                    <section className="vm-settings-section">
+                      <h3 className="vm-settings-title">About</h3>
+                      <dl className="vm-settings-about">
+                        <dt>VM</dt>
+                        <dd>{selectedVm.vm}</dd>
+                        <dt>Repo</dt>
+                        <dd>{selectedVm.repo || "none"}</dd>
+                        <dt>Created</dt>
+                        <dd>{new Date(selectedVm.created_at).toLocaleString()}</dd>
+                      </dl>
+                    </section>
+                  </div>
+                )}
+                {/* Both panels stay loaded while hidden, so switching never reconnects. */}
+                {selectedVmReady && viewerUrls && !viewerError && (
+                  <div className={vmPanel === "desktop" ? "vm-pane" : "vm-pane vm-pane-hidden"}>
+                    <iframe className="vm-viewer-frame" key={`${viewerUrls.desktop}-${viewerReload}`} src={viewerUrls.desktop} title={`Desktop of ${selectedVm.name}`} />
+                  </div>
+                )}
+                {selectedVmReady && viewerUrls && !viewerError && (
+                  <div className={vmPanel === "terminal" ? "vm-pane" : "vm-pane vm-pane-hidden"}>
+                    <div className="terminal-tabs" role="tablist">
+                      {terminals.map((name) => (
+                        <div key={name} className={name === activeTerminal ? "terminal-tab terminal-tab-on" : "terminal-tab"}>
+                          <button className="terminal-tab-name" type="button" role="tab" aria-selected={name === activeTerminal} onClick={() => setActiveTerminal(name)}>
+                            Terminal {name}
+                          </button>
+                          <button className="terminal-tab-close" type="button" aria-label={`Close terminal ${name}`} title="Close (stops what runs in it)" onClick={() => closeTerminal(name)}>
+                            <XIcon size={12} />
+                          </button>
+                        </div>
+                      ))}
+                      <button className="terminal-tab-add" type="button" aria-label="New terminal" title="New terminal" onClick={addTerminal}>
+                        <PlusIcon size={14} />
+                      </button>
+                    </div>
+                    {terminals.length === 0 && <p className="vm-viewer-empty muted">No terminals open. Press + to open one.</p>}
+                    {terminals.map((name) => (
+                      <iframe
+                        key={`${viewerUrls.terminal}-${name}-${viewerReload}`}
+                        className={name === activeTerminal ? "vm-viewer-frame" : "vm-viewer-frame vm-pane-hidden"}
+                        src={`${viewerUrls.terminal}?arg=${name}`}
+                        title={`Terminal ${name} of ${selectedVm.name}`}
+                      />
+                    ))}
+                  </div>
                 )}
               </div>
             )}

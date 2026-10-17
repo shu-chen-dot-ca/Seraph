@@ -60,6 +60,12 @@ class Sessions:
         while session.id in self.sessions:
             try:
                 session.latest_usage = session.usage()
+                # Shut down from inside (the desktop's power menu, `sudo poweroff`): say so,
+                # so the UI offers Start instead of waiting for a desktop that isn't coming.
+                if not session.latest_usage["on"] and session.status == "running" and not session.lock.locked():
+                    session.status = "stopped"
+                    session.save()
+                    session.log("The VM was turned off from inside")
             except Exception:
                 pass  # Incus hiccup; try again next round.
             time.sleep(1)
@@ -155,6 +161,27 @@ class Sessions:
                 with self.lock:
                     self.sessions.pop(session.id, None)
             raise
+
+    def set_resources(self, session_id: str, cpus: int, memory_gb: int) -> None:
+        if cpus not in CPUS_ALLOWED:
+            raise SessionError(f"cpus must be one of {CPUS_ALLOWED}")
+        if memory_gb not in MEMORY_GB_ALLOWED:
+            raise SessionError(f"memory_gb must be one of {MEMORY_GB_ALLOWED}")
+        self.get(session_id).set_resources(cpus, memory_gb)
+
+    def start_in_background(self, session_id: str) -> None:
+        """Start a stopped VM (takes a while); the list shows "starting" until it is up."""
+        session = self.get(session_id)
+        if session.lock.locked():
+            raise SessionError(f"Session {session_id} is busy")
+        threading.Thread(target=session.start, daemon=True).start()
+
+    def stop_in_background(self, session_id: str) -> None:
+        """Shut a VM down (up to a minute); the list shows "stopping" until it is off."""
+        session = self.get(session_id)
+        if session.lock.locked():
+            raise SessionError(f"Session {session_id} is busy")
+        threading.Thread(target=session.stop, daemon=True).start()
 
     def get(self, session_id: str) -> Session:
         session = self.sessions.get(session_id)

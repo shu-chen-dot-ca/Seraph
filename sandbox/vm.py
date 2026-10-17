@@ -24,6 +24,7 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 NETWORK = os.environ["SANDBOX_NETWORK"]
 NOVNC_PORT = int(os.environ["SANDBOX_VM_NOVNC_PORT"])
+VNC_PORT = int(os.environ["SANDBOX_VM_VNC_PORT"])
 
 
 class VMError(Exception):
@@ -133,7 +134,11 @@ class VM:
         )
 
     def wait_ready(self, timeout: float = 300) -> None:
-        """Wait until commands work, the VM has an address and noVNC answers."""
+        """Wait until commands work, the VM has an address, noVNC answers and the desktop is up.
+
+        The desktop is up when its VNC server (x11vnc) listens: it starts only once
+        the desktop user is logged in, a few seconds after noVNC's web page works.
+        """
         deadline = time.monotonic() + timeout
 
         while True:
@@ -149,12 +154,105 @@ class VM:
             if address:
                 try:
                     urllib.request.urlopen(f"http://{address}:{NOVNC_PORT}/", timeout=3)
-                    return
+                    break
                 except OSError:
                     pass
             if time.monotonic() > deadline:
                 raise VMError(f"{self.name}: noVNC did not answer on port {NOVNC_PORT}")
             time.sleep(2)
+
+        while True:
+            result = subprocess.run(
+                ["incus", "exec", self.name, "--", "bash", "-c", f"ss -ltn | grep -q ':{VNC_PORT} '"],
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+            )
+            if result.returncode == 0:
+                return
+            if time.monotonic() > deadline:
+                raise VMError(f"{self.name}: the desktop did not start (no VNC server on port {VNC_PORT})")
+            time.sleep(2)
+
+    def write_file(self, path: str, content: str, mode: str = "0644") -> None:
+        """Write a file inside the VM as root (the VM must be running)."""
+        result = subprocess.run(
+            ["incus", "file", "push", "-", f"{self.name}{path}", "--mode", mode, "--uid", "0", "--gid", "0"],
+            input=content,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise VMError(f"Could not write {path} in {self.name}: {result.stderr.strip()}")
+
+    def set_config(self, key: str, value: str) -> None:
+        """Set an Incus setting of the VM, e.g. limits.cpu or boot.autostart."""
+        result = subprocess.run(
+            ["incus", "config", "set", self.name, f"{key}={value}"],
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise VMError(f"Could not set {key} on {self.name}: {result.stderr.strip()}")
+
+    def set_internet(self, enabled: bool, offline_acl: str) -> None:
+        """Let the VM reach the internet, or not. Works while it runs, and stays set.
+
+        Off: the VM's network card gets the offline ACL, which rejects everything the
+        VM starts itself. Answers to connections from this machine (desktop, terminal)
+        still work, and so do DHCP and DNS to the bridge. On: the card goes back to
+        the network's own rules (internet yes, this machine and the LAN no).
+        """
+        if enabled:
+            for key in ("security.acls", "security.acls.default.ingress.action", "security.acls.default.egress.action"):
+                # Fails when the key isn't set, which is fine.
+                subprocess.run(
+                    ["incus", "config", "device", "unset", self.name, "eth0", key],
+                    capture_output=True,
+                    stdin=subprocess.DEVNULL,
+                )
+            return
+
+        exists = subprocess.run(
+            ["incus", "network", "acl", "show", offline_acl],
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+        ).returncode == 0
+        if not exists:
+            subprocess.run(
+                ["incus", "network", "acl", "create", offline_acl, "--description", "Sandbox VMs with the internet turned off"],
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                check=True,
+            )
+            subprocess.run(
+                ["incus", "network", "acl", "rule", "add", offline_acl, "egress", "action=reject", "destination=0.0.0.0/0,::/0"],
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                check=True,
+            )
+
+        settings = [
+            f"security.acls={offline_acl}",
+            "security.acls.default.ingress.action=allow",
+            "security.acls.default.egress.action=reject",
+        ]
+        # The eth0 card comes from the profile; the first time it must be copied onto the VM.
+        result = subprocess.run(
+            ["incus", "config", "device", "override", self.name, "eth0", *settings],
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            text=True,
+        )
+        if result.returncode != 0:
+            result = subprocess.run(
+                ["incus", "config", "device", "set", self.name, "eth0", *settings],
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                text=True,
+            )
+        if result.returncode != 0:
+            raise VMError(f"Could not turn off the internet of {self.name}: {result.stderr.strip()}")
 
     def clone(self, repo_url: str, folder: str) -> None:
         """Clone a public repo into ~/<folder> of the desktop user."""

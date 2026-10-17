@@ -2,7 +2,8 @@
 
 On disk, in SANDBOX_SESSIONS_DIR:
 
-    <id>/session.json              {"id", "name", "repo", "vm", "cpus", "memory_gb", "disk_gb", "status", "created_at"}
+    <id>/session.json              {"id", "name", "repo", "vm", "cpus", "memory_gb", "disk_gb",
+                                    "internet", "env", "autostart", "status", "created_at"}
     <id>/events.jsonl              lifecycle log, one {"time", "text"} per line
     <id>/agents/<aid>/agent.json   {"id", "session_id", "task", "status", "claude_session_id", "created_at"}
 
@@ -10,13 +11,16 @@ The VM lives in Incus; "vm" in session.json points to it. "name" is only for
 showing; "repo" may be empty (then nothing is cloned). An agent belongs to
 exactly one session, so it only ever acts on that session's VM.
 
-Status: creating -> running <-> stopped, or failed. "missing" means the VM is gone.
+Status: creating -> running -> stopping -> stopped -> starting -> running, or failed.
+"missing" means the VM is gone.
 Only one lifecycle action runs on a session at a time; a second one gets SessionBusyError.
 """
 
 import json
 import os
+import re
 import secrets
+import shlex
 import shutil
 import threading
 import time
@@ -36,6 +40,8 @@ PROFILE = os.environ["SANDBOX_PROFILE"]
 DISK_GB_DEFAULT = int(os.environ["SANDBOX_DISK_GB_DEFAULT"])
 MIN_FREE_RAM_GB = int(os.environ["SANDBOX_MIN_FREE_RAM_GB"])
 PROJECT_DIR = os.environ["SANDBOX_VM_PROJECT_DIR"]
+OFFLINE_ACL = os.environ["SANDBOX_OFFLINE_ACL"]
+VM_ENV_FILE = os.environ["SANDBOX_VM_ENV_FILE"]
 
 
 class SessionError(Exception):
@@ -56,6 +62,10 @@ class Session:
         self.memory_gb = record["memory_gb"]
         # Records from before disks could be picked have no disk_gb.
         self.disk_gb = record.get("disk_gb", DISK_GB_DEFAULT)
+        # Settings. Records from before settings existed have none: use the defaults.
+        self.internet = record.get("internet", True)
+        self.env = record.get("env", {})
+        self.autostart = record.get("autostart", False)
         self.status = record["status"]
         self.created_at = record["created_at"]
         self.folder = SESSIONS_DIR / self.id
@@ -75,6 +85,9 @@ class Session:
             "cpus": self.cpus,
             "memory_gb": self.memory_gb,
             "disk_gb": self.disk_gb,
+            "internet": self.internet,
+            "env": self.env,
+            "autostart": self.autostart,
             "status": self.status,
             "created_at": self.created_at,
         }
@@ -112,6 +125,7 @@ class Session:
             self.vm.launch(IMAGE, PROFILE, self.cpus, self.memory_gb, f"{self.disk_gb}GiB")
             self.log("Waiting for the VM to be ready")
             self.vm.wait_ready()
+            self.vm.write_file(VM_ENV_FILE, self.env_file())
             if self.repo:
                 self.log(f"Cloning {self.repo}")
                 self.vm.clone(f"https://github.com/{self.repo}.git", PROJECT_DIR)
@@ -143,12 +157,20 @@ class Session:
                     f"Not enough free memory: {free_gb:.1f}GB free, the VM needs {self.memory_gb}GB "
                     f"and {MIN_FREE_RAM_GB}GB must stay free"
                 )
+            self.status = "starting"
+            self.save()
             self.log("Starting")
             self.vm.start()
             self.vm.wait_ready()
+            self.vm.write_file(VM_ENV_FILE, self.env_file())
             self.status = "running"
             self.save()
             self.log("Started")
+        except Exception as error:
+            self.status = "running" if self.vm.status() == "Running" else "stopped"
+            self.save()
+            self.log(f"Start failed: {error}")
+            raise
         finally:
             self.lock.release()
 
@@ -158,11 +180,18 @@ class Session:
             raise SessionBusyError(f"Session {self.id} is busy")
         try:
             # Later: stop this session's running agents first.
+            self.status = "stopping"
+            self.save()
             self.log("Stopping")
             self.vm.stop()
             self.status = "stopped"
             self.save()
             self.log("Stopped")
+        except Exception as error:
+            self.status = "running" if self.vm.status() == "Running" else "stopped"
+            self.save()
+            self.log(f"Stop failed: {error}")
+            raise
         finally:
             self.lock.release()
 
@@ -197,6 +226,59 @@ class Session:
         self.last_cpu = (cpu_ns, now)
         memory_used_gb = state["memory"]["usage"] / 1024**3
         return {"on": True, "cpu_percent": cpu_percent, "memory_used_gb": memory_used_gb}
+
+    # --- Settings ----------------------------------------------------------------
+
+    def set_internet(self, enabled: bool) -> None:
+        """Turn the VM's internet on or off. Applies right away, running or not."""
+        self.vm.set_internet(enabled, OFFLINE_ACL)
+        self.internet = enabled
+        self.save()
+        self.log(f"Internet {'on' if enabled else 'off'}")
+
+    def set_env(self, env: dict[str, str]) -> None:
+        """Environment variables for everything in the VM: terminals, desktop, the agent.
+
+        Shells started after this see them; ones already open keep the old values.
+        A stopped VM gets them when it starts.
+        """
+        for key in env:
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+                raise SessionError(f"Not a valid variable name: {key}")
+        self.env = env
+        self.save()
+        if self.vm.status() == "Running":
+            self.vm.write_file(VM_ENV_FILE, self.env_file())
+        self.log(f"Environment variables set: {', '.join(env) or 'none'}")
+
+    def env_file(self) -> str:
+        lines = ["# Set in the session's Settings tab. Rewritten whenever they change."]
+        for key, value in self.env.items():
+            lines.append(f"export {key}={shlex.quote(value)}")
+        return "\n".join(lines) + "\n"
+
+    def set_autostart(self, enabled: bool) -> None:
+        """Start the VM when this computer starts."""
+        self.vm.set_config("boot.autostart", "true" if enabled else "false")
+        self.autostart = enabled
+        self.save()
+        self.log(f"Start with this computer: {'on' if enabled else 'off'}")
+
+    def set_resources(self, cpus: int, memory_gb: int) -> None:
+        """Change CPU and memory. Only while the VM is off; they apply when it starts."""
+        if not self.lock.acquire(blocking=False):
+            raise SessionBusyError(f"Session {self.id} is busy")
+        try:
+            if self.vm.status() == "Running":
+                raise SessionError("Stop the VM first; CPU and memory change while it is off.")
+            self.vm.set_config("limits.cpu", str(cpus))
+            self.vm.set_config("limits.memory", f"{memory_gb}GiB")
+            self.cpus = cpus
+            self.memory_gb = memory_gb
+            self.save()
+            self.log(f"Resources: {cpus} CPUs, {memory_gb}GB memory")
+        finally:
+            self.lock.release()
 
     def refresh(self) -> None:
         """Make the status match what Incus says (after a restart or a crash)."""

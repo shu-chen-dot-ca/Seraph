@@ -19,6 +19,7 @@
 # Ports inside the VM:
 #   SANDBOX_VM_NOVNC_PORT   noVNC: the desktop in the browser (http://<vm>:<port>/vnc.html)
 #   SANDBOX_VM_VNC_PORT     VNC, only on localhost (noVNC talks to it)
+#   SANDBOX_VM_TERMINAL_PORT  ttyd: terminals in the browser (http://<vm>:<port>/?arg=<n>)
 #
 # Paths, ports and versions come in as SANDBOX_VM_* environment variables from
 # build.sh (which reads them from the project's .env).
@@ -34,6 +35,7 @@ PLAYWRIGHT_DIR=$SANDBOX_VM_PLAYWRIGHT_DIR
 DEMO_DIR=$SANDBOX_VM_DEMO_DIR
 NOVNC_PORT=$SANDBOX_VM_NOVNC_PORT
 VNC_PORT=$SANDBOX_VM_VNC_PORT
+TERMINAL_PORT=$SANDBOX_VM_TERMINAL_PORT
 DOCKER_IMAGES=$SANDBOX_VM_DOCKER_IMAGES
 
 # The desktop updates itself on first boot; wait for its apt lock instead of failing.
@@ -67,7 +69,7 @@ $APT install --no-install-recommends \
     openjdk-21-jdk \
     docker.io docker-compose-v2 docker-buildx \
     ffmpeg imagemagick poppler-utils graphviz postgresql-client redis-tools \
-    xdotool scrot x11vnc novnc python3-websockify
+    xdotool scrot x11vnc novnc python3-websockify ttyd
 
 # VS Code. Its package adds Microsoft's apt repo itself, so it updates with apt.
 echo "code code/add-microsoft-repo boolean true" | debconf-set-selections
@@ -143,6 +145,29 @@ usermod -aG docker "$desktop_user"
 # link, so its wait-online job only holds up every boot for its 2 minute timeout.
 systemctl mask systemd-networkd-wait-online.service
 
+# --- Quiet desktop: no welcome wizard, no Ubuntu Pro, no update or crash popups --
+
+# gnome-initial-setup is the "Welcome to Ubuntu" wizard (privacy, location,
+# Ubuntu Pro pages) on first login. update-notifier opens Software Updater and
+# its Ubuntu Pro offers. apport and whoopsie pop up crash reports.
+# unattended-upgrades runs apt in the background and holds its lock while a
+# session installs things. Sessions are throwaway VMs; none of these help.
+# Purging them also removes the ubuntu-desktop-minimal meta-package, which would
+# let a later `apt autoremove` strip out the desktop. So first mark everything
+# installed as wanted on its own, and never autoremove here.
+apt-mark showauto | xargs apt-mark manual > /dev/null
+$APT purge gnome-initial-setup update-notifier apport whoopsie unattended-upgrades
+# In case anything still looks for it: first-login setup is done.
+mkdir -p "$desktop_home/.config"
+echo yes > "$desktop_home/.config/gnome-initial-setup-done"
+chown -R "$desktop_user:$desktop_user" "$desktop_home/.config"
+# Ubuntu Pro adverts in apt output and the login message.
+pro config set apt_news=false || true
+rm -f /etc/apt/apt.conf.d/20apt-esm-hook.conf
+if [[ -f /etc/default/motd-news ]]; then
+    sed -i 's/^ENABLED=.*/ENABLED=0/' /etc/default/motd-news
+fi
+
 # --- Desktop: X11, logs in by itself, never locks ----------------------------
 
 cat > /etc/gdm3/custom.conf <<EOF
@@ -196,6 +221,47 @@ RestartSec=2
 WantedBy=multi-user.target
 EOF
 systemctl enable novnc.service
+
+# --- Terminals in the browser: ttyd + tmux ------------------------------------
+
+# Each terminal tab opens http://<vm>:<port>/?arg=<n> and gets tmux session <n>
+# as the desktop user. Closing the browser tab leaves the session running;
+# `tmux kill-session -t <n>` (the backend does it when a tab is closed) stops it.
+cat > /usr/local/bin/sandbox-terminal <<'EOF'
+#!/usr/bin/env bash
+name="${1:-1}"
+if [[ ! "$name" =~ ^[0-9]{1,4}$ ]]; then
+    echo "Terminal names are numbers."
+    exit 1
+fi
+user=$(id -nu 1000)
+exec runuser -l "$user" -c "set -a; . /etc/environment; set +a; exec tmux new-session -A -s $name"
+EOF
+chmod 755 /usr/local/bin/sandbox-terminal
+
+# Mouse on: the wheel scrolls back through output (hold Shift to select text).
+cat > /etc/tmux.conf <<'EOF'
+set -g mouse on
+set -g history-limit 50000
+set -g default-terminal "tmux-256color"
+EOF
+
+# --writable: input is allowed. --url-arg: ?arg=<n> picks the terminal.
+# disableLeaveAlert: no "leave this page?" prompt when a tab closes.
+cat > /etc/systemd/system/ttyd.service <<EOF
+[Unit]
+Description=ttyd: terminals in the browser
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/ttyd --port $TERMINAL_PORT --writable --url-arg -t disableLeaveAlert=true -t fontSize=14 /usr/local/bin/sandbox-terminal
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl enable ttyd.service
 
 # --- The demo service ---------------------------------------------------------
 

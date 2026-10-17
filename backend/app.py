@@ -242,10 +242,10 @@ def create_vm_session(body: CreateVmSessionRequest) -> list[dict]:
 
 @app.get("/api/vm/sessions/{session_id}/viewer")
 def vm_session_viewer(session_id: str) -> dict:
-    """The noVNC page that shows the session's desktop.
+    """Where the browser finds the session's desktop (noVNC) and terminals (ttyd).
 
-    The browser loads it straight from the VM's address on the Incus bridge,
-    which only this machine can reach.
+    The browser loads them straight from the VM's address on the Incus bridge,
+    which only this machine can reach. A terminal is "<terminal>?arg=<n>".
     """
     try:
         session = vm_sessions.get(session_id)
@@ -256,8 +256,126 @@ def vm_session_viewer(session_id: str) -> dict:
     address = session.vm.address()
     if address is None:
         raise HTTPException(status_code=409, detail="The VM has no address yet.")
-    port = os.environ["SANDBOX_VM_NOVNC_PORT"]
-    return {"url": f"http://{address}:{port}/vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=2000"}
+    novnc_port = os.environ["SANDBOX_VM_NOVNC_PORT"]
+    terminal_port = os.environ["SANDBOX_VM_TERMINAL_PORT"]
+    return {
+        "desktop": f"http://{address}:{novnc_port}/vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=2000",
+        "terminal": f"http://{address}:{terminal_port}/",
+    }
+
+
+@app.get("/api/vm/sessions/{session_id}/terminals")
+def list_vm_terminals(session_id: str) -> list[str]:
+    """The terminals still running in the VM (their tmux session names: 1, 2, ...)."""
+    try:
+        session = vm_sessions.get(session_id)
+    except SessionError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    # Fails when no tmux is running at all: that just means no terminals.
+    result = session.vm.exec("tmux list-sessions -F '#S'", timeout=10)
+    names = []
+    for name in result.stdout.split():
+        if name.isdigit():
+            names.append(name)
+    names.sort(key=int)
+    return names
+
+
+@app.delete("/api/vm/sessions/{session_id}/terminals/{name}")
+def close_vm_terminal(session_id: str, name: str) -> dict:
+    """Stop a terminal: ends its tmux session and everything running in it."""
+    if not name.isdigit():
+        raise HTTPException(status_code=400, detail="Terminal names are numbers.")
+    try:
+        session = vm_sessions.get(session_id)
+    except SessionError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    session.vm.exec(f"tmux kill-session -t {name}", timeout=10)
+    return {}
+
+
+class ToggleRequest(BaseModel):
+    enabled: bool
+
+
+class EnvRequest(BaseModel):
+    env: dict[str, str]
+
+
+class ResourcesRequest(BaseModel):
+    cpus: int
+    memory_gb: int
+
+
+def find_vm_session(session_id: str):
+    try:
+        return vm_sessions.get(session_id)
+    except SessionError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+
+
+@app.post("/api/vm/sessions/{session_id}/start")
+def start_vm_session(session_id: str) -> dict:
+    find_vm_session(session_id)
+    try:
+        vm_sessions.start_in_background(session_id)
+    except SessionError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    return {}
+
+
+@app.post("/api/vm/sessions/{session_id}/stop")
+def stop_vm_session(session_id: str) -> dict:
+    find_vm_session(session_id)
+    try:
+        vm_sessions.stop_in_background(session_id)
+    except SessionError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    return {}
+
+
+@app.put("/api/vm/sessions/{session_id}/internet")
+def set_vm_internet(session_id: str, body: ToggleRequest) -> dict:
+    session = find_vm_session(session_id)
+    try:
+        session.set_internet(body.enabled)
+    except VMError as error:
+        raise HTTPException(status_code=500, detail=str(error))
+    return session.to_dict()
+
+
+@app.put("/api/vm/sessions/{session_id}/env")
+def set_vm_env(session_id: str, body: EnvRequest) -> dict:
+    session = find_vm_session(session_id)
+    try:
+        session.set_env(body.env)
+    except SessionError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except VMError as error:
+        raise HTTPException(status_code=500, detail=str(error))
+    return session.to_dict()
+
+
+@app.put("/api/vm/sessions/{session_id}/autostart")
+def set_vm_autostart(session_id: str, body: ToggleRequest) -> dict:
+    session = find_vm_session(session_id)
+    try:
+        session.set_autostart(body.enabled)
+    except VMError as error:
+        raise HTTPException(status_code=500, detail=str(error))
+    return session.to_dict()
+
+
+@app.put("/api/vm/sessions/{session_id}/resources")
+def set_vm_resources(session_id: str, body: ResourcesRequest) -> dict:
+    session = find_vm_session(session_id)
+    try:
+        vm_sessions.set_resources(session_id, body.cpus, body.memory_gb)
+    except SessionError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    except VMError as error:
+        raise HTTPException(status_code=500, detail=str(error))
+    return session.to_dict()
 
 
 @app.delete("/api/vm/sessions/{session_id}")
