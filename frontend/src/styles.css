@@ -1817,3 +1817,92 @@ code {
 .vm-chat-input-row {
   justify-content: flex-end;
 }
+
+/* Agent panel header: the context window bar, with "Agent" and "123k/1M" below it. */
+.agent-header {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.context-bar {
+  height: 6px;
+  overflow: hidden;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-muted);
+  border-radius: 3px;
+}
+
+.context-bar-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.context-text {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+/* ---- VM tab: narrower left panel, input lock ---------------------------------- */
+
+/* The session list needs less room than the chat, so the desktop gets more. */
+.layout-vm {
+  grid-template-columns: 300px minmax(0, 1fr);
+}
+
+.layout-vm.layout-agent {
+  grid-template-columns: 300px minmax(0, 1fr) 400px;
+}
+
+.layout-folded.layout-vm {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+
+.layout-folded.layout-vm.layout-agent {
+  grid-template-columns: 0 minmax(0, 1fr) 400px;
+}
+
+@media (max-width: 860px) {
+  .layout-vm,
+  .layout-vm.layout-agent,
+  .layout-folded.layout-vm,
+  .layout-folded.layout-vm.layout-agent,
+  .layout-agent,
+  .layout-folded.layout-agent {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.vm-viewer {
+  position: relative;
+}
+
+/* Over the desktop and terminals: takes every click, so none reach them. */
+.input-lock-cover {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  cursor: not-allowed;
+}
+
+.input-lock-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.input-lock-on {
+  color: var(--attention);
+  border-color: var(--attention);
+}

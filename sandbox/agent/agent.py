@@ -26,7 +26,6 @@ load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 SYSTEM_PROMPT = (Path(__file__).parent / "prompt.md").read_text()
 MODEL = os.environ["CLAUDE_MODEL"]
-MAX_TURNS = int(os.environ["AGENT_MAX_TURNS"])
 # Tools are served by an in-process MCP server with this name; their full names are mcp__<name>__<tool>.
 TOOL_SERVER = "agent"
 
@@ -40,6 +39,10 @@ class Agent:
         self.session_id = session_id
         # What the user sees: {"role": "user" | "assistant" | "activity", "text": ...}
         self.history = history or []
+        # How full its context window is, in tokens. Read from Claude Code after
+        # connecting and after each turn, and from each reply while it works.
+        self.context_used = 0
+        self.context_max = 0
 
         # Without a VM it only talks.
         tools = []
@@ -59,7 +62,6 @@ class Agent:
                 permission_mode="dontAsk",
                 setting_sources=[],
                 strict_mcp_config=True,
-                max_turns=MAX_TURNS,
                 resume=session_id,
                 # Screenshots make big messages; the default limit is 1MB.
                 max_buffer_size=10 * 1024 * 1024,
@@ -71,6 +73,12 @@ class Agent:
 
     async def start(self):
         await self.client.connect()
+        await self.read_context()
+
+    async def read_context(self):
+        usage = await self.client.get_context_usage()
+        self.context_used = usage["totalTokens"]
+        self.context_max = usage["maxTokens"]
 
     async def stop(self):
         await self.client.disconnect()
@@ -111,6 +119,12 @@ class Agent:
                     self.history.append({"role": "activity", "text": f"Failed: {error}"})
             if not isinstance(message, AssistantMessage):
                 continue
+            # Each reply's usage is the whole conversation it was given, plus what it wrote.
+            if message.usage:
+                self.context_used = message.usage.get("input_tokens", 0)
+                self.context_used += message.usage.get("cache_creation_input_tokens", 0)
+                self.context_used += message.usage.get("cache_read_input_tokens", 0)
+                self.context_used += message.usage.get("output_tokens", 0)
             for block in message.content:
                 if isinstance(block, ThinkingBlock):
                     print(f"[thinking] {block.thinking}")
@@ -120,5 +134,6 @@ class Agent:
                     print(block.text)
 
         watcher.cancel()
+        await self.read_context()
         self.history.append({"role": "assistant", "text": reply or "(stopped)"})
         return reply

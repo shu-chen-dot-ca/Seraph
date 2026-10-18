@@ -24,7 +24,9 @@ from claude_agent_sdk import tool
 
 from sandbox.agent.computer_use import Computer
 
-MAX_WAIT_SECONDS = 30
+# The only waits the agent can pick. Short ones are for things that are about
+# instant; for something slow it waits 10s at a time and looks in between.
+WAIT_SECONDS = [1, 3, 10, 30]
 
 
 class ComputerTools:
@@ -50,7 +52,13 @@ class ComputerTools:
                 "Scroll with the mouse at (x, y). direction: up, down, left or right. amount: wheel clicks, 3 is about a third of a page.",
                 {"x": int, "y": int, "direction": str, "amount": int},
             )(self.scroll),
-            tool("wait", f"Wait some seconds, e.g. for a page to load (at most {MAX_WAIT_SECONDS}).", {"seconds": int})(self.wait),
+            tool(
+                "wait",
+                "Wait before looking again with screenshot. seconds: 1 for things that are instant (a menu opening), 3 for things that are "
+                "nearly instant (a window or page opening), 10 or 30 for slow things (installs, downloads, builds). "
+                "Prefer checking often: for something that takes about 40 seconds, wait 10 four times and look in between, not 30 twice.",
+                {"type": "object", "properties": {"seconds": {"type": "integer", "enum": WAIT_SECONDS}}, "required": ["seconds"]},
+            )(self.wait),
             tool("bash", "Run a shell command in the VM as the desktop user, in their home folder.", {"command": str})(self.bash),
         ]
 
@@ -104,7 +112,9 @@ class ComputerTools:
         return {"content": [{"type": "text", "text": "Scrolled."}]}
 
     async def wait(self, args: dict) -> dict:
-        seconds = min(args["seconds"], MAX_WAIT_SECONDS)
+        seconds = args["seconds"]
+        if seconds not in WAIT_SECONDS:
+            raise ValueError(f"seconds must be one of {WAIT_SECONDS}")
         await asyncio.sleep(seconds)
         self.history.append({"role": "activity", "text": f"Waited {seconds} seconds"})
         return {"content": [{"type": "text", "text": f"Waited {seconds} seconds."}]}

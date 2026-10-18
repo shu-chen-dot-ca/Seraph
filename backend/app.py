@@ -394,11 +394,14 @@ def vm_agent_history(session_id: str) -> dict:
     """The chat with the session's agent. While it answers, this includes what it did so far."""
     session = find_vm_session(session_id)
     vm_agent = vm_agents.get(session_id)
+    # Context: how full the agent's context window is, None until it has started.
     if vm_agent is not None:
         history = vm_agent.history
+        context = {"used": vm_agent.context_used, "max": vm_agent.context_max}
     else:
         history = session.chat_agent().get("history", [])
-    return {"history": history, "busy": session_id in vm_agents_busy}
+        context = None
+    return {"history": history, "busy": session_id in vm_agents_busy, "context": context}
 
 
 @app.post("/api/vm/sessions/{session_id}/agent/chat")
@@ -420,7 +423,8 @@ async def vm_agent_chat(session_id: str, body: VmChatRequest) -> dict:
         record["history"] = vm_agent.history
         record["claude_session_id"] = vm_agent.session_id
         session.save_agent(record)
-        return {"message": reply, "history": vm_agent.history}
+        context = {"used": vm_agent.context_used, "max": vm_agent.context_max}
+        return {"message": reply, "history": vm_agent.history, "context": context}
     finally:
         vm_agents_busy.discard(session_id)
 

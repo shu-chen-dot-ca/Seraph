@@ -1,4 +1,4 @@
-import { AlertIcon, ArchiveIcon, ChevronLeftIcon, ChevronRightIcon, CheckIcon, FileDirectoryFillIcon, FileIcon, CodeIcon, GitBranchIcon, GitCommitIcon, LinkExternalIcon, PaperAirplaneIcon, SquareFillIcon, PlusCircleIcon, PlusIcon, SyncIcon, TrashIcon, XIcon, HistoryIcon, IssueOpenedIcon, LawIcon, LinkIcon, RepoForkedIcon, SearchIcon, StarIcon } from "@primer/octicons-react";
+import { AlertIcon, ArchiveIcon, ChevronLeftIcon, ChevronRightIcon, CheckIcon, FileDirectoryFillIcon, FileIcon, CodeIcon, GitBranchIcon, GitCommitIcon, LinkExternalIcon, PaperAirplaneIcon, SquareFillIcon, PlusCircleIcon, PlusIcon, SyncIcon, LockIcon, UnlockIcon, TrashIcon, XIcon, HistoryIcon, IssueOpenedIcon, LawIcon, LinkIcon, RepoForkedIcon, SearchIcon, StarIcon } from "@primer/octicons-react";
 import { StrictMode, useEffect, useRef, useState, type MouseEvent } from "react";
 import { createRoot } from "react-dom/client";
 import Markdown from "react-markdown";
@@ -244,6 +244,8 @@ function App() {
   const [vmPanel, setVmPanel] = useState<"desktop" | "terminal" | "settings">("desktop");
   // Bumped by the Reconnect button: new iframe keys make the desktop and terminals load again.
   const [viewerReload, setViewerReload] = useState(0);
+  // Locked: the desktop and terminals ignore the human's mouse and keyboard, so the agent works undisturbed.
+  const [inputLocked, setInputLocked] = useState(false);
   // Terminal tabs of the selected VM: tmux session names "1", "2", ...
   const [terminals, setTerminals] = useState<string[]>([]);
   const [activeTerminal, setActiveTerminal] = useState<string | null>(null);
@@ -251,6 +253,8 @@ function App() {
   const [vmChatMessages, setVmChatMessages] = useState<{ role: string; text: string }[]>([]);
   const [vmChatInput, setVmChatInput] = useState("");
   const [vmChatBusy, setVmChatBusy] = useState(false);
+  // How full the agent's context window is, in tokens; null until the agent has started.
+  const [vmContext, setVmContext] = useState<{ used: number; max: number } | null>(null);
   const vmChatBox = useRef<HTMLTextAreaElement>(null);
   // The selected session right now, for answers that arrive after the user picked another one.
   const selectedVmIdRef = useRef<string | null>(null);
@@ -260,6 +264,7 @@ function App() {
   useEffect(() => {
     setVmChatMessages([]);
     setVmChatBusy(false);
+    setVmContext(null);
     if (selectedVmId === null) {
       return;
     }
@@ -269,6 +274,7 @@ function App() {
         if (selectedVmIdRef.current === selectedVmId && body.history) {
           setVmChatMessages(body.history);
           setVmChatBusy(body.busy);
+          setVmContext(body.context);
         }
       })
       .catch(() => undefined);
@@ -294,6 +300,7 @@ function App() {
         const body = await response.json();
         if (selectedVmIdRef.current === sessionId && body.history) {
           setVmChatMessages(body.history);
+          setVmContext(body.context);
         }
       } catch {
         return;
@@ -312,6 +319,7 @@ function App() {
       }
       if (selectedVmIdRef.current === sessionId) {
         setVmChatMessages(body.history);
+        setVmContext(body.context);
       }
     } catch (err) {
       if (selectedVmIdRef.current === sessionId) {
@@ -855,7 +863,17 @@ function App() {
     search(searchedQ, newPage);
   }
 
+  // The agent's context window as "123k/1M".
+  let contextText = "Not started";
+  if (vmContext !== null) {
+    const max = vmContext.max >= 1000000 ? `${vmContext.max / 1000000}M` : `${Math.round(vmContext.max / 1000)}k`;
+    contextText = `${Math.round(vmContext.used / 1000)}k/${max}`;
+  }
+
   let layoutClass = "layout";
+  if (leftTab === "vm") {
+    layoutClass += " layout-vm";
+  }
   if (!leftOpen) {
     layoutClass += " layout-folded";
   }
@@ -1222,6 +1240,23 @@ function App() {
                     <SyncIcon size={14} /> Reconnect
                   </button>
                 )}
+                {leftTab === "vm" && selectedVmReady && (vmPanel === "desktop" || vmPanel === "terminal") && (
+                  <button
+                    className={inputLocked ? "btn btn-sm input-lock-on" : "btn btn-sm"}
+                    type="button"
+                    aria-pressed={inputLocked}
+                    title={inputLocked ? "Your mouse and keyboard are locked out, so the agent works undisturbed. Click to unlock." : "Lock out your mouse and keyboard, so the agent works undisturbed"}
+                    onClick={() => {
+                      // Take the keyboard away from the desktop or terminal it is in.
+                      if (!inputLocked && document.activeElement instanceof HTMLElement) {
+                        document.activeElement.blur();
+                      }
+                      setInputLocked(!inputLocked);
+                    }}
+                  >
+                    {inputLocked ? <LockIcon size={14} /> : <UnlockIcon size={14} />} {inputLocked ? "Locked" : "Lock"}
+                  </button>
+                )}
                 {leftTab === "explore" && (
                 <div className="results-counts">
                   {view === "search" && result !== null && (
@@ -1381,6 +1416,14 @@ function App() {
                         <dd>{new Date(selectedVm.created_at).toLocaleString()}</dd>
                       </dl>
                     </section>
+                  </div>
+                )}
+                {/* Covers the desktop and terminals so clicks and keys never reach them. */}
+                {selectedVmReady && inputLocked && (vmPanel === "desktop" || vmPanel === "terminal") && (
+                  <div className="input-lock-cover">
+                    <span className="input-lock-badge">
+                      <LockIcon size={12} /> Locked: the agent is in control
+                    </span>
                   </div>
                 )}
                 {/* Both panels stay loaded while hidden, so switching never reconnects. */}
@@ -1709,8 +1752,14 @@ function App() {
               >
                 {agentOpen ? <ChevronRightIcon size={12} /> : <ChevronLeftIcon size={12} />}
               </button>
-              <div className="left-panel-header">
-                <strong>Agent</strong>
+              <div className="left-panel-header agent-header">
+                <div className="context-bar" title="How full the agent's context window is">
+                  <div className="context-bar-fill" style={{ width: vmContext && vmContext.max > 0 ? `${Math.min(100, (vmContext.used / vmContext.max) * 100)}%` : "0%" }} />
+                </div>
+                <div className="context-text">
+                  <strong>Agent</strong>
+                  <span className="muted">{contextText}</span>
+                </div>
               </div>
               <div className="chat">
                 <div className="chat-messages">
