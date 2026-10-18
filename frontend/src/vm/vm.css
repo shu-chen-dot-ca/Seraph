@@ -1,0 +1,643 @@
+/* VM Sessions tab: session cards, create dialog, desktop, terminals, directory, settings, agent chat. Loaded after explore.css. */
+
+/* VM agent chat: a wider right column, level with the left panel. */
+.layout-agent {
+  grid-template-columns: minmax(360px, 34vw) minmax(0, 1fr) 400px;
+}
+
+.layout-folded.layout-agent {
+  grid-template-columns: 0 minmax(0, 1fr) 400px;
+}
+
+.agent-panel {
+  margin-top: 44px;
+}
+
+/* As tall as the left panel's header, which holds 32px toggles. */
+.agent-panel .left-panel-header {
+  min-height: 44px;
+}
+
+.right-panel .chat-messages {
+  margin-right: -12px;
+  padding: 16px 16px 16px 4px;
+}
+
+.right-panel .chat-input {
+  margin: 0 -12px;
+  padding: 12px 12px 0;
+}
+
+/* ---- Create session dialog ----------------------------------------------------- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: #0000007a;
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 420px;
+  max-width: 100%;
+  padding: 16px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px #0000003d;
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-weight: 500;
+}
+
+.modal-field .muted {
+  font-weight: 400;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ---- VM session cards (left panel) ------------------------------------------- */
+
+.vm-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.vm-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.vm-card {
+  cursor: pointer;
+}
+
+.vm-card:hover {
+  border-color: var(--fg-muted);
+}
+
+.vm-card-selected,
+.vm-card-selected:hover {
+  border-color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* ---- VM desktop viewer (right panel) ----------------------------------------- */
+
+.vm-viewer {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.vm-viewer-frame {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #000000;
+}
+
+.vm-pane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.vm-pane-hidden {
+  display: none;
+}
+
+.terminal-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 4px 4px 0;
+  overflow-x: auto;
+  background: var(--bg-subtle);
+  border-bottom: 1px solid var(--border);
+}
+
+.terminal-tab {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  color: var(--fg-muted);
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+.terminal-tab-on {
+  color: var(--fg);
+  background: var(--bg);
+  border-color: var(--border);
+}
+
+.terminal-tab-name,
+.terminal-tab-close,
+.terminal-tab-add {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.terminal-tab-name {
+  padding: 6px 4px 6px 10px;
+  font-size: 12px;
+}
+
+.terminal-tab-close {
+  display: flex;
+  padding: 4px 6px;
+  border-radius: var(--radius);
+}
+
+.terminal-tab-close:hover,
+.terminal-tab-add:hover {
+  color: var(--fg);
+  background: var(--btn-hover-bg);
+}
+
+.terminal-tab-add {
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  color: var(--fg-muted);
+  border-radius: var(--radius);
+}
+
+.vm-viewer-empty {
+  margin: auto;
+  padding: 16px;
+  text-align: center;
+}
+
+.vm-card-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.vm-card-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.vm-card-sub {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.vm-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 12px;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.vm-state {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.vm-state-dot {
+  width: 8px;
+  height: 8px;
+  background: var(--fg-muted);
+  border-radius: 50%;
+}
+
+.vm-state-on {
+  color: var(--success);
+  background: var(--success-subtle);
+  border-color: var(--success);
+}
+
+.vm-state-on .vm-state-dot {
+  background: var(--success);
+}
+
+.vm-card-status {
+  font-size: 12px;
+  color: var(--attention);
+}
+
+.vm-card-status-bad {
+  color: var(--danger);
+}
+
+.vm-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.btn-sm {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.btn-danger {
+  color: var(--danger);
+}
+
+.btn-danger:hover:not(:disabled) {
+  color: #ffffff;
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+.modal-error {
+  margin: 0;
+  color: var(--danger);
+}
+
+.modal-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.modal-note {
+  margin: 0;
+  font-size: 12px;
+}
+
+/* Inside a pane the frame shares the height with the terminal tabs. */
+.vm-pane .vm-viewer-frame {
+  height: auto;
+  min-height: 0;
+}
+
+/* ---- VM settings (right panel) ------------------------------------------------- */
+
+.vm-settings {
+  gap: 0;
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+.vm-settings > .vm-card-status {
+  margin: 12px 16px 0;
+}
+
+.vm-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  border-bottom: 1px solid var(--border-muted);
+}
+
+.vm-settings-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.vm-settings-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.vm-settings-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.vm-settings-note {
+  margin: 0;
+  font-size: 12px;
+}
+
+.vm-settings-env-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.vm-settings-env-row .form-control {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.vm-settings-select {
+  width: auto;
+}
+
+.vm-settings-about {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.vm-settings-about dt {
+  color: var(--fg-muted);
+}
+
+.vm-settings-about dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+/* ---- Agent chat (right panel) ----------------------------------------------- */
+
+/* Only the Send / Stop button: keep it on the right. */
+.vm-chat-input-row {
+  justify-content: flex-end;
+}
+
+/* Agent panel header: the context window bar, with "Agent" and "123k/1M" below it. */
+.agent-header {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.context-bar {
+  height: 6px;
+  overflow: hidden;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-muted);
+  border-radius: 3px;
+}
+
+.context-bar-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.context-text {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+/* ---- VM tab: narrower left panel, input lock ---------------------------------- */
+
+/* The session list needs less room than the chat, so the desktop gets more. */
+.layout-vm {
+  grid-template-columns: 300px minmax(0, 1fr);
+}
+
+.layout-vm.layout-agent {
+  grid-template-columns: 300px minmax(0, 1fr) 400px;
+}
+
+.layout-folded.layout-vm {
+  grid-template-columns: 0 minmax(0, 1fr);
+}
+
+.layout-folded.layout-vm.layout-agent {
+  grid-template-columns: 0 minmax(0, 1fr) 400px;
+}
+
+@media (max-width: 860px) {
+  .layout-vm,
+  .layout-vm.layout-agent,
+  .layout-folded.layout-vm,
+  .layout-folded.layout-vm.layout-agent,
+  .layout-agent,
+  .layout-folded.layout-agent {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.vm-viewer {
+  position: relative;
+}
+
+/* Over the desktop and terminals: takes every click, so none reach them. */
+.input-lock-cover {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  cursor: not-allowed;
+}
+
+/* Centred in the empty strip above the desktop, kept slim so it fits in it. */
+.input-lock-badge {
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+  color: var(--attention);
+  background: var(--bg);
+  border: 1px solid var(--attention);
+  border-radius: 8px;
+}
+
+.input-lock-on {
+  color: var(--attention);
+  border-color: var(--attention);
+}
+
+/* ---- VM tab: Directory ---------------------------------------------------------- */
+
+.vm-directory {
+  gap: 12px;
+  padding: 12px 16px 16px;
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+/* The path on the left, the buttons for the folder or file on the right. */
+.dir-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dir-breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.dir-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.dir-hidden-toggle {
+  margin: 0 4px;
+  font-size: 12px;
+}
+
+.dir-error {
+  margin: 0;
+}
+
+/* A row: name (opens it), size, date, delete. Only the name is the link. */
+.dir-row {
+  cursor: default;
+}
+
+.dir-row:hover {
+  color: var(--fg);
+}
+
+.dir-row-name {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  background: none;
+  border: 0;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.dir-row-name:hover {
+  color: var(--accent);
+}
+
+.dir-row-size {
+  width: 72px;
+  text-align: right;
+  font-size: 12px;
+}
+
+.dir-row-time {
+  width: 96px;
+  text-align: right;
+  font-size: 12px;
+}
+
+.dir-row-delete {
+  visibility: hidden;
+}
+
+.dir-row:hover .dir-row-delete {
+  visibility: visible;
+}
+
+/* Line numbers in front of each line of a text file. */
+.dir-code code {
+  counter-reset: line;
+}
+
+.dir-code-line {
+  display: block;
+  min-height: 20px;
+}
+
+.dir-code-line::before {
+  counter-increment: line;
+  content: counter(line);
+  display: inline-block;
+  width: 40px;
+  margin-right: 16px;
+  text-align: right;
+  color: var(--fg-muted);
+  user-select: none;
+}
+
+.dir-editor {
+  display: block;
+  width: 100%;
+  min-height: 60vh;
+  padding: 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 20px;
+  border: 0;
+  border-radius: 0;
+  resize: vertical;
+}
+
+/* Tree mode: room for the open / closed arrow, empty for files so names line up. */
+.dir-chevron {
+  display: inline-flex;
+  flex: none;
+  justify-content: center;
+  width: 14px;
+  color: var(--fg-muted);
+}
+
+/* A number box with its unit after it, e.g. the disk size in GB. */
+.modal-number {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

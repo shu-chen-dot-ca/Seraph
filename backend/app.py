@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from claude_agent_sdk import get_session_info
@@ -18,6 +18,7 @@ from claude_agent_sdk import get_session_info
 from github_searcher.agent.agent import SearchChatAgent
 from github_searcher.search import get_branches, get_commits, get_contents, get_contents_html, get_repository, search_repositories
 from sandbox.agent.agent import Agent
+from sandbox.files import Files, FilesError
 from sandbox.session import SessionBusyError, SessionError
 from sandbox.vm import VMError
 from sandbox.sessions import Sessions
@@ -201,12 +202,11 @@ class CreateVmSessionRequest(BaseModel):
     cpus: int
     memory_gb: int
     disk_gb: int
-    count: int = 1  # How many sessions to make with these settings.
 
 
 @app.get("/api/vm/options")
 def vm_options() -> dict:
-    """CPU, memory, disk and count choices for the create dialog (from .env)."""
+    """CPU, memory and disk choices for the create dialog (from .env)."""
     return vm_sessions.options()
 
 
@@ -218,33 +218,29 @@ def list_vm_sessions() -> list[dict]:
     """
     result = []
     for session in vm_sessions.list():
-        result.append({**session.to_dict(), **session.latest_usage})
+        result.append({**session.to_dict(), **session.latest_usage, "locked_by": session.locked_by})
     return result
 
 
 @app.post("/api/vm/sessions")
-def create_vm_session(body: CreateVmSessionRequest) -> list[dict]:
-    """Starts creating the sessions and returns right away; the list shows their progress."""
+def create_vm_session(body: CreateVmSessionRequest) -> dict:
+    """Starts creating the session and returns right away; the list shows its progress."""
     repo = body.repo.strip().removeprefix("https://").removeprefix("http://").removeprefix("github.com/")
     repo = repo.removesuffix("/").removesuffix(".git")
     if repo and not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
         raise HTTPException(status_code=400, detail="The repo must be a GitHub URL or owner/name.")
     try:
-        created = vm_sessions.create(
+        session = vm_sessions.create(
             repo,
             name=body.name.strip(),
             cpus=body.cpus,
             memory_gb=body.memory_gb,
             disk_gb=body.disk_gb,
-            count=body.count,
             background=True,
         )
     except SessionError as error:
         raise HTTPException(status_code=400, detail=str(error))
-    result = []
-    for session in created:
-        result.append(session.to_dict())
-    return result
+    return session.to_dict()
 
 
 @app.get("/api/vm/sessions/{session_id}/viewer")
@@ -266,7 +262,8 @@ def vm_session_viewer(session_id: str) -> dict:
     novnc_port = os.environ["SANDBOX_VM_NOVNC_PORT"]
     terminal_port = os.environ["SANDBOX_VM_TERMINAL_PORT"]
     return {
-        "desktop": f"http://{address}:{novnc_port}/vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=2000",
+        # bell=off: no ding in the browser each time the desktop beeps (e.g. while the agent types).
+        "desktop": f"http://{address}:{novnc_port}/vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=2000&bell=off",
         "terminal": f"http://{address}:{terminal_port}/",
     }
 
@@ -321,6 +318,14 @@ def find_vm_session(session_id: str):
         raise HTTPException(status_code=404, detail=str(error))
 
 
+@app.put("/api/vm/sessions/{session_id}/lock")
+def set_vm_lock(session_id: str, body: ToggleRequest) -> dict:
+    """The user locks or unlocks their mouse and keyboard. Unlocking also ends a lock the agent set."""
+    session = find_vm_session(session_id)
+    session.locked_by = "user" if body.enabled else None
+    return {"locked_by": session.locked_by}
+
+
 @app.post("/api/vm/sessions/{session_id}/start")
 def start_vm_session(session_id: str) -> dict:
     find_vm_session(session_id)
@@ -361,6 +366,68 @@ def set_vm_env(session_id: str, body: EnvRequest) -> dict:
     except VMError as error:
         raise HTTPException(status_code=500, detail=str(error))
     return session.to_dict()
+
+
+# --- Directory tab: the VM's files, as its desktop user ------------------------
+
+
+class SaveFileRequest(BaseModel):
+    path: str
+    text: str
+
+
+class UploadFileRequest(BaseModel):
+    folder: str
+    name: str
+    data: str  # The file's content, base64.
+
+
+@app.get("/api/vm/sessions/{session_id}/files")
+def list_vm_files(session_id: str, path: str = "") -> dict:
+    """A folder's entries. No path: the home folder."""
+    files = Files(find_vm_session(session_id).vm)
+    home = files.home()
+    if not path:
+        path = home
+    path = files.clean_path(path)
+    return {"path": path, "home": home, "entries": files.list(path)}
+
+
+@app.get("/api/vm/sessions/{session_id}/files/content")
+def read_vm_file(session_id: str, path: str) -> dict:
+    return Files(find_vm_session(session_id).vm).read(path)
+
+
+@app.get("/api/vm/sessions/{session_id}/files/download")
+def download_vm_file(session_id: str, path: str) -> Response:
+    content = Files(find_vm_session(session_id).vm).read_bytes(path)
+    name = path.rstrip("/").split("/")[-1].replace('"', "")
+    return Response(content, media_type="application/octet-stream", headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.put("/api/vm/sessions/{session_id}/files/content")
+def save_vm_file(session_id: str, body: SaveFileRequest) -> dict:
+    Files(find_vm_session(session_id).vm).write(body.path, body.text.encode())
+    return {}
+
+
+@app.post("/api/vm/sessions/{session_id}/files/upload")
+def upload_vm_file(session_id: str, body: UploadFileRequest) -> dict:
+    if "/" in body.name or body.name in ("", ".", ".."):
+        raise HTTPException(status_code=400, detail=f"Not a file name: {body.name}")
+    Files(find_vm_session(session_id).vm).write(body.folder.rstrip("/") + "/" + body.name, base64.b64decode(body.data))
+    return {}
+
+
+@app.delete("/api/vm/sessions/{session_id}/files")
+def delete_vm_file(session_id: str, path: str) -> dict:
+    Files(find_vm_session(session_id).vm).delete(path)
+    return {}
+
+
+@app.exception_handler(FilesError)
+def files_error(request: Request, error: FilesError) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"detail": str(error)})
 
 
 @app.put("/api/vm/sessions/{session_id}/autostart")
@@ -416,7 +483,7 @@ async def vm_agent_chat(session_id: str, body: VmChatRequest) -> dict:
         vm_agent = vm_agents.get(session_id)
         if vm_agent is None:
             # Continue the saved conversation, if there is one.
-            vm_agent = Agent(record["claude_session_id"], record.get("history", []), vm=session.vm)
+            vm_agent = Agent(record["claude_session_id"], record.get("history", []), session=session)
             await vm_agent.start()
             vm_agents[session_id] = vm_agent
         reply = await vm_agent.run(body.message)
