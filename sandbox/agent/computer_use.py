@@ -45,7 +45,7 @@ class Computer:
         if status is None:
             raise ComputerError("The VM does not exist anymore.")
         if status != "Running":
-            raise ComputerError(f"The VM is not running (it is {status.lower()}). Ask the user to start the session.")
+            raise ComputerError(f"The VM is not running (it is {status.lower()}). Start it with vm_start if the task needs it.")
         # Running can still mean booting or hung: then commands don't get through.
         try:
             result = self.vm.exec("true", timeout=10)
@@ -106,6 +106,28 @@ class Computer:
         result = self.vm.exec(command, timeout=30)
         if result.returncode != 0:
             raise ComputerError(f"Could not scroll: {result.stderr.strip()}")
+
+    def log_out(self) -> None:
+        """End the desktop session (open windows close). Browser terminals and what runs in them keep going."""
+        # The desktop's own login session is the one on seat0 (terminals have none).
+        command = (
+            "id=$(loginctl list-sessions --no-legend | awk '$4 == \"seat0\" {print $1; exit}'); "
+            "[ -n \"$id\" ] || { echo 'Nobody is logged in to the desktop' >&2; exit 3; }; "
+            "loginctl terminate-session \"$id\""
+        )
+        result = self.vm.exec_root(command, timeout=60)
+        if result.returncode != 0:
+            raise ComputerError(f"Could not log out: {result.stderr.strip()}")
+
+    def log_in(self) -> None:
+        """Log the desktop user in again (the login screen does it by itself), and wait until the desktop is up."""
+        result = self.vm.exec_root("systemctl restart gdm3", timeout=60)
+        if result.returncode != 0:
+            raise ComputerError(f"Could not log in: {result.stderr.strip()}")
+        try:
+            self.vm.wait_ready(timeout=180)
+        except Exception as error:
+            raise ComputerError(f"Logged in, but the desktop did not come up: {error}")
 
     def bash(self, command: str, timeout: float = 600) -> str:
         """Run a shell command as the desktop user. Returns what it printed and its exit code."""

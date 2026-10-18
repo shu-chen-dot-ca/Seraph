@@ -20,7 +20,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+# override: the backend reloads itself on code changes, and .env changes should apply then too.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 
 NETWORK = os.environ["SANDBOX_NETWORK"]
 NOVNC_PORT = int(os.environ["SANDBOX_VM_NOVNC_PORT"])
@@ -129,13 +130,34 @@ class VM:
                 return lease["address"]
         return None
 
-    def exec(self, command: str, timeout: float = 600) -> subprocess.CompletedProcess:
-        """Run a shell command as the desktop user, in their home, with the image's PATH."""
+    def exec(self, command: str, timeout: float = 600, input: str | None = None) -> subprocess.CompletedProcess:
+        """Run a shell command as the desktop user, in their home, with the image's PATH.
+
+        input is text for the command's stdin (e.g. a file's content); without it stdin is empty.
+        """
         script = f"set -a; . /etc/environment; set +a; {command}"
         # runuser -l: a login shell in the user's home. The user is whoever has uid 1000.
         as_user = f'exec runuser -l "$(id -nu 1000)" -c {shlex.quote(script)}'
+        if input is None:
+            return subprocess.run(
+                ["incus", "exec", self.name, "--", "bash", "-c", as_user],
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                timeout=timeout,
+            )
         return subprocess.run(
             ["incus", "exec", self.name, "--", "bash", "-c", as_user],
+            capture_output=True,
+            input=input,
+            text=True,
+            timeout=timeout,
+        )
+
+    def exec_root(self, command: str, timeout: float = 120) -> subprocess.CompletedProcess:
+        """Run a shell command as root (for system things like the login screen)."""
+        return subprocess.run(
+            ["incus", "exec", self.name, "--", "bash", "-c", command],
             capture_output=True,
             stdin=subprocess.DEVNULL,
             text=True,

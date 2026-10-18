@@ -32,7 +32,8 @@ from dotenv import load_dotenv
 from sandbox.vm import VM
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(PROJECT_ROOT / ".env")
+# override: the backend reloads itself on code changes, and .env changes should apply then too.
+load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 SESSIONS_DIR = PROJECT_ROOT / os.environ["SANDBOX_SESSIONS_DIR"]
 IMAGE = os.environ["SANDBOX_IMAGE"]
@@ -75,6 +76,9 @@ class Session:
         # The latest usage(), kept fresh by Sessions' watcher thread. Reading it never waits
         # on Incus, which can take seconds for a VM whose guest has hung.
         self.latest_usage = {"on": False, "cpu_percent": None, "memory_used_gb": None}
+        # Who locked the human's mouse and keyboard out of the desktop: "user", "agent" or None.
+        # Only kept while the backend runs; the page shows it and covers the desktop.
+        self.locked_by: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -125,7 +129,7 @@ class Session:
             self.vm.launch(IMAGE, PROFILE, self.cpus, self.memory_gb, f"{self.disk_gb}GiB")
             self.log("Waiting for the VM to be ready")
             self.vm.wait_ready()
-            self.vm.write_file(VM_ENV_FILE, self.env_file())
+            self.write_env()
             if self.repo:
                 self.log(f"Cloning {self.repo}")
                 self.vm.clone(f"https://github.com/{self.repo}.git", PROJECT_DIR)
@@ -162,7 +166,7 @@ class Session:
             self.log("Starting")
             self.vm.start()
             self.vm.wait_ready()
-            self.vm.write_file(VM_ENV_FILE, self.env_file())
+            self.write_env()
             self.status = "running"
             self.save()
             self.log("Started")
@@ -239,7 +243,8 @@ class Session:
     def set_env(self, env: dict[str, str]) -> None:
         """Environment variables for everything in the VM: terminals, desktop, the agent.
 
-        Shells started after this see them; ones already open keep the old values.
+        Shells started after this see them (desktop terminals too, through ~/.bashrc);
+        ones already open keep the old values.
         A stopped VM gets them when it starts.
         """
         for key in env:
@@ -248,8 +253,21 @@ class Session:
         self.env = env
         self.save()
         if self.vm.status() == "Running":
-            self.vm.write_file(VM_ENV_FILE, self.env_file())
+            self.write_env()
         self.log(f"Environment variables set: {', '.join(env) or 'none'}")
+
+    def write_env(self) -> None:
+        """Put the variables in the VM (it must be running).
+
+        They go in VM_ENV_FILE, which login shells read (the browser terminals, the agent).
+        Terminals opened on the desktop are not login shells and only read ~/.bashrc,
+        so ~/.bashrc gets a line that reads the file too (once).
+        """
+        self.vm.write_file(VM_ENV_FILE, self.env_file())
+        line = f"[ -f {VM_ENV_FILE} ] && . {VM_ENV_FILE}  # sandbox environment variables"
+        result = self.vm.exec(f"grep -qxF {shlex.quote(line)} ~/.bashrc || echo {shlex.quote(line)} >> ~/.bashrc", timeout=30)
+        if result.returncode != 0:
+            raise SessionError(f"Could not add the variables to ~/.bashrc: {result.stderr.strip()}")
 
     def env_file(self) -> str:
         lines = ["# Set in the session's Settings tab. Rewritten whenever they change."]

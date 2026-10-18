@@ -6,6 +6,7 @@
 # running demo for a human, who watches it in the browser. So the image has:
 #   - runtimes and system tools a repo can't install itself without sudo
 #   - Playwright + Chromium, so the agent can check a page before calling it ready
+#   - Flatpak (with Flathub) and Firefox from it, pinned to the dock with Files and Terminal
 #   - a `demo` systemd service, so the demo keeps running after the agent stops
 #   - an X11 desktop that logs in by itself, served to the browser by noVNC
 #     (xdotool and scrot only work on X11, not Wayland)
@@ -76,6 +77,15 @@ echo "code code/add-microsoft-repo boolean true" | debconf-set-selections
 curl -fsSL "https://code.visualstudio.com/sha/download?build=stable&os=linux-deb-x64" -o /tmp/code.deb
 $APT install /tmp/code.deb
 rm /tmp/code.deb
+
+# Flatpak with Flathub, and Firefox from it for everyone (a browser on the desktop
+# for the human and the agent). No snap Firefox next to it, so there is only one.
+$APT install flatpak
+flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak install --system -y --noninteractive flathub org.mozilla.firefox
+if command -v snap > /dev/null && snap list firefox > /dev/null 2>&1; then
+    snap remove --purge firefox
+fi
 
 # Node.js: the current LTS line, from nodejs.org (checksum verified).
 node_base="https://nodejs.org/dist/latest-v${NODE_MAJOR}.x"
@@ -191,6 +201,9 @@ lock-enabled=false
 
 [org/gnome/desktop/lockdown]
 disable-lock-screen=true
+
+[org/gnome/shell]
+favorite-apps=['org.mozilla.firefox.desktop', 'org.gnome.Nautilus.desktop', 'org.gnome.Terminal.desktop']
 EOF
 dconf update
 
@@ -244,6 +257,9 @@ cat > /etc/tmux.conf <<'EOF'
 set -g mouse on
 set -g history-limit 50000
 set -g default-terminal "tmux-256color"
+# Size a terminal to the browser tab used last, not the smallest one attached
+# (a hidden or old tab would otherwise shrink it for everyone).
+set -g window-size latest
 EOF
 
 # --writable: input is allowed. --url-arg: ?arg=<n> picks the terminal.

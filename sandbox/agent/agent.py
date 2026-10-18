@@ -5,7 +5,7 @@ Code's built-in tools (no shell, files or web on this machine). Given a VM, it
 gets the computer use tools (tools.py): screenshots, mouse, keyboard and a
 shell, all inside that VM. Without one it only talks.
 
-    agent = Agent(vm=session.vm)
+    agent = Agent(session=session)
     await agent.start()
     reply = await agent.run("hello")
     await agent.stop()
@@ -20,9 +20,10 @@ from dotenv import load_dotenv
 
 from sandbox.agent.computer_use import Computer
 from sandbox.agent.tools import ComputerTools
-from sandbox.vm import VM
+from sandbox.session import Session
 
-load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
+# override: the backend reloads itself on code changes, and .env changes should apply then too.
+load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env", override=True)
 
 SYSTEM_PROMPT = (Path(__file__).parent / "prompt.md").read_text()
 MODEL = os.environ["CLAUDE_MODEL"]
@@ -31,7 +32,7 @@ TOOL_SERVER = "agent"
 
 
 class Agent:
-    def __init__(self, session_id: str | None = None, history: list | None = None, vm: VM | None = None):
+    def __init__(self, session_id: str | None = None, history: list | None = None, session: Session | None = None):
         self.tokens = 0
         self.cost = 0.0
         self.interrupt = False
@@ -44,10 +45,13 @@ class Agent:
         self.context_used = 0
         self.context_max = 0
 
-        # Without a VM it only talks.
+        # Without a session (and so a VM) it only talks.
         tools = []
-        if vm is not None:
-            tools = ComputerTools(Computer(vm), self.history).list()
+        # Kept to end each turn (lock_desktop's lock ends with the turn).
+        self.computer_tools = None
+        if session is not None:
+            self.computer_tools = ComputerTools(Computer(session.vm), session, self.history)
+            tools = self.computer_tools.list()
         allowed_tools = []
         for item in tools:
             allowed_tools.append(f"mcp__{TOOL_SERVER}__{item.name}")
@@ -98,6 +102,9 @@ class Agent:
         await self.client.query(prompt)
 
         reply = ""
+        # Where the last thing the agent said sits in the history: the final one is its reply,
+        # which is added as the answer, so its activity copy is taken out again at the end.
+        last_text_index = None
         async for message in self.client.receive_response():
             if isinstance(message, ResultMessage):
                 usage = message.usage or {}
@@ -125,15 +132,26 @@ class Agent:
                 self.context_used += message.usage.get("cache_creation_input_tokens", 0)
                 self.context_used += message.usage.get("cache_read_input_tokens", 0)
                 self.context_used += message.usage.get("output_tokens", 0)
+            # Show everything as it happens: what it says between actions, and each action as it starts.
             for block in message.content:
                 if isinstance(block, ThinkingBlock):
                     print(f"[thinking] {block.thinking}")
                 if isinstance(block, ToolUseBlock):
                     print(f"[tool] {block.name} {block.input}")
+                    if self.computer_tools is not None:
+                        name = block.name.removeprefix(f"mcp__{TOOL_SERVER}__")
+                        self.history.append({"role": "activity", "text": self.computer_tools.describe(name, block.input)})
                 if isinstance(block, TextBlock):
                     print(block.text)
+                    if block.text.strip():
+                        self.history.append({"role": "activity", "text": block.text.strip()})
+                        last_text_index = len(self.history) - 1
 
         watcher.cancel()
+        if self.computer_tools is not None:
+            self.computer_tools.end_turn()
         await self.read_context()
+        if last_text_index is not None and self.history[last_text_index]["text"] == reply.strip():
+            del self.history[last_text_index]
         self.history.append({"role": "assistant", "text": reply or "(stopped)"})
         return reply
