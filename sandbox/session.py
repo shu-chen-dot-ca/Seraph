@@ -5,7 +5,7 @@ On disk, in SANDBOX_SESSIONS_DIR:
     <id>/session.json              {"id", "name", "repo", "vm", "cpus", "memory_gb", "disk_gb",
                                     "internet", "env", "autostart", "status", "created_at"}
     <id>/events.jsonl              lifecycle log, one {"time", "text"} per line
-    <id>/agents/<aid>/agent.json   {"id", "session_id", "task", "status", "claude_session_id", "created_at"}
+    <id>/agents/<aid>/agent.json   {"id", "session_id", "task", "status", "claude_session_id", "history", "created_at"}
 
 The VM lives in Incus; "vm" in session.json points to it. "name" is only for
 showing; "repo" may be empty (then nothing is cloned). An agent belongs to
@@ -303,6 +303,7 @@ class Session:
             "task": task,
             "status": "idle",
             "claude_session_id": None,
+            "history": [],
             "created_at": datetime.now(UTC).isoformat(),
         }
         folder = self.folder / "agents" / agent["id"]
@@ -316,6 +317,21 @@ class Session:
         for record in sorted((self.folder / "agents").glob("*/agent.json")):
             agents.append(json.loads(record.read_text()))
         return agents
+
+    def chat_agent(self) -> dict:
+        """The record of the agent the Agent tab chats with: the first one, made if there is none."""
+        agents = self.list_agents()
+        if agents:
+            return agents[0]
+        return self.add_agent("chat")
+
+    def save_agent(self, agent: dict) -> None:
+        folder = self.folder / "agents" / agent["id"]
+        folder.mkdir(parents=True, exist_ok=True)
+        # Write, then rename: a crash never leaves half a record.
+        temporary = folder / "agent.json.tmp"
+        temporary.write_text(json.dumps(agent, indent=2))
+        temporary.replace(folder / "agent.json")
 
     def remove_agent(self, agent_id: str) -> None:
         # Later: stop the agent first if it is running.

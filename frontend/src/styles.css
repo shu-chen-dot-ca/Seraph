@@ -272,6 +272,34 @@ code {
   right: -16px;
 }
 
+/* VM agent chat: a wider right column, level with the left panel. */
+.layout-agent {
+  grid-template-columns: minmax(360px, 34vw) minmax(0, 1fr) 400px;
+}
+
+.layout-folded.layout-agent {
+  grid-template-columns: 0 minmax(0, 1fr) 400px;
+}
+
+.agent-panel {
+  margin-top: 44px;
+}
+
+/* As tall as the left panel's header, which holds 32px toggles. */
+.agent-panel .left-panel-header {
+  min-height: 44px;
+}
+
+.right-panel .chat-messages {
+  margin-right: -12px;
+  padding: 16px 16px 16px 4px;
+}
+
+.right-panel .chat-input {
+  margin: 0 -12px;
+  padding: 12px 12px 0;
+}
+
 .side-list {
   flex: 1;
   min-height: 0;
@@ -1781,4 +1809,11 @@ code {
   margin: 0;
   font-family: var(--font-mono);
   overflow-wrap: anywhere;
+}
+
+/* ---- Agent chat (right panel) ----------------------------------------------- */
+
+/* Only the Send / Stop button: keep it on the right. */
+.vm-chat-input-row {
+  justify-content: flex-end;
 }

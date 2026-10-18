@@ -247,6 +247,87 @@ function App() {
   // Terminal tabs of the selected VM: tmux session names "1", "2", ...
   const [terminals, setTerminals] = useState<string[]>([]);
   const [activeTerminal, setActiveTerminal] = useState<string | null>(null);
+  // Agent tab: the chat with the selected session's agent.
+  const [vmChatMessages, setVmChatMessages] = useState<{ role: string; text: string }[]>([]);
+  const [vmChatInput, setVmChatInput] = useState("");
+  const [vmChatBusy, setVmChatBusy] = useState(false);
+  const vmChatBox = useRef<HTMLTextAreaElement>(null);
+  // The selected session right now, for answers that arrive after the user picked another one.
+  const selectedVmIdRef = useRef<string | null>(null);
+  selectedVmIdRef.current = selectedVmId;
+
+  // A new session picked: show its chat (and whether its agent is still answering).
+  useEffect(() => {
+    setVmChatMessages([]);
+    setVmChatBusy(false);
+    if (selectedVmId === null) {
+      return;
+    }
+    fetch(`/api/vm/sessions/${selectedVmId}/agent`)
+      .then((response) => response.json())
+      .then((body) => {
+        if (selectedVmIdRef.current === selectedVmId && body.history) {
+          setVmChatMessages(body.history);
+          setVmChatBusy(body.busy);
+        }
+      })
+      .catch(() => undefined);
+  }, [selectedVmId]);
+
+  async function sendVmChat() {
+    const message = vmChatInput.trim();
+    const sessionId = selectedVmId;
+    if (!message || vmChatBusy || sessionId === null) {
+      return;
+    }
+    setVmChatMessages((old) => [...old, { role: "user", text: message }]);
+    setVmChatInput("");
+    if (vmChatBox.current) {
+      vmChatBox.current.style.height = "";
+    }
+
+    setVmChatBusy(true);
+    // While the agent works, show what it did so far.
+    const timer = window.setInterval(async () => {
+      try {
+        const response = await fetch(`/api/vm/sessions/${sessionId}/agent`);
+        const body = await response.json();
+        if (selectedVmIdRef.current === sessionId && body.history) {
+          setVmChatMessages(body.history);
+        }
+      } catch {
+        return;
+      }
+    }, 500);
+
+    try {
+      const response = await fetch(`/api/vm/sessions/${sessionId}/agent/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: message }),
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        throw new Error(body.detail);
+      }
+      if (selectedVmIdRef.current === sessionId) {
+        setVmChatMessages(body.history);
+      }
+    } catch (err) {
+      if (selectedVmIdRef.current === sessionId) {
+        setVmChatMessages((old) => [...old, { role: "error", text: `Chat failed: ${err instanceof Error ? err.message : err}` }]);
+      }
+    }
+    window.clearInterval(timer);
+    if (selectedVmIdRef.current === sessionId) {
+      setVmChatBusy(false);
+    }
+  }
+
+  function stopVmChat() {
+    fetch(`/api/vm/sessions/${selectedVmId}/agent/interrupt`, { method: "POST" });
+  }
+
   // Settings tab: drafts that are only sent when saved, and the last error.
   const [envRows, setEnvRows] = useState<[string, string][]>([]);
   const [settingsCpus, setSettingsCpus] = useState(0);
@@ -484,6 +565,8 @@ function App() {
   const chatShown = leftTab === "explore" && leftView === "chat";
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
+  // The VM agent's chat, in the right panel while a session is picked.
+  const [agentOpen, setAgentOpen] = useState(true);
   const resultsScroll = useRef<HTMLDivElement>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
 
@@ -695,6 +778,9 @@ function App() {
         if (leftTab === "explore" && preview !== null) {
           setRightOpen(!rightOpen);
         }
+        if (leftTab === "vm" && selectedVm !== null) {
+          setAgentOpen(!agentOpen);
+        }
         return;
       }
       if (event.ctrlKey && !event.altKey && event.code === "KeyB") {
@@ -777,6 +863,12 @@ function App() {
     layoutClass += " layout-right";
   }
   if (leftTab === "explore" && preview !== null && !rightOpen) {
+    layoutClass += " layout-right-folded";
+  }
+  if (leftTab === "vm" && selectedVm !== null && agentOpen) {
+    layoutClass += " layout-right layout-agent";
+  }
+  if (leftTab === "vm" && selectedVm !== null && !agentOpen) {
     layoutClass += " layout-right-folded";
   }
 
@@ -1125,7 +1217,7 @@ function App() {
                     </button>
                   </div>
                 )}
-                {leftTab === "vm" && selectedVmReady && vmPanel !== "settings" && (
+                {leftTab === "vm" && selectedVmReady && (vmPanel === "desktop" || vmPanel === "terminal") && (
                   <button className="btn btn-sm" type="button" title="Connect the desktop and terminals again" onClick={() => setViewerReload(viewerReload + 1)}>
                     <SyncIcon size={14} /> Reconnect
                   </button>
@@ -1161,7 +1253,7 @@ function App() {
             {leftTab === "vm" && (
               <div className="vm-viewer">
                 {selectedVm === null && <p className="vm-viewer-empty muted">Pick a session on the left to open it.</p>}
-                {selectedVm !== null && !selectedVmReady && vmPanel !== "settings" && (
+                {selectedVm !== null && !selectedVmReady && (vmPanel === "desktop" || vmPanel === "terminal") && (
                   <p className="vm-viewer-empty muted">
                     {selectedVm.status === "creating" && "The VM is being set up. It opens here when it is ready."}
                     {selectedVm.status === "starting" && "The VM is starting."}
@@ -1171,7 +1263,7 @@ function App() {
                     {(selectedVm.status === "running" || selectedVm.status === "stopped") && "The VM is off. Start it in Settings."}
                   </p>
                 )}
-                {selectedVmReady && viewerError && vmPanel !== "settings" && <p className="vm-viewer-empty vm-card-status-bad">{viewerError}</p>}
+                {selectedVmReady && viewerError && (vmPanel === "desktop" || vmPanel === "terminal") && <p className="vm-viewer-empty vm-card-status-bad">{viewerError}</p>}
                 {selectedVm !== null && vmPanel === "settings" && (
                   <div className="vm-pane vm-settings">
                     {settingsError && <p className="vm-card-status vm-card-status-bad">{settingsError}</p>}
@@ -1605,6 +1697,78 @@ function App() {
             </div>
             )}
           </main>
+
+          {leftTab === "vm" && selectedVm !== null && (
+            <aside className={agentOpen ? "right-panel agent-panel" : "right-panel agent-panel right-panel-folded"}>
+              <button
+                className="fold-tab"
+                type="button"
+                aria-label={agentOpen ? "Hide agent" : "Show agent"}
+                title={agentOpen ? "Hide agent" : "Show agent"}
+                onClick={() => setAgentOpen(!agentOpen)}
+              >
+                {agentOpen ? <ChevronRightIcon size={12} /> : <ChevronLeftIcon size={12} />}
+              </button>
+              <div className="left-panel-header">
+                <strong>Agent</strong>
+              </div>
+              <div className="chat">
+                <div className="chat-messages">
+                  {vmChatMessages.length === 0 && <p className="chat-empty">Talk to the agent of {selectedVm.name}.</p>}
+                  {vmChatMessages.map((message, i) => (
+                    <div key={i} className={`chat-message chat-message-${message.role}`}>
+                      {message.role === "assistant" || message.role === "activity" ? <Markdown>{message.text}</Markdown> : message.text}
+                    </div>
+                  ))}
+                  {vmChatBusy && (
+                    <p className="status-line">
+                      <span className="spinner" /> Thinking…
+                    </p>
+                  )}
+                </div>
+                <form
+                  className="chat-input"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    sendVmChat();
+                  }}
+                >
+                  <textarea
+                    ref={vmChatBox}
+                    className="form-control"
+                    rows={1}
+                    value={vmChatInput}
+                    placeholder="Message the agent…"
+                    onChange={(event) => {
+                      setVmChatInput(event.target.value);
+                      event.target.style.height = "";
+                      event.target.style.height = `${event.target.scrollHeight + 2}px`;
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        sendVmChat();
+                      }
+                      if (event.key === "Escape" && vmChatBusy) {
+                        stopVmChat();
+                      }
+                    }}
+                  />
+                  <div className="chat-input-row vm-chat-input-row">
+                    {vmChatBusy ? (
+                      <button className="btn" type="button" aria-label="Stop" onClick={stopVmChat}>
+                        <SquareFillIcon size={16} />
+                      </button>
+                    ) : (
+                      <button className="btn btn-primary" type="submit" aria-label="Send" disabled={!vmChatInput.trim()}>
+                        <PaperAirplaneIcon size={16} />
+                      </button>
+                    )}
+                  </div>
+                </form>
+              </div>
+            </aside>
+          )}
 
           {leftTab === "explore" && preview !== null && (
             <aside className={rightOpen ? "right-panel" : "right-panel right-panel-folded"}>

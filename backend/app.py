@@ -17,6 +17,7 @@ from claude_agent_sdk import get_session_info
 
 from github_searcher.agent.agent import SearchChatAgent
 from github_searcher.search import get_branches, get_commits, get_contents, get_contents_html, get_repository, search_repositories
+from sandbox.agent.agent import Agent
 from sandbox.session import SessionBusyError, SessionError
 from sandbox.vm import VMError
 from sandbox.sessions import Sessions
@@ -26,6 +27,10 @@ SESSIONS_FILE = Path(__file__).parent.parent / ".chat_sessions.json"
 agent = SearchChatAgent()
 agent_ready = None
 vm_sessions = Sessions()
+# The running chat agent of each VM session (by session id), made on the first message.
+vm_agents: dict[str, Agent] = {}
+# Sessions whose agent is answering right now.
+vm_agents_busy: set[str] = set()
 old_agent_stop = None
 
 
@@ -35,6 +40,8 @@ async def lifespan(app: FastAPI):
     agent_ready = asyncio.create_task(agent.start())
     yield
     await agent.stop()
+    for vm_agent in list(vm_agents.values()):
+        await vm_agent.stop()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -378,11 +385,62 @@ def set_vm_resources(session_id: str, body: ResourcesRequest) -> dict:
     return session.to_dict()
 
 
-@app.delete("/api/vm/sessions/{session_id}")
-def delete_vm_session(session_id: str) -> dict:
-    """Deletes the VM, then the session's folder. Takes a few seconds."""
+class VmChatRequest(BaseModel):
+    message: str
+
+
+@app.get("/api/vm/sessions/{session_id}/agent")
+def vm_agent_history(session_id: str) -> dict:
+    """The chat with the session's agent. While it answers, this includes what it did so far."""
+    session = find_vm_session(session_id)
+    vm_agent = vm_agents.get(session_id)
+    if vm_agent is not None:
+        history = vm_agent.history
+    else:
+        history = session.chat_agent().get("history", [])
+    return {"history": history, "busy": session_id in vm_agents_busy}
+
+
+@app.post("/api/vm/sessions/{session_id}/agent/chat")
+async def vm_agent_chat(session_id: str, body: VmChatRequest) -> dict:
+    """Send one message to the session's agent and wait for its answer."""
+    session = find_vm_session(session_id)
+    if session_id in vm_agents_busy:
+        raise HTTPException(status_code=409, detail="The agent is still answering.")
+    vm_agents_busy.add(session_id)
     try:
-        vm_sessions.delete(session_id)
+        record = session.chat_agent()
+        vm_agent = vm_agents.get(session_id)
+        if vm_agent is None:
+            # Continue the saved conversation, if there is one.
+            vm_agent = Agent(record["claude_session_id"], record.get("history", []), vm=session.vm)
+            await vm_agent.start()
+            vm_agents[session_id] = vm_agent
+        reply = await vm_agent.run(body.message)
+        record["history"] = vm_agent.history
+        record["claude_session_id"] = vm_agent.session_id
+        session.save_agent(record)
+        return {"message": reply, "history": vm_agent.history}
+    finally:
+        vm_agents_busy.discard(session_id)
+
+
+@app.post("/api/vm/sessions/{session_id}/agent/interrupt")
+def vm_agent_interrupt(session_id: str) -> dict:
+    vm_agent = vm_agents.get(session_id)
+    if vm_agent is not None:
+        vm_agent.interrupt = True
+    return {}
+
+
+@app.delete("/api/vm/sessions/{session_id}")
+async def delete_vm_session(session_id: str) -> dict:
+    """Stops the session's agent, deletes the VM, then the session's folder. Takes a few seconds."""
+    vm_agent = vm_agents.pop(session_id, None)
+    if vm_agent is not None:
+        await vm_agent.stop()
+    try:
+        await asyncio.to_thread(vm_sessions.delete, session_id)
     except SessionBusyError as error:
         raise HTTPException(status_code=409, detail=f"{error}: wait until it finishes, then delete it.")
     except SessionError as error:

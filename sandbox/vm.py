@@ -85,10 +85,19 @@ class VM:
     def stop(self) -> None:
         if self.status() != "Running":
             return
-        # Ask the VM to shut down; force it off if it takes too long.
-        result = subprocess.run(["incus", "stop", self.name, "--timeout", "60"], capture_output=True, stdin=subprocess.DEVNULL)
-        if result.returncode != 0:
+        # A VM that crashed or hung can't shut itself down: force it off right away
+        # instead of waiting a minute for it.
+        try:
+            responds = subprocess.run(["incus", "exec", self.name, "--", "true"], capture_output=True, stdin=subprocess.DEVNULL, timeout=10).returncode == 0
+        except subprocess.TimeoutExpired:
+            responds = False
+        if not responds:
             subprocess.run(["incus", "stop", self.name, "--force"], capture_output=True, stdin=subprocess.DEVNULL)
+        else:
+            # Ask the VM to shut down; force it off if it takes too long.
+            result = subprocess.run(["incus", "stop", self.name, "--timeout", "60"], capture_output=True, stdin=subprocess.DEVNULL)
+            if result.returncode != 0:
+                subprocess.run(["incus", "stop", self.name, "--force"], capture_output=True, stdin=subprocess.DEVNULL)
         if self.status() == "Running":
             raise VMError(f"Could not stop {self.name}")
 
@@ -168,10 +177,14 @@ class VM:
                 stdin=subprocess.DEVNULL,
             )
             if result.returncode == 0:
-                return
+                break
             if time.monotonic() > deadline:
                 raise VMError(f"{self.name}: the desktop did not start (no VNC server on port {VNC_PORT})")
             time.sleep(2)
+
+        # GNOME's shell comes up all black after boot and only draws once restarted.
+        # Restart it now that the desktop is up; open windows stay open.
+        self.exec("pkill -HUP -x gnome-shell; sleep 5", timeout=60)
 
     def write_file(self, path: str, content: str, mode: str = "0644") -> None:
         """Write a file inside the VM as root (the VM must be running)."""
