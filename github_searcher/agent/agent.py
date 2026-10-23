@@ -1,348 +1,233 @@
-import asyncio
-import json
-import threading
-import uuid
+"""One agent: one long-lived Claude conversation.
+
+Every agent is the same kind. It searches GitHub and keeps the Repos and Issues lists, works on
+its jobs, and does the hands-on part in a VM while it holds one. Its tools come from one
+in-process MCP server ("agent"):
+- the GitHub tools (github_tools.py) read GitHub from this machine, so the token never enters the VM;
+- the work tools (work_tools.py) change the lists, jobs, the Inbox and the VM queue;
+- the computer tools (sandbox/agent/tools.py) act inside the VM: screen, mouse, keyboard, shell.
+Of Claude Code's own tools it only gets TodoWrite, which touches nothing. No shell, files or web
+on this machine, so the host's secrets stay out of reach.
+
+The conversation lives in Claude Code and is resumed by its session id after a restart. What the
+user sees is the history: the agent record's list, appended as messages arrive and never changed.
+The frontend pairs each tool entry with its tool_result by id:
+
+    {"type": "user", "text", "time"}            added by Agents, which batches the messages
+    {"type": "system", "text", "time"}          also added by Agents (VM granted, inbox decisions, errors)
+    {"type": "text", "text"}                    what the agent says
+    {"type": "thinking", "text"}
+    {"type": "tool", "id", "name", "summary", "input"}
+    {"type": "tool_result", "id", "text", "is_error", "image"}
+    {"type": "turn_end", "stopped", "cost_usd", "time"}
+
+    agent = Agent(record, computer_tools, work_tools, on_change)
+    await agent.run("[User] hello")
+    await agent.stop()
+"""
+
+import os
+from datetime import UTC, datetime
 from pathlib import Path
 
-import httpx
-from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, TextBlock, ThinkingBlock, ToolUseBlock, create_sdk_mcp_server, tool
+from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, SystemMessage, TextBlock, ThinkingBlock, ToolResultBlock, ToolUseBlock, UserMessage, create_sdk_mcp_server
+from dotenv import load_dotenv
 
-from github_searcher import search as github
-from github_searcher.search import get_branches, get_contents, get_contents_html, get_readme, get_repository, search_repositories
+from github_searcher.agent.github_tools import GithubTools
+from github_searcher.agent.work_tools import WorkTools
+from sandbox.agent.tools import ComputerTools
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+# override: the backend reloads itself on code changes, and .env changes should apply then too.
+load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 SYSTEM_PROMPT = (Path(__file__).parent / "prompt.md").read_text()
-
-PREFIXES = [
-    "",
-    "NOT ",
-    "in:",
-    "stars:",
-    "forks:",
-    "followers:",
-    "size:",
-    "topics:",
-    "good-first-issues:",
-    "help-wanted-issues:",
-    "created:",
-    "pushed:",
-    "language:",
-    "topic:",
-    "license:",
-    "user:",
-    "org:",
-    "repo:",
-    "archived:",
-    "fork:",
-    "mirror:",
-    "template:",
-    "is:",
-    "has:",
-    "-topic:",
-    "-language:",
-    "-license:",
-    "-user:",
-    "-org:",
-    "-repo:",
-    "sort:",
-]
+# Tools are served by an in-process MCP server with this name; their full names are mcp__<name>__<tool>.
+TOOL_SERVER = "agent"
+# How much of a tool's input and result the history keeps. The agent itself gets them in full.
+INPUT_CUT = 2000
+RESULT_CUT = 4000
+# The folder Claude Code runs in. It has no file tools, so this only decides where Claude Code keeps the
+# conversations: apart from the user's own Claude Code sessions for this repo.
+AGENT_HOME = PROJECT_ROOT / os.environ["DATA_DIR"] / "agent_home"
 
 
-class SearchChatAgent:
-    def __init__(self, session_id: str | None = None, history: list | None = None, repos: list | None = None):
-        self.tokens = 0
-        self.cost = 0.0
-        self.interrupt = False
-        self.entries = []
-        self.mode = "Auto"
-        self.session_id = session_id
-        self.history = history or []
-        self.repos = repos or []
-        self.seen = {}
-        self.query = ""
-        self.result = None
+class Agent:
+    def __init__(self, record: dict, computer_tools: ComputerTools, work_tools: WorkTools, on_change):
+        AGENT_HOME.mkdir(parents=True, exist_ok=True)
+        self.record = record
+        self.id = record["id"]
+        self.name = record["name"]
+        # The record's own list: appending here is appending to what gets saved.
+        self.history = record["history"]
+        # The Claude conversation to continue (None: a new one). Set when a turn starts and after it.
+        self.session_id = record["claude_session_id"]
+        # How full its context window is, in tokens. Read from Claude Code after connecting
+        # and after each turn, and from each reply while it works.
+        self.context_used = record["context_used"]
+        self.context_max = record["context_max"]
+        self.cost_usd = record["cost_usd"]
+        self.computer_tools = computer_tools
+        self.work_tools = work_tools
+        # Called after every message, so the live feed sends the agent list again.
+        self.on_change = on_change
+        # Set by Agents while a turn runs.
+        self.busy = False
+        # When the last message of a turn came in (set by run()), or None before the first one.
+        self.last_event_at = None
+        # Whether the current (or last) turn was interrupted.
+        self.stopped = False
+        self.client = None
+        # Claude Code reports cost as a running total for the connection; this turns it into each turn's cost.
+        self.connection_cost = 0.0
+        # The VM tools' lines in the chat come from their own describe(); all others' from WorkTools.describe().
+        self.computer_names = [item.name for item in computer_tools.list()]
 
-        # A new chat session starts with an empty preview cache, filled with its own repos.
-        github.CACHE.clear()
-        names = [repo["full_name"] for repo in self.repos]
-        threading.Thread(target=self.prefetch, args=(names,), daemon=True).start()
+    async def connect(self) -> None:
+        # GitHub tools still add old-style "activity" lines to the list they are given; nobody reads this one.
+        tools = self.computer_tools.list() + self.work_tools.list() + GithubTools([]).list()
+        allowed_tools = ["TodoWrite"]
+        for item in tools:
+            allowed_tools.append(f"mcp__{TOOL_SERVER}__{item.name}")
 
-        tools = [
-            tool("add_filter", "Add one filter row. prefix must be one of the supported prefixes, value is what follows it, e.g. prefix 'stars:' value '>100'.", {"prefix": str, "value": str})(self.add_filter),
-            tool("update_filter", "Change the value of one filter row by its id.", {"id": str, "value": str})(self.update_filter),
-            tool("remove_filter", "Remove one filter row by its id.", {"id": str})(self.remove_filter),
-            tool("show_search", "Run the user's filter query in the app, like pressing Search. The results show up in the user's Search result tab. Returns all repos on the page (up to 100) with metadata.", {})(self.show_search),
-            tool("search", "Search GitHub on your own; this doesn't touch the user's filters or results. q is a full GitHub query (keywords and qualifiers). sort is stars, forks, updated or help-wanted-issues, add -asc for ascending; leave it empty for best match. Returns up to 100 repos with metadata.", {"type": "object", "properties": {"q": {"type": "string"}, "sort": {"type": "string"}, "page": {"type": "integer"}}, "required": ["q"]})(self.search),
-            tool("read_readme", "Read the README of repos, by full name (owner/name). Each README is cut at 4,000 characters. Use it whenever the README would help you judge or answer, whether or not you plan to add the repo.", {"type": "object", "properties": {"names": {"type": "array", "items": {"type": "string"}}}, "required": ["names"]})(self.read_readme),
-            tool("add_to_session", "Add repos to the session list the user sees, by full name (owner/name).", {"type": "object", "properties": {"names": {"type": "array", "items": {"type": "string"}}}, "required": ["names"]})(self.add_to_session),
-            tool("remove_from_session", "Remove repos from the session list, by full name.", {"type": "object", "properties": {"names": {"type": "array", "items": {"type": "string"}}}, "required": ["names"]})(self.remove_from_session),
-            tool("rank_session", "Reorder the session list: names in best-first order. Repos you leave out keep their order after them.", {"type": "object", "properties": {"names": {"type": "array", "items": {"type": "string"}}}, "required": ["names"]})(self.rank_session),
-            tool("get_session", "Get the repos in the session list with their metadata.", {})(self.get_session),
-        ]
         self.client = ClaudeSDKClient(
             ClaudeAgentOptions(
-                model="claude-opus-5-5",
+                model=os.environ["CLAUDE_MODEL"],
                 system_prompt=SYSTEM_PROMPT,
-                tools=[],
-                mcp_servers={"filters": create_sdk_mcp_server(name="filters", tools=tools)},
-                allowed_tools=["mcp__filters__add_filter", "mcp__filters__update_filter", "mcp__filters__remove_filter", "mcp__filters__show_search", "mcp__filters__search", "mcp__filters__read_readme", "mcp__filters__add_to_session", "mcp__filters__remove_from_session", "mcp__filters__rank_session", "mcp__filters__get_session"],
+                # The only built-in tool: a todo list, which touches nothing on this machine.
+                tools=["TodoWrite"],
+                allowed_tools=allowed_tools,
+                mcp_servers={TOOL_SERVER: create_sdk_mcp_server(name=TOOL_SERVER, tools=tools)},
                 permission_mode="dontAsk",
                 setting_sources=[],
                 strict_mcp_config=True,
-                max_turns=50,
-                resume=session_id,
+                resume=self.session_id,
+                cwd=str(AGENT_HOME),
+                # Screenshots make big messages; the default limit is 1MB.
+                max_buffer_size=10 * 1024 * 1024,
+                # The backend runs in this repo: don't hand the repo's CLAUDE.md or Claude Code's memory
+                # (instructions meant for working on this code) to the agent. Compact at the app's cap.
+                env={
+                    "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1",
+                    "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+                    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": os.environ["AGENT_CONTEXT_CAP"],
+                },
             )
         )
-
-    def state(self) -> str:
-        return json.dumps({"entries": self.entries})
-
-    async def add_filter(self, args: dict) -> dict:
-        if self.mode == "Plan":
-            return {"content": [{"type": "text", "text": "Plan mode: you can't change filters."}], "is_error": True}
-        if args["prefix"] not in PREFIXES:
-            return {"content": [{"type": "text", "text": f"Unknown prefix {args['prefix']!r}. Use one of: {PREFIXES}"}], "is_error": True}
-        self.entries.append({"id": uuid.uuid4().hex[:8], "prefix": args["prefix"], "value": args["value"]})
-        self.history.append({"role": "activity", "text": f"Added filter `{args['prefix']}{args['value']}`"})
-        return {"content": [{"type": "text", "text": self.state()}]}
-
-    async def update_filter(self, args: dict) -> dict:
-        if self.mode == "Plan":
-            return {"content": [{"type": "text", "text": "Plan mode: you can't change filters."}], "is_error": True}
-        for entry in self.entries:
-            if entry["id"] == args["id"]:
-                entry["value"] = args["value"]
-                self.history.append({"role": "activity", "text": f"Changed filter to `{entry['prefix']}{entry['value']}`"})
-                return {"content": [{"type": "text", "text": self.state()}]}
-        return {"content": [{"type": "text", "text": f"No row with id {args['id']!r}. " + self.state()}], "is_error": True}
-
-    async def remove_filter(self, args: dict) -> dict:
-        if self.mode == "Plan":
-            return {"content": [{"type": "text", "text": "Plan mode: you can't change filters."}], "is_error": True}
-        if not any(entry["id"] == args["id"] for entry in self.entries):
-            return {"content": [{"type": "text", "text": f"No row with id {args['id']!r}. " + self.state()}], "is_error": True}
-        for entry in self.entries:
-            if entry["id"] == args["id"]:
-                self.history.append({"role": "activity", "text": f"Removed filter `{entry['prefix']}{entry['value']}`"})
-        self.entries = [entry for entry in self.entries if entry["id"] != args["id"]]
-        return {"content": [{"type": "text", "text": self.state()}]}
-
-    def summarize(self, items: list) -> list:
-        in_session = [repo["full_name"] for repo in self.repos]
-        repos = []
-        for item in items:
-            license = item["license"]["spdx_id"] if item["license"] else None
-            repos.append(
-                {
-                    "name": item["full_name"],
-                    "description": item["description"],
-                    "stars": item["stargazers_count"],
-                    "forks": item["forks_count"],
-                    "open_issues": item["open_issues_count"],
-                    "language": item["language"],
-                    "topics": item["topics"],
-                    "license": license,
-                    "created_at": item["created_at"],
-                    "pushed_at": item["pushed_at"],
-                    "archived": item["archived"],
-                    "fork": item["fork"],
-                    "in_session": item["full_name"] in in_session,
-                }
-            )
-        return repos
-
-    async def show_search(self, args: dict) -> dict:
-        if self.mode == "Plan" or self.mode == "Manual":
-            return {"content": [{"type": "text", "text": f"{self.mode} mode: you can't search."}], "is_error": True}
-
-        parts = []
-        sort = None
-        order = "desc"
-        for entry in self.entries:
-            value = entry["value"].strip()
-            if value:
-                parts.append(entry["prefix"] + value)
-            if entry["prefix"] == "sort:" and value:
-                sort = value.removesuffix("-asc")
-                order = "asc" if value.endswith("-asc") else "desc"
-        query = " ".join(parts)
-        if not query:
-            return {"content": [{"type": "text", "text": "The filters are empty. Add filter rows first."}], "is_error": True}
-
         try:
-            result = await asyncio.to_thread(search_repositories, query, sort, order, 100, 1)
-        except httpx.HTTPStatusError as error:
-            return {"content": [{"type": "text", "text": f"GitHub error: {error.response.text}"}], "is_error": True}
+            await self.client.connect()
+        except Exception as error:
+            if self.session_id is None or "No conversation found" not in str(error):
+                raise
+            # Claude Code no longer has the conversation (its files were cleared): start a new one
+            # instead of failing on every turn. The history stays; the agent forgets it.
+            self.history.append({"type": "system", "text": "Could not continue the old conversation; started a new one", "time": datetime.now(UTC).isoformat()})
+            await self.stop()
+            self.session_id = None
+            await self.connect()
+            return
+        self.connection_cost = 0.0
+        usage = await self.client.get_context_usage()
+        self.context_used = usage["totalTokens"]
+        self.context_max = usage["maxTokens"]
 
-        self.query = query
-        self.result = result
-        self.history.append({"role": "activity", "text": f"Searched your filters `{query}` → {result['total_count']:,} results"})
-        for item in result["items"]:
-            self.seen[item["full_name"]] = item
-        summary = {"q": query, "total_count": result["total_count"], "repos": self.summarize(result["items"])}
-        return {"content": [{"type": "text", "text": json.dumps(summary)}]}
-
-    async def search(self, args: dict) -> dict:
-        if self.mode == "Plan" or self.mode == "Manual":
-            return {"content": [{"type": "text", "text": f"{self.mode} mode: you can't search."}], "is_error": True}
-
-        sort = args.get("sort") or None
-        order = "desc"
-        if sort and sort.endswith("-asc"):
-            sort = sort.removesuffix("-asc")
-            order = "asc"
-
+    async def stop(self) -> None:
+        """Disconnect. The next run() connects again and resumes the conversation."""
+        if self.client is None:
+            return
+        client = self.client
+        self.client = None
         try:
-            result = await asyncio.to_thread(search_repositories, args["q"], sort, order, 100, args.get("page", 1))
-        except httpx.HTTPStatusError as error:
-            return {"content": [{"type": "text", "text": f"GitHub error: {error.response.text}"}], "is_error": True}
+            await client.disconnect()
+        except Exception:
+            # A client whose Claude Code already died has nothing left to close.
+            pass
 
-        self.history.append({"role": "activity", "text": f"Searched `{args['q']}` → {result['total_count']:,} results"})
-        for item in result["items"]:
-            self.seen[item["full_name"]] = item
-        summary = {"q": args["q"], "total_count": result["total_count"], "repos": self.summarize(result["items"])}
-        return {"content": [{"type": "text", "text": json.dumps(summary)}]}
+    async def interrupt(self) -> None:
+        if not self.busy:
+            return
+        # Also seen by run() when the turn is still starting.
+        self.stopped = True
+        if self.client is None:
+            return
+        try:
+            await self.client.interrupt()
+        except Exception:
+            # The turn may have just ended.
+            pass
 
-    def prefetch(self, names: list) -> None:
-        # Load what the preview page opens first, so the user's click is instant.
-        # Runs in a background thread; a repo that fails is simply loaded on click.
-        for name in names:
-            try:
-                owner = name.split("/")[0]
-                repo = name.split("/")[1]
-                info = get_repository(owner, repo)
-                ref = info["default_branch"]
-                get_branches(owner, repo)
-                entries = get_contents(owner, repo, "", ref)
-                readmes = [item for item in entries if item["type"] == "file" and item["name"].lower().startswith("readme")]
-                readmes.sort(key=lambda item: item["name"].lower())
-                if readmes:
-                    get_contents_html(owner, repo, readmes[0]["path"], ref)
-            except (httpx.HTTPError, IndexError, KeyError, TypeError):
-                continue
+    async def run(self, prompt: str) -> None:
+        """One turn: send the prompt and add to the history until the agent ends its turn."""
+        self.stopped = False
+        if self.client is None:
+            await self.connect()
+        await self.client.query(prompt)
+        if self.stopped:
+            await self.client.interrupt()
 
-    async def read_readme(self, args: dict) -> dict:
-        readmes = {}
-        names = [name for name in args["names"] if name.count("/") == 1]
-        for name in args["names"]:
-            if name not in names:
-                readmes[name] = "Not a full name (owner/name)."
-
-        # Fetch all READMEs at the same time instead of one after another.
-        results = await asyncio.gather(*[asyncio.to_thread(get_readme, name.split("/")[0], name.split("/")[1]) for name in names], return_exceptions=True)
-        for name, text in zip(names, results):
-            if isinstance(text, httpx.HTTPStatusError) and text.response.status_code == 404:
-                text = "This repo has no README."
-            elif isinstance(text, httpx.HTTPStatusError):
-                readmes[name] = f"GitHub error: {text.response.text}"
-                continue
-            elif isinstance(text, Exception):
-                readmes[name] = f"Could not read the README: {text}"
-                continue
-            if len(text) > 4000:
-                text = text[:4000] + "\n[cut]"
-            readmes[name] = text
-
-        read = [name for name in names if not readmes.get(name, "").startswith(("GitHub error:", "Could not read"))]
-        if read:
-            self.history.append({"role": "activity", "text": f"Read README of {', '.join(read)}"})
-        return {"content": [{"type": "text", "text": json.dumps(readmes)}]}
-
-    async def add_to_session(self, args: dict) -> dict:
-        if self.mode == "Plan" or self.mode == "Manual":
-            return {"content": [{"type": "text", "text": f"{self.mode} mode: you can't change the session list."}], "is_error": True}
-
-        in_session = [repo["full_name"] for repo in self.repos]
-        not_found = []
-        added = []
-        for name in args["names"]:
-            if name in in_session:
-                continue
-            item = self.seen.get(name)
-            if item is None and name.count("/") == 1:
-                try:
-                    item = await asyncio.to_thread(get_repository, name.split("/")[0], name.split("/")[1])
-                except httpx.HTTPStatusError:
-                    item = None
-            if item is None:
-                not_found.append(name)
-                continue
-            self.repos.append(item)
-            in_session.append(name)
-            added.append(name)
-
-        if added:
-            self.history.append({"role": "activity", "text": f"Added {len(added)} to session: {', '.join(added)}"})
-            threading.Thread(target=self.prefetch, args=(added,), daemon=True).start()
-        text = json.dumps({"session": self.summarize(self.repos), "not_found": not_found})
-        return {"content": [{"type": "text", "text": text}]}
-
-    async def remove_from_session(self, args: dict) -> dict:
-        if self.mode == "Plan" or self.mode == "Manual":
-            return {"content": [{"type": "text", "text": f"{self.mode} mode: you can't change the session list."}], "is_error": True}
-        removed = [repo["full_name"] for repo in self.repos if repo["full_name"] in args["names"]]
-        if removed:
-            self.history.append({"role": "activity", "text": f"Removed {len(removed)} from session: {', '.join(removed)}"})
-        self.repos = [repo for repo in self.repos if repo["full_name"] not in args["names"]]
-        return {"content": [{"type": "text", "text": json.dumps({"session": self.summarize(self.repos)})}]}
-
-    async def rank_session(self, args: dict) -> dict:
-        if self.mode == "Plan" or self.mode == "Manual":
-            return {"content": [{"type": "text", "text": f"{self.mode} mode: you can't change the session list."}], "is_error": True}
-        ranked = []
-        for name in args["names"]:
-            for repo in self.repos:
-                if repo["full_name"] == name and repo not in ranked:
-                    ranked.append(repo)
-        rest = [repo for repo in self.repos if repo not in ranked]
-        self.repos = ranked + rest
-        top = ", ".join(repo["full_name"] for repo in self.repos[:3])
-        self.history.append({"role": "activity", "text": f"Ranked session, top: {top}"})
-        return {"content": [{"type": "text", "text": json.dumps({"session": self.summarize(self.repos)})}]}
-
-    async def get_session(self, args: dict) -> dict:
-        return {"content": [{"type": "text", "text": json.dumps({"session": self.summarize(self.repos)})}]}
-
-    async def start(self):
-        await self.client.connect()
-
-    async def stop(self):
-        await self.client.disconnect()
-
-    async def watch_interrupt(self):
-        while True:
-            await asyncio.sleep(0.1)
-            if self.interrupt:
-                self.interrupt = False
-                await self.client.interrupt()
-
-    async def run(self, prompt: str, mode: str) -> str:
-        self.interrupt = False
-        self.mode = mode
-        self.result = None
-        watcher = asyncio.create_task(self.watch_interrupt())
-        await self.client.query(f"Mode: {mode}\nCurrent filters: {self.state()}\n\n{prompt}")
-
-        reply = ""
         async for message in self.client.receive_response():
-            if isinstance(message, ResultMessage):
-                usage = message.usage or {}
-                self.tokens += usage.get("input_tokens", 0)
-                self.tokens += usage.get("cache_creation_input_tokens", 0)
-                self.tokens += usage.get("cache_read_input_tokens", 0)
-                self.tokens += usage.get("output_tokens", 0)
-                self.cost += message.total_cost_usd or 0
-                reply = message.result or ""
-                self.session_id = message.session_id
-            if not isinstance(message, AssistantMessage):
-                continue
-            for block in message.content:
-                if isinstance(block, ThinkingBlock):
-                    print(f"[thinking] {block.thinking}")
-                if isinstance(block, ToolUseBlock):
-                    print(f"[tool] {block.name} {block.input}")
-                if isinstance(block, TextBlock):
-                    print(block.text)
+            # The conversation's id comes first, so a first turn cut off by a restart can still be continued.
+            if isinstance(message, SystemMessage) and message.subtype == "init" and message.data.get("session_id"):
+                self.session_id = message.data["session_id"]
 
-        watcher.cancel()
-        self.history.append({"role": "assistant", "text": reply or "(stopped)"})
-        return reply
+            if isinstance(message, SystemMessage) and message.subtype == "compact_boundary":
+                self.history.append({"type": "system", "text": "Context compacted", "time": datetime.now(UTC).isoformat()})
+
+            if isinstance(message, AssistantMessage) and message.error:
+                self.history.append({"type": "system", "text": f"Error from Claude: {message.error}", "time": datetime.now(UTC).isoformat()})
+
+            # Each reply's usage is the whole conversation it was given, plus what it wrote.
+            if isinstance(message, AssistantMessage) and message.usage:
+                self.context_used = message.usage.get("input_tokens", 0)
+                self.context_used += message.usage.get("cache_creation_input_tokens", 0)
+                self.context_used += message.usage.get("cache_read_input_tokens", 0)
+                self.context_used += message.usage.get("output_tokens", 0)
+
+            if isinstance(message, ResultMessage):
+                self.session_id = message.session_id
+                total = message.total_cost_usd or 0.0
+                # The running total starts again at 0 when the conversation is reset (e.g. by a reconnect).
+                turn_cost = total - self.connection_cost
+                if total < self.connection_cost:
+                    turn_cost = total
+                self.connection_cost = total
+                self.cost_usd += turn_cost
+                stopped = self.stopped or message.terminal_reason in ["aborted_streaming", "aborted_tools"]
+                if message.is_error and not stopped:
+                    error = "; ".join(message.errors or []) or message.result or message.subtype
+                    self.history.append({"type": "system", "text": f"Error: {error}", "time": datetime.now(UTC).isoformat()})
+                self.history.append({"type": "turn_end", "stopped": stopped, "cost_usd": turn_cost, "time": datetime.now(UTC).isoformat()})
+
+            # The agent's text, thinking and tool calls come in its messages; tool results come back in user
+            # messages (which also carry Claude Code's own notes, like "[Request interrupted by user]", not kept).
+            blocks = []
+            if isinstance(message, (AssistantMessage, UserMessage)) and isinstance(message.content, list):
+                blocks = message.content
+            for block in blocks:
+                if isinstance(block, TextBlock) and isinstance(message, AssistantMessage) and block.text.strip():
+                    self.history.append({"type": "text", "text": block.text})
+                if isinstance(block, ThinkingBlock) and block.thinking.strip():
+                    self.history.append({"type": "thinking", "text": block.thinking})
+                if isinstance(block, ToolUseBlock):
+                    name = block.name.removeprefix(f"mcp__{TOOL_SERVER}__")
+                    summary = self.work_tools.describe(name, block.input)
+                    if name in self.computer_names:
+                        summary = self.computer_tools.describe(name, block.input)
+                    cut = {key: value[:INPUT_CUT] if isinstance(value, str) else value for key, value in block.input.items()}
+                    self.history.append({"type": "tool", "id": block.id, "name": name, "summary": summary, "input": cut})
+                if not isinstance(block, ToolResultBlock):
+                    continue
+                # A result is text, or a list of text and image parts (screenshots). Images are not kept.
+                parts = block.content if isinstance(block.content, list) else [{"type": "text", "text": block.content or ""}]
+                text = "\n".join(part.get("text", "") for part in parts if part.get("type") == "text")
+                image = any(part.get("type") == "image" for part in parts)
+                self.history.append({"type": "tool_result", "id": block.tool_use_id, "text": text[:RESULT_CUT], "is_error": bool(block.is_error), "image": image})
+            # When something last happened, so the user can tell a long command from an agent that is stuck.
+            self.last_event_at = datetime.now(UTC).isoformat()
+            self.on_change()
+
+        # A desktop lock the agent set ends with its turn: Agents.work calls computer_tools.end_turn(),
+        # also when the turn fails or is cancelled.
+        usage = await self.client.get_context_usage()
+        self.context_used = usage["totalTokens"]
+        self.context_max = usage["maxTokens"]

@@ -1,0 +1,1297 @@
+"""The agent's work tools: the Repos and Issues lists, its jobs, drafts for the Inbox and the VM queue.
+
+The GitHub tools (github_tools.py) only read GitHub; these change what the user sees and decides on:
+- Lists: the Repos and Issues lists are the user's view of what the agents found. Each change is
+  one undo step for the user. Repos and issues are read from GitHub here, on this machine, so the
+  agent only names them. The Tracked list is the repos the user wants to keep an eye on; the
+  backend checks their open issues now and then (github_searcher/tracked_issues.py), and
+  tracked_issues shows what it found, so the agent can pick good ones for the Issues list.
+- Jobs: the smallest unit of work (github_searcher/jobs.py). The user makes them by assigning an
+  issue; the agent can make its own and keeps their status and notes up to date, and their
+  progress (job_progress: the step it is on and a headline in everyday words) for the user to follow.
+- Drafts: nothing goes to GitHub from here. A PR, an issue comment or a question becomes a draft
+  in the user's Inbox and its job waits on the user. A PR draft's diff is read from the repo
+  folder in the VM, so only the agent holding the VM can make one.
+- Evidence: what the user looks at to decide on a draft. Screenshots of the VM's desktop, image
+  files from the VM (a plot, a render) and command runs (a test failing, then passing), each
+  "before" or "after" the agent's change, under a topic that pairs them. It is kept on the job
+  (jobs.py), and each draft gets a copy. A PR draft needs at least one before and one after.
+- VM queue: the agent joins its target VM's queue (sandbox/vm_queue.py) and releases the VM
+  when its jobs there are done.
+
+Each tool returns its result as text; a bad call returns is_error, so Claude sees it failed.
+A job that is done or cancelled (often by the user, while the agent was busy) can't change
+anymore: no status, notes or drafts, so the user's cancel is never undone. The list stores
+write a file on every change, so they are called in a thread, off the backend's event loop.
+describe() gives the one line the chat shows for each call, of these tools and of the GitHub tools.
+
+    tools = WorkTools(agents, record).list()
+"""
+
+import asyncio
+import base64
+import json
+import secrets
+import shlex
+import subprocess
+from datetime import UTC, datetime
+
+import httpx
+from claude_agent_sdk import tool
+
+from github_searcher.jobs import EVIDENCE_DIR
+from github_searcher.search import get_repository, get_thread
+from sandbox.agent.computer_use import Computer, ComputerError
+from sandbox.agent.tools import HIDE_MIN_LENGTH
+from sandbox.vms import VMsError
+
+# The job statuses an agent may set. "queued" and "waiting_on_user" are set by the app.
+AGENT_STATUSES = ["working", "done", "cancelled"]
+OPEN_STATUSES = ["queued", "working"]
+CLOSED_STATUSES = ["done", "cancelled"]
+# A PR draft's diff can't be bigger than this. A real fix is far smaller; a bigger diff
+# almost always has build output, a lockfile or a virtualenv in it.
+DIFF_LIMIT = 500_000
+EVIDENCE_KINDS = ["screenshot", "image", "command"]
+EVIDENCE_STAGES = ["before", "after", "other"]
+# Evidence screenshots are for the user to read, so sharper than the agent's own (60).
+EVIDENCE_QUALITY = 85
+# An image file from the VM can't be bigger than this; Claude takes images up to 5 MB.
+IMAGE_LIMIT = 5_000_000
+# A command's output is kept up to this many bytes, the last ones (where results and errors are).
+OUTPUT_LIMIT = 20_000
+# The live feed carries only the end of a command's output: this many lines, at most TAIL_CHARS.
+TAIL_LINES = 20
+TAIL_CHARS = 2000
+# The overview is for a user who doesn't know the project: short, plain words. These caps keep it that way.
+OVERVIEW_PROJECT_CHARS = 150
+OVERVIEW_PART_CHARS = 400
+OVERVIEW_RISK_CHARS = 250
+OVERVIEW_RISKS_MAX = 3
+CONTEXT_CHARS = 500
+# The overview's wording, said once for every tool that takes one.
+PLAIN = (
+    "Plain words for someone who has never seen this project or its code: no function or file names, "
+    "and explain any technical term in a few words."
+)
+
+
+class WorkTools:
+    def __init__(self, agents, record: dict):
+        # The Agents manager: the shared stores (repos, issues, jobs, inbox) and the VMs and their queue.
+        self.agents = agents
+        # The agent's record (the same dict), so the target VM is always the current one.
+        self.record = record
+        self.agent_id = record["id"]
+
+    def list(self) -> list:
+        names = {"type": "array", "items": {"type": "string"}}
+        return [
+            tool(
+                "repos_list",
+                "See the Repos list the user sees: each repo with its stars, description, your note, who added it and how many of its issues are in the Issues list.",
+                {},
+            )(self.repos_list),
+            tool(
+                "repos_add",
+                "Add repos to the Repos list, by full name (owner/name). note is one short line on why they fit (shown under each repo). "
+                "Repos already in the list are skipped. Add only repos you checked and would recommend.",
+                {"type": "object", "properties": {"names": names, "note": {"type": "string"}}, "required": ["names", "note"]},
+            )(self.repos_add),
+            tool(
+                "repos_remove",
+                "Remove repos from the Repos list, by full name. Their issues stay in the Issues list.",
+                {"type": "object", "properties": {"names": names}, "required": ["names"]},
+            )(self.repos_remove),
+            tool(
+                "repos_note",
+                "Replace the note of one repo in the Repos list: one short line on why it fits or what to watch out for.",
+                {"name": str, "note": str},
+            )(self.repos_note),
+            tool(
+                "issues_list",
+                "See the Issues list the user sees: each issue with its title, labels, state, your note and its job status "
+                "(new when nobody was assigned yet). repo limits it to one repo (owner/name).",
+                {"type": "object", "properties": {"repo": {"type": "string"}}},
+            )(self.issues_list),
+            tool(
+                "issues_add",
+                "Add issues to the Issues list, each as owner/name#number. Only issues, not pull requests. note is one short line on "
+                "why it is a good pick (shown under each issue). Their repos are added to the Repos list too if missing. "
+                "Issues already in the list are skipped.",
+                {"type": "object", "properties": {"issues": names, "note": {"type": "string"}}, "required": ["issues", "note"]},
+            )(self.issues_add),
+            tool(
+                "issues_remove",
+                "Remove issues from the Issues list, each as owner/name#number, e.g. when someone else took one or it got fixed.",
+                {"type": "object", "properties": {"ids": names}, "required": ["ids"]},
+            )(self.issues_remove),
+            tool(
+                "issues_note",
+                "Replace the note of one issue in the Issues list (owner/name#number): one short line.",
+                {"id": str, "note": str},
+            )(self.issues_note),
+            tool(
+                "tracked_list",
+                "See the Tracked list: the repos the user wants to keep an eye on for new issues. Each with its stars, note, who "
+                "added it, when its issues were last checked, and how many open issues it has: all, good first (a good-first-issue "
+                "kind of label) and new (opened since the user last looked).",
+                {},
+            )(self.tracked_list),
+            tool(
+                "tracked_add",
+                "Add repos to the Tracked list, by full name (owner/name), so their new issues get checked every few minutes. "
+                "note is one short line on why (may be empty). Repos already tracked are skipped.",
+                {"type": "object", "properties": {"names": names, "note": {"type": "string"}}, "required": ["names"]},
+            )(self.tracked_add),
+            tool(
+                "tracked_remove",
+                "Remove repos from the Tracked list, by full name. Only when the user asks, or a repo is archived or gone.",
+                {"type": "object", "properties": {"names": names}, "required": ["names"]},
+            )(self.tracked_remove),
+            tool(
+                "tracked_issues",
+                "See the open issues the last check found in tracked repos, newest first, each with its labels, comments, "
+                "assignees, whether it is a good first issue, whether it is new to the user and whether it is in the Issues list "
+                "already. name limits it to one repo (owner/name). which: new (opened since the user last looked, the default), "
+                "good_first, or all (the 100 newest open issues plus every good first issue).",
+                {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}, "which": {"type": "string", "enum": ["new", "good_first", "all"]}},
+                },
+            )(self.tracked_issues),
+            tool(
+                "my_jobs",
+                "See your jobs: open ones in full (kind, title, issue, repo, VM, status, the user's instructions, your notes, "
+                "drafts and their decisions), finished ones (done, cancelled) by id and title only.",
+                {},
+            )(self.my_jobs),
+            tool(
+                "job_create",
+                "Make a job for yourself, e.g. a follow-up task the user asked for in chat. kind: fix_issue (issue is required) or task. "
+                "title says what the job is in a few words; instructions say what exactly to do. It is for your target VM.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "kind": {"type": "string"},
+                        "title": {"type": "string"},
+                        "instructions": {"type": "string"},
+                        "issue": {"type": "string", "description": "owner/name#number, if the job is about one issue"},
+                    },
+                    "required": ["kind", "title", "instructions"],
+                },
+            )(self.job_create),
+            tool(
+                "job_update",
+                "Update one of your jobs. status: working when you start on it, done when it is finished, cancelled when it can't or "
+                "shouldn't be done. notes replaces the job's notes: a few lines on where it stands (what you did, what is left, "
+                "where the work is in the VM), so you or the user can pick it up later.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "job_id": {"type": "string"},
+                        "status": {"type": "string", "enum": AGENT_STATUSES},
+                        "notes": {"type": "string"},
+                    },
+                    "required": ["job_id"],
+                },
+            )(self.job_update),
+            tool(
+                "job_progress",
+                "Show the user where one of your jobs stands. They watch this to follow your work, and they don't know the project's "
+                "code. step: the step you are on now, one of the job's steps (my_jobs lists them; for fix_issue: understand, set_up, "
+                "reproduce, fix, test, draft). Going back is fine, e.g. from test to fix when tests fail. headline: one sentence in "
+                "everyday words on what you are doing and how it is going, for someone who doesn't know the code (no file, function or "
+                "test names, no jargon). detail: the same in technical terms (files, tests, errors), shown when they look closer. "
+                "about: what the job is about, in everyday words; set it once, when you understand the issue. Call this at every new "
+                "step and whenever the headline changes, e.g. a check failed or you found the cause. It also marks the job working.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "job_id": {"type": "string"},
+                        "step": {"type": "string"},
+                        "headline": {"type": "string"},
+                        "detail": {"type": "string"},
+                        "about": {"type": "string"},
+                    },
+                    "required": ["job_id", "headline"],
+                },
+            )(self.job_progress),
+            tool(
+                "draft_comment",
+                "Draft a comment on an issue or PR (target: owner/name#number) for the user's Inbox, e.g. \"I'd like to work on this\". "
+                "Nothing is posted: the user decides, and you get a message with their decision. The job waits on the user meanwhile. "
+                "body is the comment as it would be posted. project, problem and why are only for the user, in the Inbox's overview. " + PLAIN,
+                {
+                    "type": "object",
+                    "properties": {
+                        "job_id": {"type": "string"},
+                        "target": {"type": "string"},
+                        "body": {"type": "string"},
+                        "project": {"type": "string", "description": "One line: what the project is, e.g. 'matplotlib: a Python library that draws charts'."},
+                        "problem": {"type": "string", "description": "What the issue is about: what goes wrong, for whom, when. Specific, 1 to 2 sentences."},
+                        "why": {"type": "string", "description": "Why post this comment now, in 1 to 2 sentences."},
+                    },
+                    "required": ["job_id", "target", "body", "project", "problem", "why"],
+                },
+            )(self.draft_comment),
+            tool(
+                "draft_question",
+                "Ask the user a question through their Inbox when you are blocked and need their decision or information. "
+                "job_id is the job it is about (leave it out if none). The job waits on the user until they answer.",
+                {
+                    "type": "object",
+                    "properties": {"job_id": {"type": "string"}, "question": {"type": "string"}},
+                    "required": ["question"],
+                },
+            )(self.draft_question),
+            tool(
+                "draft_pr",
+                "Draft a pull request for the user's Inbox from your work in the VM (only while you hold it). Only when you are certain the "
+                "fix is right and complete, and your evidence shows it. path is the repo folder in the VM (e.g. ~/click), base what to "
+                "compare against (e.g. origin/main). The diff is everything that differs from base, committed or not, new files included. "
+                "title and body are the PR exactly as it would be sent, in the project's own form: its PR template (checked: every "
+                "heading of the repo's template must be in the body), CONTRIBUTING and title style. Nothing is pushed or sent: the user "
+                "reviews it, and you get a message with their decision. project, problem, cause, fix and risks are only for the user, "
+                "who reads them first to understand and judge the PR. " + PLAIN,
+                {
+                    "type": "object",
+                    "properties": {
+                        "job_id": {"type": "string"},
+                        "path": {"type": "string"},
+                        "base": {"type": "string"},
+                        "title": {"type": "string"},
+                        "body": {"type": "string"},
+                        "project": {"type": "string", "description": "One line: what the project is, e.g. 'matplotlib: a Python library that draws charts'."},
+                        "problem": {
+                            "type": "string",
+                            "description": "What goes wrong, as someone using it sees it, specific about when and what, in 1 to 2 sentences. E.g. "
+                            "'While you drag a slider, the chart shows the picture from before the slider moved; the right picture only "
+                            "appears once the slider stops.'",
+                        },
+                        "cause": {"type": "string", "description": "Why it goes wrong, in 1 to 2 sentences."},
+                        "fix": {"type": "string", "description": "What your change does about it, and what stays the same, in 1 to 2 sentences."},
+                        "risks": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "1 to 3 ways this change could still go wrong or be turned down: real, specific ones (who or what "
+                            "could be affected, what a maintainer might object to), not 'tests might fail'.",
+                        },
+                    },
+                    "required": ["job_id", "path", "base", "title", "body", "project", "problem", "cause", "fix", "risks"],
+                },
+            )(self.draft_pr),
+            tool(
+                "evidence_add",
+                "Add evidence to one of your jobs, for the user to decide on its drafts (only while you hold the VM). The user sees "
+                "it next to your draft in the Inbox, with each topic's before and after side by side. "
+                "kind: screenshot (the VM's desktop now; region [x, y, width, height] takes only that part, e.g. one window), "
+                "image (an image file in the VM, path: a PNG, JPEG, GIF or WebP up to 5 MB, e.g. a plot or a render), or "
+                "command (runs command in the VM and keeps the command, its exit code and its output, e.g. the failing test, "
+                "the tool's wrong output). stage: before (the problem, before your change), after (the same with your change), "
+                "or other. topic: a few words naming what is shown, the same for its before and after (e.g. \"help output\", "
+                "\"tests\"). context: what this comparison shows and how to read it, for the user who doesn't know the project "
+                "(the same text for a topic's before and after). caption: one line on what this side shows. Adding a topic and stage "
+                "again replaces the old one. Make it easy to see: a chart you drew of the numbers, a picture of the app's window, "
+                "a short GIF of something that moves, one image with before and after labeled; raw output only when it speaks for itself.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "job_id": {"type": "string"},
+                        "kind": {"type": "string", "enum": EVIDENCE_KINDS},
+                        "stage": {"type": "string", "enum": EVIDENCE_STAGES},
+                        "topic": {"type": "string"},
+                        "context": {
+                            "type": "string",
+                            "description": "1 to 3 sentences in plain words: what is shown, what to look at, and what it means. E.g. 'Each "
+                            "frame is what the chart showed while the slider moved to 0.7. The red line should follow the slider.'",
+                        },
+                        "caption": {"type": "string"},
+                        "region": {"type": "array", "items": {"type": "integer"}, "description": "screenshot only: x, y, width, height"},
+                        "path": {"type": "string", "description": "image only: the image file in the VM"},
+                        "command": {"type": "string", "description": "command only: the shell command to run"},
+                    },
+                    "required": ["job_id", "kind", "stage", "topic", "context", "caption"],
+                },
+            )(self.evidence_add),
+            tool(
+                "evidence_remove",
+                "Take evidence off one of your jobs, by id (my_jobs lists them), e.g. when it no longer fits your change. "
+                "Drafts you already made keep theirs.",
+                {"type": "object", "properties": {"job_id": {"type": "string"}, "ids": names}, "required": ["job_id", "ids"]},
+            )(self.evidence_remove),
+            tool(
+                "queue_for_vm",
+                "Join your target VM's queue to work in it. Either it is yours at once, or you get your place in line: then end your "
+                "turn, and you get a message when it is yours (even while the VM is off, you keep your place).",
+                {},
+            )(self.queue_for_vm),
+            tool(
+                "release_vm",
+                "Give your VM back so the next agent in line can use it. Do it as soon as your jobs for it are done or waiting on the user. "
+                "While you wait in a VM's queue, it takes you out of the queue instead (e.g. when your jobs there were cancelled).",
+                {},
+            )(self.release_vm),
+            tool(
+                "vm_queue_status",
+                "See your target VM, whether it is running, who holds it, who waits for it, and your own place.",
+                {},
+            )(self.vm_queue_status),
+        ]
+
+    def describe(self, name: str, args: dict) -> str:
+        """The line the chat shows for a call, e.g. "Adding to Issues: pallets/click#812".
+
+        Also for the GitHub tools and TodoWrite; the VM tools have their own (ComputerTools.describe).
+        """
+        if name == "repos_list":
+            return "Looked at the Repos list"
+        if name == "repos_add":
+            return "Adding to Repos: " + ", ".join(args.get("names") or [])
+        if name == "repos_remove":
+            return "Removing from Repos: " + ", ".join(args.get("names") or [])
+        if name == "repos_note":
+            return f"Note on {args.get('name')}: {args.get('note')}"
+        if name == "issues_list" and args.get("repo"):
+            return f"Looked at the Issues list of {args['repo']}"
+        if name == "issues_list":
+            return "Looked at the Issues list"
+        if name == "issues_add":
+            return "Adding to Issues: " + ", ".join(args.get("issues") or [])
+        if name == "issues_remove":
+            return "Removing from Issues: " + ", ".join(args.get("ids") or [])
+        if name == "issues_note":
+            return f"Note on {args.get('id')}: {args.get('note')}"
+        if name == "tracked_list":
+            return "Looked at the Tracked list"
+        if name == "tracked_add":
+            return "Tracking: " + ", ".join(args.get("names") or [])
+        if name == "tracked_remove":
+            return "No longer tracking: " + ", ".join(args.get("names") or [])
+        if name == "tracked_issues":
+            which = (args.get("which") or "new").replace("_", " ")
+            return f"Looked at the {which} issues of " + (args.get("name") or "the tracked repos")
+        if name == "my_jobs":
+            return "Looked at its jobs"
+        if name == "job_create":
+            return f"New job: {args.get('title')}"
+        if name == "job_update" and args.get("status"):
+            return f"Job {args.get('job_id')}: {args['status']}"
+        if name == "job_update":
+            return f"Updated the notes of {args.get('job_id')}"
+        if name == "job_progress" and args.get("step"):
+            return f"{str(args['step']).replace('_', ' ').capitalize()}: {args.get('headline')}"
+        if name == "job_progress":
+            return f"Progress: {args.get('headline')}"
+        if name == "draft_comment":
+            return f"Drafting a comment on {args.get('target')}"
+        if name == "draft_question":
+            return "Asking: " + (args.get("question") or "").split("\n")[0][:120]
+        if name == "draft_pr":
+            return f"Drafting a PR: {args.get('title')}"
+        if name == "evidence_add":
+            return f"Evidence, {args.get('stage')}: {args.get('topic')} ({args.get('kind')})"
+        if name == "evidence_remove":
+            return "Removing evidence: " + ", ".join(args.get("ids") or [])
+        if name == "queue_for_vm":
+            return f"Queuing for {self.record['target_vm']}"
+        if name == "release_vm":
+            return "Releasing its VM (or leaving the queue)"
+        if name == "vm_queue_status":
+            return "Looked at the VM queue"
+        # Claude Code's todo list and the GitHub tools, which have no describe() of their own.
+        if name == "TodoWrite":
+            return "Updated its todo list"
+        if name == "read_readme":
+            return "Read README of " + ", ".join(args.get("names") or [])
+        if name == "check_activity":
+            return "Checked activity of " + ", ".join(args.get("names") or [])
+        if name == "read_thread":
+            return "Read " + ", ".join(args.get("threads") or [])
+        if name == "list_files" and args.get("path"):
+            return f"Listed files of {args.get('name')} in {args['path']}"
+        if name == "list_files":
+            return f"Listed files of {args.get('name')}"
+        if name == "read_files":
+            return "Read " + ", ".join(args.get("paths") or []) + f" in {args.get('name')}"
+        if name == "search_code":
+            return f"Searched code `{args.get('q')}`"
+        if name == "search_issues":
+            return f"Searched issues `{args.get('q')}`"
+        return name
+
+    async def repos_list(self, args: dict) -> dict:
+        issues = await asyncio.to_thread(self.agents.issues.items)
+        repos = []
+        for item in await asyncio.to_thread(self.agents.repos.items):
+            count = len([issue for issue in issues if issue["repo"] == item["full_name"]])
+            repos.append(
+                {
+                    "name": item["full_name"],
+                    "stars": item["stars"],
+                    "description": item["description"],
+                    "note": item["note"],
+                    "added_by": item["added_by"],
+                    "issues_in_list": count,
+                }
+            )
+        return {"content": [{"type": "text", "text": json.dumps({"repos": repos})}]}
+
+    async def repos_add(self, args: dict) -> dict:
+        in_list = [item["full_name"].lower() for item in await asyncio.to_thread(self.agents.repos.items)]
+        report = {}
+        items = []
+        for name in args["names"]:
+            if name.count("/") != 1:
+                report[name] = "not a full name (owner/name)"
+                continue
+            if name.lower() in in_list:
+                report[name] = "already in Repos"
+                continue
+            try:
+                info = await asyncio.to_thread(get_repository, name.split("/")[0], name.split("/")[1])
+            except httpx.HTTPStatusError as error:
+                report[name] = f"GitHub error {error.response.status_code}: {error.response.text[:200]}"
+                continue
+            except httpx.HTTPError as error:
+                report[name] = f"could not reach GitHub: {error}"
+                continue
+            items.append(
+                {
+                    "full_name": info["full_name"],
+                    "description": info["description"] or "",
+                    "stars": info["stargazers_count"],
+                    "default_branch": info["default_branch"],
+                    "html_url": info["html_url"],
+                    "note": args["note"],
+                    "added_by": self.agent_id,
+                    "added_at": datetime.now(UTC).isoformat(),
+                }
+            )
+
+        added = await asyncio.to_thread(self.agents.repos.add, items)
+        for item in items:
+            report[item["full_name"]] = "added" if item["full_name"] in added else "already in Repos"
+        return {"content": [{"type": "text", "text": json.dumps(report)}]}
+
+    async def repos_remove(self, args: dict) -> dict:
+        removed = await asyncio.to_thread(self.agents.repos.remove, args["names"])
+        missing = [name for name in args["names"] if name not in removed]
+        text = json.dumps({"removed": removed, "not_in_list": missing})
+        return {"content": [{"type": "text", "text": text}]}
+
+    async def repos_note(self, args: dict) -> dict:
+        try:
+            await asyncio.to_thread(self.agents.repos.set_note, args["name"], args["note"])
+        except KeyError:
+            return {"content": [{"type": "text", "text": f"{args['name']} is not in the Repos list."}], "is_error": True}
+        return {"content": [{"type": "text", "text": f"Note set on {args['name']}."}]}
+
+    async def issues_list(self, args: dict) -> dict:
+        repo = args.get("repo") or ""
+        # The newest job of each issue gives its status. jobs.list() is newest first.
+        latest = {}
+        for job in reversed(self.agents.jobs.list()):
+            latest[job["issue"]] = job
+
+        issues = []
+        for item in await asyncio.to_thread(self.agents.issues.items):
+            if repo and item["repo"].lower() != repo.lower():
+                continue
+            job = latest.get(item["id"])
+            issues.append(
+                {
+                    "id": item["id"],
+                    "title": item["title"],
+                    "labels": item["labels"],
+                    "state": item["state"],
+                    "comments": item["comments"],
+                    "note": item["note"],
+                    "added_by": item["added_by"],
+                    "status": job["status"] if job else "new",
+                    "agent": job["agent"] if job else None,
+                }
+            )
+        return {"content": [{"type": "text", "text": json.dumps({"issues": issues})}]}
+
+    async def issues_add(self, args: dict) -> dict:
+        in_list = [item["id"].lower() for item in await asyncio.to_thread(self.agents.issues.items)]
+        report = {}
+        items = []
+        # Repo info by the issue's repo, for the Repos list.
+        repos = {}
+        for issue_id in args["issues"]:
+            name = issue_id.split("#")[0]
+            number = issue_id.split("#")[-1]
+            if "#" not in issue_id or name.count("/") != 1 or not number.isdigit():
+                report[issue_id] = "not owner/name#number"
+                continue
+            if issue_id.lower() in in_list:
+                report[issue_id] = "already in Issues"
+                continue
+            try:
+                info = await asyncio.to_thread(get_repository, name.split("/")[0], name.split("/")[1])
+                # The repo's own spelling, so the issue matches its repo in the lists.
+                name = info["full_name"]
+                data = await asyncio.to_thread(get_thread, name.split("/")[0], name.split("/")[1], int(number))
+            except httpx.HTTPStatusError as error:
+                report[issue_id] = f"GitHub error {error.response.status_code}: {error.response.text[:200]}"
+                continue
+            except (httpx.HTTPError, ValueError) as error:
+                report[issue_id] = f"could not read it from GitHub: {error}"
+                continue
+            if data is None:
+                report[issue_id] = "no issue with that number"
+                continue
+            if data["__typename"] != "Issue":
+                report[issue_id] = "a pull request, not an issue"
+                continue
+            repos[name] = info
+            items.append(
+                {
+                    "id": f"{name}#{number}",
+                    "repo": name,
+                    "number": int(number),
+                    "title": data["title"],
+                    "labels": [label["name"] for label in data["labels"]["nodes"]],
+                    "state": data["state"],
+                    "comments": data["comments"]["totalCount"],
+                    "html_url": f"https://github.com/{name}/issues/{number}",
+                    "note": args["note"],
+                    "added_by": self.agent_id,
+                    "added_at": datetime.now(UTC).isoformat(),
+                }
+            )
+
+        added = await asyncio.to_thread(self.agents.issues.add, items)
+        for item in items:
+            report[item["id"]] = "added" if item["id"] in added else "already in Issues"
+
+        # The repo of each new issue goes into Repos too, so the user can look at its code.
+        repos_in_list = [item["full_name"] for item in await asyncio.to_thread(self.agents.repos.items)]
+        repo_items = []
+        for name, info in repos.items():
+            if name in repos_in_list:
+                continue
+            if not any(issue_id.startswith(name + "#") for issue_id in added):
+                continue
+            repo_items.append(
+                {
+                    "full_name": name,
+                    "description": info["description"] or "",
+                    "stars": info["stargazers_count"],
+                    "default_branch": info["default_branch"],
+                    "html_url": info["html_url"],
+                    "note": "",
+                    "added_by": self.agent_id,
+                    "added_at": datetime.now(UTC).isoformat(),
+                }
+            )
+        added_repos = await asyncio.to_thread(self.agents.repos.add, repo_items)
+        result = {"issues": report}
+        if added_repos:
+            result["also_added_to_repos"] = added_repos
+            result["hint"] = "These repos have no note yet; give each one with repos_note."
+        return {"content": [{"type": "text", "text": json.dumps(result)}]}
+
+    async def issues_remove(self, args: dict) -> dict:
+        removed = await asyncio.to_thread(self.agents.issues.remove, args["ids"])
+        missing = [issue_id for issue_id in args["ids"] if issue_id not in removed]
+        text = json.dumps({"removed": removed, "not_in_list": missing})
+        return {"content": [{"type": "text", "text": text}]}
+
+    async def issues_note(self, args: dict) -> dict:
+        try:
+            await asyncio.to_thread(self.agents.issues.set_note, args["id"], args["note"])
+        except KeyError:
+            return {"content": [{"type": "text", "text": f"{args['id']} is not in the Issues list."}], "is_error": True}
+        return {"content": [{"type": "text", "text": f"Note set on {args['id']}."}]}
+
+    async def tracked_list(self, args: dict) -> dict:
+        checks = await asyncio.to_thread(self.agents.tracked_issues.all)
+        repos = []
+        for item in await asyncio.to_thread(self.agents.tracked.items):
+            check = checks.get(item["full_name"])
+            summary = {
+                "name": item["full_name"],
+                "stars": item["stars"],
+                "description": item["description"],
+                "note": item["note"],
+                "added_by": item["added_by"],
+            }
+            if check is None:
+                summary["checked"] = "not yet (it will be within a minute)"
+                repos.append(summary)
+                continue
+            summary["checked_at"] = check["checked_at"]
+            summary["check_error"] = check["error"]
+            summary["open_issues"] = len(check["issues"])
+            summary["good_first"] = len([issue for issue in check["issues"] if issue["good_first"]])
+            summary["new"] = len([issue for issue in check["issues"] if issue["created_at"] > check["seen_at"]])
+            repos.append(summary)
+        return {"content": [{"type": "text", "text": json.dumps({"tracked": repos})}]}
+
+    async def tracked_add(self, args: dict) -> dict:
+        in_list = [item["full_name"].lower() for item in await asyncio.to_thread(self.agents.tracked.items)]
+        report = {}
+        items = []
+        for name in args["names"]:
+            if name.count("/") != 1:
+                report[name] = "not a full name (owner/name)"
+                continue
+            if name.lower() in in_list:
+                report[name] = "already tracked"
+                continue
+            try:
+                info = await asyncio.to_thread(get_repository, name.split("/")[0], name.split("/")[1])
+            except httpx.HTTPStatusError as error:
+                report[name] = f"GitHub error {error.response.status_code}: {error.response.text[:200]}"
+                continue
+            except httpx.HTTPError as error:
+                report[name] = f"could not reach GitHub: {error}"
+                continue
+            items.append(
+                {
+                    "full_name": info["full_name"],
+                    "description": info["description"] or "",
+                    "stars": info["stargazers_count"],
+                    "default_branch": info["default_branch"],
+                    "html_url": info["html_url"],
+                    "note": args.get("note") or "",
+                    "added_by": self.agent_id,
+                    "added_at": datetime.now(UTC).isoformat(),
+                }
+            )
+
+        added = await asyncio.to_thread(self.agents.tracked.add, items)
+        for item in items:
+            report[item["full_name"]] = "now tracked; its issues are checked within a minute" if item["full_name"] in added else "already tracked"
+        return {"content": [{"type": "text", "text": json.dumps(report)}]}
+
+    async def tracked_remove(self, args: dict) -> dict:
+        removed = await asyncio.to_thread(self.agents.tracked.remove, args["names"])
+        missing = [name for name in args["names"] if name not in removed]
+        text = json.dumps({"removed": removed, "not_tracked": missing})
+        return {"content": [{"type": "text", "text": text}]}
+
+    async def tracked_issues(self, args: dict) -> dict:
+        name = args.get("name") or ""
+        which = args.get("which") or "new"
+        if which not in ("new", "good_first", "all"):
+            return {"content": [{"type": "text", "text": "which must be new, good_first or all."}], "is_error": True}
+        names = [item["full_name"] for item in await asyncio.to_thread(self.agents.tracked.items)]
+        if name and name.lower() not in [tracked.lower() for tracked in names]:
+            return {"content": [{"type": "text", "text": f"{name} is not tracked; tracked_list shows what is."}], "is_error": True}
+        checks = await asyncio.to_thread(self.agents.tracked_issues.all)
+        in_issues = [item["id"] for item in await asyncio.to_thread(self.agents.issues.items)]
+
+        result = {}
+        for full_name in names:
+            if name and full_name.lower() != name.lower():
+                continue
+            check = checks.get(full_name)
+            if check is None:
+                result[full_name] = "not checked yet; try again in a minute"
+                continue
+            issues = []
+            for issue in check["issues"]:
+                new = issue["created_at"] > check["seen_at"]
+                if which == "new" and not new:
+                    continue
+                if which == "good_first" and not issue["good_first"]:
+                    continue
+                issues.append({**issue, "id": f"{full_name}#{issue['number']}", "new": new, "in_issues_list": f"{full_name}#{issue['number']}" in in_issues})
+            result[full_name] = {"checked_at": check["checked_at"], "check_error": check["error"], "issues": issues}
+        return {"content": [{"type": "text", "text": json.dumps(result)}]}
+
+    async def my_jobs(self, args: dict) -> dict:
+        jobs = []
+        for job in self.agents.jobs.for_agent(self.agent_id):
+            if job["status"] in ["done", "cancelled"]:
+                jobs.append({"id": job["id"], "title": job["title"], "status": job["status"]})
+                continue
+            drafts = []
+            for draft_id in job["drafts"]:
+                draft = self.agents.inbox.get(draft_id)
+                drafts.append({"id": draft_id, "kind": draft["kind"], "title": draft["title"], "status": draft["status"], "reply": draft["reply"]})
+            evidence = []
+            for item in job["evidence"]:
+                evidence.append({"id": item["id"], "kind": item["kind"], "stage": item["stage"], "topic": item["topic"], "caption": item["caption"]})
+            jobs.append(
+                {
+                    "id": job["id"],
+                    "kind": job["kind"],
+                    "title": job["title"],
+                    "issue": job["issue"],
+                    "repo": job["repo"],
+                    "vm": job["vm"],
+                    "status": job["status"],
+                    "instructions": job["instructions"],
+                    "notes": job["notes"],
+                    "steps": job["steps"],
+                    "step": job["step"],
+                    "about": job["about"],
+                    "headline": job["headline"],
+                    "drafts": drafts,
+                    "evidence": evidence,
+                }
+            )
+        text = json.dumps({"target_vm": self.record["target_vm"], "jobs": jobs})
+        return {"content": [{"type": "text", "text": text}]}
+
+    async def job_create(self, args: dict) -> dict:
+        kind = (args.get("kind") or "task").strip()
+        title = (args.get("title") or "").strip()
+        issue = (args.get("issue") or "").strip() or None
+        if not title:
+            return {"content": [{"type": "text", "text": "A job needs a title."}], "is_error": True}
+        if issue is not None and ("#" not in issue or issue.split("#")[0].count("/") != 1 or not issue.split("#")[-1].isdigit()):
+            return {"content": [{"type": "text", "text": "issue must be owner/name#number."}], "is_error": True}
+        if kind == "fix_issue" and issue is None:
+            return {"content": [{"type": "text", "text": "A fix_issue job needs its issue (owner/name#number)."}], "is_error": True}
+
+        vm_name = self.record["target_vm"]
+        job = self.agents.jobs.create(kind, title, self.agent_id, self.agent_id, issue=issue, vm=vm_name, instructions=args.get("instructions") or "")
+        text = f"Made {job['id']}: {title}. It is for {vm_name}."
+        if vm_name is None:
+            text = f"Made {job['id']}: {title}. You have no target VM, so the user has to set one before you can work on it in a VM."
+        return {"content": [{"type": "text", "text": text}]}
+
+    async def job_update(self, args: dict) -> dict:
+        try:
+            job = self.agents.jobs.get(args["job_id"])
+        except KeyError:
+            return {"content": [{"type": "text", "text": f"No job {args['job_id']}."}], "is_error": True}
+        if job["agent"] != self.agent_id:
+            return {"content": [{"type": "text", "text": f"{job['id']} is not your job."}], "is_error": True}
+        if job["status"] in CLOSED_STATUSES:
+            text = f"{job['id']} is {job['status']} (the user may have cancelled it); it can't change anymore. Move on."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        fields = {}
+        if args.get("status"):
+            fields["status"] = args["status"]
+        if args.get("notes") is not None:
+            fields["notes"] = args["notes"]
+        if not fields:
+            return {"content": [{"type": "text", "text": "Give a status, notes, or both."}], "is_error": True}
+        if "status" in fields and fields["status"] not in AGENT_STATUSES:
+            return {"content": [{"type": "text", "text": f"status must be one of: {', '.join(AGENT_STATUSES)}."}], "is_error": True}
+
+        job = self.agents.jobs.update(job["id"], **fields)
+        text = f"{job['id']} is {job['status']}."
+        # Holding the VM with nothing left to do there means it should go back now.
+        vm_name, place = self.agents.queue.place(self.agent_id)
+        left = [other for other in self.agents.jobs.for_agent(self.agent_id) if other["status"] in OPEN_STATUSES and other["vm"] == vm_name]
+        if place == 0 and not left:
+            text += f" You have no open jobs left for {vm_name}: call release_vm now."
+        return {"content": [{"type": "text", "text": text}]}
+
+    async def job_progress(self, args: dict) -> dict:
+        try:
+            job = self.agents.jobs.get(args["job_id"])
+        except KeyError:
+            return {"content": [{"type": "text", "text": f"No job {args['job_id']}."}], "is_error": True}
+        if job["agent"] != self.agent_id:
+            return {"content": [{"type": "text", "text": f"{job['id']} is not your job."}], "is_error": True}
+        if job["status"] in CLOSED_STATUSES:
+            text = f"{job['id']} is {job['status']} (the user may have cancelled it); it can't change anymore. Move on."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        headline = args["headline"].strip()
+        if not headline:
+            return {"content": [{"type": "text", "text": "The headline is empty."}], "is_error": True}
+        step = (args.get("step") or "").strip().lower().replace(" ", "_") or None
+        if step is not None and step not in job["steps"]:
+            return {"content": [{"type": "text", "text": f"step must be one of: {', '.join(job['steps'])}."}], "is_error": True}
+
+        # A queued job (new, or back from the user's decision) is being worked on now. One waiting on the
+        # user stays waiting: its draft is still in their Inbox.
+        fields = {"headline": headline}
+        if job["status"] == "queued":
+            fields["status"] = "working"
+        if step is not None:
+            fields["step"] = step
+        if args.get("detail") is not None:
+            fields["detail"] = args["detail"].strip()
+        if args.get("about") is not None:
+            fields["about"] = args["about"].strip()
+        job = self.agents.jobs.update(job["id"], **fields)
+        text = f"{job['id']}: {(job['step'] or 'no step yet').replace('_', ' ')}, \"{job['headline']}\"."
+        return {"content": [{"type": "text", "text": text}]}
+
+    async def draft_comment(self, args: dict) -> dict:
+        target = args["target"].strip()
+        name = target.split("#")[0]
+        if "#" not in target or name.count("/") != 1 or not target.split("#")[-1].isdigit():
+            return {"content": [{"type": "text", "text": "target must be owner/name#number."}], "is_error": True}
+        if not args["body"].strip():
+            return {"content": [{"type": "text", "text": "The comment is empty."}], "is_error": True}
+        overview = {
+            "project": (args.get("project") or "").strip(),
+            "problem": (args.get("problem") or "").strip(),
+            "why": (args.get("why") or "").strip(),
+        }
+        for part, text in overview.items():
+            limit = OVERVIEW_PROJECT_CHARS if part == "project" else OVERVIEW_PART_CHARS
+            if not text:
+                return {"content": [{"type": "text", "text": f"Give {part}: the user reads it to understand the comment."}], "is_error": True}
+            if len(text) > limit:
+                text = f"{part} is {len(text)} characters; keep it under {limit}. Short and plain: the user reads it at a glance."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+        try:
+            job = self.agents.jobs.get(args["job_id"])
+        except KeyError:
+            return {"content": [{"type": "text", "text": f"No job {args['job_id']}."}], "is_error": True}
+        if job["agent"] != self.agent_id:
+            return {"content": [{"type": "text", "text": f"{job['id']} is not your job."}], "is_error": True}
+        if job["status"] in CLOSED_STATUSES:
+            text = f"{job['id']} is {job['status']} (the user may have cancelled it): no drafts for it anymore. Move on."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        draft = self.agents.inbox.create(
+            "comment", self.agent_id, f"Comment on {target}", args["body"], job=job["id"], repo=name, target=target, evidence=job["evidence"], overview=overview
+        )
+        self.agents.jobs.update(job["id"], status="waiting_on_user", drafts=job["drafts"] + [draft["id"]])
+        text = (
+            f"{draft['id']} is in the user's Inbox. Nothing was posted: the user decides, and you'll get a message with their "
+            f"decision. {job['id']} waits on the user now; move on to your next job."
+        )
+        return {"content": [{"type": "text", "text": text}]}
+
+    async def draft_question(self, args: dict) -> dict:
+        question = args["question"].strip()
+        if not question:
+            return {"content": [{"type": "text", "text": "The question is empty."}], "is_error": True}
+        job = None
+        if args.get("job_id"):
+            try:
+                job = self.agents.jobs.get(args["job_id"])
+            except KeyError:
+                return {"content": [{"type": "text", "text": f"No job {args['job_id']}."}], "is_error": True}
+            if job["agent"] != self.agent_id:
+                return {"content": [{"type": "text", "text": f"{job['id']} is not your job."}], "is_error": True}
+            if job["status"] in CLOSED_STATUSES:
+                text = f"{job['id']} is {job['status']} (the user may have cancelled it): no questions about it anymore. Move on."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        # The subject line is the question's first line.
+        title = question.split("\n")[0][:120]
+        if job is None:
+            self.agents.inbox.create("question", self.agent_id, title, question)
+            text = "Your question is in the user's Inbox. You'll get a message with their answer."
+            return {"content": [{"type": "text", "text": text}]}
+
+        draft = self.agents.inbox.create("question", self.agent_id, title, question, job=job["id"], repo=job["repo"], target=job["issue"], evidence=job["evidence"])
+        self.agents.jobs.update(job["id"], status="waiting_on_user", drafts=job["drafts"] + [draft["id"]])
+        text = f"Your question is in the user's Inbox. {job['id']} waits on the user now; move on to your next job. You'll get a message with their answer."
+        return {"content": [{"type": "text", "text": text}]}
+
+    async def draft_pr(self, args: dict) -> dict:
+        try:
+            job = self.agents.jobs.get(args["job_id"])
+        except KeyError:
+            return {"content": [{"type": "text", "text": f"No job {args['job_id']}."}], "is_error": True}
+        if job["agent"] != self.agent_id:
+            return {"content": [{"type": "text", "text": f"{job['id']} is not your job."}], "is_error": True}
+        if job["status"] in CLOSED_STATUSES:
+            text = f"{job['id']} is {job['status']} (the user may have cancelled it): no drafts for it anymore. Move on."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if not args["title"].strip():
+            return {"content": [{"type": "text", "text": "The PR needs a title."}], "is_error": True}
+        # The user reads the overview first: it must be there, and short.
+        overview = {
+            "project": (args.get("project") or "").strip(),
+            "problem": (args.get("problem") or "").strip(),
+            "cause": (args.get("cause") or "").strip(),
+            "fix": (args.get("fix") or "").strip(),
+        }
+        for part, text in overview.items():
+            limit = OVERVIEW_PROJECT_CHARS if part == "project" else OVERVIEW_PART_CHARS
+            if not text:
+                return {"content": [{"type": "text", "text": f"Give {part}: the user reads it to understand the PR."}], "is_error": True}
+            if len(text) > limit:
+                text = f"{part} is {len(text)} characters; keep it under {limit}. Short and plain: the user reads it at a glance."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+        risks = [risk.strip() for risk in (args.get("risks") or []) if risk.strip()]
+        if not risks or len(risks) > OVERVIEW_RISKS_MAX:
+            text = f"Give 1 to {OVERVIEW_RISKS_MAX} risks: real ways this change could still go wrong or be turned down."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        for risk in risks:
+            if len(risk) > OVERVIEW_RISK_CHARS:
+                text = f"A risk is {len(risk)} characters; keep each under {OVERVIEW_RISK_CHARS}."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+        overview["risks"] = risks
+        # The user decides on evidence, not on the agent's word: no PR without a before and an after.
+        stages = [item["stage"] for item in job["evidence"]]
+        if "before" not in stages or "after" not in stages:
+            text = (
+                "A PR draft needs evidence the user can judge it by: at least one 'before' (the problem without your change) "
+                "and one 'after' (the same thing with your change), under the same topic, added with evidence_add. "
+                "If you already changed the code, show the before with `git stash`, add it, then `git stash pop`."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        vm_name = self.record["target_vm"]
+        if vm_name is None:
+            return {"content": [{"type": "text", "text": "You have no target VM."}], "is_error": True}
+        try:
+            vm_record = self.agents.vms.get(vm_name)
+        except VMsError as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        if vm_record.holder != self.agent_id:
+            text = "You don't hold a VM. Call queue_for_vm and wait for the message that it is yours."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        # Commands run in the user's home, so ~/click and click are the same folder.
+        folder = shlex.quote(args["path"].strip().removeprefix("~/"))
+        base = shlex.quote(args["base"].strip())
+        try:
+            result = await asyncio.to_thread(vm_record.vm.exec, f"cd {folder} && pwd && git rev-parse --abbrev-ref HEAD", 60)
+        except Exception as error:
+            return {"content": [{"type": "text", "text": f"Could not reach the VM: {error}"}], "is_error": True}
+        if result.returncode != 0:
+            # Hidden as in the bash tool: error text can hold the user's secrets too.
+            text = f"Not a git repo folder: {result.stderr.strip()}"
+            for value in sorted(vm_record.env.values(), key=len, reverse=True):
+                if len(value) >= HIDE_MIN_LENGTH:
+                    text = text.replace(value, "[hidden]")
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        path = result.stdout.strip().split("\n")[0]
+        branch = result.stdout.strip().split("\n")[-1]
+
+        # The body must be in the project's own form. When the repo has a PR template, every heading of it must be in the
+        # body. The first line printed is the template's path, the rest its text; nothing printed means there is none.
+        command = (
+            f"cd {folder} && f=$(find . .github docs -maxdepth 1 -iname pull_request_template.md 2>/dev/null | head -1); "
+            '[ -z "$f" ] || { echo "$f"; cat "$f"; }'
+        )
+        try:
+            result = await asyncio.to_thread(vm_record.vm.exec, command, 60)
+        except Exception as error:
+            return {"content": [{"type": "text", "text": f"Could not reach the VM: {error}"}], "is_error": True}
+        template = None
+        if result.stdout.strip():
+            template = result.stdout.split("\n")[0].removeprefix("./")
+            template_text = "\n".join(result.stdout.split("\n")[1:])
+            # Headings compared without case and extra spaces, the way they read.
+            body_lines = [" ".join(line.split()).lower() for line in args["body"].split("\n")]
+            missing = []
+            for line in template_text.split("\n"):
+                heading = " ".join(line.split())
+                if heading.startswith("#") and heading.lower() not in body_lines:
+                    missing.append(heading)
+            if missing:
+                text = (
+                    f"The body doesn't follow this repo's PR template ({template}): it lacks {', '.join(missing)}. Write it in the "
+                    f"template's form: keep its headings, fill each in, tick the checklist items you did. The template:\n{template_text}"
+                )
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        # -N marks new files as "intent to add", so git diff shows them too. head stops a huge diff
+        # inside the VM (one byte over the limit is enough to tell), so it never fills this machine's memory.
+        command = f"set -o pipefail; cd {folder} && git add -A -N . && git diff {base} | head -c {DIFF_LIMIT + 1}"
+        try:
+            result = await asyncio.to_thread(vm_record.vm.exec, command, 120)
+        except Exception as error:
+            return {"content": [{"type": "text", "text": f"Could not reach the VM: {error}"}], "is_error": True}
+        diff = result.stdout
+        # Before the exit code: head stopping git diff makes the pipe fail too.
+        if len(diff.encode()) > DIFF_LIMIT:
+            text = (
+                f"The diff is over the {DIFF_LIMIT // 1000} KB limit. A fix is never that big: look for build output, lockfiles "
+                "or a virtualenv in it (git diff --stat), remove them or add them to .git/info/exclude, then try again."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if result.returncode != 0:
+            text = f"git diff failed: {result.stderr.strip()}"
+            for value in sorted(vm_record.env.values(), key=len, reverse=True):
+                if len(value) >= HIDE_MIN_LENGTH:
+                    text = text.replace(value, "[hidden]")
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if not diff.strip():
+            text = f"There is no difference between {args['path']} and {args['base']}: nothing to draft."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        # The diff is shown in the Inbox, sent to the browser and downloaded as it is: a secret (a VM env
+        # value, e.g. written into a .env file) must never be in it. Named by its variable, never its value.
+        for env_name, value in vm_record.env.items():
+            if len(value) < HIDE_MIN_LENGTH or value not in diff:
+                continue
+            # One chunk per file; each starts with "a/<path> b/<path>" (the first with "diff --git ").
+            chunks = diff.split("\ndiff --git ")
+            files = [chunk.split("\n")[0].split(" b/")[-1] for chunk in chunks if value in chunk]
+            text = (
+                f"The diff contains the value of the environment variable {env_name}, in: {', '.join(files)}. Take it out "
+                "of those files, or keep the file out of the diff (delete it, or add it to .git/info/exclude), then try again."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        # The user may have cancelled the job while the commands ran.
+        job = self.agents.jobs.get(job["id"])
+        if job["status"] in CLOSED_STATUSES:
+            text = f"{job['id']} is {job['status']} now (the user may have cancelled it): no draft was made. Move on."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        draft = self.agents.inbox.create(
+            "pr",
+            self.agent_id,
+            args["title"].strip(),
+            args["body"],
+            job=job["id"],
+            repo=job["repo"],
+            target=job["issue"],
+            diff=diff,
+            branch=branch,
+            base=args["base"].strip(),
+            vm=vm_name,
+            path=path,
+            evidence=job["evidence"],
+            overview=overview,
+            template=template,
+        )
+        fields = {"status": "waiting_on_user", "drafts": job["drafts"] + [draft["id"]]}
+        # A PR draft is the draft step, even if the agent didn't say so.
+        if "draft" in job["steps"]:
+            fields["step"] = "draft"
+        self.agents.jobs.update(job["id"], **fields)
+
+        lines = diff.split("\n")
+        files = len([line for line in lines if line.startswith("diff --git ")])
+        added = len([line for line in lines if line.startswith("+") and not line.startswith("+++")])
+        removed = len([line for line in lines if line.startswith("-") and not line.startswith("---")])
+        text = (
+            f"{draft['id']} is in the user's Inbox: {files} files, +{added} -{removed}, branch {branch} against {args['base']}, "
+            f"with {len(job['evidence'])} pieces of evidence. "
+            f"Nothing was pushed or sent: the user reviews it, and you'll get a message with their decision. "
+            f"{job['id']} waits on the user now; move on to your next job (release_vm if none is left for {vm_name})."
+        )
+        return {"content": [{"type": "text", "text": text}]}
+
+    async def evidence_add(self, args: dict) -> dict:
+        kind = args.get("kind") or ""
+        stage = args.get("stage") or ""
+        topic = (args.get("topic") or "").strip()
+        caption = (args.get("caption") or "").strip()
+        context = (args.get("context") or "").strip()
+        if kind not in EVIDENCE_KINDS:
+            return {"content": [{"type": "text", "text": f"kind must be one of: {', '.join(EVIDENCE_KINDS)}."}], "is_error": True}
+        if stage not in EVIDENCE_STAGES:
+            return {"content": [{"type": "text", "text": f"stage must be one of: {', '.join(EVIDENCE_STAGES)}."}], "is_error": True}
+        if not topic:
+            text = "Give a topic: a few words naming what is shown, the same for its before and after."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if not caption:
+            return {"content": [{"type": "text", "text": "Give a caption: one line on what this side shows."}], "is_error": True}
+        if not context:
+            text = "Give context: what this comparison shows, what to look at and what it means, for someone who doesn't know the project."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if len(context) > CONTEXT_CHARS:
+            return {"content": [{"type": "text", "text": f"context is {len(context)} characters; keep it under {CONTEXT_CHARS}."}], "is_error": True}
+        try:
+            job = self.agents.jobs.get(args["job_id"])
+        except KeyError:
+            return {"content": [{"type": "text", "text": f"No job {args['job_id']}."}], "is_error": True}
+        if job["agent"] != self.agent_id:
+            return {"content": [{"type": "text", "text": f"{job['id']} is not your job."}], "is_error": True}
+        if job["status"] in CLOSED_STATUSES:
+            text = f"{job['id']} is {job['status']} (the user may have cancelled it): no evidence for it anymore. Move on."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        vm_name = self.record["target_vm"]
+        if vm_name is None:
+            return {"content": [{"type": "text", "text": "You have no target VM."}], "is_error": True}
+        try:
+            vm_record = self.agents.vms.get(vm_name)
+        except VMsError as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        if vm_record.holder != self.agent_id:
+            text = "You don't hold a VM. Call queue_for_vm and wait for the message that it is yours."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        # The same tag as the agent's VM tools (ComputerTools), so losing the VM stops these commands too.
+        tag = f"sandbox-agent-{self.agent_id}"
+        # The user's secrets, longest first, so a value that contains another one is hidden whole.
+        hidden = [value for value in sorted(vm_record.env.values(), key=len, reverse=True) if len(value) >= HIDE_MIN_LENGTH]
+        evidence_id = "ev_" + secrets.token_hex(3)
+        item = {
+            "id": evidence_id,
+            "kind": kind,
+            "topic": topic,
+            "stage": stage,
+            "context": context,
+            "caption": caption,
+            "file": None,
+            "command": None,
+            "exit_code": None,
+            "output_file": None,
+            "output_tail": "",
+            "output_size": 0,
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        data = b""
+        mime = ""
+        output = ""
+
+        if kind == "screenshot":
+            region = None
+            if args.get("region"):
+                region = args["region"]
+                if len(region) != 4 or region[2] <= 0 or region[3] <= 0 or region[0] < 0 or region[1] < 0:
+                    return {"content": [{"type": "text", "text": "region is [x, y, width, height], all positive."}], "is_error": True}
+                region = tuple(region)
+            computer = Computer(vm_record.vm, tag)
+            try:
+                await asyncio.to_thread(computer.check)
+                data = await asyncio.to_thread(computer.screenshot, EVIDENCE_QUALITY, region)
+            except (ComputerError, subprocess.TimeoutExpired) as error:
+                text = f"Could not take the screenshot: {error}"
+                for value in hidden:
+                    text = text.replace(value, "[hidden]")
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+            item["file"] = f"{evidence_id}.jpg"
+            mime = "image/jpeg"
+
+        if kind == "image":
+            path = (args.get("path") or "").strip()
+            if not path:
+                return {"content": [{"type": "text", "text": "Give the image's path in the VM."}], "is_error": True}
+            # Commands run in the user's home, so ~/plot.png and plot.png are the same file. One byte
+            # over the limit is enough to tell, and a huge file never fills this machine's memory.
+            command = f"set -o pipefail; head -c {IMAGE_LIMIT + 1} {shlex.quote(path.removeprefix('~/'))} | base64 -w0"
+            try:
+                result = await asyncio.to_thread(vm_record.vm.exec, command, 60, None, tag)
+            except subprocess.TimeoutExpired:
+                return {"content": [{"type": "text", "text": "Reading the image took too long."}], "is_error": True}
+            if result.returncode != 0:
+                text = f"Could not read {path}: {result.stderr.strip()}"
+                for value in hidden:
+                    text = text.replace(value, "[hidden]")
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+            data = base64.b64decode(result.stdout)
+            if len(data) > IMAGE_LIMIT:
+                text = f"{path} is over {IMAGE_LIMIT // 1_000_000} MB. Save it smaller (a lower resolution, or JPEG) and try again."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+            # The type comes from the file's first bytes, never its name. No SVG: it can carry scripts.
+            if data.startswith(b"\x89PNG\r\n\x1a\n"):
+                item["file"] = f"{evidence_id}.png"
+                mime = "image/png"
+            elif data.startswith(b"\xff\xd8\xff"):
+                item["file"] = f"{evidence_id}.jpg"
+                mime = "image/jpeg"
+            elif data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+                item["file"] = f"{evidence_id}.gif"
+                mime = "image/gif"
+            elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+                item["file"] = f"{evidence_id}.webp"
+                mime = "image/webp"
+            else:
+                return {"content": [{"type": "text", "text": f"{path} is not a PNG, JPEG, GIF or WebP image."}], "is_error": True}
+
+        if kind == "command":
+            command = (args.get("command") or "").strip()
+            if not command:
+                return {"content": [{"type": "text", "text": "Give the command to run."}], "is_error": True}
+            # Output and errors together, in the order they came, as in a terminal. tail keeps the end and never
+            # stops the command; pipefail makes the exit code the command's. The newline ends a comment on its last line.
+            capped = f"set -o pipefail; {{ {command}\n}} 2>&1 | tail -c {OUTPUT_LIMIT}"
+            try:
+                result = await asyncio.to_thread(vm_record.vm.exec, capped, 600, None, tag)
+            except subprocess.TimeoutExpired:
+                return {"content": [{"type": "text", "text": "The command ran over 10 minutes and was stopped."}], "is_error": True}
+            output = result.stdout
+            for value in hidden:
+                output = output.replace(value, "[hidden]")
+                command = command.replace(value, "[hidden]")
+            item["command"] = command
+            item["exit_code"] = result.returncode
+            item["output_file"] = f"{evidence_id}.txt"
+            item["output_size"] = len(output.encode())
+            tail = "\n".join(output.rstrip("\n").split("\n")[-TAIL_LINES:])
+            item["output_tail"] = tail[-TAIL_CHARS:]
+            data = output.encode()
+
+        # The VM may have been taken from it, or the job cancelled, while it ran.
+        if vm_record.holder != self.agent_id:
+            return {"content": [{"type": "text", "text": "You lost the VM meanwhile; no evidence was added."}], "is_error": True}
+        job = self.agents.jobs.get(job["id"])
+        if job["status"] in CLOSED_STATUSES:
+            text = f"{job['id']} is {job['status']} now (the user may have cancelled it): no evidence was added. Move on."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        # Write, then rename: a crash never leaves half a file.
+        name = item["file"] or item["output_file"]
+        await asyncio.to_thread(EVIDENCE_DIR.mkdir, parents=True, exist_ok=True)
+        temporary = EVIDENCE_DIR / f"{name}.tmp"
+        await asyncio.to_thread(temporary.write_bytes, data)
+        await asyncio.to_thread(temporary.replace, EVIDENCE_DIR / name)
+        replaced = self.agents.jobs.add_evidence(job["id"], item)
+
+        text = f"Added {evidence_id} to {job['id']}: {stage} of \"{topic}\" ({kind})."
+        if replaced:
+            text += f" It replaced the {stage} you had for that topic."
+        if kind == "command":
+            text += f"\nexit code {item['exit_code']}\n{output}"
+            return {"content": [{"type": "text", "text": text}]}
+        # The agent sees what the user will see, so it can tell whether it shows what the caption says.
+        text += " This is what the user sees. If it doesn't show what the caption says, take it again with the same topic and stage."
+        return {"content": [{"type": "text", "text": text}, {"type": "image", "data": base64.b64encode(data).decode(), "mimeType": mime}]}
+
+    async def evidence_remove(self, args: dict) -> dict:
+        try:
+            job = self.agents.jobs.get(args["job_id"])
+        except KeyError:
+            return {"content": [{"type": "text", "text": f"No job {args['job_id']}."}], "is_error": True}
+        if job["agent"] != self.agent_id:
+            return {"content": [{"type": "text", "text": f"{job['id']} is not your job."}], "is_error": True}
+        removed = self.agents.jobs.remove_evidence(job["id"], args["ids"])
+        missing = [evidence_id for evidence_id in args["ids"] if evidence_id not in removed]
+        return {"content": [{"type": "text", "text": json.dumps({"removed": removed, "not_on_job": missing})}]}
+
+    async def queue_for_vm(self, args: dict) -> dict:
+        vm_name = self.record["target_vm"]
+        if vm_name is None:
+            text = "You have no target VM. The user sets it; ask them (draft_question, or say so in your reply), then end your turn."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        try:
+            place = self.agents.queue.join(vm_name, self.agent_id)
+            vm_record = self.agents.vms.get(vm_name)
+        except (ValueError, VMsError) as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+
+        if place > 0:
+            text = f"You are number {place} in {vm_name}'s queue. End your turn; you'll get a message when it's yours."
+            return {"content": [{"type": "text", "text": text}]}
+        jobs = [job for job in self.agents.jobs.for_agent(self.agent_id) if job["status"] in OPEN_STATUSES and job["vm"] == vm_name]
+        titles = ", ".join(f"{job['id']} ({job['title']})" for job in jobs) or "none"
+        text = f"{vm_name} is yours now. Your open jobs for it: {titles}. Do them all, then release_vm."
+        if vm_record.status != "running":
+            text += f" {vm_name} is {vm_record.status}: start it with vm_start."
+        return {"content": [{"type": "text", "text": text}]}
+
+    async def release_vm(self, args: dict) -> dict:
+        vm_name, place = self.agents.queue.place(self.agent_id)
+        if place is None:
+            return {"content": [{"type": "text", "text": "You don't hold a VM and wait for none."}], "is_error": True}
+        if place > 0:
+            self.agents.queue.leave_all(self.agent_id)
+            return {"content": [{"type": "text", "text": f"You left {vm_name}'s queue."}]}
+        try:
+            self.agents.queue.release(vm_name, self.agent_id)
+        except (ValueError, VMsError) as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        return {"content": [{"type": "text", "text": f"Released {vm_name}."}]}
+
+    async def vm_queue_status(self, args: dict) -> dict:
+        vm_name, place = self.agents.queue.place(self.agent_id)
+        you = "in no queue"
+        if place == 0:
+            you = f"holding {vm_name}"
+        if place is not None and place > 0:
+            you = f"number {place} in {vm_name}'s queue"
+        status = {"target_vm": self.record["target_vm"], "you": you}
+        if self.record["target_vm"] is not None:
+            try:
+                vm_record = self.agents.vms.get(self.record["target_vm"])
+            except VMsError as error:
+                return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+            status["vm_status"] = vm_record.status
+            status["holder"] = vm_record.holder
+            status["queue"] = list(vm_record.queue)
+        return {"content": [{"type": "text", "text": json.dumps(status)}]}
