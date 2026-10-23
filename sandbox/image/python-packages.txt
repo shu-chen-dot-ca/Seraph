@@ -20,3 +20,7 @@ openpyxl
 beautifulsoup4
 tqdm
 sqlalchemy
+plotly
+pyarrow
+duckdb
+polars

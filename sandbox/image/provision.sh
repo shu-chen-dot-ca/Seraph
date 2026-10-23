@@ -146,6 +146,7 @@ cat > /etc/environment <<EOF
 PATH="$PATH_ALL"
 RUSTUP_HOME="$RUST_DIR"
 PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_DIR/browsers"
+TIKTOKEN_CACHE_DIR="$desktop_home/.cache/tiktoken"
 EOF
 
 # The desktop user may use Docker without sudo.
@@ -177,6 +178,17 @@ rm -f /etc/apt/apt.conf.d/20apt-esm-hook.conf
 if [[ -f /etc/default/motd-news ]]; then
     sed -i 's/^ENABLED=.*/ENABLED=0/' /etc/default/motd-news
 fi
+
+# --- No shadow stacks: they crash the whole VM on this host ------------------
+
+# When a program turns on a user shadow stack (a CPU security feature), the VM's
+# CPU keeps it on for the programs after it, and they all crash at once, systemd
+# too, so the VM freezes. fwupd does it when it starts. clearcpuid stops any
+# program from turning shadow stacks on, and a VM has no firmware to update.
+# The backend also does this on every start (VM.guard_shadow_stack in sandbox/vm.py).
+systemctl mask fwupd.service fwupd-refresh.service fwupd-refresh.timer
+echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT clearcpuid=user_shstk"' > /etc/default/grub.d/99-sandbox-no-shadow-stack.cfg
+update-grub
 
 # --- Desktop: X11, logs in by itself, never locks ----------------------------
 
@@ -304,6 +316,7 @@ WorkingDirectory=$desktop_home
 Environment=PATH=$PATH_ALL
 Environment=RUSTUP_HOME=$RUST_DIR
 Environment=PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_DIR/browsers
+Environment=TIKTOKEN_CACHE_DIR=$desktop_home/.cache/tiktoken
 ExecStart=$DEMO_DIR/run.sh
 Restart=on-failure
 RestartSec=3
@@ -317,15 +330,95 @@ EOF
 # Repos still install their own pinned versions; these just make the first
 # install in a session faster. Run as the desktop user so the caches are theirs,
 # from their home: uv looks for a uv.toml in the current folder, and they can't read /root.
+# The uv cache only helps venvs on the same Python (the system 3.12).
+# Each group is its own install, so one group's version limits don't hold back another.
 (
     cd "$desktop_home"
     sudo -u "$desktop_user" -H npm cache add \
         react react-dom next vite @vitejs/plugin-react typescript tailwindcss \
         @tailwindcss/vite eslint express
-    sudo -u "$desktop_user" -H uv pip install --target /tmp/uv-warm \
-        fastapi "uvicorn[standard]" pydantic sqlalchemy httpx flask django
+
+    # Web backends
+    sudo -u "$desktop_user" -H uv pip install --target /tmp/uv-warm-web \
+        fastapi "uvicorn[standard]" pydantic sqlalchemy httpx flask django \
+        alembic celery redis "psycopg[binary]" asyncpg
+
+    # PyTorch, the biggest download. The default PyPI build is the CUDA one:
+    # it runs on CPU now and on a GPU later, if a GPU is ever passed in.
+    sudo -u "$desktop_user" -H uv pip install --target /tmp/uv-warm-torch \
+        torch torchvision torchaudio
+
+    # Models on top of PyTorch
+    sudo -u "$desktop_user" -H uv pip install --target /tmp/uv-warm-ml \
+        torch transformers accelerate safetensors datasets sentence-transformers \
+        onnxruntime opencv-python-headless spacy nltk
+
+    # Classic machine learning
+    sudo -u "$desktop_user" -H uv pip install --target /tmp/uv-warm-classic \
+        scikit-learn scikit-image xgboost lightgbm catboost statsmodels numba \
+        sympy networkx
+
+    # Data and charts
+    sudo -u "$desktop_user" -H uv pip install --target /tmp/uv-warm-data \
+        numpy pandas scipy matplotlib seaborn plotly kaleido bokeh altair dash \
+        pyarrow duckdb polars openpyxl xlrd h5py tables pillow imageio \
+        geopandas shapely folium pydeck jupyterlab notebook ipywidgets rich tqdm
+
+    # LLM apps and their stores
+    sudo -u "$desktop_user" -H uv pip install --target /tmp/uv-warm-llm \
+        openai anthropic google-genai litellm tiktoken \
+        langchain langchain-core langchain-openai langchain-community langgraph \
+        llama-index-core mcp chromadb qdrant-client faiss-cpu sqlite-vec \
+        opentelemetry-sdk opentelemetry-exporter-otlp huggingface_hub tokenizers \
+        aiohttp orjson
+
+    # Demo screens
+    sudo -u "$desktop_user" -H uv pip install --target /tmp/uv-warm-ui \
+        gradio streamlit
+
+    # Tests and code tools
+    sudo -u "$desktop_user" -H uv pip install --target /tmp/uv-warm-dev \
+        pytest pytest-asyncio pytest-timeout pytest-cov black mypy pre-commit
 )
-rm -rf /tmp/uv-warm
+rm -rf /tmp/uv-warm-*
+
+# --- Models and data files libraries download on first use -------------------
+
+# These land in the desktop user's home, not in the uv cache:
+#   ~/.cache/huggingface   all-MiniLM-L6-v2 (sentence-transformers)
+#   ~/.cache/chroma        Chroma's default embedding model
+#   ~/.cache/tiktoken      OpenAI token encodings (TIKTOKEN_CACHE_DIR, see /etc/environment)
+#   ~/nltk_data            punkt and stopwords
+# The spaCy model wheel only goes in the uv cache.
+spacy_model="https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
+(
+    cd "$desktop_home"
+    sudo -u "$desktop_user" -H uv venv /tmp/warm-models --python /usr/bin/python3
+    sudo -u "$desktop_user" -H uv pip install --python /tmp/warm-models/bin/python \
+        sentence-transformers chromadb tiktoken nltk "en_core_web_sm @ $spacy_model"
+    sudo -u "$desktop_user" -H env TIKTOKEN_CACHE_DIR="$desktop_home/.cache/tiktoken" \
+        /tmp/warm-models/bin/python - <<'EOF'
+from sentence_transformers import SentenceTransformer
+SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
+DefaultEmbeddingFunction()(["warm up"])
+
+import tiktoken
+tiktoken.get_encoding("cl100k_base")
+tiktoken.get_encoding("o200k_base")
+
+import nltk
+nltk.download(["punkt", "punkt_tab", "stopwords"])
+EOF
+)
+rm -rf /tmp/warm-models
+
+# --- VS Code extensions ------------------------------------------------------
+
+# Python support (it brings debugpy and Pylance with it), so a demo opened in
+# VS Code can be run and debugged without installing anything first.
+sudo -u "$desktop_user" -H code --install-extension ms-python.python
 
 # --- Clean up before publishing ---------------------------------------------
 

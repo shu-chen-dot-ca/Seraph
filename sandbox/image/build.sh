@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Build the image every session VM starts from:
+# Build an image VMs can start from:
 #
-#     sandbox/image/build.sh
+#     sandbox/image/build.sh [name]
 #
 # SANDBOX_BUILD_FROM (Ubuntu 24.04 desktop) + the tools in provision.sh + the
-# Python packages in python-packages.txt, published as SANDBOX_BUILD_NAME.
-# Takes about 20-30 minutes. Run it again to update the image; sessions that
+# Python packages in python-packages.txt, published as name (default
+# SANDBOX_BUILD_NAME). The VMs page's Images tab runs this too.
+# Takes about 45-60 minutes (PyTorch and the ML caches are big). Run it again to update the image; VMs that
 # already exist keep their own disk.
 #
 # Settings come from the SANDBOX_* lines of the project's .env. Only the
@@ -21,6 +22,7 @@ cd "$(dirname "$0")"
 source <(grep -E '^SANDBOX_[A-Z_]+=' ../../.env)
 
 BUILDER=$SANDBOX_BUILD_VM
+NAME=${1:-$SANDBOX_BUILD_NAME}
 
 # Whatever happens, don't leave the builder VM behind.
 trap 'incus delete --force "$BUILDER" >/dev/null 2>&1 || true' EXIT
@@ -55,9 +57,9 @@ incus exec "$BUILDER" \
     --env SANDBOX_VM_DOCKER_IMAGES="$SANDBOX_VM_DOCKER_IMAGES" \
     -- bash /root/provision.sh
 
-echo "==> Publishing the image as '$SANDBOX_BUILD_NAME'"
+echo "==> Publishing the image as '$NAME'"
 incus stop "$BUILDER"
-# Uncompressed: bigger on disk, but new sessions unpack it faster.
-incus publish "$BUILDER" --alias "$SANDBOX_BUILD_NAME" --reuse --compression none
+# Uncompressed: bigger on disk, but new VMs unpack it faster.
+incus publish "$BUILDER" --alias "$NAME" --reuse --compression none
 
-echo "==> Done. Set SANDBOX_IMAGE=$SANDBOX_BUILD_NAME in .env to use it for new sessions."
+echo "==> Built '$NAME'. Pick it in New VM, or make it the default in the VMs page's Images tab."

@@ -1,4 +1,4 @@
-"""One Incus VM. Knows nothing about sessions or agents.
+"""One Incus VM. Knows nothing about records, queues or agents.
 
 Every call runs the `incus` command line. Commands inside the VM run as the
 desktop user (uid 1000) with the image's environment (/etc/environment).
@@ -130,12 +130,18 @@ class VM:
                 return lease["address"]
         return None
 
-    def exec(self, command: str, timeout: float = 600, input: str | None = None) -> subprocess.CompletedProcess:
+    def exec(self, command: str, timeout: float = 600, input: str | None = None, tag: str | None = None) -> subprocess.CompletedProcess:
         """Run a shell command as the desktop user, in their home, with the image's PATH.
 
         input is text for the command's stdin (e.g. a file's content); without it stdin is empty.
+        tag runs it in a session of its own, with tag as the last word of its command line, so
+        kill_tagged(tag) can end it and everything it started, even while this call still waits.
+        Output that isn't valid UTF-8 (binary files, a cut character) comes back with U+FFFD in its place.
         """
         script = f"set -a; . /etc/environment; set +a; {command}"
+        if tag is not None:
+            # --wait: the command's own exit code, and its end, as without setsid.
+            script = f"set -a; . /etc/environment; set +a; exec setsid --wait bash -c {shlex.quote(command)} {shlex.quote(tag)}"
         # runuser -l: a login shell in the user's home. The user is whoever has uid 1000.
         as_user = f'exec runuser -l "$(id -nu 1000)" -c {shlex.quote(script)}'
         if input is None:
@@ -144,6 +150,7 @@ class VM:
                 capture_output=True,
                 stdin=subprocess.DEVNULL,
                 text=True,
+                errors="replace",
                 timeout=timeout,
             )
         return subprocess.run(
@@ -151,8 +158,19 @@ class VM:
             capture_output=True,
             input=input,
             text=True,
+            errors="replace",
             timeout=timeout,
         )
+
+    def kill_tagged(self, tag: str) -> None:
+        """Kill everything started by exec(..., tag=tag): each such command's whole session, as root.
+
+        For when whoever ran them lost the VM: what they started must not go on in it.
+        """
+        # The session leader is the `bash -c <command> <tag>` exec started, so its pid is the session id.
+        pattern = shlex.quote(f" {tag}$")
+        command = f'for sid in $(pgrep -f -- {pattern}); do pkill -KILL -s "$sid"; done; true'
+        self.exec_root(command, timeout=30)
 
     def exec_root(self, command: str, timeout: float = 120) -> subprocess.CompletedProcess:
         """Run a shell command as root (for system things like the login screen)."""
@@ -161,8 +179,19 @@ class VM:
             capture_output=True,
             stdin=subprocess.DEVNULL,
             text=True,
+            errors="replace",
             timeout=timeout,
         )
+
+    def base_image(self) -> str:
+        """The fingerprint of the image the VM was made from, or "" if Incus doesn't know it."""
+        result = subprocess.run(
+            ["incus", "config", "get", self.name, "volatile.base_image"],
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            text=True,
+        )
+        return result.stdout.strip()
 
     def wait_ready(self, timeout: float = 300) -> None:
         """Wait until commands work, the VM has an address, noVNC answers and the desktop is up.
@@ -289,8 +318,76 @@ class VM:
         if result.returncode != 0:
             raise VMError(f"Could not turn off the internet of {self.name}: {result.stderr.strip()}")
 
-    def clone(self, repo_url: str, folder: str) -> None:
-        """Clone a public repo into ~/<folder> of the desktop user."""
-        result = self.exec(f"git clone {shlex.quote(repo_url)} {shlex.quote(folder)}")
+    def guard_memory(self) -> None:
+        """Keep a full memory from freezing the VM. Safe to run again; it stays set after reboots.
+
+        Without this, one process that eats all memory makes the kernel struggle until
+        even systemd (PID 1) crashes, and the whole VM freezes. With it:
+        - A 4 GiB swap file (when the disk has room) takes spikes, so they slow down instead of failing.
+        - user.slice (the desktop, its terminals, the agent's commands) and system.slice
+          (the browser terminals, Docker containers) may each use at most 80% of memory
+          and 2 GiB of swap. Going over kills the biggest process in that group only.
+        - systemd itself, the Incus agent (how this machine reaches the VM) and the
+          journal keep some memory that nothing else can take.
+        """
+        script = """
+set -e
+if ! swapon --show=NAME --noheadings | grep -qx /swapfile; then
+    if [ ! -f /swapfile ] && [ "$(df --output=avail -B1G / | tail -1)" -gt 8 ]; then
+        fallocate -l 4G /swapfile
+        chmod 600 /swapfile
+        mkswap /swapfile > /dev/null
+    fi
+    if [ -f /swapfile ]; then
+        swapon /swapfile
+        grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    fi
+fi
+systemctl set-property user.slice MemoryMax=80% MemorySwapMax=2G
+systemctl set-property system.slice MemoryMax=80% MemorySwapMax=2G
+systemctl set-property init.scope MemoryMin=128M
+systemctl set-property incus-agent.service MemoryMin=128M
+systemctl set-property systemd-journald.service MemoryMin=64M
+"""
+        result = self.exec_root(script, timeout=120)
         if result.returncode != 0:
-            raise VMError(f"Could not clone {repo_url}: {result.stderr.strip()}")
+            raise VMError(f"Could not set the memory limits of {self.name}: {result.stderr.strip()}")
+
+    def guard_shadow_stack(self) -> None:
+        """Keep shadow stacks from crashing the VM. Safe to run again; it stays set after reboots.
+
+        On this host, when a program in the VM turns on a user shadow stack (a CPU security feature),
+        the VM's CPU keeps it on for the programs that run after it, and they all crash at once:
+        systemd (PID 1) too, so the VM freezes while Incus still says Running. fwupd does this when it
+        starts (fwupd-refresh.timer runs it about twice a day). So:
+        - The guest kernel gets clearcpuid=user_shstk, so no program can turn shadow stacks on.
+          It applies from the next boot.
+        - fwupd is masked, which covers the boot until then. A VM has no firmware to update anyway.
+        """
+        script = """
+set -e
+systemctl mask --now fwupd.service fwupd-refresh.service fwupd-refresh.timer > /dev/null 2>&1
+file=/etc/default/grub.d/99-sandbox-no-shadow-stack.cfg
+if [ ! -f "$file" ]; then
+    echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT clearcpuid=user_shstk"' > "$file"
+    update-grub > /dev/null 2>&1
+fi
+"""
+        result = self.exec_root(script, timeout=120)
+        if result.returncode != 0:
+            raise VMError(f"Could not turn off shadow stacks in {self.name}: {result.stderr.strip()}")
+
+    def console_log(self) -> str:
+        """What the VM's kernel and systemd printed on its console. Readable even when the VM is frozen."""
+        try:
+            result = subprocess.run(["incus", "console", self.name, "--show-log"], capture_output=True, stdin=subprocess.DEVNULL, text=True, timeout=20)
+        except subprocess.TimeoutExpired:
+            return ""
+        return result.stdout
+
+    def responds(self) -> bool:
+        """Whether commands still run in the VM (a frozen VM shows as Running but doesn't answer)."""
+        try:
+            return subprocess.run(["incus", "exec", self.name, "--", "true"], capture_output=True, stdin=subprocess.DEVNULL, timeout=10).returncode == 0
+        except subprocess.TimeoutExpired:
+            return False

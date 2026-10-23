@@ -6,7 +6,10 @@ Both need the X11 display of the logged-in desktop (the image uses X11, not Wayl
 
 Coordinates are pixels of the VM's screen, the same size as the screenshot.
 
-    computer = Computer(session.vm)
+With a tag, every command runs tagged (VM.exec), so VM.kill_tagged(tag) can stop them all,
+including a long bash command or typing that is still going on.
+
+    computer = Computer(record.vm, "sandbox-agent-agent_a1b2c3")
     jpeg = computer.screenshot()
     computer.click(400, 300)
     computer.type("hello")
@@ -29,6 +32,10 @@ X11 = (
 # JPEG, not PNG: a PNG of the screen is over 1MB, too big for one message to Claude.
 SCREENSHOT_PATH = "/tmp/computer-use-screen.jpg"
 SCREENSHOT_QUALITY = 60
+# bash gives back at most this many bytes of stdout and of stderr: the last ones, where errors
+# and summaries are. Cut inside the VM, so a command that prints without end can't fill this
+# machine's memory.
+OUTPUT_LIMIT = 50_000
 
 
 class ComputerError(Exception):
@@ -36,8 +43,9 @@ class ComputerError(Exception):
 
 
 class Computer:
-    def __init__(self, vm: VM):
+    def __init__(self, vm: VM, tag: str | None = None):
         self.vm = vm
+        self.tag = tag
 
     def check(self) -> None:
         """Raise ComputerError if the VM can't be used now: missing, stopped, starting, ..."""
@@ -48,22 +56,30 @@ class Computer:
             raise ComputerError(f"The VM is not running (it is {status.lower()}). Start it with vm_start if the task needs it.")
         # Running can still mean booting or hung: then commands don't get through.
         try:
-            result = self.vm.exec("true", timeout=10)
+            result = self.vm.exec("true", timeout=10, tag=self.tag)
         except subprocess.TimeoutExpired:
-            raise ComputerError("The VM is not responding. Wait a bit, or ask the user to restart the session.")
+            raise ComputerError("The VM is not responding. Wait a bit, look with vm_health, or restart it with vm_restart.")
         if result.returncode != 0:
             raise ComputerError(f"The VM is not responding ({result.stderr.strip()}). It may still be starting up.")
 
     def screen_size(self) -> tuple[int, int]:
-        result = self.vm.exec(f"{X11} xdotool getdisplaygeometry", timeout=30)
+        result = self.vm.exec(f"{X11} xdotool getdisplaygeometry", timeout=30, tag=self.tag)
         if result.returncode != 0:
             raise ComputerError(f"Could not read the screen size: {result.stderr.strip()}")
         width, height = result.stdout.split()
         return int(width), int(height)
 
-    def screenshot(self) -> bytes:
-        """The whole screen as a JPEG."""
-        result = self.vm.exec(f"{X11} scrot --overwrite --quality {SCREENSHOT_QUALITY} {SCREENSHOT_PATH} && base64 -w0 {SCREENSHOT_PATH}", timeout=30)
+    def screenshot(self, quality: int = SCREENSHOT_QUALITY, region: tuple[int, int, int, int] | None = None) -> bytes:
+        """The screen as a JPEG. region (x, y, width, height) takes only that part of it.
+
+        Evidence for the user asks for a higher quality, so small text stays readable.
+        """
+        area = ""
+        if region is not None:
+            x, y, width, height = region
+            area = f"--autoselect {int(x)},{int(y)},{int(width)},{int(height)} "
+        command = f"{X11} scrot --overwrite --quality {int(quality)} {area}{SCREENSHOT_PATH} && base64 -w0 {SCREENSHOT_PATH}"
+        result = self.vm.exec(command, timeout=30, tag=self.tag)
         if result.returncode != 0:
             raise ComputerError(f"Could not take a screenshot: {result.stderr.strip()}")
         return base64.b64decode(result.stdout)
@@ -74,26 +90,26 @@ class Computer:
         if button not in buttons:
             raise ComputerError(f"Unknown button {button!r}, use left, middle or right")
         command = f"{X11} xdotool mousemove {int(x)} {int(y)} click --repeat {int(count)} {buttons[button]}"
-        result = self.vm.exec(command, timeout=30)
+        result = self.vm.exec(command, timeout=30, tag=self.tag)
         if result.returncode != 0:
             raise ComputerError(f"Could not click: {result.stderr.strip()}")
 
     def drag(self, x1: int, y1: int, x2: int, y2: int) -> None:
         """Hold the left button at (x1, y1), move to (x2, y2), let go."""
         command = f"{X11} xdotool mousemove {int(x1)} {int(y1)} mousedown 1 mousemove {int(x2)} {int(y2)} mouseup 1"
-        result = self.vm.exec(command, timeout=30)
+        result = self.vm.exec(command, timeout=30, tag=self.tag)
         if result.returncode != 0:
             raise ComputerError(f"Could not drag: {result.stderr.strip()}")
 
     def type(self, text: str) -> None:
         """Type text as if on a keyboard, where the keyboard focus is."""
-        result = self.vm.exec(f"{X11} xdotool type --delay 20 -- {shlex.quote(text)}", timeout=300)
+        result = self.vm.exec(f"{X11} xdotool type --delay 20 -- {shlex.quote(text)}", timeout=300, tag=self.tag)
         if result.returncode != 0:
             raise ComputerError(f"Could not type: {result.stderr.strip()}")
 
     def key(self, keys: str) -> None:
         """Press a key or combo in xdotool names, e.g. Return, Escape, ctrl+l, ctrl+shift+t."""
-        result = self.vm.exec(f"{X11} xdotool key -- {shlex.quote(keys)}", timeout=30)
+        result = self.vm.exec(f"{X11} xdotool key -- {shlex.quote(keys)}", timeout=30, tag=self.tag)
         if result.returncode != 0:
             raise ComputerError(f"Could not press {keys}: {result.stderr.strip()}")
 
@@ -103,7 +119,7 @@ class Computer:
         if direction not in buttons:
             raise ComputerError(f"Unknown direction {direction!r}, use up, down, left or right")
         command = f"{X11} xdotool mousemove {int(x)} {int(y)} click --repeat {int(amount)} {buttons[direction]}"
-        result = self.vm.exec(command, timeout=30)
+        result = self.vm.exec(command, timeout=30, tag=self.tag)
         if result.returncode != 0:
             raise ComputerError(f"Could not scroll: {result.stderr.strip()}")
 
@@ -131,5 +147,13 @@ class Computer:
 
     def bash(self, command: str, timeout: float = 600) -> str:
         """Run a shell command as the desktop user. Returns what it printed and its exit code."""
-        result = self.vm.exec(command, timeout=timeout)
-        return f"exit code {result.returncode}\n--- stdout ---\n{result.stdout}\n--- stderr ---\n{result.stderr}"
+        # The newline ends a comment on the command's last line. tail never stops the command, it only keeps the end.
+        capped = f"{{ {command}\n}} > >(tail -c {OUTPUT_LIMIT}) 2> >(tail -c {OUTPUT_LIMIT} >&2)"
+        result = self.vm.exec(capped, timeout=timeout, tag=self.tag)
+        stdout = result.stdout
+        stderr = result.stderr
+        if len(stdout.encode()) >= OUTPUT_LIMIT:
+            stdout = f"[cut: only the last {OUTPUT_LIMIT} bytes]\n{stdout}"
+        if len(stderr.encode()) >= OUTPUT_LIMIT:
+            stderr = f"[cut: only the last {OUTPUT_LIMIT} bytes]\n{stderr}"
+        return f"exit code {result.returncode}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
