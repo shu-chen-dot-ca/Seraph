@@ -3,7 +3,9 @@ The Images tab of the VMs page: the images new VMs start from.
 
 One row per image (an Incus image with a name): its description, size, when it was made, and the VMs made
 from that exact image. The default image is what New VM picks first. Each row's menu: make it the default,
-edit its name and description, rebuild it, delete it (VMs made from it keep working: each has its own disk).
+edit its name and description, rebuild it, list what it has again, delete it (VMs made from it keep working:
+each has its own disk). A row opens in place to show what the image has (ImageInventory); an image that wasn't
+listed yet offers Inspect there (about two minutes, in a throwaway VM).
 
 New images come from Build (sandbox/image/build.sh: a fresh Ubuntu desktop plus provision.sh, about an
 hour) or Save a VM (that VM's disk as it is, a few minutes). Both run in the background as tasks, shown
@@ -11,10 +13,11 @@ above the list with their last log lines until the image is listed; the whole lo
 Everything comes from the live "images" topic.
 */
 
-import { Hammer, Loader2, MoreHorizontal, Pencil, Plus, Save, ScrollText, Square, Star, Trash2, X } from "lucide-react";
+import { ChevronRight, Hammer, Loader2, MoreHorizontal, Pencil, Plus, Save, ScanSearch, ScrollText, Square, Star, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import ImageInventory from "@/ImageInventory";
 import SaveImageDialog from "@/SaveImageDialog";
 import {
   AlertDialog,
@@ -34,7 +37,9 @@ import { Input } from "@/components/ui/input";
 import { api, useLive, useLoaded, type Image, type ImageTask } from "@/live";
 import { cn } from "@/lib/utils";
 
-const COLUMNS = "grid grid-cols-[minmax(0,220px)_minmax(0,1fr)_80px_150px_minmax(0,200px)_32px] items-center gap-3";
+const COLUMNS = "grid grid-cols-[16px_minmax(0,220px)_minmax(0,1fr)_80px_150px_minmax(0,200px)_32px] items-center gap-3";
+
+const TASK_TITLE: Record<string, string> = { build: "Building", save: "Saving", inspect: "Listing what it has:" };
 
 export default function Images() {
   const data = useLive("images");
@@ -45,6 +50,8 @@ export default function Images() {
   const [editing, setEditing] = useState<Image | null>(null);
   const [deleting, setDeleting] = useState<Image | null>(null);
   const [logOf, setLogOf] = useState<ImageTask | null>(null);
+  // The fingerprints of the open rows.
+  const [open, setOpen] = useState<string[]>([]);
 
   const buildRunning = data.tasks.some((task) => task.kind === "build" && task.status === "running");
 
@@ -64,6 +71,22 @@ export default function Images() {
       toast.error(`Could not delete ${image.name}: ${err instanceof Error ? err.message : err}`);
     }
     setDeleting(null);
+  }
+
+  function toggle(fingerprint: string) {
+    if (open.includes(fingerprint)) {
+      setOpen(open.filter((other) => other !== fingerprint));
+      return;
+    }
+    setOpen([...open, fingerprint]);
+  }
+
+  async function inspect(image: Image) {
+    try {
+      await api(`/api/images/${encodeURIComponent(image.name)}/inspect`, { method: "POST" });
+    } catch (err) {
+      toast.error(`Could not inspect ${image.name}: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   async function stopTask(task: ImageTask) {
@@ -90,7 +113,12 @@ export default function Images() {
           <Button size="sm" variant="outline" onClick={() => setSaving(true)}>
             <Save /> Save a VM as image
           </Button>
-          <Button size="sm" disabled={buildRunning} title={buildRunning ? "One build runs at a time" : undefined} onClick={() => setBuilding({ name: "", rebuild: false })}>
+          <Button
+            size="sm"
+            disabled={buildRunning}
+            title={buildRunning ? "One build runs at a time" : undefined}
+            onClick={() => setBuilding({ name: "", rebuild: false })}
+          >
             <Plus /> Build image
           </Button>
         </div>
@@ -100,15 +128,23 @@ export default function Images() {
         <div className="shrink-0 border-b">
           {data.tasks.map((task) => (
             <div key={task.id} className="flex min-h-9 items-center gap-3 border-b px-3 py-1 last:border-b-0">
-              {task.status === "running" ? <Loader2 className="size-4 shrink-0 animate-spin text-warn" /> : <X className="size-4 shrink-0 text-destructive" />}
+              {task.status === "running" ? (
+                <Loader2 className="size-4 shrink-0 animate-spin text-warn" />
+              ) : (
+                <X className="size-4 shrink-0 text-destructive" />
+              )}
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className="font-medium">
-                    {task.kind === "build" ? `Building ${task.name}` : `Saving ${task.vm} as ${task.name}`}
+                    {task.kind === "save" ? `Saving ${task.vm} as ${task.name}` : `${TASK_TITLE[task.kind] ?? task.kind} ${task.name}`}
                     {task.status === "failed" && " failed"}
                   </span>
-                  <span className="text-xs text-muted-foreground">started {new Date(task.started_at).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}</span>
-                  {task.status === "running" && <span className="text-xs text-muted-foreground">{task.kind === "build" ? "about an hour" : "a few minutes"}</span>}
+                  <span className="text-xs text-muted-foreground">
+                    started {new Date(task.started_at).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
+                  </span>
+                  {task.status === "running" && (
+                    <span className="text-xs text-muted-foreground">{task.kind === "build" ? "about an hour" : "a few minutes"}</span>
+                  )}
                 </div>
                 <div className={cn("truncate font-mono text-xs", task.status === "failed" ? "text-destructive" : "text-muted-foreground")}>
                   {task.status === "failed" ? task.error : (task.log_tail[task.log_tail.length - 1] ?? "Starting…")}
@@ -133,6 +169,7 @@ export default function Images() {
       )}
 
       <div className={cn(COLUMNS, "h-7 shrink-0 border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground")}>
+        <span />
         <span>Name</span>
         <span>Description</span>
         <span className="text-right">Size</span>
@@ -145,52 +182,88 @@ export default function Images() {
         {!loaded && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
         {loaded && data.images.length === 0 && <div className="px-3 py-2 text-muted-foreground">No images yet. Build one to make VMs.</div>}
         {loaded && data.default !== "" && data.images.length > 0 && !data.images.some((image) => image.default) && (
-          <div className="border-b px-3 py-1.5 text-destructive">The default image {data.default} is gone. Make another one the default, or New VM can't work.</div>
+          <div className="border-b px-3 py-1.5 text-destructive">
+            The default image {data.default} is gone. Make another one the default, or New VM can't work.
+          </div>
         )}
         {data.images.map((image) => (
-          <div key={image.fingerprint} className={cn(COLUMNS, "h-8 border-b px-3 hover:bg-accent/50")}>
-            <span className="flex min-w-0 items-center gap-2">
-              <span className="truncate font-medium">{image.name}</span>
-              {image.default && <Badge variant="secondary">default</Badge>}
-            </span>
-            <span className="truncate text-muted-foreground" title={image.description}>
-              {image.description || "–"}
-            </span>
-            <span className="text-right tabular-nums">{image.size_gb.toFixed(1)} GB</span>
-            <span className="text-muted-foreground tabular-nums">{new Date(image.created_at).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}</span>
-            <span className="truncate">
-              {image.used_by.length === 0 && <span className="text-muted-foreground">–</span>}
-              {image.used_by.map((name, index) => (
-                <span key={name}>
-                  {index > 0 && ", "}
-                  <a href={`#/vms/${encodeURIComponent(name)}`} className="text-primary hover:underline">
-                    {name}
-                  </a>
-                </span>
-              ))}
-            </span>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon-xs" aria-label={`Actions for ${image.name}`}>
-                  <MoreHorizontal />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem disabled={image.default} onSelect={() => makeDefault(image)}>
-                  <Star /> Make default
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setEditing(image)}>
-                  <Pencil /> Edit name and description
-                </DropdownMenuItem>
-                <DropdownMenuItem disabled={buildRunning} onSelect={() => setBuilding({ name: image.name, rebuild: true })}>
-                  <Hammer /> Rebuild
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem variant="destructive" disabled={image.default} onSelect={() => setDeleting(image)}>
-                  <Trash2 /> Delete
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+          <div key={image.fingerprint} className="border-b">
+            <div
+              className={cn(COLUMNS, "h-8 cursor-pointer px-3 hover:bg-accent/50", open.includes(image.fingerprint) && "bg-accent/40")}
+              onClick={() => toggle(image.fingerprint)}
+            >
+              <ChevronRight className={cn("size-3.5 text-muted-foreground transition-transform", open.includes(image.fingerprint) && "rotate-90")} />
+              <span className="flex min-w-0 items-center gap-2">
+                <span className="truncate font-medium">{image.name}</span>
+                {image.default && <Badge variant="secondary">default</Badge>}
+              </span>
+              <span className="truncate text-muted-foreground" title={image.description}>
+                {image.description || "–"}
+              </span>
+              <span className="text-right tabular-nums">{image.size_gb.toFixed(1)} GB</span>
+              <span className="text-muted-foreground tabular-nums">
+                {new Date(image.created_at).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
+              </span>
+              <span className="truncate">
+                {image.used_by.length === 0 && <span className="text-muted-foreground">–</span>}
+                {image.used_by.map((name, index) => (
+                  <span key={name}>
+                    {index > 0 && ", "}
+                    <a
+                      href={`#/vms/${encodeURIComponent(name)}`}
+                      className="text-primary hover:underline"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      {name}
+                    </a>
+                  </span>
+                ))}
+              </span>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon-xs" aria-label={`Actions for ${image.name}`} onClick={(event) => event.stopPropagation()}>
+                    <MoreHorizontal />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem disabled={image.default} onSelect={() => makeDefault(image)}>
+                    <Star /> Make default
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setEditing(image)}>
+                    <Pencil /> Edit name and description
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={buildRunning} onSelect={() => setBuilding({ name: image.name, rebuild: true })}>
+                    <Hammer /> Rebuild
+                  </DropdownMenuItem>
+                  <DropdownMenuItem disabled={image.inspecting} onSelect={() => inspect(image)}>
+                    <ScanSearch /> {image.inventory === null ? "Inspect" : "Inspect again"}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem variant="destructive" disabled={image.default} onSelect={() => setDeleting(image)}>
+                    <Trash2 /> Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+            {open.includes(image.fingerprint) && (
+              <div className="border-t bg-muted/30 px-9 py-3">
+                {image.inventory !== null && <ImageInventory image={image} />}
+                {image.inventory === null && image.inspecting && (
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Loader2 className="size-3.5 animate-spin" /> Listing what {image.name} has. It takes a few minutes.
+                  </div>
+                )}
+                {image.inventory === null && !image.inspecting && (
+                  <div className="flex items-center gap-3 text-muted-foreground">
+                    What {image.name} has isn't listed yet.
+                    <Button size="xs" variant="outline" onClick={() => inspect(image)}>
+                      <ScanSearch /> Inspect
+                    </Button>
+                    <span className="text-xs">About two minutes, in a throwaway VM with 4 GB of memory.</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -274,7 +347,13 @@ function BuildDialog(props: { name: string; rebuild: boolean; onClose: () => voi
         </DialogHeader>
         <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 gap-y-2">
           <label className="text-muted-foreground">Name</label>
-          <Input autoFocus={!props.rebuild} disabled={props.rebuild} placeholder="e.g. desktop-2" value={name} onChange={(event) => setName(event.target.value)} />
+          <Input
+            autoFocus={!props.rebuild}
+            disabled={props.rebuild}
+            placeholder="e.g. desktop-2"
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+          />
           <label className="text-muted-foreground">Description</label>
           <Input placeholder="Optional" value={description} onChange={(event) => setDescription(event.target.value)} />
         </div>

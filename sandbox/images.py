@@ -9,6 +9,12 @@ New images come two ways. Both are slow, so each runs as a task in the backgroun
   VMs made from the old one keep their own disk.
 - save a VM: `incus publish` of a stopped VM (a few minutes): everything on its disk comes along.
 
+What an image has (system, languages, tools, packages, models) is listed once, by sandbox/image/inspect.sh:
+a throwaway VM from the image runs inventory.py, and the list goes to DATA_DIR/images/inventory/<fingerprint>.json.
+Images never change, so that list stays true. Build and save inspect the new image at the end; an older
+image is inspected with an inspect task (about two minutes). Lists of images that are gone (deleted, or
+replaced by a rebuild) are kept, so a new build can be compared with the one before it.
+
 A task is a process of its own (its own session) that writes DATA_DIR/images/<task id>.log and
 prints "==> Done" last when it worked. Its record in DATA_DIR/images/tasks.json keeps the pid, so a
 backend restart (it reloads on code changes) doesn't stop it: the task is followed again from there.
@@ -42,6 +48,8 @@ load_dotenv(PROJECT_ROOT / ".env", override=True)
 IMAGES_DIR = PROJECT_ROOT / os.environ["DATA_DIR"] / "images"
 DEFAULT_IMAGE = os.environ["SANDBOX_IMAGE"]
 BUILD_SCRIPT = PROJECT_ROOT / "sandbox" / "image" / "build.sh"
+INSPECT_SCRIPT = PROJECT_ROOT / "sandbox" / "image" / "inspect.sh"
+INVENTORY_DIR = IMAGES_DIR / "inventory"
 NAME_PATTERN = r"[a-z][a-z0-9-]{0,40}"
 # Tasks are checked this often; Incus's image list is read again every REFRESH_SECONDS.
 CHECK_SECONDS = 2
@@ -52,6 +60,16 @@ LOG_TAIL_LINES = 3
 
 class ImagesError(Exception):
     pass
+
+
+def load_inventory(fingerprint: str) -> dict | None:
+    """What an image has (inventory.py's list), or None if it wasn't inspected. Also used by the agents' tools."""
+    if not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+        return None
+    path = INVENTORY_DIR / f"{fingerprint}.json"
+    if not path.exists():
+        return None
+    return json.loads(path.read_text())
 
 
 class Images:
@@ -66,8 +84,10 @@ class Images:
         settings_path = IMAGES_DIR / "settings.json"
         if settings_path.exists():
             self.default = json.loads(settings_path.read_text()).get("default") or DEFAULT_IMAGE
-        # {"id", "kind": "build" | "save", "name", "vm", "description", "pid", "status": "running" | "failed",
-        #  "error", "started_at"}
+        # The short version of each inspected image's list (see highlights()), by fingerprint; lists never change.
+        self.highlights_by_fingerprint: dict[str, dict] = {}
+        # {"id", "kind": "build" | "save" | "inspect", "name", "vm", "description", "pid",
+        #  "status": "running" | "failed", "error", "started_at"}
         self.tasks: list[dict] = []
         tasks_path = IMAGES_DIR / "tasks.json"
         if tasks_path.exists():
@@ -149,6 +169,7 @@ class Images:
             return
         self.refresh()
         with self.lock:
+            self.highlights_by_fingerprint = {}
             for task_id, worked, error in finished:
                 for task in self.tasks:
                     if task["id"] != task_id:
@@ -206,7 +227,47 @@ class Images:
             default = self.default
         for task in tasks:
             task["log_tail"] = self.read_log(task["id"]).strip().splitlines()[-LOG_TAIL_LINES:]
-        return {"images": images, "default": default, "tasks": tasks}
+        inspecting = [task["name"] for task in tasks if task["status"] == "running"]
+        for image in images:
+            image["inventory"] = self.highlights(image["fingerprint"])
+            image["inspecting"] = image["name"] in inspecting
+        # Lists of images that are gone, to compare with: the build a rebuild replaced, or a deleted image.
+        current = [image["fingerprint"] for image in images]
+        old_builds = []
+        if INVENTORY_DIR.exists():
+            for path in sorted(INVENTORY_DIR.glob("*.json")):
+                if path.stem in current:
+                    continue
+                highlights = self.highlights(path.stem)
+                if highlights is not None:
+                    old_builds.append({"fingerprint": path.stem, "name": highlights["image"]["name"], "created_at": highlights["image"]["created_at"]})
+        return {"images": images, "default": default, "tasks": tasks, "old_builds": old_builds}
+
+    def highlights(self, fingerprint: str) -> dict | None:
+        """The short version of an image's list, for the live feed: everything but the packages, which are counted."""
+        with self.lock:
+            if fingerprint in self.highlights_by_fingerprint:
+                return self.highlights_by_fingerprint[fingerprint]
+        inventory = load_inventory(fingerprint)
+        if inventory is None:
+            return None
+        counts: dict[str, int] = {}
+        for package in inventory["packages"]:
+            counts[package["kind"]] = counts.get(package["kind"], 0) + 1
+        highlights = {
+            "image": inventory["image"],
+            "inspected_at": inventory["inspected_at"],
+            "system": inventory["system"],
+            "languages": inventory["languages"],
+            "tools": inventory["tools"],
+            "docker_images": [package["name"] for package in inventory["packages"] if package["kind"] == "docker"],
+            "models": inventory["models"],
+            "caches": inventory["caches"],
+            "counts": counts,
+        }
+        with self.lock:
+            self.highlights_by_fingerprint[fingerprint] = highlights
+        return highlights
 
     # --- Changing -----------------------------------------------------------------
 
@@ -252,7 +313,7 @@ class Images:
         with self.lock:
             busy = [task for task in self.tasks if task["status"] == "running" and task["name"] == image["name"]]
         if busy:
-            raise ImagesError(f"{name} is being rebuilt; wait until that is done.")
+            raise ImagesError(f"{name} is busy ({busy[0]['kind']} is running); wait until that is done.")
         result = subprocess.run(["incus", "image", "delete", image["fingerprint"]], capture_output=True, stdin=subprocess.DEVNULL, text=True)
         if result.returncode != 0:
             raise ImagesError(f"Could not delete {name}: {result.stderr.strip()}")
@@ -298,7 +359,7 @@ class Images:
             raise ImagesError(f"{building[0]['name']} is being built; only one build runs at a time.")
         if saving:
             raise ImagesError(f"{name} is being made already.")
-        script = f"set -e\nbash {BUILD_SCRIPT} {name}\n"
+        script = f"set -e\nbash {BUILD_SCRIPT} {name}\nbash {INSPECT_SCRIPT} {name} {INVENTORY_DIR}\n"
         if description:
             script += f"incus image set-property {name} description={self.quote(description)}\n"
         script += "echo '==> Done'\n"
@@ -330,7 +391,7 @@ class Images:
         if saving:
             raise ImagesError(f"{saving[0]['name']} is being made from {vm_name} already.")
         # Uncompressed, like build.sh: bigger on disk, but new VMs unpack it faster.
-        script = f"set -e\nincus publish {record.incus_name} --alias {name} --compression none\n"
+        script = f"set -e\nincus publish {record.incus_name} --alias {name} --compression none\nbash {INSPECT_SCRIPT} {name} {INVENTORY_DIR}\n"
         if description:
             script += f"incus image set-property {name} description={self.quote(description)}\n"
         script += "echo '==> Done'\n"
@@ -348,6 +409,19 @@ class Images:
     def wait_then_release(self, process: subprocess.Popen, record) -> None:
         process.wait()
         record.lock.release()
+
+    def inspect(self, name: str) -> dict:
+        """List what an image has (about two minutes, in a throwaway VM). Build and save do this by themselves."""
+        image = self.find(name)
+        with self.lock:
+            busy = [task for task in self.tasks if task["status"] == "running" and task["name"] == image["name"]]
+        if busy:
+            raise ImagesError(f"{image['name']} is busy: {busy[0]['kind']} is running.")
+        script = f"set -e\nbash {INSPECT_SCRIPT} {image['name']} {INVENTORY_DIR}\necho '==> Done'\n"
+        task, process = self.start_task("inspect", image["name"], None, "", script)
+        # Reap it when it ends, so it doesn't stay a zombie; check_tasks reads the outcome from the log.
+        threading.Thread(target=process.wait, daemon=True).start()
+        return task
 
     def quote(self, text: str) -> str:
         """Single-quote text for the task's bash script."""

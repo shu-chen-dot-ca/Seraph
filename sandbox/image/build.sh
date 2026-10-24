@@ -41,6 +41,9 @@ for _ in $(seq 150); do
     fi
     sleep 2
 done
+# fwupd crashes VMs on this host (see VM.guard_shadow_stack in sandbox/vm.py); keep it
+# from starting during the hour-long build, before provision.sh turns it off for good.
+incus exec "$BUILDER" -- systemctl mask --now fwupd.service fwupd-refresh.service fwupd-refresh.timer
 
 echo "==> Provisioning"
 incus file push provision.sh python-packages.txt "$BUILDER/root/"

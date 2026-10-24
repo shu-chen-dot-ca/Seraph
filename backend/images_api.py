@@ -1,4 +1,5 @@
-"""The Images tab on the VMs page: the default image, rename, describe, delete, build, and save a VM as an image.
+"""The Images tab on the VMs page: the default image, rename, describe, delete, build, save a VM as an image,
+and what each image has (its inventory: system, languages, tools, packages).
 
 The list itself reaches the browser through /api/live (topic "images"). Building and saving run as
 background tasks in sandbox/images.py and answer at once; the task shows in the list until it is
@@ -11,7 +12,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from backend.shared import images
-from sandbox.images import ImagesError
+from sandbox.images import ImagesError, load_inventory
 
 router = APIRouter(prefix="/api")
 
@@ -81,6 +82,24 @@ def save_vm_as_image(body: SaveRequest) -> dict:
         return images.save_vm(body.vm.strip(), body.name.strip(), body.description.strip())
     except ImagesError as error:
         raise HTTPException(status_code=409, detail=str(error))
+
+
+@router.post("/images/{name}/inspect")
+def inspect_image(name: str) -> dict:
+    """Lists what the image has, in a throwaway VM in the background (about two minutes)."""
+    try:
+        return images.inspect(name)
+    except ImagesError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+
+
+@router.get("/images/inventory/{fingerprint}")
+def image_inventory(fingerprint: str) -> dict:
+    """Everything an image has, packages included (the live feed only carries a summary). Also for images that are gone."""
+    inventory = load_inventory(fingerprint)
+    if inventory is None:
+        raise HTTPException(status_code=404, detail="That image wasn't inspected.")
+    return inventory
 
 
 @router.get("/images/tasks/{task_id}/log", response_class=PlainTextResponse)
