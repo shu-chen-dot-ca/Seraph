@@ -6,8 +6,7 @@ latest check reach the browser through /api/live.
 
 A repo's check is its open issues on GitHub (github_searcher/tracked_issues.py). keep_tracked(), which
 the app runs in the background, checks a newly added repo within TRACKED_CHECK_SECONDS and every repo
-again every TRACKED_REFRESH_SECONDS; Check now does one at once. Mark seen makes a repo's issues
-(or every repo's) not new anymore.
+again every TRACKED_REFRESH_SECONDS; Check now does one at once.
 
 An issue the user likes goes into the Issues list from here (add_issue), and its repo into Repos if
 missing, both from what the last check found, so it takes no GitHub call.
@@ -76,11 +75,16 @@ def add_tracked(body: AddRequest) -> dict:
     return {"added": added}
 
 
-@router.delete("/tracked")
-def remove_tracked(name: str) -> dict:
-    removed = tracked.remove([name])
+class NamesRequest(BaseModel):
+    names: list[str]
+
+
+@router.post("/tracked/remove")
+def remove_tracked(body: NamesRequest) -> dict:
+    """Stop tracking one or many repos (the page's multi-select) as one undo step."""
+    removed = tracked.remove(body.names)
     if not removed:
-        raise HTTPException(status_code=404, detail=f"{name} is not tracked.")
+        raise HTTPException(status_code=404, detail="None of them is tracked.")
     return {"removed": removed}
 
 
@@ -92,16 +96,6 @@ def undo_tracked() -> dict:
 @router.post("/tracked/redo")
 def redo_tracked() -> dict:
     return {"changed": tracked.redo()}
-
-
-@router.post("/tracked/seen")
-def mark_seen(body: NameRequest) -> dict:
-    """Nothing in this repo (or, without a name, in any tracked repo) is new anymore."""
-    if body.name is None:
-        tracked_issues.mark_seen(None)
-    else:
-        tracked_issues.mark_seen([body.name])
-    return {}
 
 
 @router.post("/tracked/check")

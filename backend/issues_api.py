@@ -10,6 +10,10 @@ github_searcher/issue_facts.py) are kept fresh by keep_facts(), which the app
 runs in the background: new issues get theirs within FACTS_CHECK_SECONDS, and
 all of them are fetched again every FACTS_REFRESH_SECONDS. Opening a row and
 the Refresh button fetch them at once.
+
+Each issue's difficulty (easy / medium / hard, github_searcher/issue_difficulty.py)
+is judged once by keep_difficulty(), also in the background: new issues get
+theirs within DIFFICULTY_CHECK_SECONDS, DIFFICULTY_AT_ONCE at a time.
 """
 
 import asyncio
@@ -19,7 +23,7 @@ import time
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.shared import agents, issue_facts, issues
+from backend.shared import agents, issue_difficulty, issue_facts, issues
 from github_searcher.search import CACHE, get_thread
 from sandbox.vms import VMsError
 
@@ -27,6 +31,10 @@ router = APIRouter(prefix="/api")
 
 FACTS_CHECK_SECONDS = 10
 FACTS_REFRESH_SECONDS = 30 * 60
+DIFFICULTY_CHECK_SECONDS = 10
+DIFFICULTY_AT_ONCE = 3
+# An issue that could not be judged (Claude or GitHub down) is tried again after this long.
+DIFFICULTY_RETRY_SECONDS = 30 * 60
 
 
 class AssignRequest(BaseModel):
@@ -36,11 +44,16 @@ class AssignRequest(BaseModel):
     instructions: str = ""
 
 
-@router.delete("/issues")
-def remove_issue(id: str) -> dict:
-    removed = issues.remove([id])
+class IdsRequest(BaseModel):
+    ids: list[str]
+
+
+@router.post("/issues/remove")
+def remove_issues(body: IdsRequest) -> dict:
+    """Remove one or many issues (the page's multi-select) as one undo step."""
+    removed = issues.remove(body.ids)
     if not removed:
-        raise HTTPException(status_code=404, detail=f"{id} is not in the list.")
+        raise HTTPException(status_code=404, detail="None of them is in the list.")
     return {"removed": removed}
 
 
@@ -155,3 +168,22 @@ async def keep_facts() -> None:
             except Exception:
                 failed.append(issue_id)
         await asyncio.sleep(FACTS_CHECK_SECONDS)
+
+
+async def keep_difficulty() -> None:
+    """Runs as long as the backend: judges the difficulty of every issue that has none yet."""
+    failed = []
+    failed_since = time.monotonic()
+    while True:
+        if time.monotonic() - failed_since > DIFFICULTY_RETRY_SECONDS:
+            failed = []
+            failed_since = time.monotonic()
+        known = issue_difficulty.all()
+        todo = [item["id"] for item in issues.items() if item["id"] not in known and item["id"] not in failed]
+        for start in range(0, len(todo), DIFFICULTY_AT_ONCE):
+            batch = todo[start:start + DIFFICULTY_AT_ONCE]
+            results = await asyncio.gather(*[issue_difficulty.judge(issue_id) for issue_id in batch], return_exceptions=True)
+            for issue_id, result in zip(batch, results):
+                if isinstance(result, Exception):
+                    failed.append(issue_id)
+        await asyncio.sleep(DIFFICULTY_CHECK_SECONDS)

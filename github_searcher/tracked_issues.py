@@ -1,18 +1,19 @@
-"""What is going on in each tracked repo: its open issues, newest first, and which of them are new to the user.
+"""What is going on in each tracked repo: its open issues, newest first.
 
 The Tracked list (DATA_DIR/tracked.json, a RepoList) holds the repos the user, or an agent, wants to keep
 an eye on. This store keeps what GitHub says about their issues, in DATA_DIR/tracked_issues.json, by repo:
 
     {"owner/name": Check, ...}
 
-    Check = {"checked_at", "error": str | None, "seen_at", "stars", "description",
+    Check = {"checked_at", "error": str | None, "stars", "description",
              "issues": [{"number", "title", "url", "created_at", "author", "labels",
                          "comments", "assignees", "good_first"}, ...]}
 
-issues are the repo's 100 newest open issues, plus every open issue under a good-first-issue kind of
-label (GOOD_FIRST matches the label's name), newest first. good_first says whether an issue has such a
-label. An issue is new when it was opened after seen_at: the time the repo was first checked, and later
-whenever the user marks it seen. Times are in GitHub's format (2026-10-23T03:39:11Z), so they compare as text. error is why the last check failed (the issues of the check before stay).
+issues are the repo's 100 newest open issues, plus every open issue under a good-first-issue or
+help-wanted kind of label (GOOD_FIRST matches the label's name), newest first. good_first says whether an
+issue has such a label; the page calls it free when nobody is assigned to it too. An issue is new for three
+days after it was opened (the page and the agent tools work that out). Times are in GitHub's format
+(2026-10-23T03:39:11Z), so they compare as text. error is why the last check failed (the issues of the check before stay).
 
 Kept apart from the list on purpose, like issue_facts.py: the list's undo/redo should only undo what
 agents and the user did, not bring back old checks. The backend checks every tracked repo now and then
@@ -37,9 +38,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 DATA_DIR = PROJECT_ROOT / os.environ["DATA_DIR"]
-# Label names that mean "good for a newcomer": "good first issue", "🌱 Good first issue", "good-first-issue",
-# "first-timers-only", "beginner-friendly", "Difficulty: Easy", ...
-GOOD_FIRST = re.compile(r"good.?first|first.?timer|beginner|easy", re.IGNORECASE)
+# Label names that mean "anyone may take this": "good first issue", "🌱 Good first issue", "good-first-issue",
+# "first-timers-only", "beginner-friendly", "Difficulty: Easy", "help wanted", "up-for-grabs", ...
+GOOD_FIRST = re.compile(r"good.?first|first.?timer|beginner|easy|help.?wanted|up.?for.?grabs", re.IGNORECASE)
 
 
 class TrackedIssues:
@@ -78,7 +79,7 @@ class TrackedIssues:
             data = get_tracked_issues(owner, repo)
         except Exception as error:
             with self.lock:
-                check = self.checks.get(full_name, {"seen_at": now, "stars": None, "description": "", "issues": []})
+                check = self.checks.get(full_name, {"stars": None, "description": "", "issues": []})
                 check["checked_at"] = now
                 check["error"] = str(error) or type(error).__name__
                 self.checks[full_name] = check
@@ -90,6 +91,7 @@ class TrackedIssues:
         for node in data["newest"]["nodes"]:
             nodes[node["number"]] = node
         found_labels = data["firstLabels"]["nodes"] + data["beginnerLabels"]["nodes"] + data["easyLabels"]["nodes"]
+        found_labels = found_labels + data["helpLabels"]["nodes"] + data["grabsLabels"]["nodes"]
         for label in found_labels:
             if not GOOD_FIRST.search(label["name"]):
                 continue
@@ -116,26 +118,11 @@ class TrackedIssues:
         issues.sort(key=lambda issue: issue["created_at"], reverse=True)
 
         with self.lock:
-            # The first check sets seen_at: what is open now is not new, what opens after it is.
-            seen_at = now
-            if full_name in self.checks:
-                seen_at = self.checks[full_name]["seen_at"]
             self.checks[full_name] = {
                 "checked_at": now,
                 "error": None,
-                "seen_at": seen_at,
                 "stars": data["stargazerCount"],
                 "description": data["description"] or "",
                 "issues": issues,
             }
-            self.save()
-
-    def mark_seen(self, full_names: list[str] | None) -> None:
-        """The user saw these repos' issues (None: every repo): none of them is new anymore."""
-        with self.lock:
-            now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-            for full_name, check in self.checks.items():
-                if full_names is not None and full_name not in full_names:
-                    continue
-                check["seen_at"] = now
             self.save()

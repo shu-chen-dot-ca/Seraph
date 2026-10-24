@@ -7,36 +7,58 @@ the repo chip filters by repo (it lives in the URL: #/issues?repo=owner/name, wh
 
 Each row shows what helps decide whether an issue is worth fixing, from its facts (github_searcher/issue_facts.py,
 kept fresh by the backend; Refresh fetches them all now): repo stars, when it was opened, its last activity, comments,
-and warning chips when someone is assigned or a PR is open or merged for it. Opened, Active, comments and stars sort
-on click (newest/most first, then oldest/fewest, then back to the list's order). Times re-render every minute.
+and amber words when someone is assigned or a PR is open for it. The list is a table like the Repos and Explore
+pages': #, Title (taking the room left over), then ISSUE_COLUMNS, every column as wide as its widest cell over the
+rows shown (a hidden copy of them, the sizer at the bottom, measures them: lib/column-widths.ts), the text in the
+page's own color (green / amber / red only where it means something). A click on a header sorts by that column, one
+at a time: the best first (most, newest, hardest, in progress; A to Z for text), again the other way round, again back
+to the list's order; the sorted header is blue with an arrow. A table wider than the page scrolls sideways, the header
+with it. Times re-render every minute.
 
-Rows open in place: the facts in full (author and role, last comment and who wrote it, assignees, linked PRs,
+Each issue has a difficulty, judged by Claude in the background like LeetCode's levels (github_searcher/issue_difficulty.py):
+easy (small, well defined, a general programming problem), medium (needs some project or domain knowledge, still easy to
+observe and check with the test suite) or hard (needs real understanding, changes can ripple, hard to validate). The Level
+column sorts by it and the level picker shows one level only.
+
+Rows open in place: the difficulty and why, the facts in full (author and role, last comment and who wrote it, assignees, linked PRs,
 the repo's last push), the agent's note, the issue body (fetched from GitHub on every open, so new comments show;
 the last one fetched shows meanwhile), and every job for the issue with its progress (steps and the agent's headline) and links to its agent, VM and drafts.
 A job in progress shows in the row as a small progress bar with its step.
 Assign opens AssignDialog.
 Only the rows on screen are drawn, so thousands of issues stay fast. Undo / redo like the Repos page.
+Many rows are picked like in a mail app (components/ui/row-selection.tsx): Ctrl-click, Shift-click, dragging a
+rectangle, Ctrl+A; a bar at the bottom then removes them at once, as one undo step (it asks first; Enter confirms).
 */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ArrowUp, ChevronRight, ExternalLink, Loader2, MessageSquare, RefreshCw, Redo2, Undo2, UserPlus, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { ArrowDown, ArrowUp, ExternalLink, Loader2, RefreshCw, Redo2, Undo2, UserPlus, X } from "lucide-react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import AssignDialog from "@/AssignDialog";
 import { Badge } from "@/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { JobProgressBar, JobSteps } from "@/components/ui/job-progress";
 import { Markdown } from "@/components/ui/markdown";
+import { RowSelection } from "@/components/ui/row-selection";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { JOB_LABEL, JOB_TONE, StatusDot } from "@/components/ui/status-dot";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api, useLive, useLoaded, type IssueItem, type Job, type Thread } from "@/live";
+import { useColumnWidths } from "@/lib/column-widths";
 import { cn, timeAgo } from "@/lib/utils";
-
-const COLUMNS = "grid grid-cols-[16px_60px_minmax(0,1fr)_150px_56px_68px_68px_40px_165px_96px_76px] items-center gap-2";
 
 const STARS = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
 
@@ -54,7 +76,39 @@ const ROLE: Record<string, string> = {
 };
 const MAINTAINERS = ["OWNER", "MEMBER", "COLLABORATOR"];
 
-type SortKey = "opened" | "active" | "comments" | "stars";
+type SortKey = "number" | "title" | "repo" | "level" | "stars" | "opened" | "active" | "comments" | "status" | "agent";
+
+// The table's columns: # and Title (which takes the room left over), then the rest. All but Title are measured by the
+// sizer. better says which way the first click on a header sorts: higher first, or A to Z.
+type IssueColumn = { key: SortKey; label: string; title: string; better: "higher" | "text" };
+const NUMBER_COLUMN: IssueColumn = { key: "number", label: "#", title: "Its number on GitHub, newest first", better: "higher" };
+const TITLE_COLUMN: IssueColumn = { key: "title", label: "Title", title: "A to Z", better: "text" };
+const ISSUE_COLUMNS: IssueColumn[] = [
+  { key: "repo", label: "Repo", title: "The repo it is in", better: "text" },
+  { key: "level", label: "Level", title: "How hard the issue is: easy, medium or hard, judged by Claude like LeetCode's levels", better: "higher" },
+  { key: "stars", label: "Stars", title: "The repo's stars", better: "higher" },
+  { key: "opened", label: "Opened", title: "When the issue was opened on GitHub", better: "higher" },
+  { key: "active", label: "Active", title: "The last activity on the issue: a comment, a label, an edit…", better: "higher" },
+  { key: "comments", label: "Comments", title: "Comments", better: "higher" },
+  { key: "status", label: "Status", title: "What is being done about it (its latest job): in progress first", better: "higher" },
+  { key: "agent", label: "Agent", title: "The agent on its latest job", better: "text" },
+];
+const TITLE_MIN = 200;
+// Assign and Remove at the end of each row.
+const ACTIONS_WIDTH = 104;
+
+// The order of a latest job's status, in progress first being the highest. No job (or a cancelled one) is New.
+const STATUS_RANK: Record<string, number> = { waiting_on_user: 5, working: 4, queued: 3, new: 2, done: 1 };
+
+// Difficulty levels: their order for sorting, and their color (a soft Badge variant, like LeetCode's green / amber / red).
+const LEVEL_RANK: Record<string, number> = { easy: 1, medium: 2, hard: 3 };
+const LEVEL_COLOR: Record<string, string> = { easy: "text-ok", medium: "text-warn", hard: "text-destructive" };
+const LEVEL_VARIANT: Record<string, "ok" | "warn" | "bad"> = {
+  easy: "ok",
+  medium: "warn",
+  hard: "bad",
+};
+const ALL_LEVELS = "__all__";
 
 // Tab → which latest-job statuses it shows. "new" also takes issues without a job.
 const TABS = [
@@ -76,15 +130,24 @@ export default function Issues(props: { repo: string | null; open: string | null
   const agents = useLive("agents");
   const loaded = useLoaded("issues");
   const [tab, setTab] = useState("all");
+  const [level, setLevel] = useState(ALL_LEVELS);
   const [filter, setFilter] = useState("");
   const [open, setOpen] = useState<string[]>(props.open !== null ? [props.open] : []);
   const [threads, setThreads] = useState<Record<string, Thread>>({});
   const [threadErrors, setThreadErrors] = useState<Record<string, string>>({});
   const [assigning, setAssigning] = useState<IssueItem | null>(null);
-  const [sort, setSort] = useState<{ key: SortKey; desc: boolean } | null>(null);
+  // Selected issues, the last one clicked (where a shift-click range starts), and whether removing them waits for a confirm.
+  const [selected, setSelected] = useState<string[]>([]);
+  const [anchor, setAnchor] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  // The list's order: as listed (null), or by one column; best is the way its first click sorts, or not.
+  const [sort, setSort] = useState<{ key: SortKey; best: boolean } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [, setTick] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // The hidden copy of every shown row's cells (but the title's), and the widths it gives each column.
+  const sizerRef = useRef<HTMLDivElement>(null);
+  const sizes = useColumnWidths(sizerRef);
 
   // "3h ago" goes stale on its own: draw again every minute.
   useEffect(() => {
@@ -133,6 +196,9 @@ export default function Issues(props: { repo: string | null; open: string | null
   const needle = filter.trim().toLowerCase();
   const rows = inRepo.filter((issue) => {
     const job = latestJob[issue.id];
+    if (level !== ALL_LEVELS && issue.difficulty?.level !== level) {
+      return false;
+    }
     if (tab !== "all" && job === undefined && tab !== "new") {
       return false;
     }
@@ -146,14 +212,33 @@ export default function Issues(props: { repo: string | null; open: string | null
     return text.includes(needle);
   });
 
-  // The sort value of a row; missing facts sort last either way.
-  function sortValue(issue: IssueItem, key: SortKey): number | null {
+  // The value an issue sorts by in a column: a number, or text. null when it hasn't one (it goes last).
+  function sortValue(issue: IssueItem, key: SortKey): number | string | null {
     const facts = issue.facts;
+    const job = latestJob[issue.id];
+    if (key === "number") {
+      return issue.number;
+    }
+    if (key === "title") {
+      return (facts?.title ?? issue.title).toLowerCase();
+    }
+    if (key === "repo") {
+      return issue.repo.toLowerCase();
+    }
+    if (key === "level") {
+      return issue.difficulty ? (LEVEL_RANK[issue.difficulty.level] ?? null) : null;
+    }
     if (key === "stars") {
       return facts?.repo_stars ?? repoStars[issue.repo] ?? null;
     }
     if (key === "comments") {
       return facts?.comments ?? issue.comments;
+    }
+    if (key === "status") {
+      return job === undefined || job.status === "cancelled" ? STATUS_RANK.new : (STATUS_RANK[job.status] ?? null);
+    }
+    if (key === "agent") {
+      return job !== undefined ? (agentNames[job.agent] ?? job.agent).toLowerCase() : null;
     }
     if (facts === null || facts === undefined) {
       return null;
@@ -161,34 +246,125 @@ export default function Issues(props: { repo: string | null; open: string | null
     return new Date(key === "opened" ? facts.created_at : facts.updated_at).getTime();
   }
   if (sort !== null) {
+    const better = [NUMBER_COLUMN, TITLE_COLUMN, ...ISSUE_COLUMNS].find((column) => column.key === sort.key)?.better ?? "higher";
     rows.sort((a, b) => {
       const first = sortValue(a, sort.key);
       const second = sortValue(b, sort.key);
-      if (first === null || second === null) {
-        return first === null ? (second === null ? 0 : 1) : -1;
+      if (first === second) {
+        return 0;
       }
-      return sort.desc ? second - first : first - second;
+      // Missing values go last, whichever way.
+      if (first === null) {
+        return 1;
+      }
+      if (second === null) {
+        return -1;
+      }
+      // Low to high (A to Z for text), turned round when the best is the highest, and again for the other way.
+      let order = typeof first === "string" && typeof second === "string" ? first.localeCompare(second) : Number(first) - Number(second);
+      if (better === "higher") {
+        order = -order;
+      }
+      return sort.best ? order : -order;
     });
   }
 
+  // One column at a time: the best first, then the other way round, then back to the list's order.
   function clickSort(key: SortKey) {
     if (sort === null || sort.key !== key) {
-      setSort({ key, desc: true });
-    } else if (sort.desc) {
-      setSort({ key, desc: false });
+      setSort({ key, best: true });
+    } else if (sort.best) {
+      setSort({ key, best: false });
     } else {
       setSort(null);
     }
   }
 
-  function sortHeader(key: SortKey, label: React.ReactNode, title: string) {
+  // A column's header: its label, and an arrow the way it sorts when it does.
+  function sortHeader(column: IssueColumn) {
     return (
-      <button type="button" className="flex items-center gap-0.5 text-left hover:text-foreground" title={title} onClick={() => clickSort(key)}>
-        {label}
-        {sort?.key === key && (sort.desc ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />)}
+      <button
+        key={column.key}
+        type="button"
+        className={cn("flex min-w-0 items-center gap-0.5 hover:text-primary", sort?.key === column.key && "text-primary")}
+        title={column.title}
+        onClick={() => clickSort(column.key)}
+      >
+        <span className="truncate">{column.label}</span>
+        {sort?.key === column.key && (sort.best ? <ArrowDown className="size-3 shrink-0" /> : <ArrowUp className="size-3 shrink-0" />)}
       </button>
     );
   }
+
+  // What a measured column shows for an issue, in the page's own color: green / amber / red only where it means something.
+  function issueCell(issue: IssueItem, key: SortKey) {
+    const facts = issue.facts ?? null;
+    const job = latestJob[issue.id];
+    const thread = threads[issue.id];
+    if (key === "number") {
+      return (
+        <a href={issue.html_url} target="_blank" rel="noreferrer" className="hover:underline" title="Open on GitHub" onClick={(event) => event.stopPropagation()}>
+          #{issue.number}
+        </a>
+      );
+    }
+    if (key === "repo") {
+      return issue.repo;
+    }
+    if (key === "level") {
+      if (!issue.difficulty) {
+        return <span title="Being judged">–</span>;
+      }
+      return (
+        <span className={cn("capitalize", LEVEL_COLOR[issue.difficulty.level])} title={issue.difficulty.reason}>
+          {issue.difficulty.level}
+        </span>
+      );
+    }
+    if (key === "stars") {
+      const stars = facts !== null ? facts.repo_stars : repoStars[issue.repo];
+      return stars !== undefined ? STARS.format(stars) : "–";
+    }
+    if (key === "opened") {
+      return facts !== null ? <span title={new Date(facts.created_at).toLocaleString()}>{timeAgo(facts.created_at)}</span> : "–";
+    }
+    if (key === "active") {
+      return facts !== null ? <span title={new Date(facts.updated_at).toLocaleString()}>{timeAgo(facts.updated_at)}</span> : "–";
+    }
+    if (key === "comments") {
+      return facts !== null ? facts.comments : thread !== undefined ? thread.comments.length : issue.comments;
+    }
+    if (key === "status") {
+      if (job !== undefined && (job.status === "queued" || job.status === "working" || job.status === "waiting_on_user")) {
+        return <JobProgressBar job={job} />;
+      }
+      return (
+        <span className="flex items-center gap-1.5">
+          <StatusDot tone={job === undefined ? "gray" : JOB_TONE[job.status]} />
+          {job === undefined ? "New" : (JOB_LABEL[job.status] ?? job.status)}
+        </span>
+      );
+    }
+    if (key === "agent" && job !== undefined) {
+      return (
+        <a href={`#/agents/${job.agent}`} className="hover:underline" onClick={(event) => event.stopPropagation()}>
+          {agentNames[job.agent] ?? job.agent}
+        </a>
+      );
+    }
+    return "";
+  }
+
+  // The columns' widths from the sizer (max-content until it has measured), and the grid the header and the rows
+  // share: #, Title (the room left over), the rest, then Assign / Remove. tableWidth is the least they need.
+  const measured = sizes.length === ISSUE_COLUMNS.length + 1;
+  let tableWidth = 24 + TITLE_MIN + ACTIONS_WIDTH + 16 * (ISSUE_COLUMNS.length + 2);
+  const tracks: string[] = [];
+  for (let index = 0; index < ISSUE_COLUMNS.length + 1; index++) {
+    tracks.push(measured ? `${sizes[index]}px` : "max-content");
+    tableWidth += measured ? sizes[index] : 0;
+  }
+  const template = `${tracks[0]} minmax(${TITLE_MIN}px,1fr) ${tracks.slice(1).join(" ")} ${ACTIONS_WIDTH}px`;
 
   async function refreshFacts() {
     setRefreshing(true);
@@ -249,12 +425,31 @@ export default function Issues(props: { repo: string | null; open: string | null
     }
   }
 
-  async function remove(id: string) {
+  async function remove(ids: string[]) {
     try {
-      await api(`/api/issues?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      await api("/api/issues/remove", { method: "POST", body: { ids } });
+      setSelected((current) => current.filter((id) => !ids.includes(id)));
     } catch (err) {
-      toast.error(`Could not remove ${id}: ${err instanceof Error ? err.message : err}`);
+      toast.error(`Could not remove: ${err instanceof Error ? err.message : err}`);
     }
+  }
+
+  // Only issues still in the list count as selected (an undo, an agent or another tab may have taken some out).
+  const rowIds = rows.map((issue) => issue.id);
+  const listedIds = issues.items.map((issue) => issue.id);
+  const chosen = selected.filter((id) => listedIds.includes(id));
+
+  // A ctrl-click picks or unpicks one row; a shift-click does the same to every row shown from the last one clicked.
+  function select(id: string, shift: boolean) {
+    const on = !chosen.includes(id);
+    let ids = [id];
+    if (shift && anchor !== null && rowIds.includes(anchor)) {
+      const from = rowIds.indexOf(anchor);
+      const to = rowIds.indexOf(id);
+      ids = rowIds.slice(Math.min(from, to), Math.max(from, to) + 1);
+    }
+    setSelected(on ? [...chosen.filter((each) => !ids.includes(each)), ...ids] : chosen.filter((each) => !ids.includes(each)));
+    setAnchor(id);
   }
 
   async function cancelJob(job: Job) {
@@ -309,10 +504,9 @@ export default function Issues(props: { repo: string | null; open: string | null
   });
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="relative flex h-full flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-        <h1 className="font-semibold">Issues</h1>
-        <Tabs value={tab} onValueChange={setTab} className="ml-2">
+        <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
             {TABS.map((item) => (
               <TabsTrigger key={item.value} value={item.value} className="px-2.5">
@@ -341,6 +535,17 @@ export default function Issues(props: { repo: string | null; open: string | null
               <X />
             </Button>
           )}
+          <Select value={level} onValueChange={setLevel}>
+            <SelectTrigger className={cn("w-28", level !== ALL_LEVELS && "border-primary text-primary")}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent position="popper" align="end">
+              <SelectItem value={ALL_LEVELS}>All levels</SelectItem>
+              <SelectItem value="easy">Easy</SelectItem>
+              <SelectItem value="medium">Medium</SelectItem>
+              <SelectItem value="hard">Hard</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <Input className="w-52" placeholder="Filter issues" value={filter} onChange={(event) => setFilter(event.target.value)} />
         <Tooltip>
@@ -369,283 +574,319 @@ export default function Issues(props: { repo: string | null; open: string | null
         </Tooltip>
       </div>
 
-      <div className={cn(COLUMNS, "h-7 shrink-0 border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground")}>
-        <span />
-        <span>#</span>
-        <span>Title</span>
-        <span>Repo</span>
-        {sortHeader("stars", "Stars", "The repo's stars")}
-        {sortHeader("opened", "Opened", "When the issue was opened on GitHub")}
-        {sortHeader("active", "Active", "The last activity on the issue: a comment, a label, an edit…")}
-        {sortHeader("comments", <MessageSquare className="size-3.5" />, "Comments")}
-        <span>Status</span>
-        <span>Agent</span>
-        <span />
-      </div>
-
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
-        {!loaded && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
-        {loaded && issues.items.length === 0 && (
-          <div className="px-3 py-2 text-muted-foreground">No issues yet. Agents add good first issues here while they search.</div>
-        )}
-        {loaded && issues.items.length > 0 && rows.length === 0 && <div className="px-3 py-2 text-muted-foreground">No issue matches.</div>}
+        <div style={{ minWidth: tableWidth }}>
+          <div className="sticky top-0 z-10 border-b bg-background select-none">
+            <div className="grid h-7 items-center gap-x-4 bg-muted/40 px-3 text-xs font-medium" style={{ gridTemplateColumns: template }}>
+              {sortHeader(NUMBER_COLUMN)}
+              {sortHeader(TITLE_COLUMN)}
+              {ISSUE_COLUMNS.map((column) => sortHeader(column))}
+              <span />
+            </div>
+          </div>
+          {!loaded && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
+          {loaded && issues.items.length === 0 && (
+            <div className="px-3 py-2 text-muted-foreground">No issues yet. Agents add good first issues here while they search.</div>
+          )}
+          {loaded && issues.items.length > 0 && rows.length === 0 && <div className="px-3 py-2 text-muted-foreground">No issue matches.</div>}
 
-        <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
-          {virtualizer.getVirtualItems().map((item) => {
-            const issue = rows[item.index];
-            const isOpen = open.includes(issue.id);
-            const job = latestJob[issue.id];
-            const thread = threads[issue.id];
-            const threadError = threadErrors[issue.id] ?? "";
-            const facts = issue.facts ?? null;
-            const commentCount = facts !== null ? facts.comments : thread !== undefined ? thread.comments.length : issue.comments;
-            const state = facts !== null ? facts.state : issue.state;
-            const stars = facts !== null ? facts.repo_stars : repoStars[issue.repo];
-            const openPRs = facts !== null ? facts.linked_prs.filter((pull) => pull.state === "OPEN") : [];
-            const mergedPRs = facts !== null ? facts.linked_prs.filter((pull) => pull.state === "MERGED") : [];
-            const history = [...(issueJobs[issue.id] ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at));
-            return (
-              <div key={item.key} data-index={item.index} ref={virtualizer.measureElement} className="absolute left-0 w-full border-b" style={{ top: item.start }}>
-                <div
-                  className={cn(COLUMNS, "h-7 cursor-pointer px-3 hover:bg-accent/50", isOpen && "bg-accent/40")}
-                  onClick={() => toggle(issue.id)}
-                >
-                  <ChevronRight className={cn("size-3.5 text-muted-foreground transition-transform", isOpen && "rotate-90")} />
-                  <a
-                    href={issue.html_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-muted-foreground tabular-nums hover:text-foreground hover:underline"
-                    title="Open on GitHub"
-                    onClick={(event) => event.stopPropagation()}
+          <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+            {virtualizer.getVirtualItems().map((item) => {
+              const issue = rows[item.index];
+              const isOpen = open.includes(issue.id);
+              const thread = threads[issue.id];
+              const threadError = threadErrors[issue.id] ?? "";
+              const facts = issue.facts ?? null;
+              const commentCount = facts !== null ? facts.comments : thread !== undefined ? thread.comments.length : issue.comments;
+              const state = facts !== null ? facts.state : issue.state;
+              const openPRs = facts !== null ? facts.linked_prs.filter((pull) => pull.state === "OPEN") : [];
+              const mergedPRs = facts !== null ? facts.linked_prs.filter((pull) => pull.state === "MERGED") : [];
+              const history = [...(issueJobs[issue.id] ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at));
+              return (
+                <div key={item.key} data-index={item.index} ref={virtualizer.measureElement} className="absolute left-0 w-full border-b" style={{ top: item.start }}>
+                  <div
+                    data-select-id={issue.id}
+                    className={cn("grid min-h-7 cursor-pointer items-center gap-x-4 px-3 py-0.5 hover:bg-accent/50", isOpen && "bg-accent/40", chosen.includes(issue.id) && "bg-selected hover:bg-selected")}
+                    style={{ gridTemplateColumns: template }}
+                    onClick={(event) => {
+                      if (event.ctrlKey || event.metaKey || event.shiftKey) {
+                        select(issue.id, event.shiftKey);
+                      } else {
+                        toggle(issue.id);
+                      }
+                    }}
                   >
-                    #{issue.number}
-                  </a>
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    <span className={cn("truncate", state === "CLOSED" && "text-muted-foreground line-through")}>{facts !== null ? facts.title : issue.title}</span>
-                    {state === "CLOSED" && <Badge variant="outline">closed</Badge>}
-                    {facts !== null && facts.assignees.length > 0 && (
-                      <Badge variant="outline" className="border-warn text-warn" title={`Assigned to ${facts.assignees.join(", ")}`}>
-                        assigned
-                      </Badge>
-                    )}
-                    {/* Each PR its own chip, linked to it on GitHub; the open ones first, at most three. */}
-                    {[...openPRs, ...mergedPRs].slice(0, 3).map((pull) => (
-                      <Badge key={pull.url} variant="outline" className={cn("hover:bg-accent", pull.state === "OPEN" && "border-warn text-warn")} asChild>
-                        <a href={pull.url} target="_blank" rel="noreferrer" title={`Open on GitHub: by ${pull.author}`} onClick={(event) => event.stopPropagation()}>
-                          PR #{pull.number} {pull.state === "OPEN" ? "open" : "merged"}
-                        </a>
-                      </Badge>
-                    ))}
-                    {openPRs.length + mergedPRs.length > 3 && <span className="text-xs text-muted-foreground">+{openPRs.length + mergedPRs.length - 3}</span>}
-                  </span>
-                  <span className="truncate text-muted-foreground">{issue.repo}</span>
-                  <span className="text-muted-foreground tabular-nums">{stars !== undefined ? STARS.format(stars) : "–"}</span>
-                  <span className="text-muted-foreground tabular-nums" title={facts !== null ? new Date(facts.created_at).toLocaleString() : undefined}>
-                    {facts !== null ? timeAgo(facts.created_at) : "–"}
-                  </span>
-                  <span className="text-muted-foreground tabular-nums" title={facts !== null ? new Date(facts.updated_at).toLocaleString() : undefined}>
-                    {facts !== null ? timeAgo(facts.updated_at) : "–"}
-                  </span>
-                  <span className="text-muted-foreground tabular-nums">{commentCount}</span>
-                  {job !== undefined && (job.status === "queued" || job.status === "working" || job.status === "waiting_on_user") ? (
-                    <JobProgressBar job={job} />
-                  ) : (
-                    <span className="flex items-center gap-1.5">
-                      <StatusDot tone={job === undefined ? "gray" : JOB_TONE[job.status]} />
-                      {job === undefined ? "New" : (JOB_LABEL[job.status] ?? job.status)}
-                    </span>
-                  )}
-                  <span className="truncate">
-                    {job !== undefined && (
-                      <a href={`#/agents/${job.agent}`} className="hover:underline" onClick={(event) => event.stopPropagation()}>
-                        {agentNames[job.agent] ?? job.agent}
-                      </a>
-                    )}
-                  </span>
-                  <span className="flex items-center justify-end gap-0.5">
-                    <Button
-                      variant="ghost"
-                      size="xs"
-                      title="Give this issue to an agent"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setAssigning(issue);
-                      }}
-                    >
-                      <UserPlus /> Assign
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-label={`Remove ${issue.id}`}
-                      title="Remove from the list"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        remove(issue.id);
-                      }}
-                    >
-                      <X />
-                    </Button>
-                  </span>
-                </div>
-
-                {isOpen && (
-                  <div className="space-y-3 border-t bg-muted/30 px-9 py-3">
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
-                      <span>
-                        {commentCount} {commentCount === 1 ? "comment" : "comments"}
-                      </span>
-                      {(facts !== null ? facts.labels : issue.labels).map((label) => (
-                        <Badge key={label} variant="secondary">
-                          {label}
+                    <span className="whitespace-nowrap tabular-nums">{issueCell(issue, "number")}</span>
+                    {/* The title, then what to know before taking it: closed, assigned, PRs open or merged for it. */}
+                    <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+                      <span className={cn("truncate", state === "CLOSED" && "line-through")}>{facts !== null ? facts.title : issue.title}</span>
+                      {state === "CLOSED" && <Badge variant="secondary">closed</Badge>}
+                      {facts !== null && facts.assignees.length > 0 && (
+                        <Badge variant="warn" title={`Assigned to ${facts.assignees.join(", ")}`}>
+                          assigned
+                        </Badge>
+                      )}
+                      {/* Each PR linked to it on GitHub; the open ones first, at most three. */}
+                      {[...openPRs, ...mergedPRs].slice(0, 3).map((pull) => (
+                        <Badge key={pull.url} asChild variant={pull.state === "OPEN" ? "warn" : "secondary"}>
+                          <a href={pull.url} target="_blank" rel="noreferrer" title={`Open on GitHub: by ${pull.author}`} onClick={(event) => event.stopPropagation()}>
+                            PR #{pull.number} {pull.state === "OPEN" ? "open" : "merged"}
+                          </a>
                         </Badge>
                       ))}
-                      <a href={issue.html_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 hover:text-foreground">
-                        GitHub <ExternalLink className="size-3" />
-                      </a>
-                    </div>
+                      {openPRs.length + mergedPRs.length > 3 && <Badge variant="secondary">+{openPRs.length + mergedPRs.length - 3}</Badge>}
+                    </span>
+                    {ISSUE_COLUMNS.map((column) => (
+                      <span key={column.key} className="min-w-0 truncate whitespace-nowrap tabular-nums">
+                        {issueCell(issue, column.key)}
+                      </span>
+                    ))}
+                    <span className="flex items-center justify-end gap-0.5">
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        title="Give this issue to an agent"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setAssigning(issue);
+                        }}
+                      >
+                        <UserPlus /> Assign
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={`Remove ${issue.id}`}
+                        title="Remove from the list"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          remove([issue.id]);
+                        }}
+                      >
+                        <X />
+                      </Button>
+                    </span>
+                  </div>
 
-                    {facts === null && (
-                      <div className="flex items-center gap-2 text-muted-foreground">
-                        <Loader2 className="size-3.5 animate-spin" /> Getting the facts from GitHub…
-                      </div>
-                    )}
-                    {facts !== null && (
-                      <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-1">
-                        <span className="text-muted-foreground">Opened</span>
+                  {isOpen && (
+                    <div className="space-y-3 border-t bg-muted/30 px-9 py-3">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
                         <span>
-                          {timeAgo(facts.created_at)} by {facts.author}
-                          {ROLE[facts.author_role] && (
-                            <span className={MAINTAINERS.includes(facts.author_role) ? "text-ok" : "text-muted-foreground"}> · {ROLE[facts.author_role]}</span>
-                          )}
+                          {commentCount} {commentCount === 1 ? "comment" : "comments"}
                         </span>
-
-                        <span className="text-muted-foreground">Last activity</span>
-                        <span>{timeAgo(facts.updated_at)}</span>
-
-                        <span className="text-muted-foreground">Last comment</span>
-                        <span>
-                          {facts.last_comment_at === null && <span className="text-muted-foreground">No comments yet</span>}
-                          {facts.last_comment_at !== null && (
-                            <>
-                              {timeAgo(facts.last_comment_at)} by {facts.last_comment_by}
-                              {facts.last_comment_role !== null && ROLE[facts.last_comment_role] && (
-                                <span className={MAINTAINERS.includes(facts.last_comment_role) ? "text-ok" : "text-muted-foreground"}>
-                                  {" "}
-                                  · {ROLE[facts.last_comment_role]}
-                                </span>
-                              )}
-                              <span className="text-muted-foreground"> · {facts.comments} in all</span>
-                            </>
-                          )}
-                        </span>
-
-                        <span className="text-muted-foreground">Interest</span>
-                        <span>
-                          {facts.participants} {facts.participants === 1 ? "person" : "people"} in the thread · {facts.thumbs_up} thumbs up
-                        </span>
-
-                        <span className="text-muted-foreground">Assigned</span>
-                        <span className={facts.assignees.length > 0 ? "text-warn" : "text-muted-foreground"}>
-                          {facts.assignees.length > 0 ? facts.assignees.join(", ") : "Nobody"}
-                        </span>
-
-                        <span className="text-muted-foreground">Linked PRs</span>
-                        <span className="flex flex-wrap gap-x-3">
-                          {facts.linked_prs.length === 0 && <span className="text-muted-foreground">None</span>}
-                          {facts.linked_prs.map((pull) => (
-                            <a
-                              key={pull.url}
-                              href={pull.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className={cn("hover:underline", pull.state === "OPEN" ? "text-warn" : "text-muted-foreground")}
-                            >
-                              {pull.repo !== issue.repo && pull.repo}#{pull.number} {pull.state.toLowerCase()} by {pull.author}
-                            </a>
-                          ))}
-                        </span>
-
-                        <span className="text-muted-foreground">Repo</span>
-                        <span>
-                          {STARS.format(facts.repo_stars)} stars · last push {timeAgo(facts.repo_pushed_at)}
-                        </span>
-
-                        <span className="col-span-2 text-xs text-muted-foreground">From GitHub {timeAgo(facts.fetched_at)}</span>
+                        {(facts !== null ? facts.labels : issue.labels).map((label) => (
+                          <Badge key={label} variant="secondary">
+                            {label}
+                          </Badge>
+                        ))}
+                        <a href={issue.html_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 hover:text-foreground">
+                          GitHub <ExternalLink className="size-3" />
+                        </a>
                       </div>
-                    )}
 
-                    {issue.note !== "" && (
-                      <div className="border-l-2 border-primary pl-3">
-                        <div className="text-xs font-medium text-muted-foreground">Agent's note</div>
-                        <div className="whitespace-pre-wrap">{issue.note}</div>
-                      </div>
-                    )}
+                      {issue.difficulty ? (
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <Badge variant={LEVEL_VARIANT[issue.difficulty.level] ?? "secondary"} className="capitalize">
+                            {issue.difficulty.level}
+                          </Badge>
+                          <span>{issue.difficulty.reason}</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 text-muted-foreground">
+                          <Loader2 className="size-3.5 animate-spin" /> Judging how hard it is…
+                        </div>
+                      )}
 
-                    {thread === undefined && threadError === "" && (
-                      <div className="flex items-center gap-2 text-muted-foreground">
-                        <Loader2 className="size-3.5 animate-spin" /> Loading the issue…
-                      </div>
-                    )}
-                    {threadError !== "" && <div className="text-destructive">Could not load the issue: {threadError}</div>}
-                    {thread !== undefined && (
-                      <div className="border bg-background px-4 py-3">
-                        <Markdown text={thread.body || "*No description.*"} repo={issue.repo} issueRefs />
-                      </div>
-                    )}
-
-                    <div>
-                      <div className="mb-1 text-xs font-medium text-muted-foreground">Jobs</div>
-                      {history.length === 0 && <div className="text-muted-foreground">No jobs yet. Use Assign to give this issue to an agent.</div>}
-                      {history.map((each) => (
-                        <div key={each.id} className="border-b py-1 last:border-b-0">
-                          <div className="flex h-6 items-center gap-3">
-                            <span className="flex w-28 shrink-0 items-center gap-1.5">
-                              <StatusDot tone={JOB_TONE[each.status]} />
-                              {JOB_LABEL[each.status] ?? each.status}
-                            </span>
-                            <span className="w-24 shrink-0 font-mono text-xs text-muted-foreground">{each.id}</span>
-                            <a href={`#/agents/${each.agent}`} className="shrink-0 text-primary hover:underline">
-                              {agentNames[each.agent] ?? each.agent}
-                            </a>
-                            {each.vm !== null && (
-                              <a href={`#/vms/${each.vm}`} className="shrink-0 text-primary hover:underline">
-                                {each.vm}
-                              </a>
+                      {facts === null && (
+                        <div className="flex items-center gap-2 text-muted-foreground">
+                          <Loader2 className="size-3.5 animate-spin" /> Getting the facts from GitHub…
+                        </div>
+                      )}
+                      {facts !== null && (
+                        <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-1">
+                          <span className="text-muted-foreground">Opened</span>
+                          <span>
+                            {timeAgo(facts.created_at)} by {facts.author}
+                            {ROLE[facts.author_role] && (
+                              <span className={MAINTAINERS.includes(facts.author_role) ? "text-ok" : "text-muted-foreground"}> · {ROLE[facts.author_role]}</span>
                             )}
-                            {each.drafts.map((draft) => (
-                              <a key={draft} href={`#/inbox/${draft}`} className="shrink-0 font-mono text-xs text-primary hover:underline">
-                                {draft}
+                          </span>
+
+                          <span className="text-muted-foreground">Last activity</span>
+                          <span>{timeAgo(facts.updated_at)}</span>
+
+                          <span className="text-muted-foreground">Last comment</span>
+                          <span>
+                            {facts.last_comment_at === null && <span className="text-muted-foreground">No comments yet</span>}
+                            {facts.last_comment_at !== null && (
+                              <>
+                                {timeAgo(facts.last_comment_at)} by {facts.last_comment_by}
+                                {facts.last_comment_role !== null && ROLE[facts.last_comment_role] && (
+                                  <span className={MAINTAINERS.includes(facts.last_comment_role) ? "text-ok" : "text-muted-foreground"}>
+                                    {" "}
+                                    · {ROLE[facts.last_comment_role]}
+                                  </span>
+                                )}
+                                <span className="text-muted-foreground"> · {facts.comments} in all</span>
+                              </>
+                            )}
+                          </span>
+
+                          <span className="text-muted-foreground">Interest</span>
+                          <span>
+                            {facts.participants} {facts.participants === 1 ? "person" : "people"} in the thread · {facts.thumbs_up} thumbs up
+                          </span>
+
+                          <span className="text-muted-foreground">Assigned</span>
+                          <span className={facts.assignees.length > 0 ? "text-warn" : "text-muted-foreground"}>
+                            {facts.assignees.length > 0 ? facts.assignees.join(", ") : "Nobody"}
+                          </span>
+
+                          <span className="text-muted-foreground">Linked PRs</span>
+                          <span className="flex flex-wrap gap-x-3">
+                            {facts.linked_prs.length === 0 && <span className="text-muted-foreground">None</span>}
+                            {facts.linked_prs.map((pull) => (
+                              <a
+                                key={pull.url}
+                                href={pull.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className={cn("hover:underline", pull.state === "OPEN" ? "text-warn" : "text-muted-foreground")}
+                              >
+                                {pull.repo !== issue.repo && pull.repo}#{pull.number} {pull.state.toLowerCase()} by {pull.author}
                               </a>
                             ))}
-                            <span className="ml-auto shrink-0 text-xs text-muted-foreground">{new Date(each.created_at).toLocaleString()}</span>
-                            {(each.status === "queued" || each.status === "working" || each.status === "waiting_on_user") && (
-                              <Button variant="ghost" size="xs" onClick={() => cancelJob(each)}>
-                                Cancel
-                              </Button>
-                            )}
-                          </div>
-                          {(each.status === "working" || each.status === "waiting_on_user" || each.step !== null) && (
-                            <div className="space-y-1 py-1 pl-[124px]">
-                              <JobSteps job={each} />
-                              {each.headline !== "" && <div>{each.headline}</div>}
-                            </div>
-                          )}
-                          {each.instructions !== "" && <div className="pl-[124px] whitespace-pre-wrap text-muted-foreground">Instructions: {each.instructions}</div>}
-                          {each.notes !== "" && <div className="pl-[124px] whitespace-pre-wrap text-muted-foreground">{each.notes}</div>}
+                          </span>
+
+                          <span className="text-muted-foreground">Repo</span>
+                          <span>
+                            {STARS.format(facts.repo_stars)} stars · last push {timeAgo(facts.repo_pushed_at)}
+                          </span>
+
+                          <span className="col-span-2 text-xs text-muted-foreground">From GitHub {timeAgo(facts.fetched_at)}</span>
                         </div>
-                      ))}
+                      )}
+
+                      {issue.note !== "" && (
+                        <div className="border-l-2 border-muted-foreground/30 pl-3">
+                          <div className="text-xs font-medium text-muted-foreground">Agent's note</div>
+                          <div className="whitespace-pre-wrap">{issue.note}</div>
+                        </div>
+                      )}
+
+                      {thread === undefined && threadError === "" && (
+                        <div className="flex items-center gap-2 text-muted-foreground">
+                          <Loader2 className="size-3.5 animate-spin" /> Loading the issue…
+                        </div>
+                      )}
+                      {threadError !== "" && <div className="text-destructive">Could not load the issue: {threadError}</div>}
+                      {thread !== undefined && (
+                        <div className="border bg-background px-4 py-3">
+                          <Markdown text={thread.body || "*No description.*"} repo={issue.repo} issueRefs />
+                        </div>
+                      )}
+
+                      <div>
+                        <div className="mb-1 text-xs font-medium text-muted-foreground">Jobs</div>
+                        {history.length === 0 && <div className="text-muted-foreground">No jobs yet. Use Assign to give this issue to an agent.</div>}
+                        {history.map((each) => (
+                          <div key={each.id} className="border-b py-1 last:border-b-0">
+                            <div className="flex h-6 items-center gap-3">
+                              <span className="flex w-28 shrink-0 items-center gap-1.5">
+                                <StatusDot tone={JOB_TONE[each.status]} />
+                                {JOB_LABEL[each.status] ?? each.status}
+                              </span>
+                              <span className="w-24 shrink-0 font-mono text-xs text-muted-foreground">{each.id}</span>
+                              <a href={`#/agents/${each.agent}`} className="shrink-0 text-primary hover:underline">
+                                {agentNames[each.agent] ?? each.agent}
+                              </a>
+                              {each.vm !== null && (
+                                <a href={`#/vms/${each.vm}`} className="shrink-0 text-primary hover:underline">
+                                  {each.vm}
+                                </a>
+                              )}
+                              {each.drafts.map((draft) => (
+                                <a key={draft} href={`#/inbox/${draft}`} className="shrink-0 font-mono text-xs text-primary hover:underline">
+                                  {draft}
+                                </a>
+                              ))}
+                              <span className="ml-auto shrink-0 text-xs text-muted-foreground">{new Date(each.created_at).toLocaleString()}</span>
+                              {(each.status === "queued" || each.status === "working" || each.status === "waiting_on_user") && (
+                                <Button variant="ghost" size="xs" onClick={() => cancelJob(each)}>
+                                  Cancel
+                                </Button>
+                              )}
+                            </div>
+                            {(each.status === "working" || each.status === "waiting_on_user" || each.step !== null) && (
+                              <div className="space-y-1 py-1 pl-[124px]">
+                                <JobSteps job={each} />
+                                {each.headline !== "" && <div>{each.headline}</div>}
+                              </div>
+                            )}
+                            {each.instructions !== "" && <div className="pl-[124px] whitespace-pre-wrap text-muted-foreground">Instructions: {each.instructions}</div>}
+                            {each.notes !== "" && <div className="pl-[124px] whitespace-pre-wrap text-muted-foreground">{each.notes}</div>}
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       </div>
 
+      {/* Hidden: every shown row's cells (but the title's) at their own width in max-content columns, so useColumnWidths
+          can read how wide each column has to be for its widest cell. The header labels count too, with room for the
+          arrow a sorted one shows. */}
+      <div
+        ref={sizerRef}
+        aria-hidden
+        className="invisible absolute top-0 left-0 -z-10 grid h-0 overflow-hidden"
+        style={{ gridTemplateColumns: `repeat(${ISSUE_COLUMNS.length + 1}, max-content)` }}
+      >
+        {[NUMBER_COLUMN, ...ISSUE_COLUMNS].map((column) => (
+          <span key={column.key} className="flex items-center gap-0.5 text-xs font-medium">
+            {column.label}
+            <ArrowDown className="size-3" />
+          </span>
+        ))}
+        {rows.map((issue) => (
+          <Fragment key={issue.id}>
+            {[NUMBER_COLUMN, ...ISSUE_COLUMNS].map((column) => (
+              <span key={column.key} className="whitespace-nowrap tabular-nums">
+                {issueCell(issue, column.key)}
+              </span>
+            ))}
+          </Fragment>
+        ))}
+      </div>
+
+      <RowSelection listRef={scrollRef} ids={rowIds} selected={chosen} onSelect={setSelected}>
+        <Button size="xs" variant="ghost" onClick={() => setConfirmRemove(true)}>
+          <X /> Remove
+        </Button>
+      </RowSelection>
+
       {assigning !== null && <AssignDialog key={assigning.id} issue={assigning} onClose={() => setAssigning(null)} />}
+
+      <AlertDialog open={confirmRemove} onOpenChange={setConfirmRemove}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Remove {chosen.length} {chosen.length === 1 ? "issue" : "issues"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>They leave the Issues list; their jobs stay. Undo brings them back.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={() => remove(chosen)}>
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
