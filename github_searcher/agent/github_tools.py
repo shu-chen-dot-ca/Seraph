@@ -7,24 +7,24 @@ activity line to the agent's history (the same list).
 import asyncio
 import base64
 import json
-import statistics
-from datetime import datetime, timedelta, timezone
 
 import httpx
 from claude_agent_sdk import tool
 
-from github_searcher.search import get_activity, get_contents, get_readme, get_repository, get_thread, get_tree, search_code, search_issues
+from github_searcher.search import get_contents, get_readme, get_repository, get_thread, get_tree, search_code, search_issues
 from github_searcher.token_balancer import BALANCER
 
 
 class GithubTools:
-    def __init__(self, history: list):
+    def __init__(self, history: list, repo_signals):
         self.history = history
+        # check_activity works its numbers out the way the Repos page does (github_searcher/repo_signals.py).
+        self.repo_signals = repo_signals
 
     def list(self) -> list:
         return [
             tool("read_readme", "Read the README of repos, by full name (owner/name). Each README is cut at 4,000 characters. Use it whenever the README would help you judge or answer, whether or not you plan to add the repo.", {"type": "object", "properties": {"names": {"type": "array", "items": {"type": "string"}}}, "required": ["names"]})(self.read_readme),
-            tool("check_activity", "Check how a repo treats outside contributors, by full name (owner/name): how fast their merged PRs got a first response and got merged, open PRs still waiting for a reply, recent good-first-issue issues and whether they look taken, and commits in the last 30 days.", {"type": "object", "properties": {"names": {"type": "array", "items": {"type": "string"}}}, "required": ["names"]})(self.check_activity),
+            tool("check_activity", "Check how repos treat outside contributors, by full name (owner/name), the same numbers the Repos page shows: of outside contributors' PRs in the last 90 days, the merge rate (merged / merged + closed unmerged) and median days to a first reply and to merge; their open PRs over 30 days old nobody answered (stale); how many people merged PRs and how many commits landed in the last 30 days; open good-first / beginner / help-wanted issues (with assignees and cross references: above 0 usually means taken); the AI policy from CONTRIBUTING, AI_POLICY.md or AGENTS.md (welcome, disclose, no_ai, unclear or none, with the deciding quote); how newcomers' first PRs fare (merged, reply speed, came back); PRs, issues and commits a month and how often maintainers answer new issues; and the review atmosphere (warm, neutral, strict or curt, a summary and what reviewers ask for).", {"type": "object", "properties": {"names": {"type": "array", "items": {"type": "string"}}}, "required": ["names"]})(self.check_activity),
             tool("read_thread", "Read issues or PRs in full: the description and the comments, plus review comments for PRs, with who wrote each and their role. Each is given as owner/name#number, e.g. 'feast-dev/feast#1234'.", {"type": "object", "properties": {"threads": {"type": "array", "items": {"type": "string"}}}, "required": ["threads"]})(self.read_thread),
             tool("list_files", "List the files in a repo (owner/name) on its default branch, with sizes. path limits it to one folder, e.g. 'src/'; leave it empty for the whole repo.", {"type": "object", "properties": {"name": {"type": "string"}, "path": {"type": "string"}}, "required": ["name"]})(self.list_files),
             tool("read_files", "Read source files of one repo (owner/name) on its default branch, by path, all in one call. Lines are numbered. Each file is cut at 400 lines; start_line reads further down.", {"type": "object", "properties": {"name": {"type": "string"}, "paths": {"type": "array", "items": {"type": "string"}}, "start_line": {"type": "integer"}}, "required": ["name", "paths"]})(self.read_files),
@@ -66,19 +66,15 @@ class GithubTools:
             if name not in names:
                 report[name] = "Not a full name (owner/name)."
 
-        now = datetime.now(timezone.utc)
-        since = (now - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        # A few repos at a time: each is two heavy GraphQL queries, and GitHub's secondary limits punish
-        # many at once. As many at a time as the tokens can run (token_balancer.py), so the rest don't
-        # sit in threads waiting for a turn.
+        # The same numbers the Repos page shows (repo_signals.py), worked out fresh. A few repos at a time:
+        # each is one heavy GraphQL query, and GitHub's secondary limits punish many at once. As many at a time
+        # as the tokens can run (token_balancer.py), so the rest don't sit in threads waiting for a turn.
         results = []
         step = BALANCER.slots("graphql")
         for start in range(0, len(names), step):
             batch = names[start:start + step]
-            results += await asyncio.gather(*[asyncio.to_thread(get_activity, name.split("/")[0], name.split("/")[1], since) for name in batch], return_exceptions=True)
+            results += await asyncio.gather(*[self.repo_signals.fetch(name) for name in batch], return_exceptions=True)
 
-        # Authors who aren't owners, org members or collaborators.
-        outside = ["CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE"]
         for name, data in zip(names, results):
             if isinstance(data, httpx.HTTPStatusError):
                 report[name] = f"GitHub error: {data.response.text}"
@@ -86,95 +82,9 @@ class GithubTools:
             if isinstance(data, Exception):
                 report[name] = f"Could not check activity: {data}"
                 continue
-
-            # Merged PRs from outside contributors. The first response is the first review or
-            # comment by a person other than the author, or the merge if nobody said anything.
-            merged = []
-            for pr in data["merged"]["nodes"]:
-                if pr["authorAssociation"] not in outside:
-                    continue
-                if pr["author"] and (pr["author"]["__typename"] != "User" or pr["author"]["login"].lower().endswith("bot")):
-                    continue
-                author = pr["author"]["login"] if pr["author"] else ""
-                opened = datetime.fromisoformat(pr["createdAt"])
-                merged_at = datetime.fromisoformat(pr["mergedAt"])
-                first = merged_at
-                for item in pr["reviews"]["nodes"] + pr["comments"]["nodes"]:
-                    if item["author"] is None or item["author"]["__typename"] != "User":
-                        continue
-                    login = item["author"]["login"]
-                    if login == author or login.lower().endswith("bot"):
-                        continue
-                    first = min(first, datetime.fromisoformat(item["createdAt"]))
-                merged.append(
-                    {
-                        "number": pr["number"],
-                        "title": pr["title"],
-                        "opened": pr["createdAt"][:10],
-                        "days_to_first_response": round((first - opened).total_seconds() / 86400, 1),
-                        "days_to_merge": round((merged_at - opened).total_seconds() / 86400, 1),
-                    }
-                )
-
-            # Open PRs from outside contributors that no other person has replied to yet.
-            waiting = []
-            open_count = 0
-            for pr in data["open"]["nodes"]:
-                if pr["authorAssociation"] not in outside:
-                    continue
-                if pr["author"] and (pr["author"]["__typename"] != "User" or pr["author"]["login"].lower().endswith("bot")):
-                    continue
-                open_count += 1
-                author = pr["author"]["login"] if pr["author"] else ""
-                replied = False
-                for item in pr["reviews"]["nodes"] + pr["comments"]["nodes"]:
-                    if item["author"] is None or item["author"]["__typename"] != "User":
-                        continue
-                    login = item["author"]["login"]
-                    if login != author and not login.lower().endswith("bot"):
-                        replied = True
-                if not replied:
-                    days_open = (now - datetime.fromisoformat(pr["createdAt"])).total_seconds() / 86400
-                    waiting.append({"number": pr["number"], "title": pr["title"], "days_open": round(days_open, 1)})
-
-            issues = []
-            for issue in data["issues"]["nodes"]:
-                issues.append(
-                    {
-                        "number": issue["number"],
-                        "title": issue["title"],
-                        "opened": issue["createdAt"][:10],
-                        "comments": issue["comments"]["totalCount"],
-                        "assignees": issue["assignees"]["totalCount"],
-                        "cross_references": issue["timelineItems"]["totalCount"],
-                    }
-                )
-
-            commits = 0
-            authors = set()
-            if data["defaultBranchRef"] and data["defaultBranchRef"]["target"].get("history"):
-                history = data["defaultBranchRef"]["target"]["history"]
-                commits = history["totalCount"]
-                for commit in history["nodes"]:
-                    if commit["author"] and commit["author"]["user"]:
-                        authors.add(commit["author"]["user"]["login"])
-
-            first_responses = [pr["days_to_first_response"] for pr in merged]
-            merges = [pr["days_to_merge"] for pr in merged]
-            within_3_days = [pr for pr in merged if pr["days_to_first_response"] <= 3]
-            report[name] = {
-                "merged_outside_prs": {
-                    "checked": len(merged),
-                    "median_days_to_first_response": statistics.median(first_responses) if merged else None,
-                    "median_days_to_merge": statistics.median(merges) if merged else None,
-                    "share_first_response_within_3_days": round(len(within_3_days) / len(merged), 2) if merged else None,
-                    "recent": merged[:10],
-                },
-                "open_outside_prs": {"checked": open_count, "no_reply_yet": waiting[:10]},
-                "good_first_issues": {"open": data["issues"]["totalCount"], "recent": issues},
-                "commits_last_30_days": commits,
-                "commit_authors_last_30_days": len(authors),
-            }
+            # basis is only for knowing when to ask Claude about the policy again.
+            data["ai_policy"].pop("basis", None)
+            report[name] = data
 
         checked = [name for name in names if isinstance(report.get(name), dict)]
         if checked:

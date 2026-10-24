@@ -17,6 +17,10 @@ const badgeVariants = cva(
           "border-border text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
         ghost: "[a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
         link: "text-primary underline-offset-4 [a&]:hover:underline",
+        // Soft status tags (see the color rules in index.css): a light wash of the status color, the text in it.
+        ok: "bg-ok/10 text-ok dark:bg-ok/15 [a&]:hover:bg-ok/20",
+        warn: "bg-warn/10 text-warn dark:bg-warn/15 [a&]:hover:bg-warn/20",
+        bad: "bg-destructive/10 text-destructive dark:bg-destructive/15 [a&]:hover:bg-destructive/20",
       },
     },
     defaultVariants: {
