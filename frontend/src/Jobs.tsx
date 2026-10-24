@@ -5,7 +5,7 @@ A job comes from Assign on the Issues page (kind fix_issue), from New job here (
 agent itself (job_create). Tabs filter by status; "Open" is everything not done or cancelled, the most
 recently changed first. Each row shows its progress (the step the agent is on) and, under the title, the
 agent's headline in everyday words. Rows open in place: every step, what the job is about, the technical
-detail, what the agent is doing right now, the instructions, the agent's notes and the drafts it made,
+detail, the project's test suite runs (before and with the change), what the agent is doing right now, the instructions, the agent's notes and the drafts it made,
 each linking to the Inbox. #/jobs/<job id> opens with that job's row open.
 Only the rows on screen are drawn, so long lists stay fast.
 */
@@ -19,7 +19,7 @@ import NewJobDialog from "@/NewJobDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { JobProgressBar, JobSteps, since, stuckFor, useNow } from "@/components/ui/job-progress";
+import { JobProgressBar, JobSteps, JobTests, since, stuckFor, useNow } from "@/components/ui/job-progress";
 import { DRAFT_TONE, JOB_LABEL, JOB_TONE, StatusDot } from "@/components/ui/status-dot";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, useLive, useLoaded, type AgentSummary, type Job } from "@/live";
@@ -231,6 +231,7 @@ export default function Jobs(props: { selected: string | null }) {
                   <div className="space-y-3 border-t bg-muted/30 px-9 py-3">
                     <div className="space-y-1.5">
                       <JobSteps job={job} />
+                      {job.kind === "fix_issue" && <JobTests job={job} />}
                       {job.about !== "" && <div className="text-muted-foreground">{job.about}</div>}
                       {job.headline !== "" && <div className="font-medium">{job.headline}</div>}
                       {job.headline === "" && isOpenJob && <div className="text-muted-foreground">No progress reported yet.</div>}
@@ -246,6 +247,7 @@ export default function Jobs(props: { selected: string | null }) {
                       {live && agent.activity !== "" && (
                         <div className="truncate text-xs text-muted-foreground" title={agent.activity}>
                           Now: {agent.activity}
+                          {agent.in_tool && agent.last_event_at !== null && ` · ${since(agent.last_event_at, now)}`}
                         </div>
                       )}
                       {stuck !== "" && <div className="text-xs text-warn">No activity for {stuck}: it may be stuck, or running something slow.</div>}

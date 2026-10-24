@@ -16,8 +16,9 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   files from the VM (a plot, a render) and command runs (a test failing, then passing), each
   "before" or "after" the agent's change, under a topic that pairs them. It is kept on the job
   (jobs.py), and each draft gets a copy. A PR draft needs at least one before and one after.
-- VM queue: the agent joins its target VM's queue (sandbox/vm_queue.py) and releases the VM
-  when its jobs there are done.
+- VMs: the agent sees every VM with what its image has (sandbox/images.py lists each image once) and
+  picks the one that suits its jobs as its target VM (the user can set it too). It can't make VMs.
+  It joins its target VM's queue (sandbox/vm_queue.py) and releases the VM when its jobs there are done.
 
 Each tool returns its result as text; a bad call returns is_error, so Claude sees it failed.
 A job that is done or cancelled (often by the user, while the agent was busy) can't change
@@ -30,10 +31,12 @@ describe() gives the one line the chat shows for each call, of these tools and o
 
 import asyncio
 import base64
+import hashlib
 import json
 import secrets
 import shlex
 import subprocess
+import time
 from datetime import UTC, datetime
 
 import httpx
@@ -43,6 +46,7 @@ from github_searcher.jobs import EVIDENCE_DIR
 from github_searcher.search import get_repository, get_thread
 from sandbox.agent.computer_use import Computer, ComputerError
 from sandbox.agent.tools import HIDE_MIN_LENGTH
+from sandbox.images import load_inventory
 from sandbox.vms import VMsError
 
 # The job statuses an agent may set. "queued" and "waiting_on_user" are set by the app.
@@ -63,6 +67,16 @@ OUTPUT_LIMIT = 20_000
 # The live feed carries only the end of a command's output: this many lines, at most TAIL_CHARS.
 TAIL_LINES = 20
 TAIL_CHARS = 2000
+# The full test suite may run this long; then it is stopped and counts as failed.
+TEST_TIMEOUT = 3600
+# A fix_issue job can't go past set_up until the full suite passed on the unchanged code.
+STEPS_AFTER_SETUP = ["reproduce", "fix", "test", "draft"]
+# The evidence each test run adds, the same for its before and after, so the Inbox pairs them.
+TESTS_TOPIC = "full test suite"
+TESTS_CONTEXT = (
+    "The project's own automatic checks, all of them, run once on the code as it was and once with the change. "
+    "Both must pass: the first shows the checks work in the VM, the second that the change broke nothing they check."
+)
 # The overview is for a user who doesn't know the project: short, plain words. These caps keep it that way.
 OVERVIEW_PROJECT_CHARS = 150
 OVERVIEW_PART_CHARS = 400
@@ -218,6 +232,27 @@ class WorkTools:
                 },
             )(self.job_progress),
             tool(
+                "run_tests",
+                "Run the project's FULL test suite in the VM for one of your fix jobs (only while you hold the VM), and keep the "
+                "result on the job and as evidence. command: the whole suite as the project's CI runs it, e.g. `pytest -n 2` or "
+                "`npm test` (setup belongs in bash before, not here). path: the repo folder (e.g. ~/click); base: what you branch "
+                "from (e.g. origin/main). when: before (on the unchanged code: the folder must not differ from base; it has to pass "
+                "before you change anything), or after (on your finished change, with exactly the same command; it has to pass "
+                "before draft_pr). A PR draft is refused unless the last after run passed on exactly the code being drafted. "
+                f"Takes as long as the suite; stopped after {TEST_TIMEOUT // 60} minutes.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "job_id": {"type": "string"},
+                        "path": {"type": "string"},
+                        "base": {"type": "string"},
+                        "command": {"type": "string"},
+                        "when": {"type": "string", "enum": ["before", "after"]},
+                    },
+                    "required": ["job_id", "path", "base", "command", "when"],
+                },
+            )(self.run_tests),
+            tool(
                 "draft_comment",
                 "Draft a comment on an issue or PR (target: owner/name#number) for the user's Inbox, e.g. \"I'd like to work on this\". "
                 "Nothing is posted: the user decides, and you get a message with their decision. The job waits on the user meanwhile. "
@@ -321,6 +356,26 @@ class WorkTools:
                 {"type": "object", "properties": {"job_id": {"type": "string"}, "ids": names}, "required": ["job_id", "ids"]},
             )(self.evidence_remove),
             tool(
+                "vms_list",
+                "See every VM: whether it runs, CPU, memory and disk, who holds it and how many wait, and what it started "
+                "with: the OS, languages, tools, ready-made Docker images and models of its image. Agents may have installed more "
+                "in a VM since. Use it to pick the VM that suits your jobs (choose_vm). You can't make VMs; only the user can.",
+                {},
+            )(self.vms_list),
+            tool(
+                "choose_vm",
+                "Make a VM your target VM: the one your jobs that need a VM run in. reason: in a few words why it suits them "
+                "(e.g. 'has Rust and Postgres', 'free now'). Not while you wait for or hold a VM. If the user picked your VM, "
+                "keep it unless it lacks what a job needs; then say why.",
+                {"name": str, "reason": str},
+            )(self.choose_vm),
+            tool(
+                "image_packages",
+                "Search what a VM's image has installed: apt, pip, npm, cargo, snap, flatpak, VS Code extensions, Docker images "
+                "and Playwright browsers, by name (e.g. 'libpq', 'torch'). vm is a VM's name. Returns up to 200 matches.",
+                {"vm": str, "search": str},
+            )(self.image_packages),
+            tool(
                 "queue_for_vm",
                 "Join your target VM's queue to work in it. Either it is yours at once, or you get your place in line: then end your "
                 "turn, and you get a message when it is yours (even while the VM is off, you keep your place).",
@@ -383,6 +438,10 @@ class WorkTools:
             return f"{str(args['step']).replace('_', ' ').capitalize()}: {args.get('headline')}"
         if name == "job_progress":
             return f"Progress: {args.get('headline')}"
+        if name == "run_tests" and args.get("when") == "before":
+            return f"Running the full test suite on the unchanged code: `{args.get('command')}`"
+        if name == "run_tests":
+            return f"Running the full test suite with the change: `{args.get('command')}`"
         if name == "draft_comment":
             return f"Drafting a comment on {args.get('target')}"
         if name == "draft_question":
@@ -393,6 +452,12 @@ class WorkTools:
             return f"Evidence, {args.get('stage')}: {args.get('topic')} ({args.get('kind')})"
         if name == "evidence_remove":
             return "Removing evidence: " + ", ".join(args.get("ids") or [])
+        if name == "vms_list":
+            return "Looked at the VMs"
+        if name == "choose_vm":
+            return f"Chose {args.get('name')}: {args.get('reason')}"
+        if name == "image_packages":
+            return f"Searched {args.get('vm')}'s image for `{args.get('search')}`"
         if name == "queue_for_vm":
             return f"Queuing for {self.record['target_vm']}"
         if name == "release_vm":
@@ -754,7 +819,7 @@ class WorkTools:
         job = self.agents.jobs.create(kind, title, self.agent_id, self.agent_id, issue=issue, vm=vm_name, instructions=args.get("instructions") or "")
         text = f"Made {job['id']}: {title}. It is for {vm_name}."
         if vm_name is None:
-            text = f"Made {job['id']}: {title}. You have no target VM, so the user has to set one before you can work on it in a VM."
+            text = f"Made {job['id']}: {title}. You have no target VM; if it needs one, pick it with vms_list and choose_vm."
         return {"content": [{"type": "text", "text": text}]}
 
     async def job_update(self, args: dict) -> dict:
@@ -802,6 +867,14 @@ class WorkTools:
         step = (args.get("step") or "").strip().lower().replace(" ", "_") or None
         if step is not None and step not in job["steps"]:
             return {"content": [{"type": "text", "text": f"step must be one of: {', '.join(job['steps'])}."}], "is_error": True}
+        # The full suite has to work on the unchanged code before any change is made.
+        before = job["tests"]["before"]
+        if job["kind"] == "fix_issue" and step in STEPS_AFTER_SETUP and (before is None or not before["passed"]):
+            text = (
+                "You are still in set_up: get the project's full test suite passing on the unchanged code first "
+                "(run_tests with when: before), then go on."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
 
         # A queued job (new, or back from the user's decision) is being worked on now. One waiting on the
         # user stays waiting: its draft is still in their Inbox.
@@ -920,8 +993,9 @@ class WorkTools:
                 text = f"A risk is {len(risk)} characters; keep each under {OVERVIEW_RISK_CHARS}."
                 return {"content": [{"type": "text", "text": text}], "is_error": True}
         overview["risks"] = risks
-        # The user decides on evidence, not on the agent's word: no PR without a before and an after.
-        stages = [item["stage"] for item in job["evidence"]]
+        # The user decides on evidence, not on the agent's word: no PR without a before and an after
+        # of the problem itself (the test suite's runs are kept apart: they show nothing about the issue).
+        stages = [item["stage"] for item in job["evidence"] if item["topic"] != TESTS_TOPIC]
         if "before" not in stages or "after" not in stages:
             text = (
                 "A PR draft needs evidence the user can judge it by: at least one 'before' (the problem without your change) "
@@ -1021,6 +1095,25 @@ class WorkTools:
             text = (
                 f"The diff contains the value of the environment variable {env_name}, in: {', '.join(files)}. Take it out "
                 "of those files, or keep the file out of the diff (delete it, or add it to .git/info/exclude), then try again."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        # Finished means the full test suite passes: before the change, and after it on exactly this code.
+        before = job["tests"]["before"]
+        after = job["tests"]["after"]
+        if before is None or not before["passed"]:
+            text = (
+                "No PR without the full test suite: it must have passed on the unchanged code first (run_tests with when: before). "
+                "If you already changed the code, `git stash -u`, run it, then `git stash pop`."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if after is None or not after["passed"] or after["command"] != before["command"]:
+            text = f"No PR until the full test suite passes with your change: run_tests with when: after and the command `{before['command']}`."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if after["diff_hash"] != hashlib.sha256(diff.encode()).hexdigest():
+            text = (
+                "The code changed since the full test suite last passed (or the test run left new files behind: add those to "
+                ".git/info/exclude). Run run_tests with when: after again on the code as it is now, then draft."
             )
             return {"content": [{"type": "text", "text": text}], "is_error": True}
 
@@ -1233,6 +1326,179 @@ class WorkTools:
         text += " This is what the user sees. If it doesn't show what the caption says, take it again with the same topic and stage."
         return {"content": [{"type": "text", "text": text}, {"type": "image", "data": base64.b64encode(data).decode(), "mimeType": mime}]}
 
+    async def run_tests(self, args: dict) -> dict:
+        when = args.get("when") or ""
+        command = (args.get("command") or "").strip()
+        if when not in ["before", "after"]:
+            return {"content": [{"type": "text", "text": "when must be before (the unchanged code) or after (your finished change)."}], "is_error": True}
+        if not command:
+            return {"content": [{"type": "text", "text": "Give the command that runs the whole test suite."}], "is_error": True}
+        try:
+            job = self.agents.jobs.get(args["job_id"])
+        except KeyError:
+            return {"content": [{"type": "text", "text": f"No job {args['job_id']}."}], "is_error": True}
+        if job["agent"] != self.agent_id:
+            return {"content": [{"type": "text", "text": f"{job['id']} is not your job."}], "is_error": True}
+        if job["status"] in CLOSED_STATUSES:
+            text = f"{job['id']} is {job['status']} (the user may have cancelled it); no more test runs for it. Move on."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        before = job["tests"]["before"]
+        if when == "after" and (before is None or not before["passed"]):
+            text = "First get the full suite passing on the unchanged code (when: before)."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if when == "after" and command != before["command"]:
+            text = (
+                f"Run it with the same command as on the unchanged code: `{before['command']}`. To use another command "
+                "(e.g. the user agreed to leave out tests that already failed), run that one on the unchanged code first: "
+                "`git stash -u`, run_tests with when: before, `git stash pop`."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        vm_name = self.record["target_vm"]
+        if vm_name is None:
+            return {"content": [{"type": "text", "text": "You have no target VM."}], "is_error": True}
+        try:
+            vm_record = self.agents.vms.get(vm_name)
+        except VMsError as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        if vm_record.holder != self.agent_id:
+            text = "You don't hold a VM. Call queue_for_vm and wait for the message that it is yours."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        # The same tag as the agent's VM tools (ComputerTools), so losing the VM stops the run too.
+        tag = f"sandbox-agent-{self.agent_id}"
+        hidden = [value for value in sorted(vm_record.env.values(), key=len, reverse=True) if len(value) >= HIDE_MIN_LENGTH]
+        # Commands run in the user's home, so ~/click and click are the same folder.
+        folder = shlex.quote(args["path"].strip().removeprefix("~/"))
+        base = shlex.quote(args["base"].strip())
+
+        # The code the suite runs on: its diff from base, read exactly the way draft_pr reads it, so the two can be compared.
+        diff_command = f"set -o pipefail; cd {folder} && git add -A -N . && git diff {base} | head -c {DIFF_LIMIT + 1}"
+        try:
+            result = await asyncio.to_thread(vm_record.vm.exec, diff_command, 120, None, tag)
+        except Exception as error:
+            return {"content": [{"type": "text", "text": f"Could not reach the VM: {error}"}], "is_error": True}
+        diff = result.stdout
+        if len(diff.encode()) > DIFF_LIMIT:
+            text = (
+                f"The diff from {args['base']} is over the {DIFF_LIMIT // 1000} KB limit: look for build output, lockfiles or a "
+                "virtualenv in it (git diff --stat), remove them or add them to .git/info/exclude, then try again."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if result.returncode != 0:
+            text = f"Could not compare {args['path']} with {args['base']}: {result.stderr.strip()}"
+            for value in hidden:
+                text = text.replace(value, "[hidden]")
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if when == "before" and diff.strip():
+            text = (
+                f"when: before is for the unchanged code, but {args['path']} differs from {args['base']}. Run it before you change "
+                "anything; if you already did, `git stash -u`, run it, then `git stash pop`."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if when == "after" and not diff.strip():
+            text = f"{args['path']} doesn't differ from {args['base']} yet: there is no change to test."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        # The step it is on shows in the user's progress view while the suite runs.
+        fields = {"step": "set_up" if when == "before" else "test"}
+        if fields["step"] not in job["steps"]:
+            fields = {}
+        if job["status"] == "queued":
+            fields["status"] = "working"
+        if fields:
+            self.agents.jobs.update(job["id"], **fields)
+
+        # Output and errors together, as in a terminal. tail keeps the end (the summary and the failures) and never
+        # stops the suite; pipefail makes the exit code the suite's. The newline ends a comment on the command's last line.
+        capped = f"set -o pipefail; cd {folder} && {{ {command}\n}} 2>&1 | tail -c {OUTPUT_LIMIT}"
+        started = time.monotonic()
+        try:
+            result = await asyncio.to_thread(vm_record.vm.exec, capped, TEST_TIMEOUT, None, tag)
+            exit_code = result.returncode
+            output = result.stdout
+        except subprocess.TimeoutExpired:
+            # Stop what still runs in the VM, or it keeps the VM busy.
+            await asyncio.to_thread(vm_record.vm.kill_tagged, tag)
+            exit_code = None
+            output = f"Stopped after {TEST_TIMEOUT // 60} minutes."
+        seconds = round(time.monotonic() - started)
+        for value in hidden:
+            output = output.replace(value, "[hidden]")
+            command = command.replace(value, "[hidden]")
+        passed = exit_code == 0
+
+        # The VM may have been taken from it, or the job cancelled, while the suite ran.
+        if vm_record.holder != self.agent_id:
+            return {"content": [{"type": "text", "text": "You lost the VM while the suite ran; the run doesn't count."}], "is_error": True}
+        job = self.agents.jobs.get(job["id"])
+        if job["status"] in CLOSED_STATUSES:
+            text = f"{job['id']} is {job['status']} now (the user may have cancelled it): the run wasn't kept. Move on."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        # The output goes to the user as evidence: this run's before or after of the suite.
+        minutes = f"{seconds // 60}m {seconds % 60}s" if seconds >= 60 else f"{seconds}s"
+        caption = f"{'Passed' if passed else 'Failed'}: the whole test suite {'on the code as it was' if when == 'before' else 'with the change'}, in {minutes}"
+        if exit_code is None:
+            caption = f"Stopped: the whole test suite took over {TEST_TIMEOUT // 60} minutes"
+        evidence_id = "ev_" + secrets.token_hex(3)
+        tail = "\n".join(output.rstrip("\n").split("\n")[-TAIL_LINES:])
+        item = {
+            "id": evidence_id,
+            "kind": "command",
+            "topic": TESTS_TOPIC,
+            "stage": when,
+            "context": TESTS_CONTEXT,
+            "caption": caption,
+            "file": None,
+            "command": command,
+            "exit_code": exit_code,
+            "output_file": f"{evidence_id}.txt",
+            "output_tail": tail[-TAIL_CHARS:],
+            "output_size": len(output.encode()),
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        # Write, then rename: a crash never leaves half a file.
+        await asyncio.to_thread(EVIDENCE_DIR.mkdir, parents=True, exist_ok=True)
+        temporary = EVIDENCE_DIR / f"{evidence_id}.txt.tmp"
+        await asyncio.to_thread(temporary.write_bytes, output.encode())
+        await asyncio.to_thread(temporary.replace, EVIDENCE_DIR / f"{evidence_id}.txt")
+        self.agents.jobs.add_evidence(job["id"], item)
+
+        run = {
+            "command": command,
+            "base": args["base"].strip(),
+            "exit_code": exit_code,
+            "passed": passed,
+            "diff_hash": hashlib.sha256(diff.encode()).hexdigest() if when == "after" else "",
+            "evidence": evidence_id,
+            "seconds": seconds,
+            "at": datetime.now(UTC).isoformat(),
+        }
+        tests = {"before": job["tests"]["before"], "after": job["tests"]["after"]}
+        tests[when] = run
+        # A new run on the unchanged code starts over: an after from before it may have used another command.
+        if when == "before":
+            tests["after"] = None
+        self.agents.jobs.update(job["id"], tests=tests)
+
+        if when == "before" and passed:
+            advice = "It passes on the unchanged code: now you may change the code."
+        elif when == "before":
+            advice = (
+                "It must pass on the unchanged code before you change anything. Fix the setup (dependencies, services, settings "
+                "the project's docs or CI ask for) and run it again. If the project's own code fails on its main branch (not your "
+                "setup), don't change the code: draft_question with the failing tests and wait for the user's decision."
+            )
+        elif passed:
+            advice = "It passes with your change: you may draft the PR (it must be this exact code)."
+        else:
+            advice = (
+                "It must pass with your change before you can draft the PR. Find out why it fails and fix the code (or your test); "
+                "never skip, weaken or delete a test to make it pass."
+            )
+        text = f"{'Passed' if passed else 'Failed'} (exit code {exit_code}, {minutes}). {advice}\n{output}"
+        return {"content": [{"type": "text", "text": text}]}
+
     async def evidence_remove(self, args: dict) -> dict:
         try:
             job = self.agents.jobs.get(args["job_id"])
@@ -1244,10 +1510,73 @@ class WorkTools:
         missing = [evidence_id for evidence_id in args["ids"] if evidence_id not in removed]
         return {"content": [{"type": "text", "text": json.dumps({"removed": removed, "not_on_job": missing})}]}
 
+    async def vms_list(self, args: dict) -> dict:
+        names = {}
+        for agent in self.agents.agents.values():
+            names[agent.id] = agent.name
+        vms = []
+        for vm_record in self.agents.vms.list():
+            holder = vm_record.holder
+            if holder is not None and holder != "user":
+                holder = names.get(holder, holder)
+            if holder == self.agent_id or holder == names.get(self.agent_id):
+                holder = "you"
+            entry = {
+                "name": vm_record.name,
+                "status": vm_record.status,
+                "cpus": vm_record.cpus,
+                "memory_gb": vm_record.memory_gb,
+                "disk_gb": vm_record.disk_gb,
+                "internet": vm_record.internet,
+                "holder": holder,
+                "waiting": len(vm_record.queue),
+                "your_target": vm_record.name == self.record["target_vm"],
+                "forked_from": vm_record.forked_from or None,
+                "image": vm_record.image or None,
+                "image_has": "not inspected yet",
+            }
+            inventory = await asyncio.to_thread(load_inventory, vm_record.image_fingerprint)
+            if inventory is not None:
+                entry["image"] = inventory["image"]["name"]
+                entry["image_has"] = {
+                    "os": inventory["system"]["os"],
+                    "languages": [f"{item['name']} {item['version']}" for item in inventory["languages"]],
+                    "tools": [f"{item['name']} {item['version']}" for item in inventory["tools"]],
+                    "docker_images": [item["name"] for item in inventory["packages"] if item["kind"] == "docker"],
+                    "models": inventory["models"],
+                    "pip_packages": len([item for item in inventory["packages"] if item["kind"] == "pip"]),
+                    "apt_packages": len([item for item in inventory["packages"] if item["kind"] == "apt"]),
+                }
+            vms.append(entry)
+        if not vms:
+            return {"content": [{"type": "text", "text": "There are no VMs. Only the user can make one; ask them if a job needs it."}]}
+        return {"content": [{"type": "text", "text": json.dumps(vms)}]}
+
+    async def choose_vm(self, args: dict) -> dict:
+        try:
+            self.agents.set_target_vm(self.agent_id, args["name"], by_agent=True)
+        except (ValueError, VMsError) as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        return {"content": [{"type": "text", "text": f"{args['name']} is your target VM now; your open jobs moved to it. Use queue_for_vm when ready."}]}
+
+    async def image_packages(self, args: dict) -> dict:
+        try:
+            vm_record = self.agents.vms.get(args["vm"])
+        except VMsError as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        inventory = await asyncio.to_thread(load_inventory, vm_record.image_fingerprint)
+        if inventory is None:
+            text = f"{vm_record.name}'s image wasn't inspected yet, so its packages aren't listed. Check in the VM itself."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        search = args["search"].strip().lower()
+        matches = [item for item in inventory["packages"] if search in item["name"].lower()]
+        text = json.dumps({"image": inventory["image"]["name"], "found": len(matches), "packages": matches[:200]})
+        return {"content": [{"type": "text", "text": text}]}
+
     async def queue_for_vm(self, args: dict) -> dict:
         vm_name = self.record["target_vm"]
         if vm_name is None:
-            text = "You have no target VM. The user sets it; ask them (draft_question, or say so in your reply), then end your turn."
+            text = "You have no target VM. Pick the VM that suits your jobs with vms_list and choose_vm, then queue again."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         try:
             place = self.agents.queue.join(vm_name, self.agent_id)

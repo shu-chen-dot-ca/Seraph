@@ -2,9 +2,11 @@
 The Inbox: everything the agents want to send (PRs, comments) or ask (questions), waiting for you.
 
 Top: the list (Pending / Decided / All), newest first; only the rows on screen are drawn.
-Bottom: the open item (#/inbox/<id>). It opens on its evidence (Evidence.tsx): the screenshots, images and
-command runs the agent took before and after its change, side by side. A PR also has its description and its
-changes, where the unified diff is split into files, each folding open with +/- counts and colored lines.
+Bottom: the open item (#/inbox/<id>), in tabs. The first two are for you, the last is what would be sent:
+- Overview (Overview.tsx): what it is about in plain words (problem, cause, fix, what could go wrong) and the
+  agent's before and after, side by side. A question is only this tab.
+- Diff (PRs): the unified diff split into files, each folding open with +/- counts and colored lines.
+- PR message / Comment: the title and text exactly as they would go to GitHub, to copy when you send it.
 The bar at the bottom decides: Reject, Reply & keep working, or Approve, with an optional reply.
 Nothing is ever sent to GitHub: a decision only goes to the agent (and the draft's job goes back
 to the agent's queue). After a decision on the Pending tab the next pending item opens.
@@ -12,7 +14,7 @@ J / K (or the arrow keys) move through the list when you are not typing.
 */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Check, ChevronRight, CircleHelp, Copy, Download, ExternalLink, GitPullRequest, Images, Loader2, MessageSquare, Reply, X } from "lucide-react";
+import { Check, ChevronRight, CircleHelp, Copy, Download, ExternalLink, FileCheck, GitPullRequest, Images, Loader2, MessageSquare, Reply, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -23,7 +25,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { DRAFT_TONE, JOB_LABEL, JOB_TONE, StatusDot } from "@/components/ui/status-dot";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import Evidence from "@/Evidence";
+import Overview from "@/Overview";
 import { api, useLive, useLoaded } from "@/live";
 import { cn } from "@/lib/utils";
 
@@ -46,8 +48,8 @@ export default function Inbox(props: { selected: string | null }) {
   const jobs = useLive("jobs");
   const loaded = useLoaded("inbox");
   const [tab, setTab] = useState("pending");
-  // Evidence, description or changes. Every item opens on its evidence.
-  const [prTab, setPRTab] = useState("evidence");
+  // Overview, diff or message. Every item opens on its overview.
+  const [prTab, setPRTab] = useState("overview");
   // The reply box's text per draft, so switching items keeps what you typed.
   const [replies, setReplies] = useState<Record<string, string>>({});
   // Diff files folded open or shut by hand, by "draft id:path"; others follow BIG_FILE_LINES.
@@ -60,7 +62,7 @@ export default function Inbox(props: { selected: string | null }) {
   const draftId = draft === undefined ? "" : draft.id;
 
   useEffect(() => {
-    setPRTab("evidence");
+    setPRTab("overview");
   }, [draftId]);
 
   const agentNames: Record<string, string> = {};
@@ -275,12 +277,12 @@ export default function Inbox(props: { selected: string | null }) {
     setBusy("");
   }
 
-  async function copyDiff(diff: string) {
+  async function copyText(text: string, what: string) {
     try {
-      await navigator.clipboard.writeText(diff);
-      toast.success("Diff copied");
+      await navigator.clipboard.writeText(text);
+      toast.success(`${what} copied`);
     } catch {
-      toast.error("The browser did not allow copying. Use Download .patch instead.");
+      toast.error("The browser did not allow copying. Select the text and copy it by hand.");
     }
   }
 
@@ -318,16 +320,12 @@ export default function Inbox(props: { selected: string | null }) {
   const targetMatch = draft !== undefined && draft.target !== null ? draft.target.match(/^(.+)#(\d+)$/) : null;
   const targetUrl = targetMatch !== null ? `https://github.com/${targetMatch[1]}/issues/${targetMatch[2]}` : null;
   const reply = draft !== undefined ? (replies[draft.id] ?? "") : "";
-  const evidence = draft !== undefined ? draft.evidence : [];
-  // The tab shown: a draft without evidence opens on its text, and only PRs have changes.
+  // A question is only its overview; only PRs have a diff.
   let shownTab = prTab;
-  if (shownTab === "evidence" && evidence.length === 0) {
-    shownTab = "description";
+  if (draft === undefined || draft.kind === "question" || (shownTab === "diff" && draft.kind !== "pr")) {
+    shownTab = "overview";
   }
-  if (shownTab === "changes" && (draft === undefined || draft.kind !== "pr")) {
-    shownTab = "description";
-  }
-  const showTabs = draft !== undefined && (draft.kind === "pr" || evidence.length > 0);
+  const showTabs = draft !== undefined && draft.kind !== "question";
 
   return (
     <ResizablePanelGroup orientation="vertical">
@@ -402,7 +400,7 @@ export default function Inbox(props: { selected: string | null }) {
                     <span className="flex min-w-0 items-center gap-1.5">
                       <span className={cn("truncate", each.status === "pending" && "font-medium")}>{each.title}</span>
                       {each.evidence.length > 0 && (
-                        <span className="flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground tabular-nums" title={`${each.evidence.length} pieces of evidence`}>
+                        <span className="flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground tabular-nums" title={`${each.evidence.length} in Before and after`}>
                           <Images className="size-3.5" />
                           {each.evidence.length}
                         </span>
@@ -487,17 +485,12 @@ export default function Inbox(props: { selected: string | null }) {
                 <div className="flex h-9 items-center gap-2 border-y px-4">
                   <Tabs value={shownTab} onValueChange={setPRTab}>
                     <TabsList>
-                      {evidence.length > 0 && (
-                        <TabsTrigger value="evidence" className="px-2.5">
-                          Evidence <span className="text-xs text-muted-foreground tabular-nums">{evidence.length}</span>
-                        </TabsTrigger>
-                      )}
-                      <TabsTrigger value="description" className="px-2.5">
-                        {draft.kind === "pr" ? "Description" : "Message"}
+                      <TabsTrigger value="overview" className="px-2.5">
+                        Overview
                       </TabsTrigger>
                       {draft.kind === "pr" && (
-                        <TabsTrigger value="changes" className="px-2.5">
-                          Changes
+                        <TabsTrigger value="diff" className="px-2.5">
+                          Diff
                           <span className="text-xs text-muted-foreground tabular-nums">
                             {files.length} {files.length === 1 ? "file" : "files"}
                           </span>
@@ -506,11 +499,14 @@ export default function Inbox(props: { selected: string | null }) {
                           </span>
                         </TabsTrigger>
                       )}
+                      <TabsTrigger value="message" className="px-2.5">
+                        {draft.kind === "pr" ? "PR message" : "Comment"}
+                      </TabsTrigger>
                     </TabsList>
                   </Tabs>
-                  {draft.kind === "pr" && (
+                  {shownTab === "diff" && (
                     <div className="ml-auto flex items-center gap-1">
-                      <Button variant="ghost" size="sm" disabled={draft.diff === ""} onClick={() => copyDiff(draft.diff)}>
+                      <Button variant="ghost" size="sm" disabled={draft.diff === ""} onClick={() => copyText(draft.diff, "Diff")}>
                         <Copy /> Copy diff
                       </Button>
                       {draft.diff === "" ? (
@@ -526,17 +522,35 @@ export default function Inbox(props: { selected: string | null }) {
                       )}
                     </div>
                   )}
+                  {shownTab === "message" && (
+                    <div className="ml-auto flex items-center gap-1">
+                      {draft.kind === "pr" && (
+                        <Button variant="ghost" size="sm" onClick={() => copyText(draft.title, "Title")}>
+                          <Copy /> Copy title
+                        </Button>
+                      )}
+                      <Button variant="ghost" size="sm" disabled={draft.body === ""} onClick={() => copyText(draft.body, "Text")}>
+                        <Copy /> Copy text
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
 
-              {shownTab === "evidence" && <Evidence items={evidence} />}
-              {shownTab === "description" && (
-                <div className="px-4 py-3">
+              {shownTab === "overview" && <Overview draft={draft} files={files.length} added={totalAdded} removed={totalRemoved} />}
+              {shownTab === "message" && (
+                <div className="space-y-3 px-4 py-3">
+                  {draft.kind === "pr" && draft.template !== null && (
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <FileCheck className="size-3.5 text-ok" /> Follows the project's PR template <span className="font-mono">{draft.template}</span>
+                    </div>
+                  )}
+                  {draft.kind === "pr" && <div className="text-[15px] font-semibold">{draft.title}</div>}
                   <Markdown text={draft.body || "*No text.*"} repo={draft.repo ?? undefined} githubImagesOnly issueRefs />
                 </div>
               )}
-              {shownTab === "changes" && files.length === 0 && <div className="px-4 py-3 text-muted-foreground">This draft has no changes.</div>}
-              {shownTab === "changes" && diffView}
+              {shownTab === "diff" && files.length === 0 && <div className="px-4 py-3 text-muted-foreground">This draft has no changes.</div>}
+              {shownTab === "diff" && diffView}
             </div>
 
             {draft.status === "pending" && (

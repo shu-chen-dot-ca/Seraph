@@ -3,8 +3,9 @@ Give an issue to an agent: pick the agent (or a new one), the VM it should work 
 "Add job" posts /api/issues/assign, which creates a fix_issue job and wakes the agent.
 
 An agent that is queued for or holding a VM can't switch VMs, so while such an agent is picked the VM
-select is locked to that VM. Picking an agent with a target VM preselects that VM. "No VM yet" is only
-offered when the agent has no target VM: the backend reads "no VM" as "keep its target VM".
+select is locked to that VM. Picking an agent with a target VM preselects that VM. "Let the agent choose" is
+only offered when the agent has no target VM (the backend reads "no VM" as "keep its target VM"): the agent
+then picks the VM that suits the job itself (vms_list, choose_vm).
 */
 
 import { useState } from "react";
@@ -27,7 +28,7 @@ export default function AssignDialog(props: { issue: IssueItem; onClose: () => v
   // Start with an idle agent if there is one (it can start right away), else the first agent, else a new one.
   const first = agents.find((agent) => agent.status === "idle") ?? agents[0];
   const [agentId, setAgentId] = useState(first !== undefined ? first.id : NEW_AGENT);
-  const [vmName, setVMName] = useState(first?.target_vm ?? vms[0]?.name ?? NO_VM);
+  const [vmName, setVMName] = useState(first?.target_vm ?? NO_VM);
   const [instructions, setInstructions] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -44,9 +45,7 @@ export default function AssignDialog(props: { issue: IssueItem; onClose: () => v
   function pickAgent(value: string) {
     setAgentId(value);
     const picked = agents.find((each) => each.id === value);
-    if (picked !== undefined && picked.target_vm !== null) {
-      setVMName(picked.target_vm);
-    }
+    setVMName(picked !== undefined && picked.target_vm !== null ? picked.target_vm : NO_VM);
   }
 
   async function submit() {
@@ -116,7 +115,7 @@ export default function AssignDialog(props: { issue: IssueItem; onClose: () => v
               <SelectValue />
             </SelectTrigger>
             <SelectContent position="popper">
-              {(agent === undefined || agent.target_vm === null || chosenVM === NO_VM) && <SelectItem value={NO_VM}>No VM yet</SelectItem>}
+              {(agent === undefined || agent.target_vm === null || chosenVM === NO_VM) && <SelectItem value={NO_VM}>Let the agent choose</SelectItem>}
               {vms.map((vm) => (
                 <SelectItem key={vm.name} value={vm.name}>
                   <StatusDot tone={VM_TONE[vm.status]} />

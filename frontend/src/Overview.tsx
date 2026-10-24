@@ -226,7 +226,7 @@ export default function Overview(props: { draft: Draft; files: number; added: nu
           {topics.map((topic) => (
             <section key={topic.name} className="space-y-2">
               <div className="border-b pb-1 font-semibold">{topic.name}</div>
-              {topic.context !== "" && <p className="max-w-3xl text-muted-foreground">{topic.context}</p>}
+              {topic.context !== "" && <p className="max-w-3xl">{topic.context}</p>}
               {(topic.before !== null || topic.after !== null) && (
                 <div className="grid grid-cols-2 gap-3">
                   {renderItem(topic.before, "before")}

@@ -138,6 +138,19 @@ export type Job = {
   about: string; // what the job is about, in everyday words
   headline: string; // where it stands now, in everyday words
   detail: string; // the same, technical
+  // The project's full test suite: on the unchanged code (must pass before any change) and on the finished change.
+  tests: { before: TestRun | null; after: TestRun | null };
+};
+
+export type TestRun = {
+  command: string;
+  base: string;
+  exit_code: number | null; // null: stopped at the time limit
+  passed: boolean;
+  diff_hash: string; // the code it ran on ("" for before)
+  evidence: string; // the evidence item with its output
+  seconds: number;
+  at: string;
 };
 
 // What a draft is about, in plain words for the user (github_searcher/inbox.py). PRs have problem, cause, fix and
@@ -193,6 +206,7 @@ export type AgentSummary = {
   pending: number; // user messages waiting for the current turn to end
   activity: string; // the last tool summary or system line
   last_event_at: string | null; // when something last happened in its turn (to tell a slow command from a stuck agent)
+  in_tool: boolean; // a tool call is running (a command, the test suite): quiet then is not stuck
   todo_done: number; // from its latest todo list
   todo_total: number;
   created_at: string;
@@ -239,6 +253,7 @@ export type VMSummary = {
   image: string; // the image's name when the VM was made ("" for older VMs); see image_fingerprint
   image_fingerprint: string; // the exact image it was made from: images can be renamed or rebuilt
   secrets_in_vm: string[]; // env variables whose values are written in the VM's files now
+  forked_from: string; // the VM this one is a copy of, or ""
   cpus: number;
   memory_gb: number;
   disk_gb: number;
@@ -256,6 +271,26 @@ export type VMSummary = {
   error: string | null; // why the last create, start or stop failed
 };
 
+// What an image has, listed once in a throwaway VM (sandbox/image/inventory.py). The live feed carries this
+// summary; the packages themselves come from GET /api/images/inventory/<fingerprint> (ImageInventory).
+export type Probe = { name: string; version: string; raw: string };
+
+export type InventoryHighlights = {
+  image: { name: string; fingerprint: string; created_at: string };
+  inspected_at: string;
+  system: { os: string; kernel: string; arch: string; desktop: string; user: string; disk_used_gb: number };
+  languages: Probe[];
+  tools: Probe[];
+  docker_images: string[];
+  models: string[];
+  caches: { name: string; path: string; size_gb: number }[];
+  counts: Record<string, number>; // packages per kind: apt, pip, npm, cargo, snap, flatpak, vscode, docker, playwright
+};
+
+export type Package = { kind: string; name: string; version: string; manual?: boolean };
+
+export type Inventory = Omit<InventoryHighlights, "docker_images" | "counts"> & { packages: Package[] };
+
 export type Image = {
   name: string;
   aliases: string[];
@@ -265,13 +300,15 @@ export type Image = {
   created_at: string;
   default: boolean;
   used_by: string[]; // names of the VMs made from this exact image
+  inventory: InventoryHighlights | null; // null until it is inspected
+  inspecting: boolean; // a build, save or inspect of it is running
 };
 
 // A build (sandbox/image/build.sh, about an hour) or a VM being saved as an image (minutes).
 // Tasks that worked disappear once their image is listed; failed ones stay until dismissed.
 export type ImageTask = {
   id: string;
-  kind: "build" | "save";
+  kind: "build" | "save" | "inspect";
   name: string;
   vm: string | null;
   description: string;
@@ -285,6 +322,7 @@ export type ImagesData = {
   images: Image[];
   default: string;
   tasks: ImageTask[];
+  old_builds: { fingerprint: string; name: string; created_at: string }[]; // inspected images that are gone, to compare with
 };
 
 // ---- One-off responses (fetched with api(), not live) ----
@@ -370,7 +408,7 @@ const store = {
     inbox: [],
     agents: [],
     vms: [],
-    images: { images: [], default: "", tasks: [] },
+    images: { images: [], default: "", tasks: [], old_builds: [] },
   } as Topics,
   loaded: {} as Partial<Record<keyof Topics, boolean>>,
   connected: false,

@@ -1,6 +1,6 @@
 /*
 One agent's page: under the header, the job it is on now (every step, the current one marked, the
-agent's headline in everyday words, what it does this moment, its todo count and times, and a warning
+agent's headline in everyday words, the project's test suite runs, what it does this moment, its todo count and times, and a warning
 when it has been quiet too long); the conversation on the left; on the right where it stands in a VM
 queue, its jobs with their progress, and its latest todo list.
 
@@ -28,6 +28,7 @@ import {
   CircleHelp,
   Clock,
   FileText,
+  FlaskConical,
   FolderGit2,
   GitPullRequest,
   Keyboard,
@@ -61,7 +62,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { JobProgressBar, JobSteps, currentJob, since, stuckFor, useNow } from "@/components/ui/job-progress";
+import { JobProgressBar, JobSteps, JobTests, currentJob, since, stuckFor, useNow } from "@/components/ui/job-progress";
 import { IssueRefText, Markdown } from "@/components/ui/markdown";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -110,6 +111,7 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   issues_remove: CircleDot,
   issues_note: CircleDot,
   draft_pr: GitPullRequest,
+  run_tests: FlaskConical,
   draft_comment: MessageSquare,
   draft_question: CircleHelp,
   queue_for_vm: ListOrdered,
@@ -464,6 +466,7 @@ export default function AgentChat(props: { agentId: string }) {
             <JobSteps job={job} />
           </div>
           {job.about !== "" && <div className="text-xs text-muted-foreground">{job.about}</div>}
+          {job.kind === "fix_issue" && <JobTests job={job} />}
           {job.headline !== "" && (
             <div title={job.detail !== "" ? job.detail : undefined}>{job.headline}</div>
           )}
@@ -472,6 +475,7 @@ export default function AgentChat(props: { agentId: string }) {
             {summary.busy && summary.activity !== "" && (
               <span className="truncate" title={summary.activity}>
                 Now: {summary.activity}
+                {summary.in_tool && summary.last_event_at !== null && ` · ${since(summary.last_event_at, now)}`}
               </span>
             )}
             {summary.busy && summary.todo_total > 0 && (

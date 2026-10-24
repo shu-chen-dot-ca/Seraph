@@ -64,8 +64,9 @@ function currentJob(agentId: string, jobs: Job[]): Job | undefined {
 }
 
 // How long the agent has been quiet in its turn, when that is long enough to look stuck; else "".
+// Not while a tool runs (a command, the test suite): that is work, and every tool has a time limit.
 function stuckFor(agent: AgentSummary, now: number): string {
-  if (!agent.busy || agent.last_event_at === null) {
+  if (!agent.busy || agent.last_event_at === null || agent.in_tool) {
     return ""
   }
   if (now - new Date(agent.last_event_at).getTime() < STUCK_MS) {
@@ -179,4 +180,39 @@ function JobSteps(props: { job: Job; className?: string }) {
   )
 }
 
-export { JobProgressBar, JobSteps, currentJob, since, stepLabel, stuckFor, useNow }
+// The project's full test suite for a job, in plain words: on the code as it was, then with the change.
+// Both must pass: the first before the agent may change anything, the second before it may draft a PR.
+function JobTests(props: { job: Job; className?: string }) {
+  const before = props.job.tests?.before ?? null
+  const after = props.job.tests?.after ?? null
+  if (before === null && after === null) {
+    return <div className={cn("text-xs text-muted-foreground", props.className)}>Project's tests: not run yet.</div>
+  }
+  const runs = [
+    { label: "on the code as it was", run: before },
+    { label: "with the change", run: after },
+  ]
+  return (
+    <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-1 text-xs", props.className)}>
+      <span className="text-muted-foreground">Project's tests:</span>
+      {runs.map((item) => (
+        <span key={item.label} className="flex items-center gap-1">
+          {item.run === null && <span className="text-muted-foreground">not run {item.label} yet</span>}
+          {item.run !== null && (
+            <>
+              <span className={cn("font-medium", item.run.passed ? "text-ok" : "text-destructive")}>
+                {item.run.passed ? "passed" : item.run.exit_code === null ? "stopped (too long)" : "failed"}
+              </span>
+              <span className="text-muted-foreground">
+                {item.label} · {item.run.seconds >= 60 ? `${Math.floor(item.run.seconds / 60)}m` : `${item.run.seconds}s`}
+              </span>
+            </>
+          )}
+        </span>
+      ))}
+      {before !== null && <code className="truncate font-mono text-muted-foreground" title={before.command}>{before.command}</code>}
+    </div>
+  )
+}
+
+export { JobProgressBar, JobSteps, JobTests, currentJob, since, stepLabel, stuckFor, useNow }

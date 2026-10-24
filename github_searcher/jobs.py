@@ -25,6 +25,14 @@ Progress, which the agent sets with job_progress so the user can follow along wi
 
 Waiting on the user, done and cancelled are not steps: the job's status says them.
 
+The project's full test suite, run by the agent with run_tests: first on the unchanged code (it must
+pass before the agent changes anything), then on the finished change (it must pass again, with the
+same command, before a PR can be drafted):
+
+    "tests": {"before": Run | null, "after": Run | null}
+    Run: {"command", "base", "exit_code", "passed", "diff_hash" (sha256 of the diff it ran on, "" for
+          before), "evidence": "ev_..." (its output), "seconds", "at"}
+
 Evidence is what the agent shows the user so they can decide on its drafts: screenshots, images
 from the VM (a plot, a render) and command runs (a failing test, then the same test passing).
 Each item has a topic and a stage, so the Inbox can put "before" and "after" of one topic side
@@ -64,7 +72,7 @@ DATA_DIR = PROJECT_ROOT / os.environ["DATA_DIR"]
 EVIDENCE_DIR = DATA_DIR / "evidence"
 STATUSES = ["queued", "working", "waiting_on_user", "done", "cancelled"]
 # The fields update() may change. The others are set once, by create().
-UPDATABLE = ["status", "notes", "vm", "drafts", "title", "instructions", "step", "about", "headline", "detail"]
+UPDATABLE = ["status", "notes", "vm", "drafts", "title", "instructions", "step", "about", "headline", "detail", "tests"]
 # The steps each kind of job goes through, in order. Kinds not listed use "task".
 STEPS = {
     "fix_issue": ["understand", "set_up", "reproduce", "fix", "test", "draft"],
@@ -91,6 +99,8 @@ class Jobs:
             job.setdefault("about", "")
             job.setdefault("headline", "")
             job.setdefault("detail", "")
+            # Jobs from before test runs were kept.
+            job.setdefault("tests", {"before": None, "after": None})
             self.jobs[job["id"]] = job
 
     def save(self, job: dict) -> None:
@@ -155,6 +165,7 @@ class Jobs:
                 "about": "",
                 "headline": "",
                 "detail": "",
+                "tests": {"before": None, "after": None},
             }
             self.jobs[job_id] = job
             self.save(job)

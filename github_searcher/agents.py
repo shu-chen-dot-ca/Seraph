@@ -312,6 +312,9 @@ class Agents:
                     "pending": len([message for message in self.pending[agent.id] if message["from"] == "User"]),
                     "activity": activity,
                     "last_event_at": agent.last_event_at,
+                    # A tool call without its result yet: a command or the test suite is running, so a long quiet
+                    # spell is that tool working (each has a time limit), not the agent being stuck.
+                    "in_tool": agent.busy and len(agent.history) > 0 and agent.history[-1]["type"] == "tool",
                     "todo_done": todo_done,
                     "todo_total": todo_total,
                     "created_at": agent.record["created_at"],
@@ -410,8 +413,11 @@ class Agents:
     async def interrupt(self, agent_id: str) -> None:
         await self.agents[agent_id].interrupt()
 
-    def set_target_vm(self, agent_id: str, vm_name: str | None) -> None:
-        """The VM the agent works in. Its unfinished jobs move along. Not while it waits for or holds a VM."""
+    def set_target_vm(self, agent_id: str, vm_name: str | None, by_agent: bool = False) -> None:
+        """The VM the agent works in. Its unfinished jobs move along. Not while it waits for or holds a VM.
+
+        The user sets it, or the agent picks one itself (choose_vm, by_agent=True: then it isn't told).
+        """
         agent = self.agents[agent_id]
         if vm_name == agent.record["target_vm"]:
             return
@@ -432,11 +438,13 @@ class Agents:
             moved.append(job)
         self.save(agent)
         self.version += 1
+        if by_agent:
+            return
 
         # Queued jobs can start now, so that wakes it; otherwise it hears with its next message.
         text = f"The user set your target VM to {vm_name}."
         if vm_name is None:
-            text = "The user took your target VM away; you can't work in a VM until they set one."
+            text = "The user took your target VM away; pick another with vms_list and choose_vm when you need one."
         if any(job["status"] == "queued" for job in moved) and vm_name is not None:
             self.notify(agent_id, text + " Your open jobs moved to it. Use queue_for_vm when you are ready to work on them.")
             return
@@ -467,7 +475,7 @@ class Agents:
         if instructions:
             text += f"\nInstructions from the user: {instructions}"
         if vm_name is None:
-            text += "\nYou have no target VM yet: read the issue and the code on GitHub meanwhile; the user has to set a VM before you can work in one."
+            text += "\nYou have no target VM: pick the VM that suits the job with vms_list and choose_vm, then queue_for_vm when ready."
         else:
             text += f"\nIt is for {vm_name}. Use queue_for_vm when ready."
         self.notify(agent_id, text)
@@ -495,7 +503,7 @@ class Agents:
         if instructions:
             text += f"\nInstructions from the user: {instructions}"
         if vm_name is None:
-            text += "\nYou have no target VM. If the job needs one, ask the user for it with draft_question."
+            text += "\nYou have no target VM. If the job needs one, pick the one that suits it with vms_list and choose_vm."
         else:
             text += f"\nYour VM is {vm_name}. If the job needs it, use queue_for_vm when ready; if it doesn't, just do it and mark it done."
         self.notify(agent_id, text)

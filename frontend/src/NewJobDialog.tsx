@@ -4,7 +4,8 @@ Make a job by hand: a title, what to do, the agent that does it (or a new one) a
 
 The agent and VM pickers work like AssignDialog's: an agent that is queued for or holding a VM can't
 switch VMs, so the VM select is locked to that VM; picking an agent with a target VM preselects it;
-"No VM" is only offered when the agent has no target VM (the backend reads "no VM" as "keep its VM").
+"Let the agent choose" is only offered when the agent has no target VM (the backend reads "no VM" as "keep its
+VM"); the agent then picks the VM that suits the job itself, if the job needs one.
 */
 
 import { useState } from "react";
@@ -30,7 +31,7 @@ export default function NewJobDialog(props: { onClose: () => void }) {
   const [title, setTitle] = useState("");
   const [instructions, setInstructions] = useState("");
   const [agentId, setAgentId] = useState(first !== undefined ? first.id : NEW_AGENT);
-  const [vmName, setVMName] = useState(first?.target_vm ?? vms[0]?.name ?? NO_VM);
+  const [vmName, setVMName] = useState(first?.target_vm ?? NO_VM);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -46,9 +47,7 @@ export default function NewJobDialog(props: { onClose: () => void }) {
   function pickAgent(value: string) {
     setAgentId(value);
     const picked = agents.find((each) => each.id === value);
-    if (picked !== undefined && picked.target_vm !== null) {
-      setVMName(picked.target_vm);
-    }
+    setVMName(picked !== undefined && picked.target_vm !== null ? picked.target_vm : NO_VM);
   }
 
   async function submit() {
@@ -137,7 +136,7 @@ export default function NewJobDialog(props: { onClose: () => void }) {
               <SelectValue />
             </SelectTrigger>
             <SelectContent position="popper">
-              {(agent === undefined || agent.target_vm === null || chosenVM === NO_VM) && <SelectItem value={NO_VM}>No VM</SelectItem>}
+              {(agent === undefined || agent.target_vm === null || chosenVM === NO_VM) && <SelectItem value={NO_VM}>Let the agent choose</SelectItem>}
               {vms.map((vm) => (
                 <SelectItem key={vm.name} value={vm.name}>
                   <StatusDot tone={VM_TONE[vm.status]} />
@@ -157,7 +156,9 @@ export default function NewJobDialog(props: { onClose: () => void }) {
               {agent.name} is {agent.status === "using_vm" ? "using" : "queued for"} {chosenVM}, so its VM can't change until it releases it.
             </p>
           )}
-          {!locked && chosenVM === NO_VM && <p className="col-start-2 text-xs text-muted-foreground">Fine for jobs that only read GitHub, like searching for issues.</p>}
+          {!locked && chosenVM === NO_VM && (
+            <p className="col-start-2 text-xs text-muted-foreground">It picks the VM whose image suits the job, or none for jobs that only read GitHub.</p>
+          )}
         </div>
 
         {error !== "" && <p className="text-destructive">{error}</p>}
