@@ -1,0 +1,167 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="824" viewBox="0 0 1280 824" role="img" aria-label="The browser talks to a FastAPI backend over HTTP and one live websocket, and opens VM desktops directly. The backend runs the stores, the agents manager, the MCP tools and the sandbox managers. Each agent is a Claude Code process with no host tools; it calls the backend&#x27;s tools. GitHub is only read; VMs are driven through Incus.">
+<title>System overview</title>
+<desc>The browser talks to a FastAPI backend over HTTP and one live websocket, and opens VM desktops directly. The backend runs the stores, the agents manager, the MCP tools and the sandbox managers. Each agent is a Claude Code process with no host tools; it calls the backend&#x27;s tools. GitHub is only read; VMs are driven through Incus.</desc>
+<style>
+  text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; fill: #1f2328; }
+  .bg { fill: #ffffff; stroke: #d0d7de; }
+  .title { font-size: 21px; font-weight: 700; }
+  .sub { font-size: 13px; fill: #59636e; }
+  .zl { font-size: 11px; font-weight: 700; letter-spacing: 0.07em; }
+  .h { font-size: 14px; font-weight: 650; }
+  .s { font-size: 12px; fill: #59636e; }
+  .m { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 11.5px; fill: #31373d; }
+  .hm { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 13.5px; font-weight: 650; }
+  .el { font-size: 11.5px; fill: #31373d; paint-order: stroke; stroke: #ffffff; stroke-width: 5px; stroke-linejoin: round; }
+  .pt { font-size: 11px; font-weight: 600; fill: #31373d; }
+  .halo { fill: #ffffff; }
+  .card-shadow { fill: #000000; opacity: 0.04; }
+  .line { fill: none; stroke-width: 1.6; }
+  .dash { stroke-dasharray: 5 4; }
+  .x { stroke-width: 2; stroke-linecap: round; }
+  .z-browser{fill:#eef5ff;stroke:#a8c8f8} .c-browser{fill:#ffffff;stroke:#a8c8f8} .h-browser{fill:#eef5ff} .l-browser{fill:#0b5cd5} .p-browser{fill:#eef5ff;stroke:#a8c8f8} .z-host{fill:#f6f8fa;stroke:#d0d7de} .c-host{fill:#ffffff;stroke:#d0d7de} .h-host{fill:#f6f8fa} .l-host{fill:#424a53} .p-host{fill:#f6f8fa;stroke:#d0d7de} .z-core{fill:#ffffff;stroke:#c9d1d9} .c-core{fill:#ffffff;stroke:#c9d1d9} .h-core{fill:#ffffff} .l-core{fill:#424a53} .p-core{fill:#ffffff;stroke:#c9d1d9} .z-claude{fill:#f6f2ff;stroke:#cbb8fb} .c-claude{fill:#ffffff;stroke:#cbb8fb} .h-claude{fill:#f6f2ff} .l-claude{fill:#6e40c9} .p-claude{fill:#f6f2ff;stroke:#cbb8fb} .z-vm{fill:#eefaf2;stroke:#94d6a9} .c-vm{fill:#ffffff;stroke:#94d6a9} .h-vm{fill:#eefaf2} .l-vm{fill:#1a7f37} .p-vm{fill:#eefaf2;stroke:#94d6a9} .z-ext{fill:#fff6ec;stroke:#f2c08a} .c-ext{fill:#ffffff;stroke:#f2c08a} .h-ext{fill:#fff6ec} .l-ext{fill:#bc4c00} .p-ext{fill:#fff6ec;stroke:#f2c08a} .z-you{fill:#fff8e0;stroke:#ecc548} .c-you{fill:#ffffff;stroke:#ecc548} .h-you{fill:#fff8e0} .l-you{fill:#9a6700} .p-you{fill:#fff8e0;stroke:#ecc548} .z-muted{fill:#f6f8fa;stroke:#d0d7de} .c-muted{fill:#ffffff;stroke:#d0d7de} .h-muted{fill:#f6f8fa} .l-muted{fill:#6e7781} .p-muted{fill:#f6f8fa;stroke:#d0d7de} .e-edge{stroke:#6e7781} .a-edge{fill:#6e7781} .x-edge{stroke:#6e7781} .e-you{stroke:#bf8700} .a-you{fill:#bf8700} .x-you{stroke:#bf8700} .e-ok{stroke:#1a7f37} .a-ok{fill:#1a7f37} .x-ok{stroke:#1a7f37} .e-no{stroke:#cf222e} .a-no{fill:#cf222e} .x-no{stroke:#cf222e}
+  @media (prefers-color-scheme: dark) {
+    text { fill: #e6edf3; }
+    .bg { fill: #0d1117; stroke: #30363d; }
+    .sub, .s { fill: #9198a1; }
+    .m { fill: #c9d1d9; }
+    .el { fill: #c9d1d9; stroke: #0d1117; }
+    .pt { fill: #e6edf3; }
+    .halo { fill: #0d1117; }
+    .card-shadow { opacity: 0; }
+    .z-browser{fill:#0b1a2e;stroke:#22477a} .c-browser{fill:#151b23;stroke:#22477a} .h-browser{fill:#0b1a2e} .l-browser{fill:#79b8ff} .p-browser{fill:#0b1a2e;stroke:#22477a} .z-host{fill:#10151c;stroke:#30363d} .c-host{fill:#151b23;stroke:#30363d} .h-host{fill:#10151c} .l-host{fill:#b1bac4} .p-host{fill:#10151c;stroke:#30363d} .z-core{fill:#0d1117;stroke:#3d444d} .c-core{fill:#151b23;stroke:#3d444d} .h-core{fill:#0d1117} .l-core{fill:#b1bac4} .p-core{fill:#0d1117;stroke:#3d444d} .z-claude{fill:#18122b;stroke:#45367d} .c-claude{fill:#151b23;stroke:#45367d} .h-claude{fill:#18122b} .l-claude{fill:#b392f0} .p-claude{fill:#18122b;stroke:#45367d} .z-vm{fill:#0c1f15;stroke:#22603a} .c-vm{fill:#151b23;stroke:#22603a} .h-vm{fill:#0c1f15} .l-vm{fill:#56d364} .p-vm{fill:#0c1f15;stroke:#22603a} .z-ext{fill:#231509;stroke:#6e3d10} .c-ext{fill:#151b23;stroke:#6e3d10} .h-ext{fill:#231509} .l-ext{fill:#ffa657} .p-ext{fill:#231509;stroke:#6e3d10} .z-you{fill:#241c08;stroke:#6e5512} .c-you{fill:#151b23;stroke:#6e5512} .h-you{fill:#241c08} .l-you{fill:#e3b341} .p-you{fill:#241c08;stroke:#6e5512} .z-muted{fill:#151b23;stroke:#30363d} .c-muted{fill:#151b23;stroke:#30363d} .h-muted{fill:#151b23} .l-muted{fill:#8b949e} .p-muted{fill:#151b23;stroke:#30363d} .e-edge{stroke:#8b949e} .a-edge{fill:#8b949e} .x-edge{stroke:#8b949e} .e-you{stroke:#e3b341} .a-you{fill:#e3b341} .x-you{stroke:#e3b341} .e-ok{stroke:#3fb950} .a-ok{fill:#3fb950} .x-ok{stroke:#3fb950} .e-no{stroke:#f85149} .a-no{fill:#f85149} .x-no{stroke:#f85149}
+  }
+</style>
+<defs><marker id="ah-edge" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="a-edge" d="M0,0.5 L10,5 L0,9.5 z"/></marker><marker id="ah-you" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="a-you" d="M0,0.5 L10,5 L0,9.5 z"/></marker><marker id="ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="a-ok" d="M0,0.5 L10,5 L0,9.5 z"/></marker><marker id="ah-no" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="a-no" d="M0,0.5 L10,5 L0,9.5 z"/></marker></defs>
+<rect class="bg" x="0.5" y="0.5" width="1279" height="823" rx="14"/>
+<text x="24" y="42" class="title" text-anchor="start">System overview</text>
+<text x="24" y="66" class="sub" text-anchor="start">One machine runs everything. Agents think in Claude Code; every tool they call runs in the backend, which reads GitHub and drives the VMs through Incus.</text>
+<rect class="z-browser" x="24" y="96" width="232" height="704" rx="12" stroke-width="1.2"/>
+<text x="40" y="118" class="zl l-browser" text-anchor="start">YOUR BROWSER</text>
+<text x="40" y="140" class="s" text-anchor="start">served by the Vite dev server,</text>
+<text x="40" y="158" class="s" text-anchor="start">which proxies /api and the</text>
+<text x="40" y="176" class="s" text-anchor="start">websocket to the backend</text>
+<rect class="z-ext" x="280" y="96" width="976" height="76" rx="12" stroke-width="1.2"/>
+<text x="296" y="118" class="zl l-ext" text-anchor="start">INTERNET</text>
+<rect class="z-host" x="280" y="196" width="976" height="408" rx="12" stroke-width="1.2"/>
+<text x="296" y="218" class="zl l-host" text-anchor="start">HOST MACHINE</text>
+<rect class="z-core" x="296" y="228" width="624" height="360" rx="12" stroke-width="1.2"/>
+<text x="312" y="250" class="zl l-core" text-anchor="start">BACKEND PROCESS · FASTAPI ON :8001</text>
+<rect class="z-claude" x="944" y="228" width="296" height="360" rx="12" stroke-width="1.2"/>
+<text x="960" y="250" class="zl l-claude" text-anchor="start">CLAUDE CODE PROCESSES</text>
+<rect class="z-vm" x="280" y="628" width="976" height="172" rx="12" stroke-width="1.2"/>
+<text x="296" y="650" class="zl l-vm" text-anchor="start">INCUS VMS</text>
+<text x="296" y="668" class="s" text-anchor="start">bridge sandboxbr0 · internet yes, this machine and the LAN no</text>
+<rect class="card-shadow" x="40" y="270" width="200" height="136" rx="9"/>
+<rect class="c-browser" x="40" y="268" width="200" height="136" rx="9" stroke-width="1.3"/>
+<text x="56" y="292" class="h" text-anchor="start">React app</text>
+<text x="56" y="312" class="s" text-anchor="start">Inbox · Issues · Jobs</text>
+<text x="56" y="330" class="s" text-anchor="start">Repos · Tracked</text>
+<text x="56" y="348" class="s" text-anchor="start">Agents · VMs</text>
+<text x="56" y="366" class="m" text-anchor="start">Tailwind · shadcn/ui</text>
+<rect class="card-shadow" x="40" y="520" width="200" height="56" rx="9"/>
+<rect class="c-browser" x="40" y="518" width="200" height="56" rx="9" stroke-width="1.3"/>
+<text x="56" y="542" class="h" text-anchor="start">Live store</text>
+<text x="56" y="562" class="s" text-anchor="start">one socket, no polling</text>
+<rect class="card-shadow" x="40" y="702" width="200" height="64" rx="9"/>
+<rect class="c-browser" x="40" y="700" width="200" height="64" rx="9" stroke-width="1.3"/>
+<text x="56" y="724" class="h" text-anchor="start">VM desktop</text>
+<text x="56" y="744" class="s" text-anchor="start">noVNC iframe, kept open</text>
+<path class="line e-edge" d="M140,518 L140,404" marker-end="url(#ah-edge)"/>
+<text x="148" y="466" class="el" text-anchor="start">useLive(topic)</text>
+<rect class="card-shadow" x="432" y="110" width="352" height="52" rx="9"/>
+<rect class="c-ext" x="432" y="108" width="352" height="52" rx="9" stroke-width="1.3"/>
+<text x="608.0" y="132" class="h" text-anchor="middle">GitHub API</text>
+<text x="608.0" y="152" class="s" text-anchor="middle">REST + GraphQL · read only</text>
+<rect class="card-shadow" x="984" y="110" width="224" height="52" rx="9"/>
+<rect class="c-ext" x="984" y="108" width="224" height="52" rx="9" stroke-width="1.3"/>
+<text x="1096.0" y="132" class="h" text-anchor="middle">Anthropic API</text>
+<text x="1096.0" y="152" class="s" text-anchor="middle">Claude Opus 5.5</text>
+<rect class="card-shadow" x="312" y="266" width="592" height="48" rx="9"/>
+<rect class="c-core" x="312" y="264" width="592" height="48" rx="9" stroke-width="1.3"/>
+<text x="328" y="284" class="h" text-anchor="start">search.py + token_balancer</text>
+<text x="328" y="302" class="s" text-anchor="start">every GitHub read · spread over the tokens in .env · paced, rate limits waited out</text>
+<rect class="card-shadow" x="312" y="334" width="248" height="64" rx="9"/>
+<rect class="c-core" x="312" y="332" width="248" height="64" rx="9" stroke-width="1.3"/>
+<text x="328" y="356" class="h" text-anchor="start">HTTP routers</text>
+<text x="328" y="376" class="s" text-anchor="start">one router per page</text>
+<text x="328" y="394" class="m" text-anchor="start">backend/*_api.py</text>
+<rect class="card-shadow" x="312" y="418" width="248" height="84" rx="9"/>
+<rect class="c-core" x="312" y="416" width="248" height="84" rx="9" stroke-width="1.3"/>
+<text x="328" y="440" class="h" text-anchor="start">Stores</text>
+<text x="328" y="460" class="s" text-anchor="start">Repos · Issues · Tracked (undo)</text>
+<text x="328" y="478" class="s" text-anchor="start">Jobs · Inbox · issue facts</text>
+<text x="328" y="496" class="m" text-anchor="start">data/*.json</text>
+<rect class="card-shadow" x="312" y="522" width="248" height="52" rx="9"/>
+<rect class="c-core" x="312" y="520" width="248" height="52" rx="9" stroke-width="1.3"/>
+<text x="328" y="544" class="h" text-anchor="start">Live feed</text>
+<text x="328" y="564" class="s" text-anchor="start">every 250 ms: changed topics</text>
+<rect class="card-shadow" x="656" y="334" width="248" height="64" rx="9"/>
+<rect class="c-core" x="656" y="332" width="248" height="64" rx="9" stroke-width="1.3"/>
+<text x="672" y="356" class="h" text-anchor="start">Agents manager</text>
+<text x="672" y="376" class="s" text-anchor="start">a worker loop per agent</text>
+<text x="672" y="394" class="m" text-anchor="start">agents.py</text>
+<rect class="card-shadow" x="656" y="418" width="248" height="84" rx="9"/>
+<rect class="c-core" x="656" y="416" width="248" height="84" rx="9" stroke-width="1.3"/>
+<text x="672" y="440" class="h" text-anchor="start">MCP server &quot;agent&quot;</text>
+<text x="672" y="460" class="s" text-anchor="start">GitHub tools: read GitHub</text>
+<text x="672" y="478" class="s" text-anchor="start">Work tools: lists, jobs, drafts</text>
+<text x="672" y="496" class="s" text-anchor="start">Computer tools: the VM</text>
+<rect class="card-shadow" x="656" y="522" width="248" height="52" rx="9"/>
+<rect class="c-core" x="656" y="520" width="248" height="52" rx="9" stroke-width="1.3"/>
+<text x="672" y="544" class="h" text-anchor="start">Sandbox</text>
+<text x="672" y="564" class="s" text-anchor="start">VMs · VM queue · Images</text>
+<path class="line e-edge" d="M436,396 L436,416" marker-end="url(#ah-edge)"/>
+<text x="444" y="410" class="el" text-anchor="start">read, change</text>
+<path class="line e-edge" d="M436,500 L436,520" marker-end="url(#ah-edge)"/>
+<text x="444" y="514" class="el" text-anchor="start">versions</text>
+<path class="line e-edge" d="M780,500 L780,520" marker-end="url(#ah-edge)"/>
+<text x="788" y="514" class="el" text-anchor="start">VM tools</text>
+<rect class="c-claude" x="1000" y="348" width="224" height="150" rx="9" stroke-width="1.1"/>
+<rect class="c-claude" x="992" y="340" width="224" height="150" rx="9" stroke-width="1.1"/>
+<rect class="card-shadow" x="984" y="334" width="224" height="150" rx="9"/>
+<rect class="c-claude" x="984" y="332" width="224" height="150" rx="9" stroke-width="1.3"/>
+<text x="1000" y="356" class="h" text-anchor="start">Claude Code CLI</text>
+<text x="1000" y="376" class="s" text-anchor="start">one per agent, via Agent SDK</text>
+<text x="1000" y="394" class="m" text-anchor="start">claude-opus-5-5[1m]</text>
+<text x="1000" y="412" class="s" text-anchor="start">compacts at 500k tokens</text>
+<text x="1000" y="430" class="s" text-anchor="start">built-in: TodoWrite only</text>
+<text x="1000" y="448" class="s" text-anchor="start">no host shell, files, web</text>
+<text x="960" y="556" class="s" text-anchor="start">resumed by session id</text>
+<text x="960" y="574" class="s" text-anchor="start">after a backend restart</text>
+<path class="line e-edge" d="M240,364 L312,364" marker-end="url(#ah-edge)"/>
+<text x="276" y="356" class="el" text-anchor="middle">HTTP /api</text>
+<path class="line e-edge" d="M312,546 L240,546" marker-end="url(#ah-edge)"/>
+<text x="276" y="538" class="el" text-anchor="middle">WebSocket</text>
+<path class="line e-edge" d="M904,364 L984,364" marker-end="url(#ah-edge)" marker-start="url(#ah-edge)"/>
+<text x="944" y="356" class="el" text-anchor="middle">turns</text>
+<path class="line e-edge" d="M984,458 L904,458" marker-end="url(#ah-edge)"/>
+<text x="944" y="450" class="el" text-anchor="middle">tool calls</text>
+<path class="line e-edge" d="M608,264 L608,160" marker-end="url(#ah-edge)"/>
+<text x="616" y="188" class="el" text-anchor="start">reads only</text>
+<path class="line e-edge" d="M1096,332 L1096,160" marker-end="url(#ah-edge)"/>
+<text x="1104" y="188" class="el" text-anchor="start">model calls</text>
+<path class="line e-edge" d="M780,572 L780,628" marker-end="url(#ah-edge)"/>
+<text x="792" y="620" class="el" text-anchor="start">incus launch · exec · start / stop · publish</text>
+<path class="line e-edge" d="M240,732 L312,732" marker-end="url(#ah-edge)"/>
+<text x="276" y="724" class="el" text-anchor="middle">noVNC</text>
+<rect class="card-shadow" x="312" y="686" width="240" height="100" rx="9"/>
+<rect class="c-vm" x="312" y="684" width="240" height="100" rx="9" stroke-width="1.3"/>
+<text x="328" y="708" class="h" text-anchor="start">vm1</text>
+<text x="328" y="728" class="s" text-anchor="start">Ubuntu desktop (X11)</text>
+<text x="328" y="746" class="m" text-anchor="start">x11vnc → noVNC :6080</text>
+<text x="328" y="764" class="s" text-anchor="start">held by agent-1, 1 waiting</text>
+<rect class="card-shadow" x="576" y="686" width="240" height="100" rx="9"/>
+<rect class="c-vm" x="576" y="684" width="240" height="100" rx="9" stroke-width="1.3"/>
+<text x="592" y="708" class="h" text-anchor="start">vm2</text>
+<text x="592" y="728" class="s" text-anchor="start">Ubuntu desktop (X11)</text>
+<text x="592" y="746" class="m" text-anchor="start">x11vnc → noVNC :6080</text>
+<text x="592" y="764" class="s" text-anchor="start">taken over by you</text>
+<rect class="card-shadow" x="840" y="686" width="240" height="100" rx="9"/>
+<rect class="c-vm" x="840" y="684" width="240" height="100" rx="9" stroke-width="1.3"/>
+<text x="856" y="708" class="h" text-anchor="start">vm3</text>
+<text x="856" y="728" class="s" text-anchor="start">stopped, free</text>
+<text x="856" y="746" class="m" text-anchor="start">incus publish → image</text>
+<text x="856" y="764" class="s" text-anchor="start">can be saved or forked</text>
+<text x="1168" y="738" class="s" text-anchor="middle">one record each</text>
+<text x="1168" y="756" class="s" text-anchor="middle">in data/vms/</text>
+</svg>
