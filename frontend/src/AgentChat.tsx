@@ -140,7 +140,7 @@ const ToolRow = memo(function ToolRow(props: { entry: ToolEntry; result: ToolRes
         <span className="truncate">
           <IssueRefText text={entry.summary || entry.name} />
         </span>
-        {running && <Loader2 className="ml-auto size-3.5 shrink-0 animate-spin text-muted-foreground" />}
+        {running && <Loader2 className="ml-auto size-3.5 shrink-0 animate-spin text-primary" />}
         {result?.is_error && <X className="ml-auto size-3.5 shrink-0" />}
       </summary>
       <div className="mt-1 mb-2 ml-3 space-y-1.5 border-l pl-3">
@@ -415,7 +415,7 @@ export default function AgentChat(props: { agentId: string }) {
             <TooltipTrigger asChild>
               <span className="ml-2 flex items-center gap-2">
                 <span className="h-1.5 w-20 overflow-hidden rounded-full bg-muted">
-                  <span className={cn("block h-full", percent > 80 ? "bg-warn" : "bg-primary")} style={{ width: `${percent}%` }} />
+                  <span className={cn("block h-full", percent > 80 ? "bg-warn" : "bg-muted-foreground/70")} style={{ width: `${percent}%` }} />
                 </span>
                 <span className="text-xs text-muted-foreground tabular-nums">
                   {Math.round(summary.context_used / 1000)}k / {capText}
@@ -625,7 +625,7 @@ export default function AgentChat(props: { agentId: string }) {
 
                 {summary.busy && (
                   <div className="flex h-7 items-center gap-2 px-1 text-muted-foreground">
-                    <Loader2 className="size-3.5 shrink-0 animate-spin" />
+                    <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />
                     <span className="truncate">Working…</span>
                   </div>
                 )}

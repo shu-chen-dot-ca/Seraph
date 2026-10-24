@@ -111,8 +111,7 @@ export default function Jobs(props: { selected: string | null }) {
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-        <h1 className="font-semibold">Jobs</h1>
-        <Tabs value={tab} onValueChange={setTab} className="ml-2">
+        <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
             {TABS.map((item) => (
               <TabsTrigger key={item.value} value={item.value} className="px-2.5">
@@ -272,7 +271,7 @@ export default function Jobs(props: { selected: string | null }) {
                       <div className="whitespace-pre-wrap">{job.instructions !== "" ? job.instructions : <span className="text-muted-foreground">None.</span>}</div>
                     </div>
 
-                    <div className="border-l-2 border-primary pl-3">
+                    <div className="border-l-2 border-muted-foreground/30 pl-3">
                       <div className="text-xs font-medium text-muted-foreground">Agent's notes</div>
                       <div className="whitespace-pre-wrap">{job.notes !== "" ? job.notes : <span className="text-muted-foreground">None yet.</span>}</div>
                     </div>
@@ -283,11 +282,13 @@ export default function Jobs(props: { selected: string | null }) {
                       {job.drafts.map((id) => {
                         const draft = drafts[id];
                         return (
-                          <a key={id} href={`#/inbox/${id}`} className="flex h-6 items-center gap-2 hover:underline">
+                          <a key={id} href={`#/inbox/${id}`} className="group flex min-h-6 items-center gap-2 py-0.5">
                             <StatusDot tone={draft !== undefined ? DRAFT_TONE[draft.status] : "gray"} />
                             <span className="w-16 shrink-0 text-muted-foreground">{draft !== undefined ? (DRAFT_KIND[draft.kind] ?? draft.kind) : "Draft"}</span>
-                            <span className="truncate">{draft !== undefined ? draft.title : id}</span>
-                            {draft !== undefined && <span className="shrink-0 text-xs text-muted-foreground">{draft.status}</span>}
+                            <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+                              <span className="truncate group-hover:underline">{draft !== undefined ? draft.title : id}</span>
+                              {draft !== undefined && <Badge variant="secondary">{draft.status}</Badge>}
+                            </span>
                           </a>
                         );
                       })}

@@ -97,6 +97,7 @@ class JobRequest(BaseModel):
     title: str
     instructions: str = ""
     agent: str | None = None  # None: a new agent is made for it.
+    agent_name: str = ""  # The new agent's name. Empty: "agent-N".
     vm: str | None = None  # None: the agent keeps its target VM.
 
 
@@ -104,13 +105,13 @@ class JobRequest(BaseModel):
 async def create_job(body: JobRequest) -> dict:
     """The user makes a job (kind "task") for an agent; returns the job."""
     try:
-        return agents.create_job(body.title, body.instructions.strip(), body.agent, body.vm)
+        return agents.create_job(body.title, body.instructions.strip(), body.agent, body.vm, body.agent_name)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error.args[0]))
     except VMsError as error:
         raise HTTPException(status_code=404, detail=str(error))
     except ValueError as error:
-        # No title, an unknown VM, or a different VM for an agent that is already queued for or holding its target VM.
+        # No title, an unknown VM, a new agent's name already taken, or a different VM for an agent that is already queued for or holding its target VM.
         raise HTTPException(status_code=409, detail=str(error))
 
 

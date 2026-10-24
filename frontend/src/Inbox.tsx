@@ -199,7 +199,7 @@ export default function Inbox(props: { selected: string | null }) {
                   {file.status === "renamed" ? `${file.oldPath} → ${file.path}` : file.path}
                 </span>
                 {file.status !== "modified" && (
-                  <Badge variant="outline" className="py-0">
+                  <Badge variant="secondary">
                     {file.status}
                   </Badge>
                 )}
@@ -222,7 +222,7 @@ export default function Inbox(props: { selected: string | null }) {
                           "flex",
                           line.kind === "add" && "bg-ok/12",
                           line.kind === "del" && "bg-destructive/12",
-                          line.kind === "hunk" && "bg-primary/8 text-muted-foreground",
+                          line.kind === "hunk" && "bg-muted/60 text-muted-foreground",
                           line.kind === "note" && "text-muted-foreground italic",
                         )}
                       >
@@ -332,8 +332,7 @@ export default function Inbox(props: { selected: string | null }) {
       <ResizablePanel defaultSize="38" minSize={120}>
         <div className="flex h-full flex-col">
           <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-            <h1 className="font-semibold">Inbox</h1>
-            <Tabs value={tab} onValueChange={setTab} className="ml-2">
+            <Tabs value={tab} onValueChange={setTab}>
               <TabsList>
                 <TabsTrigger value="pending" className="px-2.5">
                   Pending <span className="text-xs text-muted-foreground tabular-nums">{counts.pending}</span>
@@ -429,7 +428,7 @@ export default function Inbox(props: { selected: string | null }) {
             <div className="min-h-0 flex-1 overflow-auto">
               <div className="space-y-2 px-4 pt-3 pb-2">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
-                  <Badge variant="secondary" className="gap-1">
+                  <Badge variant="secondary">
                     {draft.kind === "pr" && <GitPullRequest />}
                     {draft.kind === "comment" && <MessageSquare />}
                     {draft.kind === "question" && <CircleHelp />}
@@ -605,7 +604,7 @@ export default function Inbox(props: { selected: string | null }) {
                   <span className="font-medium">{DECISION_LABEL[draft.status] ?? draft.status}</span>
                   {draft.decided_at !== null && <span className="text-xs text-muted-foreground">{new Date(draft.decided_at).toLocaleString()}</span>}
                 </div>
-                {draft.reply !== "" && <div className="mt-1 border-l-2 border-primary pl-3 whitespace-pre-wrap">{draft.reply}</div>}
+                {draft.reply !== "" && <div className="mt-1 border-l-2 border-muted-foreground/30 pl-3 whitespace-pre-wrap">{draft.reply}</div>}
               </div>
             )}
           </div>

@@ -105,7 +105,8 @@ function JobProgressBar(props: { job: Job; className?: string }) {
             className={cn(
               "h-full flex-1 bg-muted",
               stepIndex < index && (job.status === "cancelled" ? "bg-idle" : "bg-ok"),
-              stepIndex === index && job.status === "working" && "bg-primary",
+              // The step being worked on breathes, so a working job looks alive at a glance.
+              stepIndex === index && job.status === "working" && "animate-pulse bg-primary",
               stepIndex === index && job.status === "queued" && "bg-primary/60",
               stepIndex === index && job.status === "waiting_on_user" && "bg-warn",
               stepIndex === index && job.status === "cancelled" && "bg-idle"
@@ -148,8 +149,8 @@ function JobSteps(props: { job: Job; className?: string }) {
           <span
             className={cn(
               "flex h-5 items-center gap-1 rounded-sm px-1.5",
-              stepIndex < index && "text-muted-foreground",
-              stepIndex > index && "text-muted-foreground/60",
+              // Done steps (with a check) and the ones still to come read alike: only the current step stands out.
+              stepIndex !== index && "text-muted-foreground",
               stepIndex === index && job.status === "working" && "bg-primary font-medium text-primary-foreground",
               stepIndex === index && job.status === "queued" && "bg-primary/15 font-medium",
               stepIndex === index && job.status === "waiting_on_user" && "bg-warn/20 font-medium",

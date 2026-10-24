@@ -21,7 +21,6 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Markdown } from "@/components/ui/markdown";
 import { api, type Draft, type EvidenceItem } from "@/live";
-import { cn } from "@/lib/utils";
 
 const STAGE_LABEL: Record<string, string> = { before: "Before", after: "After", other: "" };
 
@@ -114,10 +113,8 @@ export default function Overview(props: { draft: Draft; files: number; added: nu
     const showOutput = short || opened[item.id] === true;
     return (
       <div className="flex min-w-0 flex-col gap-1.5">
-        <div className="flex min-w-0 items-baseline gap-2">
-          {STAGE_LABEL[item.stage] !== "" && (
-            <span className={cn("shrink-0 text-xs font-medium", item.stage === "after" ? "text-ok" : "text-warn")}>{STAGE_LABEL[item.stage]}</span>
-          )}
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          {STAGE_LABEL[item.stage] !== "" && <Badge variant={item.stage === "after" ? "ok" : "warn"}>{STAGE_LABEL[item.stage]}</Badge>}
           <span className="min-w-0">{item.caption}</span>
         </div>
 
@@ -139,10 +136,7 @@ export default function Overview(props: { draft: Draft; files: number; added: nu
               <span className="min-w-0 flex-1 truncate" title={item.command ?? ""}>
                 $ {item.command}
               </span>
-              <Badge
-                variant="outline"
-                className={cn("shrink-0 py-0", item.exit_code === 0 ? "border-ok text-ok" : "border-destructive text-destructive")}
-              >
+              <Badge variant={item.exit_code === 0 ? "ok" : "bad"}>
                 exit {item.exit_code}
               </Badge>
             </div>
@@ -265,7 +259,9 @@ export default function Overview(props: { draft: Draft; files: number; added: nu
                 <DialogTitle className="text-sm">
                   {shown.topic}
                   {STAGE_LABEL[shown.stage] !== "" && (
-                    <span className={cn("ml-2 text-xs", shown.stage === "after" ? "text-ok" : "text-warn")}>{STAGE_LABEL[shown.stage]}</span>
+                    <Badge variant={shown.stage === "after" ? "ok" : "warn"} className="ml-2">
+                      {STAGE_LABEL[shown.stage]}
+                    </Badge>
                   )}
                 </DialogTitle>
                 <DialogDescription className="min-w-0 flex-1 truncate">{shown.caption}</DialogDescription>
