@@ -131,7 +131,7 @@ export default function NewVMDialog(props: { open: boolean; onOpenChange: (open:
                 {imagesData.images.map((each) => (
                   <SelectItem key={each.fingerprint} value={each.name}>
                     {each.name}
-                    <span className="text-muted-foreground">{each.default ? "default" : each.description}</span>
+                    <span className="text-muted-foreground">{each.default ? "default" : (each.inventory?.system.os ?? "")}</span>
                   </SelectItem>
                 ))}
               </SelectContent>

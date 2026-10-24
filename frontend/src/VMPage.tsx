@@ -10,7 +10,7 @@ Settings is VMSettings. Fork (only while stopped) makes a new VM that starts as 
 App keeps this page mounted (hidden) after you leave it, and the Overview stays mounted while the
 Settings tab is open, so the desktop iframe never reloads: coming back is instant. The iframe only
 exists while the VM runs; its address comes from GET /api/vms/{name}/viewer, asked again (every 3 s)
-until the VM has one.
+until the VM has one. A VM from a terminal-only image has no desktop: the same area shows its terminal (ttyd).
 
 The queue buttons map one to one onto the backend: Take over, Release (your own hold), Give (the VM
 goes to that agent now), Front (next in line) and Remove (out of the queue, or the VM taken away;
@@ -91,6 +91,8 @@ export default function VMPage(props: { name: string; active: boolean }) {
   const jobs = useLive("jobs");
   const [tab, setTab] = useState("overview");
   const [desktopUrl, setDesktopUrl] = useState<string | null>(null);
+  // The VM has no desktop (a terminal-only image): desktopUrl is its terminal.
+  const [terminalOnly, setTerminalOnly] = useState(false);
   const [viewerError, setViewerError] = useState("");
   // Bumped by Reconnect: a new iframe key loads the desktop again.
   const [reload, setReload] = useState(0);
@@ -120,11 +122,12 @@ export default function VMPage(props: { name: string; active: boolean }) {
     let timer = 0;
     async function load() {
       try {
-        const answer = await api<{ desktop: string }>(`/api/vms/${encodeURIComponent(name)}/viewer`);
+        const answer = await api<{ desktop: string | null; terminal: string | null }>(`/api/vms/${encodeURIComponent(name)}/viewer`);
         if (stopped) {
           return;
         }
-        setDesktopUrl(answer.desktop);
+        setDesktopUrl(answer.desktop ?? answer.terminal);
+        setTerminalOnly(answer.desktop === null);
         setViewerError("");
       } catch (err) {
         if (stopped) {
@@ -299,12 +302,12 @@ export default function VMPage(props: { name: string; active: boolean }) {
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
         <Monitor className="size-4 text-muted-foreground" />
         <h1 className="font-semibold">{vm.name}</h1>
-        <Badge variant="outline" className="gap-1.5" title={error ?? undefined}>
+        <Badge variant="secondary" title={error ?? undefined}>
           <StatusDot tone={VM_TONE[vm.status]} />
           {STATUS_TEXT[vm.status] ?? vm.status}
         </Badge>
         <span className="text-muted-foreground">
-          {vm.cpus} CPUs · {vm.memory_gb} GB · {vm.disk_gb} GB disk · {imageName}
+          {imageName}
           {vm.forked_from !== "" && ` · forked from ${vm.forked_from}`}
           {vm.internet ? "" : " · no internet"}
         </span>
@@ -349,18 +352,20 @@ export default function VMPage(props: { name: string; active: boolean }) {
               <ResizablePanel defaultSize="76" minSize="30">
                 <div className="flex h-full flex-col">
                   <div className="flex h-7 shrink-0 items-center gap-1 border-b bg-muted/40 px-2 text-xs">
-                    <span className="font-medium text-muted-foreground">Desktop</span>
+                    <span className="font-medium text-muted-foreground">{terminalOnly ? "Terminal" : "Desktop"}</span>
                     {running && desktopUrl !== null && (
                       <div className="ml-auto flex items-center gap-0.5">
-                        <Button variant="ghost" size="xs" disabled={busy === "lock"} onClick={() => setLock(!locked)}>
-                          {locked ? <Unlock /> : <Lock />}
-                          {locked ? "Unlock" : "Lock"}
-                        </Button>
-                        <Button variant="ghost" size="xs" title="Connect to the desktop again" onClick={() => setReload(reload + 1)}>
+                        {!terminalOnly && (
+                          <Button variant="ghost" size="xs" disabled={busy === "lock"} onClick={() => setLock(!locked)}>
+                            {locked ? <Unlock /> : <Lock />}
+                            {locked ? "Unlock" : "Lock"}
+                          </Button>
+                        )}
+                        <Button variant="ghost" size="xs" title="Connect again" onClick={() => setReload(reload + 1)}>
                           <RotateCw /> Reconnect
                         </Button>
                         <Button variant="ghost" size="xs" asChild>
-                          <a href={desktopUrl} target="_blank" rel="noreferrer" title="Open the desktop in its own tab">
+                          <a href={desktopUrl} target="_blank" rel="noreferrer" title="Open it in its own tab">
                             <ExternalLink /> New tab
                           </a>
                         </Button>
@@ -373,7 +378,7 @@ export default function VMPage(props: { name: string; active: boolean }) {
                         key={`${desktopUrl}-${reload}`}
                         ref={frameRef}
                         src={desktopUrl}
-                        title={`Desktop of ${vm.name}`}
+                        title={terminalOnly ? `Terminal of ${vm.name}` : `Desktop of ${vm.name}`}
                         allow="clipboard-write"
                         className="absolute inset-0 size-full border-0 bg-black"
                       />
@@ -391,7 +396,7 @@ export default function VMPage(props: { name: string; active: boolean }) {
                       </div>
                     )}
 
-                    {running && desktopUrl !== null && locked && (
+                    {running && desktopUrl !== null && locked && !terminalOnly && (
                       <div className="absolute inset-0 cursor-not-allowed">
                         <div className="absolute top-2 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-md border bg-background py-1 pr-1 pl-2.5 whitespace-nowrap">
                           <Lock className="size-3.5 text-warn" />
@@ -406,7 +411,7 @@ export default function VMPage(props: { name: string; active: boolean }) {
                     {running && desktopUrl === null && (
                       <div className="flex h-full flex-col items-center justify-center gap-1 text-muted-foreground">
                         <span className="flex items-center gap-2">
-                          <Loader2 className="size-3.5 animate-spin" /> Connecting to the desktop…
+                          <Loader2 className="size-3.5 animate-spin" /> Connecting…
                         </span>
                         {viewerError !== "" && <span className="text-xs">{viewerError} Trying again.</span>}
                       </div>
@@ -653,8 +658,12 @@ export default function VMPage(props: { name: string; active: boolean }) {
                       <span className="ml-auto font-medium tabular-nums">{disk === null ? "–" : `${disk.toFixed(1)} GB`}</span>
                       <span className="text-xs text-muted-foreground">of {vm.disk_gb} GB</span>
                     </div>
-                    <div className="mt-1 h-1.5 rounded-full bg-primary/15">
-                      <div className="h-full rounded-full bg-primary" style={{ width: `${disk === null ? 0 : Math.min((disk / vm.disk_gb) * 100, 100)}%` }} />
+                    {/* Gray like the other meters, amber once the disk is 90% full (the VM starts failing when it fills). */}
+                    <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-muted">
+                      <div
+                        className={cn("h-full rounded-full", disk !== null && disk >= vm.disk_gb * 0.9 ? "bg-warn" : "bg-muted-foreground/70")}
+                        style={{ width: `${disk === null ? 0 : Math.min((disk / vm.disk_gb) * 100, 100)}%` }}
+                      />
                     </div>
                   </div>
 

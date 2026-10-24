@@ -1,4 +1,4 @@
-"""The VMs pages: create and delete VMs, power, settings, the desktop viewer, and each VM's queue.
+"""The VMs pages: create, rename and delete VMs, power, settings, the desktop viewer, and each VM's queue.
 
 Create, start, stop and restart run in background threads inside
 sandbox/vms.py and answer at once; the browser follows the state through
@@ -24,6 +24,7 @@ from sandbox.vms import VMsError
 load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 
 NOVNC_PORT = os.environ["SANDBOX_VM_NOVNC_PORT"]
+TERMINAL_PORT = os.environ["SANDBOX_VM_TERMINAL_PORT"]
 
 router = APIRouter(prefix="/api")
 
@@ -82,6 +83,22 @@ def fork_vm(name: str, body: ForkRequest) -> dict:
         record = vms.fork(name, body.name.strip())
     except VMsError as error:
         raise HTTPException(status_code=400, detail=str(error))
+    return vms.summary(record)
+
+
+class RenameRequest(BaseModel):
+    name: str
+
+
+@router.post("/vms/{name}/rename")
+async def rename_vm(name: str, body: RenameRequest) -> dict:
+    """Gives the VM another name, running or not. Agents aimed at it and the jobs on it follow."""
+    new_name = body.name.strip()
+    try:
+        record = await asyncio.to_thread(vms.rename, name, new_name)
+    except VMsError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    agents.rename_vm(name, new_name)
     return vms.summary(record)
 
 
@@ -170,7 +187,7 @@ def reset_traffic(name: str) -> dict:
 
 @router.get("/vms/{name}/viewer")
 def vm_viewer(name: str) -> dict:
-    """Where the browser finds the VM's desktop (noVNC).
+    """Where the browser finds the VM's desktop (noVNC), or its terminal (ttyd) when it has no desktop.
 
     The browser loads it straight from the VM's address on the Incus bridge,
     which only this machine can reach.
@@ -184,9 +201,12 @@ def vm_viewer(name: str) -> dict:
     address = record.vm.address()
     if address is None:
         raise HTTPException(status_code=409, detail="The VM has no address yet.")
+    # A terminal-only image: terminal 1, the same tmux session every time.
+    if not record.vm.has_desktop():
+        return {"desktop": None, "terminal": f"http://{address}:{TERMINAL_PORT}/?arg=1"}
     # bell=off: no ding in the browser each time the desktop beeps (e.g. while the agent types).
     desktop = f"http://{address}:{NOVNC_PORT}/vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=2000&bell=off"
-    return {"desktop": desktop}
+    return {"desktop": desktop, "terminal": None}
 
 
 @router.get("/vms/{name}/settings")

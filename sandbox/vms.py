@@ -1,4 +1,4 @@
-"""All VMs: create, delete, start, stop, their settings, and how much they use.
+"""All VMs: create, delete, rename, start, stop, their settings, and how much they use.
 
 A VM is a resource, not tied to a repo or an agent. Each one is an Incus VM named
 <SANDBOX_VM_PREFIX><name> (e.g. sandbox-vm1) plus a record on disk:
@@ -26,6 +26,9 @@ adds up what they counted into totals that survive restarts, until the user rese
     "traffic": {"down", "up" (bytes since "since"), "since", "boot_id", "last_down", "last_up"}
 
 boot_id and last_* are the VM's counters at the last read, so a backend restart doesn't count anything twice.
+
+A rename (VMs.rename) only changes the record: the Incus VM keeps the name it was made with, so a running VM
+can be renamed too. A new VM whose Incus name is still taken that way gets a number after it (sandbox-vm1-2).
 
 Incus is the truth: an Incus VM with the prefix but no record (e.g. data/ was deleted) gets a
 new record, so it shows up and can be used or deleted. It is looked for at start and every
@@ -623,7 +626,7 @@ class VMs:
 
         One thread per VM, so a slow VM never holds up the others.
         """
-        while self.records.get(record.name) is record:
+        while not record.deleted:
             try:
                 usage = record.read_usage()
                 changed = usage != record.usage
@@ -710,10 +713,16 @@ class VMs:
                     f"Not enough free memory: {max(free_gb, 0):.1f}GB free, the VM needs {memory_gb}GB "
                     f"and {MIN_FREE_RAM_GB}GB must stay free"
                 )
+            # A renamed VM keeps its Incus name, so this one may be taken.
+            incus_name = VM_PREFIX + name
+            number = 2
+            while any(other.incus_name == incus_name for other in self.records.values()):
+                incus_name = f"{VM_PREFIX}{name}-{number}"
+                number += 1
             record = VMRecord(
                 {
                     "name": name,
-                    "incus_name": VM_PREFIX + name,
+                    "incus_name": incus_name,
                     "image": image,
                     "image_fingerprint": "",
                     "cpus": cpus,
@@ -759,10 +768,16 @@ class VMs:
             # Held until the copy is made, so nobody starts the source meanwhile (fork_from releases it).
             if not source.lock.acquire(blocking=False):
                 raise VMsError(f"{source_name} is busy")
+            # A renamed VM keeps its Incus name, so this one may be taken.
+            incus_name = VM_PREFIX + name
+            number = 2
+            while any(other.incus_name == incus_name for other in self.records.values()):
+                incus_name = f"{VM_PREFIX}{name}-{number}"
+                number += 1
             record = VMRecord(
                 {
                     "name": name,
-                    "incus_name": VM_PREFIX + name,
+                    "incus_name": incus_name,
                     "image": source.image,
                     "image_fingerprint": source.image_fingerprint,
                     "cpus": source.cpus,
@@ -805,6 +820,39 @@ class VMs:
         if record.lock.locked():
             raise VMsError(f"{name} is busy")
         threading.Thread(target=record.restart, daemon=True).start()
+
+    def rename(self, name: str, new_name: str) -> VMRecord:
+        """Give a VM another name, running or not. Only the record changes; the Incus VM keeps its name.
+        VMs forked from it name the new one as their source. Agents and jobs are not changed here."""
+        if not re.fullmatch(NAME_PATTERN, new_name):
+            raise VMsError("The name must start with a letter and have only a-z, 0-9 and -, at most 31 characters")
+        record = self.get(name)
+        if new_name == name:
+            return record
+        if not record.lock.acquire(blocking=False):
+            raise VMsError(f"{name} is busy")
+        try:
+            # Both locks: no save writes the old file meanwhile, and nobody finds the VM under neither name.
+            with record.save_lock:
+                with self.lock:
+                    if new_name in self.records:
+                        raise VMsError(f"There is already a VM named {new_name}")
+                    del self.records[name]
+                    record.name = new_name
+                    self.records[new_name] = record
+                # Write, then rename: a crash never leaves half a record.
+                temporary = VMS_DIR / f"{new_name}.json.tmp"
+                temporary.write_text(json.dumps(record.to_dict(), indent=2))
+                temporary.replace(VMS_DIR / f"{new_name}.json")
+                (VMS_DIR / f"{name}.json").unlink(missing_ok=True)
+        finally:
+            record.lock.release()
+        for other in self.list():
+            if other.forked_from == name:
+                other.forked_from = new_name
+                other.save()
+        self.changed()
+        return record
 
     def delete(self, name: str) -> None:
         """Delete the Incus VM and its record. Agents holding or waiting for it are not told here."""

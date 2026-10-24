@@ -1,5 +1,5 @@
 /*
-The Settings tab of a VM page: CPU and memory, internet, autostart, env vars, its image, and Delete.
+The Settings tab of a VM page: its name, CPU and memory, internet, autostart, env vars, its image, and Delete.
 
 Most of it reads the live "vms" topic, so a change shows up as soon as the backend has made it.
 The env values are the one thing the live feed leaves out (it only carries the names, so agents and
@@ -7,6 +7,7 @@ other views never see secrets): they come from GET /api/vms/{name}/settings, fet
 the names change (an agent can add or remove empty ones) unless you have unsaved edits.
 
 CPU and memory only change while the VM is stopped; Incus applies them on the next start.
+Rename works running or not; the page moves to the new name (#/vms/<new name>).
 */
 
 import { Eye, EyeOff, Loader2, Plus, Save, Trash2, X } from "lucide-react";
@@ -39,10 +40,11 @@ export default function VMSettings(props: { name: string }) {
   // "" = not touched, so the select follows the live value.
   const [cpus, setCpus] = useState("");
   const [memory, setMemory] = useState("");
+  const [newName, setNewName] = useState(props.name);
   const [rows, setRows] = useState<EnvRow[]>([]);
   const [envLoaded, setEnvLoaded] = useState(false);
   const [envEdited, setEnvEdited] = useState(false);
-  // Which change is on its way: "resources", "internet", "autostart", "env" or "delete".
+  // Which change is on its way: "rename", "resources", "internet", "autostart", "env" or "delete".
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -94,6 +96,19 @@ export default function VMSettings(props: { name: string }) {
   const memoryChoices = options === null ? [vm.memory_gb] : options.memory_gb;
 
   // Each change below: the live feed shows the result, so only errors need handling here.
+  async function rename() {
+    setBusy("rename");
+    setError("");
+    try {
+      await api(`/api/vms/${encodeURIComponent(vmName)}/rename`, { method: "POST", body: { name: newName.trim() } });
+      toast.success(`Renamed ${vmName} to ${newName.trim()}`);
+      window.location.hash = `#/vms/${encodeURIComponent(newName.trim())}`;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+    setBusy("");
+  }
+
   async function applyResources() {
     setBusy("resources");
     setError("");
@@ -170,6 +185,30 @@ export default function VMSettings(props: { name: string }) {
     <div className="h-full overflow-auto">
       <div className="max-w-2xl space-y-5 p-4">
         {error !== "" && <p className="border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-destructive">{error}</p>}
+
+        <section>
+          <h2 className="mb-1.5 border-b pb-1 font-semibold">Name</h2>
+          <div className="flex items-center gap-2">
+            <Input
+              className="w-56"
+              spellCheck={false}
+              value={newName}
+              onChange={(event) => setNewName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && newName.trim() !== "" && newName.trim() !== vmName && busy === "") {
+                  rename();
+                }
+              }}
+            />
+            <Button size="sm" onClick={rename} disabled={newName.trim() === "" || newName.trim() === vmName || busy !== ""}>
+              {busy === "rename" && <Loader2 className="animate-spin" />}
+              Rename
+            </Button>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Works while it runs. Agents aimed at it and its jobs follow the new name. a-z, 0-9 and -, starting with a letter.
+          </p>
+        </section>
 
         <section>
           <h2 className="mb-1.5 border-b pb-1 font-semibold">Resources</h2>

@@ -196,6 +196,14 @@ class Jobs:
             self.save(job)
             return copy.deepcopy(job)
 
+    def rename_vm(self, name: str, new_name: str) -> None:
+        """A VM got another name: its jobs (done ones too) say the new one. updated_at stays: nothing happened to the jobs."""
+        with self.lock:
+            for job in self.jobs.values():
+                if job["vm"] == name:
+                    job["vm"] = new_name
+                    self.save(job)
+
     def add_evidence(self, job_id: str, item: dict) -> bool:
         """Add one evidence item to a job. Returns True when it replaced one with the same topic and stage.
 

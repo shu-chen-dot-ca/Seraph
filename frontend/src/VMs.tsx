@@ -3,7 +3,8 @@ The VMs overview: one row per VM with its state, CPU and memory use, who holds i
 
 Everything comes from the live "vms" topic (the backend samples usage about once a second), so the
 numbers move on their own. A row opens that VM's page; the holder links to its agent.
-New VM opens NewVMDialog. The Images tab (#/vms?tab=images) manages the images VMs start from (Images.tsx).
+New VM opens NewVMDialog. The Images tab (#/vms?tab=images) manages the images VMs start from (Images.tsx),
+which puts its own buttons in this same header row, right of the tabs.
 */
 
 import { Monitor, Plus } from "lucide-react";
@@ -41,10 +42,8 @@ export default function VMs(props: { tab: "vms" | "images" }) {
     window.location.hash = value === "images" ? "#/vms?tab=images" : "#/vms";
   }
 
-  const header = (
-    <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-      <h1 className="font-semibold">VMs</h1>
-      <Tabs value={props.tab} onValueChange={setTab} className="ml-2">
+  const tabs = (
+    <Tabs value={props.tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="vms" className="px-2.5">
             VMs
@@ -56,6 +55,11 @@ export default function VMs(props: { tab: "vms" | "images" }) {
           </TabsTrigger>
         </TabsList>
       </Tabs>
+  );
+
+  const header = (
+    <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+      {tabs}
       {props.tab === "vms" && (
         <>
           <span className="text-muted-foreground tabular-nums">
@@ -70,14 +74,7 @@ export default function VMs(props: { tab: "vms" | "images" }) {
   );
 
   if (props.tab === "images") {
-    return (
-      <div className="flex h-full flex-col">
-        {header}
-        <div className="min-h-0 flex-1">
-          <Images />
-        </div>
-      </div>
-    );
+    return <Images tabs={tabs} />;
   }
 
   return (
