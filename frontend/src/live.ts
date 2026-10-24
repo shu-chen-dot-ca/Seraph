@@ -2,7 +2,7 @@
 Live data from the backend, and the one fetch helper.
 
 One websocket to /api/live. On connect the server sends every topic, then only the topics that changed:
-{"topic": "repos" | "issues" | "tracked" | "jobs" | "inbox" | "agents" | "vms" | "images", "data": ...}.
+{"topic": "repos" | "issues" | "tracked" | "explore" | "github" | "jobs" | "inbox" | "agents" | "vms" | "images", "data": ...}.
 Each message replaces that topic in the store, and components read it with useLive(topic), so the page never
 polls and never re-fetches lists. When the socket drops it reconnects after a second, and the server sends
 everything again.
@@ -21,8 +21,118 @@ export type RepoItem = {
   default_branch: string;
   html_url: string;
   note: string;
-  added_by: string; // "user" or an agent id
+  added_by: string; // "user", "explore" or an agent id
   added_at: string;
+  lane?: string; // repos Explore found: the profile lane it was found for ("prestige", "ai", ...)
+  fit?: number; // repos Explore found: how well Claude thinks it fits the profile, 0..1
+};
+
+// What a repo's contribution files say about AI (github_searcher/repo_signals.py).
+export type AIPolicyTag = "welcome" | "disclose" | "no_ai" | "unclear" | "none";
+
+export type AIPolicy = {
+  tag: AIPolicyTag;
+  quote: string; // the sentence that decides it ("" for unclear and none)
+  file: string;
+  basis: string;
+};
+
+export type BeginnerIssue = {
+  number: number;
+  title: string;
+  created_at: string;
+  labels: string[];
+  assignees: number;
+  cross_references: number; // a PR or issue that mentions it: above 0 usually means someone is on it
+};
+
+// How a repo treats outside contributors, from GitHub (github_searcher/repo_signals.py). Over outside contributors'
+// PRs opened in the last 90 days; null when there are too few to tell.
+export type RepoSignals = {
+  fetched_at: string;
+  stars: number;
+  description: string;
+  topics: string[];
+  language: string | null;
+  archived: boolean;
+  fork: boolean;
+  pushed_at: string;
+  outside_prs_90d: number;
+  outside_merged_90d: number;
+  outside_closed_90d: number;
+  outside_merge_rate: number | null; // merged / (merged + closed unmerged)
+  median_days_to_first_reply: number | null;
+  median_days_to_merge: number | null;
+  stale_outside_prs: number; // open over 30 days, nobody answered
+  active_mergers_30d: number; // people who merged a PR in 30 days: the page calls them maintainers
+  active_contributors?: number; // people who opened a PR in the window; missing until the next fetch
+  commits_30d: number;
+  beginner_issues: BeginnerIssue[];
+  unclaimed_beginner_issues: number;
+  pr_window_days?: number; // how many days the 100 newest PRs reach back (at most 90)
+  // Missing on signals fetched before these were counted (until their next daily fetch).
+  newcomers?: Newcomers;
+  activity?: RepoActivity;
+  community?: Community;
+  atmosphere?: Atmosphere | null; // null until Claude first read the reviews
+  ai_policy: AIPolicy;
+};
+
+export type NewcomerTag = "welcomes" | "ok" | "wait" | "few";
+
+// Outside authors who never opened a PR in the repo before the window, and how their first PRs went.
+export type Newcomers = {
+  prs: number;
+  merged: number;
+  closed: number;
+  merge_rate: number | null;
+  median_days_to_first_reply: number | null;
+  returned: number; // opened a second PR
+  authors_checked: number;
+  tag: NewcomerTag;
+};
+
+// Monthly averages over 90 days, and the last 30 days as they are.
+export type RepoActivity = {
+  prs_opened_month: number;
+  prs_merged_month: number;
+  issues_opened_month: number;
+  issues_closed_month: number;
+  commits_month: number;
+  prs_opened_30d: number;
+  prs_merged_30d: number;
+  issues_opened_30d: number;
+  issues_closed_30d: number;
+  trend: "up" | "down" | "flat";
+  last_release: string | null;
+  last_release_at: string | null;
+  issue_reply_rate: number | null; // share of outsiders' new issues a maintainer answered within a week
+  issues_checked: number;
+};
+
+export type Community = {
+  contributing: boolean;
+  code_of_conduct: boolean;
+  discussions: boolean;
+  channels: string[]; // "Discord", "Slack", ...
+};
+
+export type Tone = "warm" | "neutral" | "strict" | "curt" | "unknown";
+
+// How maintainers' feedback on outside PRs feels, read by Claude at most once a week.
+export type Atmosphere = {
+  tone: Tone;
+  summary: string;
+  asks_for: string[];
+  prs: number;
+  judged_at: string;
+};
+
+// A repo in the Repos list, with what the live feed merges in.
+export type ListedRepo = RepoItem & {
+  signals: RepoSignals | null; // null until fetched (within seconds of being added)
+  score: number | null; // 0..100
+  rejected_before: number; // how many times the user rejected it before
 };
 
 export type IssueItem = {
@@ -38,6 +148,14 @@ export type IssueItem = {
   added_by: string;
   added_at: string;
   facts?: IssueFacts | null; // Merged in by the live feed; null until fetched from GitHub.
+  difficulty?: IssueDifficulty | null; // Merged in by the live feed; null until Claude judged it.
+};
+
+// How hard an issue is, like LeetCode's levels (github_searcher/issue_difficulty.py).
+export type IssueDifficulty = {
+  level: "easy" | "medium" | "hard";
+  reason: string;
+  judged_at: string;
 };
 
 // What GitHub says about an issue right now (github_searcher/issue_facts.py).
@@ -73,14 +191,13 @@ export type TrackedIssue = {
   labels: string[];
   comments: number;
   assignees: number;
-  good_first: boolean; // has a good-first-issue kind of label
+  good_first: boolean; // has a good-first-issue or help-wanted kind of label
 };
 
-// A tracked repo's latest check. An issue is new when it was opened after seen_at.
+// A tracked repo's latest check. An issue is new for three days after it was opened.
 export type TrackedCheck = {
   checked_at: string;
   error: string | null; // why the last check failed (the issues are from the check before)
-  seen_at: string;
   stars: number | null;
   description: string;
   issues: TrackedIssue[]; // newest first
@@ -88,6 +205,91 @@ export type TrackedCheck = {
 
 // A repo in the Tracked list, with its latest check merged in by the live feed (null until the first one).
 export type TrackedRepo = RepoItem & { check: TrackedCheck | null };
+
+// Explore (github_searcher/explore.py): the profile it searches with, the current or last run, and rejected repos.
+export type ExploreLane = {
+  id: string;
+  label: string;
+  about: string; // what the lane is for, given to Claude when it judges fit
+  share: number; // 0..100: the part of the finds that should come from this lane
+  seeds: string[]; // owner/name, looked at first
+  queries: string[]; // GitHub repo searches
+};
+
+// The user writes about, and each type of repo (a lane's label and about); Claude plans each one's seeds and
+// searches when the profile is saved. The types are the tags that classify repos (a repo's "lane").
+export type ExploreProfile = {
+  about: string;
+  lanes: ExploreLane[];
+};
+
+// A repo Explore found, waiting for the user to approve it into Repos or reject it. Kept across runs.
+export type ExploreFound = {
+  name: string;
+  lane: string;
+  description: string;
+  stars: number;
+  default_branch: string;
+  html_url: string;
+  fit: number;
+  score: number | null;
+  ai_policy: AIPolicyTag;
+  newcomers: NewcomerTag;
+  tone: Tone | null;
+  atmosphere: string; // its one-sentence summary
+  prs_month: number;
+  issues_month: number;
+  commits_month: number;
+  trend: "up" | "down" | "flat";
+  note: string;
+  found_at: string;
+  // From its signals: who opened PRs lately, who merged PRs in 30 days, outside PRs over 30 days nobody answered.
+  // Null when not counted (found before these were).
+  contributors: number | null;
+  maintainers: number | null;
+  unanswered: number | null;
+};
+
+export type ExploreRun = {
+  status: "running" | "done" | "stopped" | "failed";
+  started_at: string;
+  ended_at: string | null;
+  end_reason: string;
+  count: number | null;
+  minutes: number | null;
+  workers: number;
+  found: number;
+  looked_at: number;
+  lanes: Record<string, { label: string; share: number; found: number; in_flight: number; exhausted: boolean }>;
+  checking: { name: string; lane: string; since: string }[];
+  skipped: Record<string, number>; // why → how many
+  errors: { name: string; error: string; at: string }[];
+};
+
+export type Rejection = {
+  name: string;
+  until: string; // blocked until then
+  history: { at: string }[];
+};
+
+export type ExploreData = {
+  profile: ExploreProfile;
+  run: ExploreRun | null;
+  found: ExploreFound[]; // waiting for a decision, oldest first
+  rejections: Rejection[];
+};
+
+// GitHub's rate limits (github_searcher/token_balancer.py), per kind of request and token. remaining and limit are
+// null until known; a quota whose reset_at has passed is full again. Times are ISO.
+export type GithubKind = "core" | "graphql" | "search" | "code_search";
+
+export type GithubStatus = Record<
+  GithubKind,
+  {
+    waiting: number;
+    tokens: { name: string; remaining: number | null; limit: number | null; reset_at: string | null; paused_until: string | null; running: number }[];
+  }
+>;
 
 export type ListData<T> = {
   items: T[];
@@ -295,23 +497,43 @@ export type Image = {
   name: string;
   aliases: string[];
   fingerprint: string;
-  description: string;
   size_gb: number;
   created_at: string;
   default: boolean;
-  used_by: string[]; // names of the VMs made from this exact image
+  used_by: string[]; // names of the VMs made from this exact image, stopped ones too
   inventory: InventoryHighlights | null; // null until it is inspected
   inspecting: boolean; // a build, save or inspect of it is running
+  spec_changed: boolean; // its description changed since it was built (by its agent): a rebuild applies it
 };
 
-// A build (sandbox/image/build.sh, about an hour) or a VM being saved as an image (minutes).
+// What New image offers (GET /api/images/new/options): system ids and labels, desktops (the first is the default,
+// the last is "None (terminal only)"), the dependencies that go in every new image, and the system picked first.
+export type NewImageOptions = {
+  systems: { id: string; label: string }[];
+  desktops: string[];
+  packages: string[];
+  system: string;
+};
+
+// The chat with an image's agent (sandbox/image_agent.py), from GET /api/images/<name>/agent.
+export type ImageAgentEntry =
+  | { type: "user"; text: string; time: string }
+  | { type: "text"; text: string }
+  | { type: "system"; text: string; time: string }
+  | { type: "tool"; id: string; name: string; summary: string }
+  | { type: "tool_result"; id: string; text: string; is_error: boolean }
+  | { type: "turn_end"; stopped: boolean; cost_usd: number; time: string };
+
+export type ImageAgentChat = { history: ImageAgentEntry[]; busy: boolean; cost_usd: number };
+
+// An image the agent makes (New image, Rebuild), a VM being saved as an image (minutes), or an inspect.
 // Tasks that worked disappear once their image is listed; failed ones stay until dismissed.
 export type ImageTask = {
   id: string;
-  kind: "build" | "save" | "inspect";
+  kind: "agent" | "save" | "inspect";
   name: string;
-  vm: string | null;
-  description: string;
+  vm: string | null; // the VM being saved
+  builder?: string; // the agent's builder VM
   status: "running" | "failed";
   error: string | null;
   started_at: string;
@@ -322,7 +544,6 @@ export type ImagesData = {
   images: Image[];
   default: string;
   tasks: ImageTask[];
-  old_builds: { fingerprint: string; name: string; created_at: string }[]; // inspected images that are gone, to compare with
 };
 
 // ---- One-off responses (fetched with api(), not live) ----
@@ -387,9 +608,11 @@ export type Thread = {
 // ---- The live store ----
 
 export type Topics = {
-  repos: ListData<RepoItem>;
+  repos: ListData<ListedRepo>;
   issues: ListData<IssueItem>;
   tracked: ListData<TrackedRepo>;
+  explore: ExploreData;
+  github: GithubStatus | null;
   jobs: Job[];
   inbox: Draft[];
   agents: AgentSummary[];
@@ -404,11 +627,13 @@ const store = {
     repos: { items: [], can_undo: false, can_redo: false },
     issues: { items: [], can_undo: false, can_redo: false },
     tracked: { items: [], can_undo: false, can_redo: false },
+    explore: { profile: { about: "", lanes: [] }, run: null, found: [], rejections: [] },
+    github: null,
     jobs: [],
     inbox: [],
     agents: [],
     vms: [],
-    images: { images: [], default: "", tasks: [], old_builds: [] },
+    images: { images: [], default: "", tasks: [] },
   } as Topics,
   loaded: {} as Partial<Record<keyof Topics, boolean>>,
   connected: false,

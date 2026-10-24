@@ -1,7 +1,16 @@
 /* Tailwind v4 + shadcn's zinc theme, tuned to look dense and flat like Proxmox.
-   Dark is the default: <html class="dark"> (set in index.html, toggled in the header).
+   Dark is the default: <html class="dark"> (set in index.html, changed in the sidebar's Settings).
    Text is 13px Inter; code, diffs and terminal text use JetBrains Mono.
-   One blue accent (--primary). Status colors: --ok green, --warn amber, --idle gray, --destructive red. */
+   One accent (--primary), blue unless another is picked in Settings (the data-accent rules below). Status colors: --ok green, --warn amber, --idle gray, --destructive red.
+
+   Where color goes:
+   - The accent marks what you can act on and where you are: the main button, links, the selected row, the focus ring,
+     an active filter or sort, the step a job is on. Never data or decoration (tags, meters, folder icons, quote bars).
+   - Status colors carry meaning only: good (ok), needs a look (warn), bad (destructive). Everything normal stays gray.
+     Tags use them as soft fills (Badge variants ok / warn / bad; secondary for the rest), not bright outlines.
+   - Meters (rate limits, context used) are gray while fine, and turn amber or red only near the limit.
+   - Text reads at 4.5:1 or more on its background, also on the soft tag fills and on a selected row: that is why light
+     mode's --muted-foreground, --ok, --warn and --destructive are darker than shadcn's. Status dots reach 3:1. */
 
 @import "tailwindcss";
 @import "tw-animate-css";
@@ -25,10 +34,10 @@
   --secondary: oklch(0.967 0.001 286.375);
   --secondary-foreground: oklch(0.21 0.006 285.885);
   --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.552 0.016 285.938);
+  --muted-foreground: oklch(0.5 0.016 285.938);
   --accent: oklch(0.955 0.002 286.375);
   --accent-foreground: oklch(0.21 0.006 285.885);
-  --destructive: oklch(0.577 0.245 27.325);
+  --destructive: oklch(0.53 0.22 27.4);
   --border: oklch(0.92 0.004 286.32);
   --input: oklch(0.87 0.006 286.286);
   --ring: oklch(0.546 0.245 262.881);
@@ -36,9 +45,9 @@
   --sidebar-foreground: oklch(0.141 0.005 285.823);
   --sidebar-accent: oklch(0.94 0.004 286.32);
   --sidebar-border: oklch(0.92 0.004 286.32);
-  --ok: oklch(0.627 0.17 149.214);
-  --warn: oklch(0.705 0.16 70.08);
-  --idle: oklch(0.705 0.015 286.067);
+  --ok: oklch(0.5 0.14 150);
+  --warn: oklch(0.52 0.12 70);
+  --idle: oklch(0.6 0.015 286.067);
   --selected: oklch(0.546 0.245 262.881 / 12%);
 }
 
@@ -68,8 +77,135 @@
   --sidebar-border: oklch(1 0 0 / 10%);
   --ok: oklch(0.723 0.19 149.579);
   --warn: oklch(0.769 0.165 70.08);
-  --idle: oklch(0.552 0.016 285.938);
+  --idle: oklch(0.6 0.016 285.938);
   --selected: oklch(0.623 0.214 259.815 / 18%);
+}
+
+/* Accent colors, picked in Settings: <html data-accent="violet"> (set in index.html, changed by SettingsDialog).
+   Only the primary color changes; status colors stay. Each accent has the same weight as the default blue:
+   light mode around L 0.55 so white text on a button reads (4.5:1+), dark mode a step lighter and a bit less
+   saturated so it doesn't glow on the dark background. Orange, green and teal are light in dark mode, so their
+   button text turns dark there.
+   A swatch can carry data-accent too (the ".dark [data-accent]" rules), so it shows that accent in the current mode. */
+[data-accent="blue"] {
+  --primary: oklch(0.546 0.245 262.881);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.546 0.245 262.881);
+  --selected: oklch(0.546 0.245 262.881 / 12%);
+}
+
+.dark[data-accent="blue"],
+.dark [data-accent="blue"] {
+  --primary: oklch(0.623 0.214 259.815);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.623 0.214 259.815);
+  --selected: oklch(0.623 0.214 259.815 / 18%);
+}
+
+[data-accent="indigo"] {
+  --primary: oklch(0.52 0.2 277);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.52 0.2 277);
+  --selected: oklch(0.52 0.2 277 / 12%);
+}
+
+.dark[data-accent="indigo"],
+.dark [data-accent="indigo"] {
+  --primary: oklch(0.62 0.17 277);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.62 0.17 277);
+  --selected: oklch(0.62 0.17 277 / 18%);
+}
+
+[data-accent="violet"] {
+  --primary: oklch(0.54 0.2 295);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.54 0.2 295);
+  --selected: oklch(0.54 0.2 295 / 12%);
+}
+
+.dark[data-accent="violet"],
+.dark [data-accent="violet"] {
+  --primary: oklch(0.64 0.18 295);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.64 0.18 295);
+  --selected: oklch(0.64 0.18 295 / 18%);
+}
+
+[data-accent="pink"] {
+  --primary: oklch(0.56 0.19 354);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.56 0.19 354);
+  --selected: oklch(0.56 0.19 354 / 12%);
+}
+
+.dark[data-accent="pink"],
+.dark [data-accent="pink"] {
+  --primary: oklch(0.66 0.18 354);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.66 0.18 354);
+  --selected: oklch(0.66 0.18 354 / 18%);
+}
+
+[data-accent="orange"] {
+  --primary: oklch(0.58 0.16 45);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.58 0.16 45);
+  --selected: oklch(0.58 0.16 45 / 12%);
+}
+
+.dark[data-accent="orange"],
+.dark [data-accent="orange"] {
+  --primary: oklch(0.72 0.16 52);
+  --primary-foreground: oklch(0.141 0.005 285.823);
+  --ring: oklch(0.72 0.16 52);
+  --selected: oklch(0.72 0.16 52 / 16%);
+}
+
+[data-accent="green"] {
+  --primary: oklch(0.54 0.13 152);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.54 0.13 152);
+  --selected: oklch(0.54 0.13 152 / 12%);
+}
+
+.dark[data-accent="green"],
+.dark [data-accent="green"] {
+  --primary: oklch(0.7 0.15 152);
+  --primary-foreground: oklch(0.141 0.005 285.823);
+  --ring: oklch(0.7 0.15 152);
+  --selected: oklch(0.7 0.15 152 / 16%);
+}
+
+[data-accent="teal"] {
+  --primary: oklch(0.54 0.09 186);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.54 0.09 186);
+  --selected: oklch(0.54 0.09 186 / 12%);
+}
+
+.dark[data-accent="teal"],
+.dark [data-accent="teal"] {
+  --primary: oklch(0.72 0.11 186);
+  --primary-foreground: oklch(0.141 0.005 285.823);
+  --ring: oklch(0.72 0.11 186);
+  --selected: oklch(0.72 0.11 186 / 16%);
+}
+
+/* Graphite: no color at all, like shadcn's neutral. Buttons are near-black in light mode, near-white in dark. */
+[data-accent="graphite"] {
+  --primary: oklch(0.21 0.006 285.885);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.705 0.015 286.067);
+  --selected: oklch(0.21 0.006 285.885 / 8%);
+}
+
+.dark[data-accent="graphite"],
+.dark [data-accent="graphite"] {
+  --primary: oklch(0.92 0.004 286.32);
+  --primary-foreground: oklch(0.21 0.006 285.885);
+  --ring: oklch(0.552 0.016 285.938);
+  --selected: oklch(1 0 0 / 10%);
 }
 
 @theme inline {
@@ -134,6 +270,11 @@
   /* Thin scrollbars, so dense panels don't lose 15px to each one. */
   * {
     scrollbar-width: thin;
+  }
+
+  /* Selected text takes a light wash of the accent, like the selected row. */
+  ::selection {
+    background-color: color-mix(in oklab, var(--primary) 30%, transparent);
   }
 }
 

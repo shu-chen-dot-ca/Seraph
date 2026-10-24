@@ -24,6 +24,11 @@ So for every request this:
 Requests run in threads (the agents' tools use asyncio.to_thread, FastAPI runs plain endpoints
 in threads), so waiting here only holds up that one request.
 
+status() is what the Explore page shows as bars: per kind and token, what is left of the quota and when it
+fills up again, pauses, running and waiting requests. version goes up whenever any of that changes, so the
+live feed knows when to send it. prime() asks GitHub for every quota once (/rate_limit costs nothing), so
+the bars are right before the first request of a kind.
+
     response = BALANCER.request("GET", "https://api.github.com/search/issues", params={"q": q})
 
     python -m github_searcher.token_balancer     # each token's account and what is left of its quotas
@@ -70,12 +75,15 @@ class TokenBalancer:
             kinds = {}
             for kind in RUNNING:
                 # remaining None: not known yet. Times are time.monotonic().
-                kinds[kind] = {"running": 0, "next_at": 0.0, "paused_until": 0.0, "remaining": None, "reset_at": 0.0}
+                kinds[kind] = {"running": 0, "next_at": 0.0, "paused_until": 0.0, "remaining": None, "limit": None, "reset_at": 0.0}
             self.tokens.append({"name": name, "value": value, "kinds": kinds})
         if not self.tokens:
             raise KeyError("GITHUB_TOKEN is not set in .env")
         # Guards every token's counters. Waiting requests are woken when one ends.
         self.condition = threading.Condition()
+        # Requests of each kind waiting for a token right now.
+        self.waiting = {kind: 0 for kind in RUNNING}
+        self.version = 0
 
     def slots(self, kind: str) -> int:
         """How many requests of this kind can run at once over all tokens."""
@@ -119,6 +127,8 @@ class TokenBalancer:
         (time.time()) the first one is, for the error message.
         """
         with self.condition:
+            self.waiting[kind] += 1
+            self.version += 1
             while True:
                 now = time.monotonic()
                 best = None
@@ -149,8 +159,12 @@ class TokenBalancer:
                     state = best["kinds"][kind]
                     state["running"] += 1
                     state["next_at"] = now + GAP[kind]
+                    self.waiting[kind] -= 1
+                    self.version += 1
                     return best
                 if not busy and soonest > deadline:
+                    self.waiting[kind] -= 1
+                    self.version += 1
                     return time.time() + (soonest - now)
                 # Woken early when a request ends; otherwise when the first gap or pause is over.
                 wait = 1.0 if soonest is None else min(soonest - now, 1.0)
@@ -161,15 +175,19 @@ class TokenBalancer:
         with self.condition:
             state = token["kinds"][kind]
             state["running"] -= 1
+            self.version += 1
             self.condition.notify_all()
             if response is None:
                 return False
 
             now = time.monotonic()
             remaining = response.headers.get("x-ratelimit-remaining", "")
+            limit = response.headers.get("x-ratelimit-limit", "")
             reset = response.headers.get("x-ratelimit-reset", "")
             if remaining.isdigit():
                 state["remaining"] = int(remaining)
+            if limit.isdigit():
+                state["limit"] = int(limit)
             if reset.isdigit():
                 state["reset_at"] = now + max(0, int(reset) - time.time())
 
@@ -190,6 +208,62 @@ class TokenBalancer:
             else:
                 state["paused_until"] = now + PAUSE
             return True
+
+    def prime(self) -> None:
+        """Ask GitHub what is left of every quota of every token. /rate_limit costs no quota. Blocking."""
+        for token in self.tokens:
+            headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {token['value']}"}
+            try:
+                response = httpx.get("https://api.github.com/rate_limit", headers=headers, timeout=30)
+                resources = response.json()["resources"]
+            except Exception:
+                # A token that doesn't work, or GitHub down: its bars fill in with its first requests.
+                continue
+            with self.condition:
+                now = time.monotonic()
+                for kind in RUNNING:
+                    if kind not in resources:
+                        continue
+                    state = token["kinds"][kind]
+                    state["remaining"] = resources[kind]["remaining"]
+                    state["limit"] = resources[kind]["limit"]
+                    state["reset_at"] = now + max(0, resources[kind]["reset"] - time.time())
+                self.version += 1
+
+    def status(self) -> dict:
+        """Per kind: waiting requests, and per token (by its .env name, never its value) what is left, its limit,
+        when the quota fills up again and until when it is paused (wall-clock ISO times, None when not so).
+        A quota whose reset time has passed is shown full: GitHub has filled it, it just wasn't used since.
+        """
+        result = {}
+        with self.condition:
+            now = time.monotonic()
+            wall = time.time()
+            for kind in RUNNING:
+                tokens = []
+                for token in self.tokens:
+                    state = token["kinds"][kind]
+                    remaining = state["remaining"]
+                    reset_at = None
+                    if state["reset_at"] > now:
+                        reset_at = datetime.fromtimestamp(wall + state["reset_at"] - now).astimezone().isoformat()
+                    elif state["limit"] is not None:
+                        remaining = state["limit"]
+                    paused_until = None
+                    if state["paused_until"] > now:
+                        paused_until = datetime.fromtimestamp(wall + state["paused_until"] - now).astimezone().isoformat()
+                    tokens.append(
+                        {
+                            "name": token["name"],
+                            "remaining": remaining,
+                            "limit": state["limit"],
+                            "reset_at": reset_at,
+                            "paused_until": paused_until,
+                            "running": state["running"],
+                        }
+                    )
+                result[kind] = {"waiting": self.waiting[kind], "tokens": tokens}
+        return result
 
 
 BALANCER = TokenBalancer()

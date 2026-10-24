@@ -28,8 +28,9 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
-from backend import agents_api, images_api, inbox_api, issues_api, repos_api, tracked_api, vms_api
-from backend.shared import agents, images, inbox, issue_facts, issues, jobs, repos, tracked, tracked_issues, vms
+from backend import agents_api, explore_api, images_api, inbox_api, issues_api, repos_api, tracked_api, vms_api
+from backend.shared import agents, explore, images, inbox, issue_difficulty, issue_facts, issues, jobs, rejections, repo_signals, repos, tracked, tracked_issues, vms
+from github_searcher.token_balancer import BALANCER
 
 # override: the backend reloads itself on code changes, and .env changes should apply then too.
 load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
@@ -41,11 +42,18 @@ LOCAL_HOSTS = ["localhost", "127.0.0.1"]
 async def lifespan(app: FastAPI):
     # Agents run on this event loop, so they start here and not at import.
     await agents.start()
-    facts_keeper = asyncio.create_task(issues_api.keep_facts())
-    tracked_keeper = asyncio.create_task(tracked_api.keep_tracked())
+    keepers = [
+        # What is left of every GitHub quota, for the Explore page's bars from the start.
+        asyncio.create_task(asyncio.to_thread(BALANCER.prime)),
+        asyncio.create_task(issues_api.keep_facts()),
+        asyncio.create_task(issues_api.keep_difficulty()),
+        asyncio.create_task(repos_api.keep_signals()),
+        asyncio.create_task(tracked_api.keep_tracked()),
+    ]
     yield
-    facts_keeper.cancel()
-    tracked_keeper.cancel()
+    explore.stop()
+    for keeper in keepers:
+        keeper.cancel()
     await agents.stop()
 
 
@@ -53,6 +61,7 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(inbox_api.router)
 app.include_router(issues_api.router)
 app.include_router(repos_api.router)
+app.include_router(explore_api.router)
 app.include_router(tracked_api.router)
 app.include_router(agents_api.router)
 app.include_router(vms_api.router)
@@ -89,21 +98,31 @@ async def live(websocket: WebSocket) -> None:
         return
     await websocket.accept()
     # The version of each topic this browser has; None until it is sent.
-    sent = {"repos": None, "issues": None, "tracked": None, "jobs": None, "inbox": None, "agents": None, "vms": None, "images": None}
+    sent = {"repos": None, "issues": None, "tracked": None, "explore": None, "github": None, "jobs": None, "inbox": None, "agents": None, "vms": None, "images": None}
     while True:
         # The version is noted before the data is read: a change in between is sent again next tick, never lost.
         messages = []
-        if sent["repos"] != repos.version:
-            sent["repos"] = repos.version
-            data = {"items": repos.items(), "can_undo": repos.can_undo(), "can_redo": repos.can_redo()}
+        # Repos carry their signals and score (repo_signals.py) and how often they were rejected before.
+        if sent["repos"] != (repos.version, repo_signals.version, rejections.version):
+            sent["repos"] = (repos.version, repo_signals.version, rejections.version)
+            signals = repo_signals.all()
+            rejected = rejections.all()
+            items = repos.items()
+            for item in items:
+                item["signals"] = signals.get(item["full_name"])
+                item["score"] = repo_signals.score(item["signals"], item.get("fit"))
+                item["rejected_before"] = len(rejected.get(item["full_name"], {}).get("history", []))
+            data = {"items": items, "can_undo": repos.can_undo(), "can_redo": repos.can_redo()}
             messages.append({"topic": "repos", "data": data})
-        # Issues carry their facts (issue_facts.py), so the topic changes when either does.
-        if sent["issues"] != (issues.version, issue_facts.version):
-            sent["issues"] = (issues.version, issue_facts.version)
+        # Issues carry their facts (issue_facts.py) and difficulty (issue_difficulty.py), so the topic changes when any does.
+        if sent["issues"] != (issues.version, issue_facts.version, issue_difficulty.version):
+            sent["issues"] = (issues.version, issue_facts.version, issue_difficulty.version)
             facts = issue_facts.all()
+            levels = issue_difficulty.all()
             items = issues.items()
             for item in items:
                 item["facts"] = facts.get(item["id"])
+                item["difficulty"] = levels.get(item["id"])
             data = {"items": items, "can_undo": issues.can_undo(), "can_redo": issues.can_redo()}
             messages.append({"topic": "issues", "data": data})
         # Each tracked repo carries its latest check (tracked_issues.py), like issues carry their facts.
@@ -115,6 +134,16 @@ async def live(websocket: WebSocket) -> None:
                 item["check"] = checks.get(item["full_name"])
             data = {"items": items, "can_undo": tracked.can_undo(), "can_redo": tracked.can_redo()}
             messages.append({"topic": "tracked", "data": data})
+        # The run in progress (or the last one), the profile, and the rejected repos.
+        if sent["explore"] != (explore.version, rejections.version):
+            sent["explore"] = (explore.version, rejections.version)
+            data = explore.summary()
+            data["rejections"] = [{"name": name, **record} for name, record in rejections.all().items()]
+            messages.append({"topic": "explore", "data": data})
+        # GitHub's rate limits per token (token_balancer.py): changes with every GitHub request, sent at most every tick.
+        if sent["github"] != BALANCER.version:
+            sent["github"] = BALANCER.version
+            messages.append({"topic": "github", "data": BALANCER.status()})
         if sent["jobs"] != jobs.version:
             sent["jobs"] = jobs.version
             messages.append({"topic": "jobs", "data": jobs.list()})
