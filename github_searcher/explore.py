@@ -1,0 +1,586 @@
+"""Explore: find new repos while the user watches, for them to approve into the Repos list or reject.
+
+The user starts a run on the Explore page and stops it when they like. It also ends by itself after
+finding `count` repos or after `minutes`, whichever comes first (either may be left out), or when every
+search is used up. Each repo that qualifies joins the found list the moment it is found, so the list fills
+while the run goes on. The user decides on each one (or many at once): approve adds it to Repos, reject
+keeps it out for 14 days (rejections.py). What they haven't decided on stays in the found list, also
+through later runs and backend restarts (DATA_DIR/explore_found.json), and later runs don't find it again.
+Explore never changes a repo that is already listed.
+
+Where it looks: the profile (DATA_DIR/explore_profile.json) is what the user writes, "about" (who they are,
+what they like), and their types of repo, each a name and a few words on what it is (the default: Prestige,
+well-known libraries, and AI & harness). The types are the tags that classify repos: Explore puts each repo it
+finds under one, and agents give one to the repos they add (work_tools.py repos_add). In the code a type is a
+lane: when the profile is saved, Claude plans each one's seed repos (looked at first) and GitHub repo searches
+(set_profile), and the finds are split evenly between them. The run keeps the lanes near their shares: the next
+candidate comes from the lane furthest below its share. Every search gets SEARCH_SUFFIX (not archived, pushed in
+the last 30 days) and runs most stars first, a page of 100 at a time.
+
+What it skips before any heavy work: repos it already looked at in this run, repos in Repos or Tracked,
+repos already in the found list, and repos the user rejected in the last 14 days (rejections.py). Then `workers` candidates at a time
+(token_balancer.py paces GitHub for all of them):
+1. its numbers (repo_signals.py: a few GitHub calls, no Claude yet);
+2. skipped if it is archived or a fork, nothing was committed in 30 days, or no outside contributor's
+   PR was merged in 90 days: nobody would review a PR there;
+3. at the same time, Claude reads its AI policy and its review atmosphere (repo_signals.complete), and its
+   README against the profile (claude_judge.py): is it a project people contribute code to (not a link list,
+   tutorial or course), which of the user's types it is, how well it fits (one of FIT_LEVELS, fixed so repos
+   rank the same way every time; kept as its number), one line for its note;
+4. found, with its type (its "lane"), fit, note, tags and score, and its signals kept for when it is approved. Its AI
+   policy, newcomers, activity and atmosphere show as tags; they never keep a repo out.
+
+    found = [{"name", "lane", "description", "stars", "default_branch", "html_url", "fit", "note", "score",
+              "ai_policy", "newcomers", "tone", "atmosphere", "prs_month", "issues_month", "commits_month",
+              "trend", "found_at", "signals"}, ...]     newest last; summary() leaves "signals" out and adds
+                                                         three of its numbers: contributors, maintainers, unanswered
+
+One run at a time. It lives in memory: the counts, the ones being checked now, why others were skipped and
+the errors. The live feed's explore topic carries it with the found list and the profile (and the backend adds
+the rejections). A backend restart ends a run; what it found stays. version goes up on every change, so the
+page follows along. Everything here runs on the backend's event loop, so the found list needs no lock.
+"""
+
+import asyncio
+import copy
+import json
+import os
+import re
+import time
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import httpx
+from dotenv import load_dotenv
+
+from github_searcher.claude_judge import JudgeError, judge
+from github_searcher.search import get_readme, get_repository, search_repositories
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# override: the backend reloads itself on code changes, and .env changes should apply then too.
+load_dotenv(PROJECT_ROOT / ".env", override=True)
+
+DATA_DIR = PROJECT_ROOT / os.environ["DATA_DIR"]
+# The default profile, its types' searches written by hand so the first run needs no planning.
+DEFAULT_PROFILE = {
+    "about": "",
+    "lanes": [
+        {
+            "id": "prestige",
+            "label": "Prestige",
+            "about": "well-known, widely used projects that are an honor to contribute to (matplotlib-level)",
+            "share": 50,
+            "seeds": [
+                "matplotlib/matplotlib",
+                "openclaw/openclaw",
+                "numpy/numpy",
+                "pandas-dev/pandas",
+                "scikit-learn/scikit-learn",
+                "scipy/scipy",
+                "pytest-dev/pytest",
+                "python/mypy",
+                "astral-sh/ruff",
+                "astral-sh/uv",
+                "fastapi/fastapi",
+                "pydantic/pydantic",
+                "huggingface/transformers",
+                "pytorch/pytorch",
+                "vllm-project/vllm",
+                "tokio-rs/tokio",
+                "vitejs/vite",
+            ],
+            "queries": [
+                "stars:>15000 good-first-issues:>2 language:Python",
+                "stars:>15000 good-first-issues:>2 language:TypeScript",
+                "stars:>15000 good-first-issues:>2 language:Rust",
+                "stars:>15000 good-first-issues:>2 language:C++",
+                "stars:>15000 help-wanted-issues:>5",
+            ],
+        },
+        {
+            "id": "ai",
+            "label": "AI & harness",
+            "about": "AI agents, agent harnesses, MCP, LLM tooling and applied AI",
+            "share": 50,
+            "seeds": [],
+            "queries": [
+                "topic:ai-agents stars:>1000",
+                "topic:llm-agent stars:>1000",
+                "topic:model-context-protocol stars:>500",
+                "topic:mcp stars:>1000",
+                "topic:agents topic:llm stars:>1000",
+                "topic:llm-inference stars:>2000",
+                "topic:llmops stars:>1000",
+                "agent framework in:description stars:>2000",
+            ],
+        },
+    ],
+}
+SEARCH_SUFFIX = "archived:false pushed:>{since}"
+# GitHub gives at most 10 pages of 100 for one search.
+MAX_PAGES = 10
+MAX_WORKERS = 16
+README_CHARS = 4000
+ERRORS_KEPT = 20
+FULL_NAME = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
+# How well a repo fits the profile: Claude picks a level, and the repo keeps its number (score() uses it; the
+# Repos page shows the level again: the frontend's FIT_LEVELS has the same steps).
+FIT_LEVELS = {"strong": 1.0, "good": 0.75, "some": 0.5, "weak": 0.25}
+MAX_TYPES = 6
+# What Claude answers when it plans the searches of the profile's types: each type by its name.
+PLAN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "types": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "seeds": {"type": "array", "items": {"type": "string"}},
+                    "queries": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["name", "seeds", "queries"],
+            },
+        },
+    },
+    "required": ["types"],
+}
+
+
+class Explore:
+    def __init__(self, repos, tracked, rejections, repo_signals):
+        self.repos = repos
+        self.tracked = tracked
+        self.rejections = rejections
+        self.repo_signals = repo_signals
+        self.path = DATA_DIR / "explore_profile.json"
+        self.version = 0
+        self.profile = copy.deepcopy(DEFAULT_PROFILE)
+        if self.path.exists():
+            self.profile = json.loads(self.path.read_text())
+        # A profile saved before "about": its interests become it.
+        if "about" not in self.profile:
+            self.profile = {"about": self.profile.get("interests", ""), "lanes": self.profile["lanes"]}
+        # The run's own copy, so changing the profile meanwhile doesn't change a run in progress.
+        self.run_profile = copy.deepcopy(self.profile)
+        # The current or last run (None before the first), what the page shows.
+        self.run = None
+        self.task = None
+        self.stopping = False
+        # Per lane: the candidates found by its searches and not looked at yet, and where its searches are.
+        self.cursors = {}
+        # Every repo the run looked at, lower case, so one found by two searches is checked once.
+        self.seen = set()
+        # Found repos waiting for the user's decision, kept across runs and restarts.
+        self.found_path = DATA_DIR / "explore_found.json"
+        self.found = []
+        if self.found_path.exists():
+            self.found = json.loads(self.found_path.read_text())
+
+    def changed(self) -> None:
+        self.version += 1
+
+    def summary(self) -> dict:
+        # The found list without each repo's signals: those are only for approving, and big. Three numbers from them
+        # stay: who opened PRs lately, who merged them, and outside PRs nobody answered (None when not counted yet).
+        found = []
+        for entry in self.found:
+            shown = {key: value for key, value in entry.items() if key != "signals"}
+            signals = entry.get("signals") or {}
+            shown["contributors"] = signals.get("active_contributors")
+            shown["maintainers"] = signals.get("active_mergers_30d")
+            shown["unanswered"] = signals.get("stale_outside_prs")
+            found.append(shown)
+        return {"profile": copy.deepcopy(self.profile), "run": copy.deepcopy(self.run), "found": copy.deepcopy(found)}
+
+    def save_found(self) -> None:
+        self.found_path.parent.mkdir(parents=True, exist_ok=True)
+        # Write, then rename: a crash never leaves half a file.
+        temporary = self.found_path.with_name(self.found_path.name + ".tmp")
+        temporary.write_text(json.dumps(self.found))
+        temporary.replace(self.found_path)
+        self.changed()
+
+    async def approve(self, names: list[str]) -> list[str]:
+        """Move found repos into the Repos list, as one undo step, with their signals. Returns the names added
+        (a repo an agent added to Repos meanwhile just leaves the found list)."""
+        chosen = [entry for entry in self.found if entry["name"] in names]
+        if not chosen:
+            return []
+        self.found = [entry for entry in self.found if entry["name"] not in names]
+        self.save_found()
+        items = []
+        for entry in chosen:
+            items.append(
+                {
+                    "full_name": entry["name"],
+                    "description": entry["description"],
+                    "stars": entry["stars"],
+                    "default_branch": entry["default_branch"],
+                    "html_url": entry["html_url"],
+                    "note": entry["note"],
+                    "added_by": "explore",
+                    "added_at": datetime.now(UTC).isoformat(),
+                    "lane": entry["lane"],
+                    "fit": entry["fit"],
+                }
+            )
+        added = await asyncio.to_thread(self.repos.add, items)
+        for entry in chosen:
+            if entry["name"] in added:
+                await asyncio.to_thread(self.repo_signals.put, entry["name"], entry["signals"])
+        return added
+
+    async def reject(self, names: list[str]) -> list[str]:
+        """Take repos off the found list and keep them out for 14 days. Returns the names that were in the list."""
+        rejected = [entry["name"] for entry in self.found if entry["name"] in names]
+        if not rejected:
+            return []
+        self.found = [entry for entry in self.found if entry["name"] not in names]
+        self.save_found()
+        for name in rejected:
+            await asyncio.to_thread(self.rejections.reject, name)
+        return rejected
+
+    async def set_profile(self, about: str, types: list[dict]) -> None:
+        """Replace the profile: about, and the types ({"label", "about"} each). Claude plans each type's seeds and
+        searches first, so this takes a little while. ValueError when something is missing or Claude gives no
+        usable plan; the run in progress keeps the old profile."""
+        about = about.strip()
+        if about == "":
+            raise ValueError("Write something about you.")
+        if not types or len(types) > MAX_TYPES:
+            raise ValueError(f"Have 1 to {MAX_TYPES} types of repo.")
+        lanes = []
+        for each in types:
+            label = each["label"].strip()
+            if label == "" or each["about"].strip() == "":
+                raise ValueError("Each type needs a name and a few words on what it is.")
+            if label.lower() in [lane["label"].lower() for lane in lanes]:
+                raise ValueError(f"There are two types named {label}.")
+            # A type that keeps its name keeps its id, so the repos tagged with it keep their tag.
+            lane_id = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-") or "type"
+            for old_lane in self.profile["lanes"]:
+                if old_lane["label"].lower() == label.lower():
+                    lane_id = old_lane["id"]
+            while lane_id in [lane["id"] for lane in lanes]:
+                lane_id += "-2"
+            lanes.append({"id": lane_id, "label": label, "about": each["about"].strip(), "share": 0, "seeds": [], "queries": []})
+        # An even split; the first types get what doesn't divide.
+        for index, lane in enumerate(lanes):
+            lane["share"] = 100 // len(lanes) + (1 if index < 100 % len(lanes) else 0)
+
+        type_lines = "\n".join(f"- {lane['label']}: {lane['about']}" for lane in lanes)
+        prompt = (
+            "A developer looks for open-source projects to contribute to. Plan the GitHub searches that find them.\n\n"
+            f"About them:\n{about}\n\n"
+            f"The types of project they want, by name:\n{type_lines}\n\n"
+            "For each type, by its name:\n"
+            "- seeds: up to 20 repos (owner/name) of that type that you are sure exist on GitHub under that name; they "
+            "are looked at first. Empty when none come to mind.\n"
+            "- queries: 3 to 8 GitHub repository searches (the q of GET /search/repositories), most promising first, "
+            'like "topic:mcp stars:>1000" or "stars:>15000 good-first-issues:>2 language:Python". Use qualifiers '
+            "(topic:, language:, stars:, good-first-issues:, help-wanted-issues:, in:description); more than a few "
+            "words of plain text finds little. Each returns up to 1000 repos, most stars first. "
+            '"archived:false pushed:>(30 days ago)" is added to each, so leave those out.'
+        )
+        try:
+            plan = await judge(prompt, PLAN_SCHEMA, "medium")
+        except JudgeError as error:
+            raise ValueError(f"Claude could not plan the searches: {error}")
+        for planned in plan["types"]:
+            for lane in lanes:
+                if lane["label"].lower() == planned["name"].strip().lower():
+                    lane["seeds"] = [seed.strip() for seed in planned["seeds"] if FULL_NAME.fullmatch(seed.strip())][:20]
+                    lane["queries"] = [query.strip() for query in planned["queries"] if query.strip() != ""][:8]
+        if all(not lane["seeds"] and not lane["queries"] for lane in lanes):
+            raise ValueError("Claude's plan has nothing to search. Say a bit more about each type.")
+        self.profile = {"about": about, "lanes": lanes}
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_name(self.path.name + ".tmp")
+        temporary.write_text(json.dumps(self.profile, indent=2))
+        temporary.replace(self.path)
+        self.changed()
+
+    def start(self, count: int | None, minutes: int | None, workers: int) -> None:
+        """Start a run on the running event loop. ValueError when one is running or the limits are off."""
+        if self.run is not None and self.run["status"] == "running":
+            raise ValueError("Explore is already running")
+        if count is not None and (count < 1 or count > 999):
+            raise ValueError("Find 1 to 999 repos")
+        if minutes is not None and (minutes < 1 or minutes > 600):
+            raise ValueError("Run 1 to 600 minutes")
+        if workers < 1 or workers > MAX_WORKERS:
+            raise ValueError(f"1 to {MAX_WORKERS} workers")
+
+        lanes = {}
+        self.cursors = {}
+        self.run_profile = copy.deepcopy(self.profile)
+        for lane in self.run_profile["lanes"]:
+            lanes[lane["id"]] = {"label": lane["label"], "share": lane["share"], "found": 0, "in_flight": 0, "exhausted": lane["share"] == 0}
+            self.cursors[lane["id"]] = {"pending": [{"name": seed} for seed in lane.get("seeds", [])], "query": 0, "page": 1}
+        self.seen = set()
+        self.stopping = False
+        self.run = {
+            "status": "running",
+            "started_at": datetime.now(UTC).isoformat(),
+            "ended_at": None,
+            "end_reason": "",
+            "count": count,
+            "minutes": minutes,
+            "workers": workers,
+            "found": 0,
+            "looked_at": 0,
+            "lanes": lanes,
+            "checking": [],
+            "skipped": {},
+            "errors": [],
+        }
+        self.changed()
+        self.task = asyncio.create_task(self.work())
+
+    def stop(self) -> None:
+        """Stop the run: nothing new starts, and the checks in progress are dropped within a second."""
+        if self.run is None or self.run["status"] != "running":
+            return
+        self.stopping = True
+
+    async def work(self) -> None:
+        run = self.run
+        tasks = {}
+        deadline = None
+        if run["minutes"] is not None:
+            deadline = time.monotonic() + run["minutes"] * 60
+        try:
+            while True:
+                if self.stopping:
+                    run["end_reason"] = "Stopped"
+                    break
+                if deadline is not None and time.monotonic() > deadline:
+                    run["end_reason"] = f"{run['minutes']} minutes are up"
+                    break
+                if run["count"] is not None and run["found"] >= run["count"]:
+                    run["end_reason"] = f"Found {run['count']}"
+                    break
+
+                # Keep `workers` checks going. The next candidate comes from the lane furthest below its share.
+                while len(tasks) < run["workers"] and not self.stopping:
+                    if run["count"] is not None and run["found"] >= run["count"]:
+                        break
+                    lane_id = None
+                    lowest = None
+                    for each, state in run["lanes"].items():
+                        if state["exhausted"]:
+                            continue
+                        ratio = (state["found"] + state["in_flight"]) / state["share"]
+                        if lowest is None or ratio < lowest:
+                            lane_id = each
+                            lowest = ratio
+                    if lane_id is None:
+                        break
+                    name = await self.next_candidate(lane_id)
+                    if name is None:
+                        run["lanes"][lane_id]["exhausted"] = True
+                        self.changed()
+                        continue
+                    run["lanes"][lane_id]["in_flight"] += 1
+                    tasks[asyncio.create_task(self.check(lane_id, name))] = lane_id
+
+                if not tasks:
+                    if all(state["exhausted"] for state in run["lanes"].values()):
+                        run["end_reason"] = "Every search is used up"
+                        break
+                    await asyncio.sleep(1)
+                    continue
+                done, _ = await asyncio.wait(list(tasks), timeout=1, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    run["lanes"][tasks.pop(task)]["in_flight"] -= 1
+            run["status"] = "stopped" if self.stopping else "done"
+        except Exception as error:
+            run["status"] = "failed"
+            run["end_reason"] = f"Failed: {error}"
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            for state in run["lanes"].values():
+                state["in_flight"] = 0
+            run["checking"] = []
+            run["ended_at"] = datetime.now(UTC).isoformat()
+            if run["status"] == "running":
+                # Cancelled from outside (the backend shutting down).
+                run["status"] = "stopped"
+                run["end_reason"] = "The backend stopped"
+            self.changed()
+
+    async def next_candidate(self, lane_id: str) -> str | None:
+        """The next repo of a lane worth checking, or None when its seeds and searches are used up."""
+        run = self.run
+        cursor = self.cursors[lane_id]
+        lane = [each for each in self.run_profile["lanes"] if each["id"] == lane_id][0]
+        while True:
+            if cursor["pending"]:
+                candidate = cursor["pending"].pop(0)
+                name = candidate["name"]
+                if name.lower() in self.seen:
+                    continue
+                self.seen.add(name.lower())
+                run["looked_at"] += 1
+                reason = ""
+                if candidate.get("archived"):
+                    reason = "Archived"
+                elif candidate.get("fork"):
+                    reason = "A fork"
+                elif name.lower() in [item["full_name"].lower() for item in self.repos.items()]:
+                    reason = "Already in Repos"
+                elif name.lower() in [item["full_name"].lower() for item in self.tracked.items()]:
+                    reason = "Tracked"
+                elif name.lower() in [entry["name"].lower() for entry in self.found]:
+                    reason = "Found before, waiting for you"
+                elif self.rejections.blocked_until(name) is not None:
+                    reason = "Rejected in the last 14 days"
+                if reason:
+                    run["skipped"][reason] = run["skipped"].get(reason, 0) + 1
+                    self.changed()
+                    continue
+                return name
+
+            queries = lane.get("queries", [])
+            if cursor["query"] >= len(queries):
+                return None
+            since = (datetime.now(UTC) - timedelta(days=30)).strftime("%Y-%m-%d")
+            q = f"{queries[cursor['query']]} {SEARCH_SUFFIX.format(since=since)}"
+            try:
+                result = await asyncio.to_thread(search_repositories, q, cursor["page"])
+            except Exception as error:
+                # A bad search (a typo in the profile) or GitHub failing: on to the next search.
+                run["errors"] = (run["errors"] + [{"name": f"search: {q}", "error": str(error)[:300], "at": datetime.now(UTC).isoformat()}])[-ERRORS_KEPT:]
+                cursor["query"] += 1
+                cursor["page"] = 1
+                self.changed()
+                continue
+            for item in result["items"]:
+                cursor["pending"].append({"name": item["full_name"], "archived": item["archived"], "fork": item["fork"]})
+            if len(result["items"]) < 100 or cursor["page"] >= MAX_PAGES:
+                cursor["query"] += 1
+                cursor["page"] = 1
+            else:
+                cursor["page"] += 1
+
+    async def check(self, lane_id: str, name: str) -> None:
+        """Look at one candidate closely and put it in the found list when it qualifies."""
+        run = self.run
+        profile = self.run_profile
+        lane = [each for each in profile["lanes"] if each["id"] == lane_id][0]
+        run["checking"].append({"name": name, "lane": lane_id, "since": datetime.now(UTC).isoformat()})
+        self.changed()
+        owner = name.split("/")[0]
+        repo = name.split("/")[1]
+        try:
+            signals = await self.repo_signals.fetch(name, judged=False)
+            reason = ""
+            if signals["archived"]:
+                reason = "Archived"
+            elif signals["fork"]:
+                reason = "A fork"
+            elif signals["commits_30d"] == 0:
+                reason = "No commits in 30 days"
+            elif signals["outside_merged_90d"] == 0:
+                reason = "No outside PR merged in 90 days"
+            if reason:
+                run["skipped"][reason] = run["skipped"].get(reason, 0) + 1
+                return
+
+            try:
+                readme = await asyncio.to_thread(get_readme, owner, repo)
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code != 404:
+                    raise
+                readme = "(no README)"
+            topics = ", ".join(signals["topics"]) or "none"
+            type_lines = "\n".join(f"- {each['label']}: {each['about']}" for each in profile["lanes"])
+            prompt = (
+                "A developer is looking for open-source projects to contribute to. About them:\n"
+                f"{profile['about']}\n\n"
+                f"The types of project they want, by name:\n{type_lines}\n\n"
+                f"This project came up in the searches for {lane['label']}.\n\n"
+                f"Project: {name}, {signals['stars']} stars, language {signals['language'] or 'unknown'}, topics {topics}.\n"
+                f"Description: {signals['description'] or 'none'}\n\n"
+                f"README (the start of it):\n{readme[:README_CHARS]}\n\n"
+                "is_project: true when people contribute code to it (a library, app, framework or tool); false for lists of "
+                "links (awesome lists), tutorials, courses, books, interview prep, personal dotfiles or configs, and "
+                "collections of data or prompts.\n"
+                "type: the name of the type it is (the closest one, also when it came up in another type's searches).\n"
+                "fit: how well it matches what they like and that type: strong (exactly what they want), good (clearly in "
+                "their interests), some (related, but not what they're after), weak (hardly matches).\n"
+                "note: one short line (at most 120 characters) for the developer: what the project is and why it fits or "
+                "doesn't. Plain words, no hype."
+            )
+            schema = {
+                "type": "object",
+                "properties": {
+                    "is_project": {"type": "boolean"},
+                    "type": {"type": "string", "enum": [each["label"] for each in profile["lanes"]]},
+                    "fit": {"type": "string", "enum": list(FIT_LEVELS)},
+                    "note": {"type": "string"},
+                },
+                "required": ["is_project", "type", "fit", "note"],
+            }
+            # The fit, and the repo's AI policy and review atmosphere, all at once.
+            verdict, signals = await asyncio.gather(judge(prompt, schema, "medium"), self.repo_signals.complete(name, signals))
+            if not verdict["is_project"]:
+                run["skipped"]["Not a code project"] = run["skipped"].get("Not a code project", 0) + 1
+                return
+            # Checks that finish after the run found enough are dropped, so it never finds more than asked.
+            if self.stopping or (run["count"] is not None and run["found"] >= run["count"]):
+                return
+
+            info = await asyncio.to_thread(get_repository, owner, repo)
+            fit = FIT_LEVELS[verdict["fit"]]
+            # An agent may have added it to Repos meanwhile, or another search found it under its new name.
+            if info["full_name"].lower() in [item["full_name"].lower() for item in self.repos.items()]:
+                run["skipped"]["Already in Repos"] = run["skipped"].get("Already in Repos", 0) + 1
+                return
+            if info["full_name"].lower() in [entry["name"].lower() for entry in self.found]:
+                run["skipped"]["Found before, waiting for you"] = run["skipped"].get("Found before, waiting for you", 0) + 1
+                return
+            # Tagged with, and counted for, the type Claude put it under.
+            type_id = lane_id
+            for each in profile["lanes"]:
+                if each["label"] == verdict["type"]:
+                    type_id = each["id"]
+            run["found"] += 1
+            run["lanes"][type_id]["found"] += 1
+            self.found.append(
+                {
+                    "name": info["full_name"],
+                    "lane": type_id,
+                    "description": info["description"] or "",
+                    "stars": info["stargazers_count"],
+                    "default_branch": info["default_branch"],
+                    "html_url": info["html_url"],
+                    "fit": fit,
+                    "score": self.repo_signals.score(signals, fit),
+                    "ai_policy": signals["ai_policy"]["tag"],
+                    "newcomers": signals["newcomers"]["tag"],
+                    "tone": signals["atmosphere"]["tone"] if signals["atmosphere"] else None,
+                    "atmosphere": signals["atmosphere"]["summary"] if signals["atmosphere"] else "",
+                    "prs_month": signals["activity"]["prs_opened_month"],
+                    "issues_month": signals["activity"]["issues_opened_month"],
+                    "commits_month": signals["activity"]["commits_month"],
+                    "trend": signals["activity"]["trend"],
+                    "note": verdict["note"][:200],
+                    "found_at": datetime.now(UTC).isoformat(),
+                    "signals": signals,
+                }
+            )
+            self.save_found()
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            run["skipped"]["Error"] = run["skipped"].get("Error", 0) + 1
+            run["errors"] = (run["errors"] + [{"name": name, "error": str(error)[:300], "at": datetime.now(UTC).isoformat()}])[-ERRORS_KEPT:]
+        finally:
+            run["checking"] = [each for each in run["checking"] if each["name"] != name]
+            self.changed()
