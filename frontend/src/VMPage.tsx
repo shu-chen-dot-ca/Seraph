@@ -5,7 +5,7 @@ Overview is three areas with draggable dividers:
   desktop (noVNC in an iframe)  |  queue (who holds the VM, who waits)
   ------------------------------+--------------------------------------
   stats (CPU, memory and internet speed over the last minute, disk, internet used)  and  the jobs on this VM
-Settings is VMSettings.
+Settings is VMSettings. Fork (only while stopped) makes a new VM that starts as a copy of this one (ForkVMDialog).
 
 App keeps this page mounted (hidden) after you leave it, and the Overview stays mounted while the
 Settings tab is open, so the desktop iframe never reloads: coming back is instant. The iframe only
@@ -26,10 +26,11 @@ Internet used is what the VM downloaded and uploaded since the last Reset, for w
 What the backend itself uses (the agents talking to Claude and GitHub) isn't in it.
 */
 
-import { ExternalLink, Loader2, Lock, Monitor, Play, Power, RotateCw, Square, Unlock, User, X } from "lucide-react";
+import { Copy, ExternalLink, Loader2, Lock, Monitor, Play, Power, RotateCw, Square, Unlock, User, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import ForkVMDialog from "@/ForkVMDialog";
 import VMSettings from "@/VMSettings";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -98,6 +99,7 @@ export default function VMPage(props: { name: string; active: boolean }) {
   const [hover, setHover] = useState<{ chart: string; index: number } | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
   const frameRef = useRef<HTMLIFrameElement>(null);
+  const [forking, setForking] = useState(false);
   // When the VM stopped answering (Date.now()), or null while it answers.
   const silentSince = useRef<number | null>(null);
 
@@ -302,7 +304,9 @@ export default function VMPage(props: { name: string; active: boolean }) {
           {STATUS_TEXT[vm.status] ?? vm.status}
         </Badge>
         <span className="text-muted-foreground">
-          {vm.cpus} CPUs · {vm.memory_gb} GB · {vm.disk_gb} GB disk · {imageName}{vm.internet ? "" : " · no internet"}
+          {vm.cpus} CPUs · {vm.memory_gb} GB · {vm.disk_gb} GB disk · {imageName}
+          {vm.forked_from !== "" && ` · forked from ${vm.forked_from}`}
+          {vm.internet ? "" : " · no internet"}
         </span>
         <div className="ml-2 flex items-center gap-1">
           <Button variant="outline" size="sm" disabled={!canStart || busy !== ""} onClick={() => power("start")}>
@@ -313,6 +317,15 @@ export default function VMPage(props: { name: string; active: boolean }) {
           </Button>
           <Button variant="outline" size="sm" disabled={!running || busy !== ""} onClick={() => power("restart")}>
             {busy === "restart" ? <Loader2 className="animate-spin" /> : <RotateCw />} Restart
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={vm.status !== "stopped" || busy !== ""}
+            title={vm.status === "stopped" ? `A new VM that starts as a copy of ${vm.name}` : `Stop ${vm.name} to fork it`}
+            onClick={() => setForking(true)}
+          >
+            <Copy /> Fork
           </Button>
         </div>
         <Tabs value={tab} onValueChange={setTab} className="ml-auto">
@@ -730,6 +743,8 @@ export default function VMPage(props: { name: string; active: boolean }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {forking && <ForkVMDialog vm={vm.name} onClose={() => setForking(false)} />}
     </div>
   );
 }

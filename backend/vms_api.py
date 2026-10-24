@@ -71,6 +71,20 @@ def create_vm(body: CreateRequest) -> dict:
     return vms.summary(record)
 
 
+class ForkRequest(BaseModel):
+    name: str
+
+
+@router.post("/vms/{name}/fork")
+def fork_vm(name: str, body: ForkRequest) -> dict:
+    """Copies the stopped VM into a new one and starts it; answers at once, like creating a VM."""
+    try:
+        record = vms.fork(name, body.name.strip())
+    except VMsError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    return vms.summary(record)
+
+
 @router.delete("/vms/{name}")
 async def delete_vm(name: str) -> dict:
     """Deletes the VM, then tells the agents that held it or waited for it. Takes a few seconds.

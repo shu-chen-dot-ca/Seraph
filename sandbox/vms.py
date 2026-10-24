@@ -5,10 +5,11 @@ A VM is a resource, not tied to a repo or an agent. Each one is an Incus VM name
 
     DATA_DIR/vms/<name>.json   {"name", "incus_name", "image", "image_fingerprint", "cpus", "memory_gb",
                                 "disk_gb", "internet", "env", "secrets_in_vm", "autostart", "status",
-                                "created_at", "holder", "queue", "traffic"}
+                                "created_at", "forked_from", "holder", "queue", "traffic"}
 
 "image" is the name of the image it was made from (sandbox/images.py) and "image_fingerprint" the exact
-build, since an image can be rebuilt or renamed later. "secrets_in_vm" are the env variables whose values
+build, since an image can be rebuilt or renamed later. A fork (a copy of a stopped VM, see VMs.fork) has its
+source's image and "forked_from" names the source. "secrets_in_vm" are the env variables whose values
 are written in the VM's files right now, so an image is never saved from a VM that still holds them.
 
 holder and queue belong to VMQueue (vm_queue.py); they live here so they are saved with the VM.
@@ -120,6 +121,8 @@ class VMRecord:
         # Who uses the VM ("user", an agent id or None) and the agents waiting for it. Changed by VMQueue only.
         self.holder = record["holder"]
         self.queue = record["queue"]
+        # The VM this one is a copy of, or "" (records from before forks have none).
+        self.forked_from = record.get("forked_from", "")
         # Records from before internet use was counted have no traffic.
         self.traffic = record.get("traffic") or {
             "down": 0,
@@ -181,6 +184,7 @@ class VMRecord:
             "created_at": self.created_at,
             "holder": self.holder,
             "queue": list(self.queue),
+            "forked_from": self.forked_from,
             "traffic": dict(self.traffic),
         }
 
@@ -210,6 +214,38 @@ class VMRecord:
             self.save()
             self.vm.launch(self.image, PROFILE, self.cpus, self.memory_gb, f"{self.disk_gb}GiB")
             self.image_fingerprint = self.vm.base_image()
+            self.vm.wait_ready()
+            self.vm.guard_memory()
+            self.vm.guard_shadow_stack()
+            self.write_env()
+            self.status = "running"
+            self.save()
+        except Exception as error:
+            self.error = str(error)
+            self.status = "failed"
+            self.save()
+            raise
+        finally:
+            self.lock.release()
+
+    def fork_from(self, source: "VMRecord") -> None:
+        """Copy the stopped source VM into this one, then start it. The caller holds source.lock; it is released
+        once the copy is made, so the source can start again while this one boots.
+
+        If it fails the record stays, as "failed", so the user sees why and can delete it.
+        """
+        if not self.lock.acquire(blocking=False):
+            source.lock.release()
+            raise VMsError(f"{self.name} is busy")
+        try:
+            self.error = None
+            self.status = "creating"
+            self.save()
+            try:
+                source.vm.copy(self.incus_name)
+            finally:
+                source.lock.release()
+            self.vm.start()
             self.vm.wait_ready()
             self.vm.guard_memory()
             self.vm.guard_shadow_stack()
@@ -698,6 +734,56 @@ class VMs:
         record.save()
         threading.Thread(target=self.watch, args=(record,), daemon=True).start()
         threading.Thread(target=record.launch, daemon=True).start()
+        return record
+
+    def fork(self, source_name: str, name: str) -> VMRecord:
+        """Copy a stopped VM into a new one: its disk (everything installed and cloned in it), CPU, memory, disk size,
+        internet setting and env variables. Returns at once with status "creating"; the copy starts by itself."""
+        if not re.fullmatch(NAME_PATTERN, name):
+            raise VMsError("The name must start with a letter and have only a-z, 0-9 and -, at most 31 characters")
+        source = self.get(source_name)
+        if source.status != "stopped" or source.vm.status() != "Stopped":
+            raise VMsError(f"Stop {source_name} first: only a stopped VM can be forked.")
+        with self.lock:
+            if name in self.records:
+                raise VMsError(f"There is already a VM named {name}")
+            free_gb = int(Path("/proc/meminfo").read_text().split("MemAvailable:")[1].split()[0]) / 1024 / 1024
+            for other in self.records.values():
+                if other.status == "creating":
+                    free_gb -= other.memory_gb
+            if free_gb - source.memory_gb < MIN_FREE_RAM_GB:
+                raise VMsError(
+                    f"Not enough free memory: {max(free_gb, 0):.1f}GB free, the fork needs {source.memory_gb}GB "
+                    f"and {MIN_FREE_RAM_GB}GB must stay free"
+                )
+            # Held until the copy is made, so nobody starts the source meanwhile (fork_from releases it).
+            if not source.lock.acquire(blocking=False):
+                raise VMsError(f"{source_name} is busy")
+            record = VMRecord(
+                {
+                    "name": name,
+                    "incus_name": VM_PREFIX + name,
+                    "image": source.image,
+                    "image_fingerprint": source.image_fingerprint,
+                    "cpus": source.cpus,
+                    "memory_gb": source.memory_gb,
+                    "disk_gb": source.disk_gb,
+                    "internet": source.internet,
+                    "env": dict(source.env),
+                    "secrets_in_vm": list(source.secrets_in_vm),
+                    "autostart": False,
+                    "status": "creating",
+                    "created_at": datetime.now(UTC).isoformat(),
+                    "forked_from": source_name,
+                    "holder": None,
+                    "queue": [],
+                },
+                self.changed,
+            )
+            self.records[name] = record
+        record.save()
+        threading.Thread(target=self.watch, args=(record,), daemon=True).start()
+        threading.Thread(target=record.fork_from, args=(source,), daemon=True).start()
         return record
 
     def start_in_background(self, name: str) -> None:

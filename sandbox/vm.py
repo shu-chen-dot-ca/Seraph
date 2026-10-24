@@ -183,6 +183,12 @@ class VM:
             timeout=timeout,
         )
 
+    def copy(self, new_name: str) -> None:
+        """Copy this (stopped) VM into a new one: its disk and its settings. The copy gets its own network card address."""
+        result = subprocess.run(["incus", "copy", self.name, new_name, "--instance-only"], capture_output=True, stdin=subprocess.DEVNULL, text=True)
+        if result.returncode != 0:
+            raise VMError(f"Could not copy {self.name}: {result.stderr.strip()}")
+
     def base_image(self) -> str:
         """The fingerprint of the image the VM was made from, or "" if Incus doesn't know it."""
         result = subprocess.run(
