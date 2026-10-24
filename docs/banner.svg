@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="260" viewBox="0 0 1280 260" role="img" aria-label="GitHub Searcher: agents find good first issues and fix them in sandbox VMs, with evidence. You decide what reaches GitHub.">
-<title>GitHub Searcher</title>
-<desc>GitHub Searcher: agents find good first issues and fix them in sandbox VMs, with evidence. You decide what reaches GitHub.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="260" viewBox="0 0 1280 260" role="img" aria-label="Seraph: agents find good first issues and fix them in sandbox VMs, with evidence. You decide what reaches GitHub.">
+<title>Seraph</title>
+<desc>Seraph: agents find good first issues and fix them in sandbox VMs, with evidence. You decide what reaches GitHub.</desc>
 <style>
   text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; fill: #1f2328; }
   .bg { fill: #ffffff; stroke: #d0d7de; }
@@ -33,12 +33,11 @@
 </style>
 <defs><marker id="ah-edge" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="a-edge" d="M0,0.5 L10,5 L0,9.5 z"/></marker><marker id="ah-you" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="a-you" d="M0,0.5 L10,5 L0,9.5 z"/></marker><marker id="ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="a-ok" d="M0,0.5 L10,5 L0,9.5 z"/></marker><marker id="ah-no" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="a-no" d="M0,0.5 L10,5 L0,9.5 z"/></marker></defs>
 <rect class="bg" x="0.5" y="0.5" width="1279" height="259" rx="14"/>
-<circle cx="86" cy="104" r="30" fill="none" class="x-ok" stroke-width="7"/>
-<path d="M108,126 L132,150" class="x-ok" stroke-width="9" stroke-linecap="round" fill="none"/>
-<path d="M73,104 L83,114 L100,94" class="x-ok" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-<text x="160" y="112" class="title" text-anchor="start" style="font-size:42px;letter-spacing:-0.01em">GitHub Searcher</text>
-<text x="162" y="150" class="sub" text-anchor="start" style="font-size:17px">Agents find good first issues, fix them in VMs and prove it.</text>
-<text x="162" y="176" class="sub" text-anchor="start" style="font-size:17px">Nothing reaches GitHub until you send it yourself.</text>
+<path d="M88,62 L120,74 V100 C120,121 106,137 88,145 C70,137 56,121 56,100 V74 Z" class="x-ok" stroke-width="6.5" stroke-linejoin="round" fill="none"/>
+<path d="M73,103 L84,114 L104,92" class="x-ok" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+<text x="150" y="112" class="title" text-anchor="start" style="font-size:42px;letter-spacing:-0.01em">Seraph</text>
+<text x="152" y="150" class="sub" text-anchor="start" style="font-size:17px">Agents find good first issues, fix them in VMs and prove it.</text>
+<text x="152" y="176" class="sub" text-anchor="start" style="font-size:17px">Nothing reaches GitHub until you send it yourself.</text>
 <line class="e-edge" x1="40" y1="212" x2="640" y2="212" stroke-width="0.8" opacity="0.35"/>
 <text x="40" y="238" class="m" text-anchor="start">Claude agents · Incus VMs · FastAPI · React</text>
 <rect class="card-shadow" x="700" y="84" width="160" height="96" rx="9"/>

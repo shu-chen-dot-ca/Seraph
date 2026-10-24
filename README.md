@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/banner.svg" alt="GitHub Searcher: agents find good first issues, fix them in VMs and prove it. Nothing reaches GitHub until you send it yourself." width="100%">
+  <img src="docs/banner.svg" alt="Seraph: agents find good first issues, fix them in VMs and prove it. Nothing reaches GitHub until you send it yourself." width="100%">
 </p>
 
 <p align="center">
@@ -23,11 +23,13 @@
   <img src="docs/screenshots/inbox-evidence.png" alt="The Inbox: a PR draft for matplotlib with before-and-after renders the agent captured in its VM" width="100%">
 </p>
 
-GitHub Searcher is a local workbench for contributing to open source with AI agents, without handing them the keys.
+Seraph is a local workbench for contributing to open source with AI agents, without handing them the keys.
 
 Agents search GitHub for good first issues that are worth doing, and check how fast each project's maintainers answer outside contributors. They set each issue up in a sandbox VM, reproduce the bug, fix it, and back the fix with test runs and before-and-after evidence. Every PR, comment and question lands in your **Inbox** as a draft. The app never posts to GitHub: you read each draft, decide on it, and send it yourself.
 
 > **Why a human in the loop?** Maintainers notice drive-by AI pull requests. One agent's note on matplotlib, as it appears in the app: *"AI-generated PRs on good first issues get closed, so you must write the fix yourself."* This tool does the legwork and leaves the judgement, and the name on the PR, to you.
+
+> **Why "Seraph"?** In *The Matrix Reloaded*, Seraph is the program who guards the Oracle and tests everyone who wants to see her. This one tests every fix before it gets to you.
 
 ## Features
 

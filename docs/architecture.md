@@ -1,6 +1,6 @@
 # Architecture
 
-github_searcher is a harness for finding and fixing GitHub good first issues, with a human in the loop.
+Seraph is a harness for finding and fixing GitHub good first issues, with a human in the loop.
 Agents search GitHub, keep the lists and do the hands-on work in sandbox VMs. Nothing reaches GitHub until you send it yourself.
 
 The diagrams are SVG files in this folder and follow your light or dark theme.
