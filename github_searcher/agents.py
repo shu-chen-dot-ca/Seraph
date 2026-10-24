@@ -67,12 +67,19 @@ OPEN_STATUSES = ["queued", "working"]
 
 
 class Agents:
-    def __init__(self, repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues):
+    def __init__(self, repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, rejections, repo_signals, issue_difficulty, explore):
         self.repos = repos
         self.issues = issues
         # The Tracked list (a RepoList) and what each tracked repo's last check found on GitHub.
         self.tracked = tracked
         self.tracked_issues = tracked_issues
+        # Repos the user rejected (agents can't add them back while blocked), each repo's signals
+        # (check_activity works them out the same way) and each issue's difficulty.
+        self.rejections = rejections
+        self.repo_signals = repo_signals
+        self.issue_difficulty = issue_difficulty
+        # Explore, for its profile's types of repo: the tags agents give the repos they add.
+        self.explore = explore
         self.jobs = jobs
         self.inbox = inbox
         self.vms = vms
@@ -451,6 +458,19 @@ class Agents:
         self.pending[agent_id].append({"from": "System", "text": text, "shown": False})
         self.save(agent)
 
+    def rename_vm(self, name: str, new_name: str) -> None:
+        """The user renamed a VM: agents aimed at it and the jobs on it follow. Those agents hear with their next message."""
+        if new_name == name:
+            return
+        self.jobs.rename_vm(name, new_name)
+        for agent in self.agents.values():
+            if agent.record["target_vm"] != name:
+                continue
+            agent.record["target_vm"] = new_name
+            self.pending[agent.id].append({"from": "System", "text": f"The user renamed {name} to {new_name}. It is still your target VM.", "shown": False})
+            self.save(agent)
+        self.version += 1
+
     def assign(self, issue_id: str, agent_id: str | None, vm_name: str | None, instructions: str = "") -> dict:
         """The user gives an issue to an agent (a new one when agent_id is None): a fix_issue job."""
         matches = [item for item in self.issues.items() if item["id"] == issue_id]
@@ -481,15 +501,18 @@ class Agents:
         self.notify(agent_id, text)
         return job
 
-    def create_job(self, title: str, instructions: str, agent_id: str | None, vm_name: str | None) -> dict:
-        """The user makes a job of their own (a "task", not tied to an issue) for an agent, or a new one when agent_id is None."""
+    def create_job(self, title: str, instructions: str, agent_id: str | None, vm_name: str | None, agent_name: str = "") -> dict:
+        """The user makes a job of their own (a "task", not tied to an issue) for an agent, or a new one when agent_id is None.
+
+        agent_name names that new agent; empty gives it the first free "agent-N".
+        """
         title = title.strip()
         if not title:
             raise ValueError("A job needs a title")
         if vm_name is not None and vm_name not in [vm_record.name for vm_record in self.vms.list()]:
             raise ValueError(f"No VM named {vm_name}")
         if agent_id is None:
-            agent_id = self.create()["id"]
+            agent_id = self.create(agent_name)["id"]
         if agent_id not in self.agents:
             raise KeyError(f"No agent {agent_id}")
         agent = self.agents[agent_id]

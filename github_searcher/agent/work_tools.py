@@ -37,7 +37,7 @@ import secrets
 import shlex
 import subprocess
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from claude_agent_sdk import tool
@@ -103,14 +103,26 @@ class WorkTools:
         return [
             tool(
                 "repos_list",
-                "See the Repos list the user sees: each repo with its stars, description, your note, who added it and how many of its issues are in the Issues list.",
+                "See the Repos list the user sees, and the user's types of repo (the tags that classify repos, each with what it is). "
+                "Each repo with its stars, description, your note, its type, who added it (an agent id, "
+                "user, or explore), how many of its issues are in the Issues list, its score (0-100), and its signals: AI policy "
+                "(welcome, disclose, no_ai, unclear, none), outside contributors' merge rate and median days to a first reply, "
+                "stale outside PRs, how many people merged PRs in the last 30 days, how newcomers fare (welcomes, ok, wait, "
+                "few), PRs, issues and commits a month, and the review tone (warm, neutral, strict, curt) with what reviewers "
+                "often ask for.",
                 {},
             )(self.repos_list),
             tool(
                 "repos_add",
                 "Add repos to the Repos list, by full name (owner/name). note is one short line on why they fit (shown under each repo). "
-                "Repos already in the list are skipped. Add only repos you checked and would recommend.",
-                {"type": "object", "properties": {"names": names, "note": {"type": "string"}}, "required": ["names", "note"]},
+                "type is the name of the user's type of repo they are (repos_list lists the types); leave it out when none fits. "
+                "Repos already in the list are skipped, and so are repos the user rejected in the last 14 days. Add only repos you "
+                "checked and would recommend.",
+                {
+                    "type": "object",
+                    "properties": {"names": names, "note": {"type": "string"}, "type": {"type": "string"}},
+                    "required": ["names", "note"],
+                },
             )(self.repos_add),
             tool(
                 "repos_remove",
@@ -124,8 +136,9 @@ class WorkTools:
             )(self.repos_note),
             tool(
                 "issues_list",
-                "See the Issues list the user sees: each issue with its title, labels, state, your note and its job status "
-                "(new when nobody was assigned yet). repo limits it to one repo (owner/name).",
+                "See the Issues list the user sees: each issue with its title, labels, state, your note, its job status "
+                "(new when nobody was assigned yet) and its difficulty (easy, medium or hard, with the reason; judged by the app "
+                "shortly after an issue is added). repo limits it to one repo (owner/name).",
                 {"type": "object", "properties": {"repo": {"type": "string"}}},
             )(self.issues_list),
             tool(
@@ -148,8 +161,8 @@ class WorkTools:
             tool(
                 "tracked_list",
                 "See the Tracked list: the repos the user wants to keep an eye on for new issues. Each with its stars, note, who "
-                "added it, when its issues were last checked, and how many open issues it has: all, good first (a good-first-issue "
-                "kind of label) and new (opened since the user last looked).",
+                "added it, when its issues were last checked, and how many open issues it has: all, free (nobody assigned, and a "
+                "good-first-issue or help-wanted kind of label), assigned (someone is on it) and new (opened in the last 3 days).",
                 {},
             )(self.tracked_list),
             tool(
@@ -166,12 +179,13 @@ class WorkTools:
             tool(
                 "tracked_issues",
                 "See the open issues the last check found in tracked repos, newest first, each with its labels, comments, "
-                "assignees, whether it is a good first issue, whether it is new to the user and whether it is in the Issues list "
-                "already. name limits it to one repo (owner/name). which: new (opened since the user last looked, the default), "
-                "good_first, or all (the 100 newest open issues plus every good first issue).",
+                "assignees, whether it has a good-first-issue or help-wanted kind of label, whether it is new (opened in the last "
+                "3 days) and whether it is in the Issues list already. name limits it to one repo (owner/name). which: free "
+                "(nobody assigned, and such a label; the default), assigned (someone is on it), or all (the 100 newest open "
+                "issues plus every issue with such a label).",
                 {
                     "type": "object",
-                    "properties": {"name": {"type": "string"}, "which": {"type": "string", "enum": ["new", "good_first", "all"]}},
+                    "properties": {"name": {"type": "string"}, "which": {"type": "string", "enum": ["free", "assigned", "all"]}},
                 },
             )(self.tracked_issues),
             tool(
@@ -424,7 +438,7 @@ class WorkTools:
         if name == "tracked_remove":
             return "No longer tracking: " + ", ".join(args.get("names") or [])
         if name == "tracked_issues":
-            which = (args.get("which") or "new").replace("_", " ")
+            which = args.get("which") or "free"
             return f"Looked at the {which} issues of " + (args.get("name") or "the tracked repos")
         if name == "my_jobs":
             return "Looked at its jobs"
@@ -487,22 +501,54 @@ class WorkTools:
 
     async def repos_list(self, args: dict) -> dict:
         issues = await asyncio.to_thread(self.agents.issues.items)
+        signals = await asyncio.to_thread(self.agents.repo_signals.all)
+        type_names = {}
+        for lane in self.agents.explore.profile["lanes"]:
+            type_names[lane["id"]] = lane["label"]
         repos = []
         for item in await asyncio.to_thread(self.agents.repos.items):
             count = len([issue for issue in issues if issue["repo"] == item["full_name"]])
-            repos.append(
-                {
-                    "name": item["full_name"],
-                    "stars": item["stars"],
-                    "description": item["description"],
-                    "note": item["note"],
-                    "added_by": item["added_by"],
-                    "issues_in_list": count,
-                }
-            )
-        return {"content": [{"type": "text", "text": json.dumps({"repos": repos})}]}
+            repo_signals = signals.get(item["full_name"])
+            summary = {
+                "name": item["full_name"],
+                "stars": item["stars"],
+                "description": item["description"],
+                "note": item["note"],
+                "added_by": item["added_by"],
+                "issues_in_list": count,
+                "score": self.agents.repo_signals.score(repo_signals, item.get("fit")),
+            }
+            if item.get("lane"):
+                summary["type"] = type_names.get(item["lane"], item["lane"])
+            if repo_signals is not None:
+                summary["ai_policy"] = repo_signals["ai_policy"]["tag"]
+                summary["outside_merge_rate"] = repo_signals["outside_merge_rate"]
+                summary["median_days_to_first_reply"] = repo_signals["median_days_to_first_reply"]
+                summary["stale_outside_prs"] = repo_signals["stale_outside_prs"]
+                summary["active_mergers_30d"] = repo_signals["active_mergers_30d"]
+                if "newcomers" in repo_signals:
+                    summary["newcomers"] = repo_signals["newcomers"]["tag"]
+                    summary["prs_a_month"] = repo_signals["activity"]["prs_opened_month"]
+                    summary["issues_a_month"] = repo_signals["activity"]["issues_opened_month"]
+                    summary["commits_a_month"] = repo_signals["activity"]["commits_month"]
+                if repo_signals.get("atmosphere"):
+                    summary["review_tone"] = repo_signals["atmosphere"]["tone"]
+                    summary["reviewers_ask_for"] = repo_signals["atmosphere"]["asks_for"]
+            repos.append(summary)
+        types = [{"name": lane["label"], "what_it_is": lane["about"]} for lane in self.agents.explore.profile["lanes"]]
+        return {"content": [{"type": "text", "text": json.dumps({"types": types, "repos": repos})}]}
 
     async def repos_add(self, args: dict) -> dict:
+        # The type, by its name, as the tag the repos get.
+        lane_id = None
+        if args.get("type"):
+            lanes = self.agents.explore.profile["lanes"]
+            for lane in lanes:
+                if lane["label"].lower() == args["type"].strip().lower():
+                    lane_id = lane["id"]
+            if lane_id is None:
+                names_text = ", ".join(lane["label"] for lane in lanes)
+                return {"content": [{"type": "text", "text": f"There is no type {args['type']!r}. The types are: {names_text}. Nothing was added."}]}
         in_list = [item["full_name"].lower() for item in await asyncio.to_thread(self.agents.repos.items)]
         report = {}
         items = []
@@ -513,6 +559,10 @@ class WorkTools:
             if name.lower() in in_list:
                 report[name] = "already in Repos"
                 continue
+            blocked = self.agents.rejections.blocked_until(name)
+            if blocked is not None:
+                report[name] = f"the user rejected it; it can't be added again before {blocked[:10]}"
+                continue
             try:
                 info = await asyncio.to_thread(get_repository, name.split("/")[0], name.split("/")[1])
             except httpx.HTTPStatusError as error:
@@ -521,18 +571,19 @@ class WorkTools:
             except httpx.HTTPError as error:
                 report[name] = f"could not reach GitHub: {error}"
                 continue
-            items.append(
-                {
-                    "full_name": info["full_name"],
-                    "description": info["description"] or "",
-                    "stars": info["stargazers_count"],
-                    "default_branch": info["default_branch"],
-                    "html_url": info["html_url"],
-                    "note": args["note"],
-                    "added_by": self.agent_id,
-                    "added_at": datetime.now(UTC).isoformat(),
-                }
-            )
+            item = {
+                "full_name": info["full_name"],
+                "description": info["description"] or "",
+                "stars": info["stargazers_count"],
+                "default_branch": info["default_branch"],
+                "html_url": info["html_url"],
+                "note": args["note"],
+                "added_by": self.agent_id,
+                "added_at": datetime.now(UTC).isoformat(),
+            }
+            if lane_id is not None:
+                item["lane"] = lane_id
+            items.append(item)
 
         added = await asyncio.to_thread(self.agents.repos.add, items)
         for item in items:
@@ -559,11 +610,13 @@ class WorkTools:
         for job in reversed(self.agents.jobs.list()):
             latest[job["issue"]] = job
 
+        levels = await asyncio.to_thread(self.agents.issue_difficulty.all)
         issues = []
         for item in await asyncio.to_thread(self.agents.issues.items):
             if repo and item["repo"].lower() != repo.lower():
                 continue
             job = latest.get(item["id"])
+            level = levels.get(item["id"])
             issues.append(
                 {
                     "id": item["id"],
@@ -575,6 +628,9 @@ class WorkTools:
                     "added_by": item["added_by"],
                     "status": job["status"] if job else "new",
                     "agent": job["agent"] if job else None,
+                    # Judged in the background after an issue is added; None until then.
+                    "difficulty": level["level"] if level else None,
+                    "difficulty_reason": level["reason"] if level else None,
                 }
             )
         return {"content": [{"type": "text", "text": json.dumps({"issues": issues})}]}
@@ -691,8 +747,11 @@ class WorkTools:
             summary["checked_at"] = check["checked_at"]
             summary["check_error"] = check["error"]
             summary["open_issues"] = len(check["issues"])
-            summary["good_first"] = len([issue for issue in check["issues"] if issue["good_first"]])
-            summary["new"] = len([issue for issue in check["issues"] if issue["created_at"] > check["seen_at"]])
+            # New for three days after it was opened. GitHub's time format, so it compares as text.
+            new_since = (datetime.now(UTC) - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            summary["free"] = len([issue for issue in check["issues"] if issue["good_first"] and issue["assignees"] == 0])
+            summary["assigned"] = len([issue for issue in check["issues"] if issue["assignees"] > 0])
+            summary["new"] = len([issue for issue in check["issues"] if issue["created_at"] > new_since])
             repos.append(summary)
         return {"content": [{"type": "text", "text": json.dumps({"tracked": repos})}]}
 
@@ -741,14 +800,16 @@ class WorkTools:
 
     async def tracked_issues(self, args: dict) -> dict:
         name = args.get("name") or ""
-        which = args.get("which") or "new"
-        if which not in ("new", "good_first", "all"):
-            return {"content": [{"type": "text", "text": "which must be new, good_first or all."}], "is_error": True}
+        which = args.get("which") or "free"
+        if which not in ("free", "assigned", "all"):
+            return {"content": [{"type": "text", "text": "which must be free, assigned or all."}], "is_error": True}
         names = [item["full_name"] for item in await asyncio.to_thread(self.agents.tracked.items)]
         if name and name.lower() not in [tracked.lower() for tracked in names]:
             return {"content": [{"type": "text", "text": f"{name} is not tracked; tracked_list shows what is."}], "is_error": True}
         checks = await asyncio.to_thread(self.agents.tracked_issues.all)
         in_issues = [item["id"] for item in await asyncio.to_thread(self.agents.issues.items)]
+        # New for three days after it was opened. GitHub's time format, so it compares as text.
+        new_since = (datetime.now(UTC) - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         result = {}
         for full_name in names:
@@ -760,10 +821,10 @@ class WorkTools:
                 continue
             issues = []
             for issue in check["issues"]:
-                new = issue["created_at"] > check["seen_at"]
-                if which == "new" and not new:
+                new = issue["created_at"] > new_since
+                if which == "free" and (not issue["good_first"] or issue["assignees"] > 0):
                     continue
-                if which == "good_first" and not issue["good_first"]:
+                if which == "assigned" and issue["assignees"] == 0:
                     continue
                 issues.append({**issue, "id": f"{full_name}#{issue['number']}", "new": new, "in_issues_list": f"{full_name}#{issue['number']}" in in_issues})
             result[full_name] = {"checked_at": check["checked_at"], "check_error": check["error"], "issues": issues}

@@ -85,7 +85,7 @@ class Agent:
 
     async def connect(self) -> None:
         # GitHub tools still add old-style "activity" lines to the list they are given; nobody reads this one.
-        tools = self.computer_tools.list() + self.work_tools.list() + GithubTools([]).list()
+        tools = self.computer_tools.list() + self.work_tools.list() + GithubTools([], self.work_tools.agents.repo_signals).list()
         allowed_tools = ["TodoWrite"]
         for item in tools:
             allowed_tools.append(f"mcp__{TOOL_SERVER}__{item.name}")
