@@ -278,39 +278,6 @@ wheels = [
 ]
 
 [[package]]
-name = "github-searcher"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "claude-agent-sdk" },
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "pydantic" },
-    { name = "python-dotenv" },
-    { name = "uvicorn", extra = ["standard"] },
-    { name = "websockets" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "claude-agent-sdk", specifier = ">=0.2.160" },
-    { name = "fastapi", specifier = ">=0.143.1" },
-    { name = "httpx", specifier = ">=0.28" },
-    { name = "pydantic", specifier = ">=2.7" },
-    { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.54.0" },
-    { name = "websockets", specifier = ">=15" },
-]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8" }]
-
-[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1037,6 +1004,39 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/80/ef/3a9f8e4279c7920af561deed4cb7ebebed2794a8f608cf404d5eef14a105/rpds_py-2026.9.1-pp312-pypy312_pp80-macosx_10_12_x86_64.whl", hash = "sha256:56c6952a9b15047466d0c2347c446a761d4527f89976156341e68f0ce5cc08b0", size = 357108, upload-time = "2026-10-04T16:32:31.641Z" },
     { url = "https://files.pythonhosted.org/packages/b7/55/4b2fa381a583760aea5c92841e4e928a358e1c6511b129219e9c2826a226/rpds_py-2026.9.1-pp312-pypy312_pp80-macosx_11_0_arm64.whl", hash = "sha256:b242c27c8f836305a4a72df9cdd564386ac57b807bd252a063223331c9316b37", size = 346877, upload-time = "2026-10-04T16:32:34.061Z" },
 ]
+
+[[package]]
+name = "seraph"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "claude-agent-sdk" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "claude-agent-sdk", specifier = ">=0.2.160" },
+    { name = "fastapi", specifier = ">=0.143.1" },
+    { name = "httpx", specifier = ">=0.28" },
+    { name = "pydantic", specifier = ">=2.7" },
+    { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.54.0" },
+    { name = "websockets", specifier = ">=15" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
 name = "sniffio"

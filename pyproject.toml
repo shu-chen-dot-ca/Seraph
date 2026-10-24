@@ -1,7 +1,7 @@
 [project]
-name = "github-searcher"
+name = "seraph"
 version = "0.1.0"
-description = "Find GitHub repositories by describing what you want in plain English."
+description = "Agents find and fix GitHub good first issues in sandbox VMs; you decide what reaches GitHub."
 requires-python = ">=3.11"
 dependencies = [
     "claude-agent-sdk>=0.2.160",
