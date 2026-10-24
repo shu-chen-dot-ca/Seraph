@@ -17,13 +17,11 @@ agent controls) or another website, get 403.
 """
 
 import asyncio
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
-import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import JSONResponse
@@ -147,7 +145,3 @@ async def live(websocket: WebSocket) -> None:
             return
         if received["type"] == "websocket.disconnect":
             return
-
-
-def main() -> None:
-    uvicorn.run("backend.app:app", host="127.0.0.1", port=int(os.environ["BACKEND_PORT"]), reload=True)

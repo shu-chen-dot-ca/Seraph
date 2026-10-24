@@ -15,7 +15,7 @@ dependencies = [
 
 [project.scripts]
 # `uv run serve` starts the backend from any directory.
-serve = "backend.app:main"
+serve = "backend.serve:main"
 
 [build-system]
 requires = ["hatchling"]
