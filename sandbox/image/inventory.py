@@ -115,9 +115,17 @@ def main() -> None:
             key, value = line.split("=", 1)
             os_release[key] = value.strip('"')
     desktop = "GNOME"
-    gdm = Path("/etc/gdm3/custom.conf")
-    if gdm.exists() and re.search(r"^\s*WaylandEnable\s*=\s*false", gdm.read_text(), re.MULTILINE):
-        desktop = "GNOME on X11"
+    for gdm in [Path("/etc/gdm3/custom.conf"), Path("/etc/gdm/custom.conf")]:
+        if gdm.exists() and re.search(r"^\s*WaylandEnable\s*=\s*false", gdm.read_text(), re.MULTILINE):
+            desktop = "GNOME on X11"
+    # Other desktops (images the agent made): the X sessions installed.
+    sessions = [path.stem for path in Path("/usr/share/xsessions").glob("*.desktop")]
+    for name, session in [("XFCE", "xfce"), ("KDE Plasma", "plasma"), ("MATE", "mate"), ("Cinnamon", "cinnamon"), ("LXQt", "lxqt")]:
+        if any(session in each for each in sessions):
+            desktop = name
+    # A terminal-only image (sandbox/vm.py's NO_DESKTOP_FILE).
+    if Path("/etc/sandbox-no-desktop").exists():
+        desktop = "None (terminal only)"
     disk = os.statvfs("/")
     system = {
         "os": os_release.get("PRETTY_NAME", ""),
@@ -149,6 +157,12 @@ def main() -> None:
             continue
         name = parts[0].split(":")[0]
         packages.append({"kind": "apt", "name": name, "version": parts[1], "manual": name in manual})
+    # Fedora's packages (rpm), on images without apt (so no apt packages so far).
+    if not packages:
+        for line in run("rpm -qa --qf '%{NAME}\\t%{VERSION}-%{RELEASE}\\n'").splitlines():
+            parts = line.split("\t")
+            if len(parts) == 2 and parts[0] != "gpg-pubkey":
+                packages.append({"kind": "rpm", "name": parts[0], "version": parts[1]})
 
     pip_output = run("/opt/py/bin/python -m pip list --format json") or run("uv pip list --python /opt/py/bin/python --format json")
     if pip_output:

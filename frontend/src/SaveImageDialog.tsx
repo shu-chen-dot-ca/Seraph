@@ -25,7 +25,6 @@ export default function SaveImageDialog(props: { vm: string | null; onClose: () 
   const [vmName, setVMName] = useState(firstVM);
   const [name, setName] = useState(firstVM === "" ? "" : `${firstVM}-image`);
   const [nameTouched, setNameTouched] = useState(false);
-  const [description, setDescription] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
 
@@ -56,7 +55,7 @@ export default function SaveImageDialog(props: { vm: string | null; onClose: () 
     setBusy("save");
     setError("");
     try {
-      await api("/api/images/save", { method: "POST", body: { vm: vmName, name: name.trim(), description: description.trim() } });
+      await api("/api/images/save", { method: "POST", body: { vm: vmName, name: name.trim() } });
       toast.success(`Saving ${vmName} as ${name.trim()}. It takes a few minutes.`);
       props.onClose();
     } catch (err) {
@@ -123,9 +122,6 @@ export default function SaveImageDialog(props: { vm: string | null; onClose: () 
             }}
           />
           {nameTaken && <p className="col-start-2 text-xs text-destructive">There is already an image with that name.</p>}
-
-          <label className="text-muted-foreground">Description</label>
-          <Input placeholder="Optional, e.g. Ubuntu desktop with Rust and Postgres" value={description} onChange={(event) => setDescription(event.target.value)} />
         </div>
 
         <p className="text-xs text-muted-foreground">

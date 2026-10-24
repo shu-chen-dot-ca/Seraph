@@ -1,23 +1,25 @@
 /*
 The Images tab of the VMs page: the images new VMs start from.
 
-One row per image (an Incus image with a name): its description, size, when it was made, and the VMs made
-from that exact image. The default image is what New VM picks first. Each row's menu: make it the default,
-edit its name and description, rebuild it, list what it has again, delete it (VMs made from it keep working:
-each has its own disk). A row opens in place to show what the image has (ImageInventory); an image that wasn't
-listed yet offers Inspect there (about two minutes, in a throwaway VM).
+One row per image (an Incus image with a name): its system version, size, when it was made, and how many VMs
+were made from that exact image (stopped ones too). The default image is what New VM picks first. Each row's
+menu: make it the default, rename it, rebuild it, delete it (only once no VM was made from it).
+Details opens what the image has (ImageInventory) in a dialog, with Inspect again and the image's agent, which
+keeps its description; an image that wasn't listed yet has Inspect instead (about two minutes, in a throwaway VM).
+An amber dot after the name: its description changed since it was built, so a rebuild would give a different image.
 
-New images come from Build (sandbox/image/build.sh: a fresh Ubuntu desktop plus provision.sh, about an
-hour) or Save a VM (that VM's disk as it is, a few minutes). Both run in the background as tasks, shown
-above the list with their last log lines until the image is listed; the whole log opens in a dialog.
-Everything comes from the live "images" topic.
+New images come from New image (NewImageDialog: the image's agent makes it from an official system image) or
+Save a VM (that VM's disk as it is, a few minutes). Rebuild has the agent make it again from its description.
+They run in the background as tasks, shown above the list with their last log lines until the image is listed;
+the whole log opens in a dialog. Everything comes from the live "images" topic.
 */
 
-import { ChevronRight, Hammer, Loader2, MoreHorizontal, Pencil, Plus, Save, ScanSearch, ScrollText, Square, Star, Trash2, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { Hammer, Loader2, MoreHorizontal, Pencil, Plus, Save, ScanSearch, ScrollText, Square, Star, Trash2, X } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import ImageInventory from "@/ImageInventory";
+import NewImageDialog from "@/NewImageDialog";
 import SaveImageDialog from "@/SaveImageDialog";
 import {
   AlertDialog,
@@ -34,26 +36,31 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { StatusDot } from "@/components/ui/status-dot";
 import { api, useLive, useLoaded, type Image, type ImageTask } from "@/live";
 import { cn } from "@/lib/utils";
 
-const COLUMNS = "grid grid-cols-[16px_minmax(0,220px)_minmax(0,1fr)_80px_150px_minmax(0,200px)_32px] items-center gap-3";
+const COLUMNS = "grid grid-cols-[minmax(0,220px)_minmax(0,1fr)_80px_150px_56px_96px_32px] items-center gap-3";
 
-const TASK_TITLE: Record<string, string> = { build: "Building", save: "Saving", inspect: "Listing what it has:" };
+const TASK_TITLE: Record<string, string> = { agent: "Making", save: "Saving", inspect: "Listing what it has:" };
 
-export default function Images() {
+// tabs: the VMs page's tabs, which share the header row with the buttons here.
+export default function Images(props: { tabs: ReactNode }) {
   const data = useLive("images");
   const loaded = useLoaded("images");
   // Which dialog is open, and for which image or task.
-  const [building, setBuilding] = useState<{ name: string; rebuild: boolean } | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [rebuilding, setRebuilding] = useState<Image | null>(null);
   const [saving, setSaving] = useState(false);
-  const [editing, setEditing] = useState<Image | null>(null);
+  const [renaming, setRenaming] = useState<Image | null>(null);
   const [deleting, setDeleting] = useState<Image | null>(null);
   const [logOf, setLogOf] = useState<ImageTask | null>(null);
-  // The fingerprints of the open rows.
-  const [open, setOpen] = useState<string[]>([]);
+  // The fingerprint of the image whose Details are open. Read from the live list, so Inspect again shows up in it.
+  const [showing, setShowing] = useState("");
+  const shown = data.images.find((image) => image.fingerprint === showing);
 
-  const buildRunning = data.tasks.some((task) => task.kind === "build" && task.status === "running");
+  // The agent makes one image at a time.
+  const buildRunning = data.tasks.some((task) => task.kind === "agent" && task.status === "running");
 
   async function makeDefault(image: Image) {
     try {
@@ -73,12 +80,14 @@ export default function Images() {
     setDeleting(null);
   }
 
-  function toggle(fingerprint: string) {
-    if (open.includes(fingerprint)) {
-      setOpen(open.filter((other) => other !== fingerprint));
-      return;
+  async function rebuild(image: Image) {
+    try {
+      await api(`/api/images/${encodeURIComponent(image.name)}/rebuild`, { method: "POST" });
+      toast.success(`The agent is making ${image.name} again. Follow it above the image list.`);
+    } catch (err) {
+      toast.error(`Could not rebuild ${image.name}: ${err instanceof Error ? err.message : err}`);
     }
-    setOpen([...open, fingerprint]);
+    setRebuilding(null);
   }
 
   async function inspect(image: Image) {
@@ -108,7 +117,7 @@ export default function Images() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-        <span className="text-muted-foreground">New VMs start from the default image.</span>
+        {props.tabs}
         <div className="ml-auto flex items-center gap-1">
           <Button size="sm" variant="outline" onClick={() => setSaving(true)}>
             <Save /> Save a VM as image
@@ -116,10 +125,10 @@ export default function Images() {
           <Button
             size="sm"
             disabled={buildRunning}
-            title={buildRunning ? "One build runs at a time" : undefined}
-            onClick={() => setBuilding({ name: "", rebuild: false })}
+            title={buildRunning ? "The agent makes one image at a time" : undefined}
+            onClick={() => setCreating(true)}
           >
-            <Plus /> Build image
+            <Plus /> New image
           </Button>
         </div>
       </div>
@@ -143,7 +152,7 @@ export default function Images() {
                     started {new Date(task.started_at).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
                   </span>
                   {task.status === "running" && (
-                    <span className="text-xs text-muted-foreground">{task.kind === "build" ? "about an hour" : "a few minutes"}</span>
+                    <span className="text-xs text-muted-foreground">{task.kind === "agent" ? "the agent is on it" : "a few minutes"}</span>
                   )}
                 </div>
                 <div className={cn("truncate font-mono text-xs", task.status === "failed" ? "text-destructive" : "text-muted-foreground")}>
@@ -169,12 +178,12 @@ export default function Images() {
       )}
 
       <div className={cn(COLUMNS, "h-7 shrink-0 border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground")}>
-        <span />
         <span>Name</span>
-        <span>Description</span>
+        <span>System</span>
         <span className="text-right">Size</span>
         <span>Made</span>
-        <span>VMs made from it</span>
+        <span className="text-right">VMs</span>
+        <span />
         <span />
       </div>
 
@@ -187,91 +196,98 @@ export default function Images() {
           </div>
         )}
         {data.images.map((image) => (
-          <div key={image.fingerprint} className="border-b">
-            <div
-              className={cn(COLUMNS, "h-8 cursor-pointer px-3 hover:bg-accent/50", open.includes(image.fingerprint) && "bg-accent/40")}
-              onClick={() => toggle(image.fingerprint)}
-            >
-              <ChevronRight className={cn("size-3.5 text-muted-foreground transition-transform", open.includes(image.fingerprint) && "rotate-90")} />
-              <span className="flex min-w-0 items-center gap-2">
-                <span className="truncate font-medium">{image.name}</span>
-                {image.default && <Badge variant="secondary">default</Badge>}
-              </span>
-              <span className="truncate text-muted-foreground" title={image.description}>
-                {image.description || "–"}
-              </span>
-              <span className="text-right tabular-nums">{image.size_gb.toFixed(1)} GB</span>
-              <span className="text-muted-foreground tabular-nums">
-                {new Date(image.created_at).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
-              </span>
-              <span className="truncate">
-                {image.used_by.length === 0 && <span className="text-muted-foreground">–</span>}
-                {image.used_by.map((name, index) => (
-                  <span key={name}>
-                    {index > 0 && ", "}
-                    <a
-                      href={`#/vms/${encodeURIComponent(name)}`}
-                      className="text-primary hover:underline"
-                      onClick={(event) => event.stopPropagation()}
-                    >
-                      {name}
-                    </a>
-                  </span>
-                ))}
-              </span>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon-xs" aria-label={`Actions for ${image.name}`} onClick={(event) => event.stopPropagation()}>
-                    <MoreHorizontal />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem disabled={image.default} onSelect={() => makeDefault(image)}>
-                    <Star /> Make default
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => setEditing(image)}>
-                    <Pencil /> Edit name and description
-                  </DropdownMenuItem>
-                  <DropdownMenuItem disabled={buildRunning} onSelect={() => setBuilding({ name: image.name, rebuild: true })}>
-                    <Hammer /> Rebuild
-                  </DropdownMenuItem>
-                  <DropdownMenuItem disabled={image.inspecting} onSelect={() => inspect(image)}>
-                    <ScanSearch /> {image.inventory === null ? "Inspect" : "Inspect again"}
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem variant="destructive" disabled={image.default} onSelect={() => setDeleting(image)}>
-                    <Trash2 /> Delete
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-            {open.includes(image.fingerprint) && (
-              <div className="border-t bg-muted/30 px-9 py-3">
-                {image.inventory !== null && <ImageInventory image={image} />}
-                {image.inventory === null && image.inspecting && (
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <Loader2 className="size-3.5 animate-spin" /> Listing what {image.name} has. It takes a few minutes.
-                  </div>
-                )}
-                {image.inventory === null && !image.inspecting && (
-                  <div className="flex items-center gap-3 text-muted-foreground">
-                    What {image.name} has isn't listed yet.
-                    <Button size="xs" variant="outline" onClick={() => inspect(image)}>
-                      <ScanSearch /> Inspect
-                    </Button>
-                    <span className="text-xs">About two minutes, in a throwaway VM with 4 GB of memory.</span>
-                  </div>
-                )}
-              </div>
-            )}
+          <div key={image.fingerprint} className={cn(COLUMNS, "min-h-8 border-b px-3 py-0.5 hover:bg-accent/50")}>
+            <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+              <span className="truncate font-medium">{image.name}</span>
+              {image.spec_changed && (
+                <span title="Its description changed since this build. Rebuild to apply it.">
+                  <StatusDot tone="amber" />
+                </span>
+              )}
+              {image.default && <Badge>default</Badge>}
+            </span>
+            <span className="truncate text-muted-foreground">{image.inventory === null ? "–" : image.inventory.system.os}</span>
+            <span className="text-right tabular-nums">{image.size_gb.toFixed(1)} GB</span>
+            <span className="text-muted-foreground tabular-nums">
+              {new Date(image.created_at).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
+            </span>
+            <span className={cn("text-right tabular-nums", image.used_by.length === 0 && "text-muted-foreground")} title={image.used_by.join(", ")}>
+              {image.used_by.length}
+            </span>
+            <span className="flex justify-end">
+              {image.inventory !== null && (
+                <Button size="xs" variant="ghost" onClick={() => setShowing(image.fingerprint)}>
+                  Details
+                </Button>
+              )}
+              {image.inventory === null && (
+                <Button size="xs" variant="ghost" disabled={image.inspecting} onClick={() => inspect(image)}>
+                  {image.inspecting && <Loader2 className="animate-spin" />} {image.inspecting ? "Inspecting" : "Inspect"}
+                </Button>
+              )}
+            </span>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-xs" aria-label={`Actions for ${image.name}`}>
+                  <MoreHorizontal />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem disabled={image.default} onSelect={() => makeDefault(image)}>
+                  <Star /> Make default
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setRenaming(image)}>
+                  <Pencil /> Rename
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={buildRunning} onSelect={() => setRebuilding(image)}>
+                  <Hammer /> Rebuild
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem variant="destructive" disabled={image.default || image.used_by.length > 0} onSelect={() => setDeleting(image)}>
+                  <Trash2 /> Delete
+                  {image.used_by.length > 0 && <span className="ml-auto text-xs">VMs use it</span>}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         ))}
       </div>
 
-      {building !== null && <BuildDialog name={building.name} rebuild={building.rebuild} onClose={() => setBuilding(null)} />}
+      {creating && <NewImageDialog onClose={() => setCreating(false)} />}
       {saving && <SaveImageDialog vm={null} onClose={() => setSaving(false)} />}
-      {editing !== null && <EditDialog key={editing.fingerprint} image={editing} onClose={() => setEditing(null)} />}
+      {renaming !== null && <RenameDialog key={renaming.fingerprint} image={renaming} onClose={() => setRenaming(null)} />}
       {logOf !== null && <LogDialog task={logOf} onClose={() => setLogOf(null)} />}
+
+      <Dialog
+        open={shown !== undefined}
+        onOpenChange={(open) => {
+          if (!open) {
+            setShowing("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>What {shown?.name} has</DialogTitle>
+            <DialogDescription>Listed in a throwaway VM made from it. Inspect again lists it anew (about two minutes).</DialogDescription>
+          </DialogHeader>
+          {shown !== undefined && (
+            <ImageInventory
+              key={shown.fingerprint}
+              image={shown}
+              onRebuild={() => {
+                setShowing("");
+                setRebuilding(shown);
+              }}
+            />
+          )}
+          <DialogFooter>
+            <Button variant="outline" disabled={shown === undefined || shown.inspecting} onClick={() => shown !== undefined && inspect(shown)}>
+              {shown?.inspecting ? <Loader2 className="animate-spin" /> : <ScanSearch />} {shown?.inspecting ? "Inspecting" : "Inspect again"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog
         open={deleting !== null}
@@ -284,10 +300,7 @@ export default function Images() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {deleting?.name}?</AlertDialogTitle>
-            <AlertDialogDescription>
-              New VMs can't start from it anymore.
-              {deleting !== null && deleting.used_by.length > 0 && ` ${deleting.used_by.join(", ")} keep working: each VM has its own disk.`}
-            </AlertDialogDescription>
+            <AlertDialogDescription>New VMs can't start from it anymore.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
@@ -304,76 +317,43 @@ export default function Images() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <AlertDialog
+        open={rebuilding !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRebuilding(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Rebuild {rebuilding?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Its agent makes it again from its description, starting from a fresh download of the system. The new build replaces it
+              when it is done; VMs made from it keep their own disk.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (rebuilding !== null) {
+                  rebuild(rebuilding);
+                }
+              }}
+            >
+              Rebuild
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
 
-// Build a new image, or rebuild one (same name: it is replaced once the build is done).
-function BuildDialog(props: { name: string; rebuild: boolean; onClose: () => void }) {
-  const [name, setName] = useState(props.name);
-  const [description, setDescription] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-
-  async function submit() {
-    setBusy(true);
-    setError("");
-    try {
-      await api("/api/images/build", { method: "POST", body: { name: name.trim(), description: description.trim() } });
-      toast.success(`Building ${name.trim()}. It takes about an hour.`);
-      props.onClose();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) {
-          props.onClose();
-        }
-      }}
-    >
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{props.rebuild ? `Rebuild ${props.name}` : "Build an image"}</DialogTitle>
-          <DialogDescription>
-            A fresh Ubuntu desktop with everything in sandbox/image/provision.sh. Takes about an hour.
-            {props.rebuild && " The new build replaces the old one when it is done; VMs made from the old one keep their own disk."}
-          </DialogDescription>
-        </DialogHeader>
-        <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 gap-y-2">
-          <label className="text-muted-foreground">Name</label>
-          <Input
-            autoFocus={!props.rebuild}
-            disabled={props.rebuild}
-            placeholder="e.g. desktop-2"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-          />
-          <label className="text-muted-foreground">Description</label>
-          <Input placeholder="Optional" value={description} onChange={(event) => setDescription(event.target.value)} />
-        </div>
-        {error !== "" && <p className="text-destructive">{error}</p>}
-        <DialogFooter>
-          <Button variant="outline" onClick={props.onClose}>
-            Cancel
-          </Button>
-          <Button onClick={submit} disabled={busy || name.trim() === ""}>
-            {busy && <Loader2 className="animate-spin" />} {props.rebuild ? "Rebuild" : "Build"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function EditDialog(props: { image: Image; onClose: () => void }) {
+function RenameDialog(props: { image: Image; onClose: () => void }) {
   const [name, setName] = useState(props.image.name);
-  const [description, setDescription] = useState(props.image.description);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -381,10 +361,7 @@ function EditDialog(props: { image: Image; onClose: () => void }) {
     setBusy(true);
     setError("");
     try {
-      await api(`/api/images/${encodeURIComponent(props.image.name)}`, {
-        method: "PUT",
-        body: { name: name.trim(), description: description.trim() },
-      });
+      await api(`/api/images/${encodeURIComponent(props.image.name)}`, { method: "PUT", body: { name: name.trim() } });
       props.onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -403,22 +380,20 @@ function EditDialog(props: { image: Image; onClose: () => void }) {
     >
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Edit {props.image.name}</DialogTitle>
+          <DialogTitle>Rename {props.image.name}</DialogTitle>
           <DialogDescription>VMs made from it keep pointing at it after a rename.</DialogDescription>
         </DialogHeader>
         <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 gap-y-2">
           <label className="text-muted-foreground">Name</label>
-          <Input value={name} onChange={(event) => setName(event.target.value)} />
-          <label className="text-muted-foreground">Description</label>
-          <Input value={description} onChange={(event) => setDescription(event.target.value)} />
+          <Input autoFocus value={name} onChange={(event) => setName(event.target.value)} />
         </div>
         {error !== "" && <p className="text-destructive">{error}</p>}
         <DialogFooter>
           <Button variant="outline" onClick={props.onClose}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={busy || name.trim() === ""}>
-            {busy && <Loader2 className="animate-spin" />} Save
+          <Button onClick={submit} disabled={busy || name.trim() === "" || name.trim() === props.image.name}>
+            {busy && <Loader2 className="animate-spin" />} Rename
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -477,7 +452,9 @@ function LogDialog(props: { task: ImageTask; onClose: () => void }) {
     >
       <DialogContent className="sm:max-w-4xl">
         <DialogHeader>
-          <DialogTitle>{props.task.kind === "build" ? `Building ${props.task.name}` : `Saving ${props.task.vm} as ${props.task.name}`}</DialogTitle>
+          <DialogTitle>
+            {props.task.kind === "save" ? `Saving ${props.task.vm} as ${props.task.name}` : `${TASK_TITLE[props.task.kind] ?? props.task.kind} ${props.task.name}`}
+          </DialogTitle>
           <DialogDescription>{running ? "Still running; this follows along." : "Failed. The last lines say why."}</DialogDescription>
         </DialogHeader>
         <pre ref={scrollRef} className="h-[60vh] overflow-auto border bg-muted/40 p-2 font-mono text-xs whitespace-pre-wrap">

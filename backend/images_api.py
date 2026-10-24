@@ -1,36 +1,48 @@
-"""The Images tab on the VMs page: the default image, rename, describe, delete, build, save a VM as an image,
-and what each image has (its inventory: system, languages, tools, packages).
+"""The Images tab on the VMs page: the default image, rename, delete, New image and Rebuild (the image's agent
+builds it), save a VM as an image, what each image has (its inventory: system, languages, tools, packages),
+and its description and agent.
 
-The list itself reaches the browser through /api/live (topic "images"). Building and saving run as
-background tasks in sandbox/images.py and answer at once; the task shows in the list until it is
-done. Everything here makes Incus calls that block, so the endpoints are plain `def` (FastAPI runs
-them in a thread pool).
+The list itself reaches the browser through /api/live (topic "images"). Builds and saves run in the
+background and answer at once; the task shows in the list until it is done. Most of this makes Incus
+calls that block, so those endpoints are plain `def` (FastAPI runs them in a thread pool). The agent's
+endpoints (chat, New image, Rebuild, stopping a build) are `async def`: its turns run on the event loop.
 """
+
+import asyncio
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
-from backend.shared import images
+from backend.shared import image_agents, images
 from sandbox.images import ImagesError, load_inventory
 
 router = APIRouter(prefix="/api")
 
 
-class ChangeRequest(BaseModel):
-    name: str | None = None  # A new name.
-    description: str | None = None
-
-
-class BuildRequest(BaseModel):
+class RenameRequest(BaseModel):
     name: str
-    description: str = ""
+
+
+class NewImageRequest(BaseModel):
+    name: str
+    system: str
+    desktop: str
+    packages: list[str]
+    comments: str = ""
+
+
+class PackagesRequest(BaseModel):
+    packages: list[str]
 
 
 class SaveRequest(BaseModel):
     vm: str
     name: str
-    description: str = ""
+
+
+class MessageRequest(BaseModel):
+    text: str
 
 
 @router.post("/images/{name}/default")
@@ -44,12 +56,12 @@ def set_default_image(name: str) -> dict:
 
 
 @router.put("/images/{name}")
-def change_image(name: str, body: ChangeRequest) -> dict:
-    """Rename it and/or change its description."""
+def rename_image(name: str, body: RenameRequest) -> dict:
+    """Give it another name. VMs made from it keep pointing at it. Its description and agent chat move along."""
+    if image_agents.busy(name):
+        raise HTTPException(status_code=409, detail=f"{name}'s agent is working. Wait, or stop it.")
     try:
-        if body.description is not None:
-            images.set_description(name, body.description.strip())
-        if body.name is not None and body.name.strip() != name:
+        if body.name.strip() != name:
             images.rename(name, body.name.strip())
     except ImagesError as error:
         raise HTTPException(status_code=400, detail=str(error))
@@ -58,7 +70,9 @@ def change_image(name: str, body: ChangeRequest) -> dict:
 
 @router.delete("/images/{name}")
 def delete_image(name: str) -> dict:
-    """VMs made from it keep working; only new VMs can't use it anymore."""
+    """Only an image no VM was made from (stopped ones count too). Its description and agent chat go too."""
+    if image_agents.busy(name):
+        raise HTTPException(status_code=409, detail=f"{name}'s agent is working. Wait, or stop it.")
     try:
         images.delete(name)
     except ImagesError as error:
@@ -66,20 +80,46 @@ def delete_image(name: str) -> dict:
     return {}
 
 
-@router.post("/images/build")
-def build_image(body: BuildRequest) -> dict:
-    """Builds with sandbox/image/build.sh in the background (about an hour). An existing name is rebuilt."""
+@router.get("/images/new/options")
+def new_image_options() -> dict:
+    """What New image offers: systems, desktops, and the list that goes in every new image."""
+    return images.new_options()
+
+
+@router.put("/images/new/packages")
+def set_new_image_packages(body: PackagesRequest) -> dict:
+    """The list that goes in every new image from now on."""
+    images.set_packages(body.packages)
+    return {}
+
+
+@router.post("/images/new")
+async def new_image(body: NewImageRequest) -> dict:
+    """Writes the new image's description and starts its agent building it; answers at once."""
+    name = body.name.strip()
     try:
-        return images.build(body.name.strip(), body.description.strip())
+        images.new_spec(name, body.system, body.desktop, body.packages, body.comments)
+        image_agents.build(name)
     except ImagesError as error:
         raise HTTPException(status_code=409, detail=str(error))
+    return {}
+
+
+@router.post("/images/{name}/rebuild")
+async def rebuild_image(name: str) -> dict:
+    """The image's agent builds it again from its description; the new build replaces it. Answers at once."""
+    try:
+        image_agents.build(images.find(name)["name"])
+    except ImagesError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    return {}
 
 
 @router.post("/images/save")
 def save_vm_as_image(body: SaveRequest) -> dict:
     """Makes an image from a stopped VM in the background (a few minutes)."""
     try:
-        return images.save_vm(body.vm.strip(), body.name.strip(), body.description.strip())
+        return images.save_vm(body.vm.strip(), body.name.strip())
     except ImagesError as error:
         raise HTTPException(status_code=409, detail=str(error))
 
@@ -102,16 +142,81 @@ def image_inventory(fingerprint: str) -> dict:
     return inventory
 
 
+@router.get("/images/{name}/spec")
+def image_spec(name: str) -> dict:
+    """The image's description now, and a diff from the one it was built from ("" when the same)."""
+    try:
+        name = images.find(name)["name"]
+        return {"spec": images.read_spec(name), "diff": images.spec_diff(name)}
+    except ImagesError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+
+@router.post("/images/{name}/spec/discard")
+def discard_spec(name: str) -> dict:
+    """Put the description back to what the image was built from."""
+    if image_agents.busy(name):
+        raise HTTPException(status_code=409, detail=f"{name}'s agent is working. Wait, or stop it.")
+    try:
+        images.discard_spec(name)
+    except ImagesError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    return {}
+
+
+@router.get("/images/{name}/agent")
+async def image_agent_chat(name: str) -> dict:
+    """The image agent's conversation, and whether it is working now."""
+    try:
+        return image_agents.chat(name)
+    except ImagesError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+
+@router.post("/images/{name}/agent")
+async def message_image_agent(name: str, body: MessageRequest) -> dict:
+    """Starts a turn with the message and answers at once; GET the chat to follow it."""
+    try:
+        image_agents.send(name, body.text)
+    except ImagesError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    return {}
+
+
+@router.post("/images/{name}/agent/stop")
+async def stop_image_agent(name: str) -> dict:
+    try:
+        await image_agents.interrupt(name)
+    except ImagesError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    return {}
+
+
+@router.delete("/images/{name}/agent")
+async def clear_image_agent(name: str) -> dict:
+    """A new conversation. The description stays as it is."""
+    try:
+        image_agents.clear(name)
+    except ImagesError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    return {}
+
+
 @router.get("/images/tasks/{task_id}/log", response_class=PlainTextResponse)
 def task_log(task_id: str) -> str:
-    """The whole log of a build or save, as it is so far."""
+    """The whole log of a build, save or inspect, as it is so far."""
     return images.read_log(task_id)
 
 
 @router.post("/images/tasks/{task_id}/stop")
-def stop_task(task_id: str) -> dict:
+async def stop_task(task_id: str) -> dict:
+    """An agent's build stops by interrupting the agent (the build then fails and its VM goes); others are killed."""
     try:
-        images.stop(task_id)
+        task = images.get_task(task_id)
+        if task["kind"] == "agent":
+            await image_agents.interrupt(task["name"])
+        else:
+            await asyncio.to_thread(images.stop, task_id)
     except ImagesError as error:
         raise HTTPException(status_code=404, detail=str(error))
     return {}
@@ -119,7 +224,7 @@ def stop_task(task_id: str) -> dict:
 
 @router.delete("/images/tasks/{task_id}")
 def dismiss_task(task_id: str) -> dict:
-    """Forget a failed build or save, and its log."""
+    """Forget a failed build, save or inspect, and its log (and a failed build's VM)."""
     try:
         images.dismiss(task_id)
     except ImagesError as error:

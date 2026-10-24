@@ -26,6 +26,9 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 NETWORK = os.environ["SANDBOX_NETWORK"]
 NOVNC_PORT = int(os.environ["SANDBOX_VM_NOVNC_PORT"])
 VNC_PORT = int(os.environ["SANDBOX_VM_VNC_PORT"])
+TERMINAL_PORT = int(os.environ["SANDBOX_VM_TERMINAL_PORT"])
+# In an image without a desktop (terminal only): no noVNC or VNC server, its terminals (ttyd) are the way in.
+NO_DESKTOP_FILE = "/etc/sandbox-no-desktop"
 
 
 class VMError(Exception):
@@ -199,11 +202,17 @@ class VM:
         )
         return result.stdout.strip()
 
+    def has_desktop(self) -> bool:
+        """False for a VM from a terminal-only image (it has NO_DESKTOP_FILE). Asks the VM, so it must answer commands."""
+        result = subprocess.run(["incus", "exec", self.name, "--", "test", "-f", NO_DESKTOP_FILE], capture_output=True, stdin=subprocess.DEVNULL)
+        return result.returncode != 0
+
     def wait_ready(self, timeout: float = 300) -> None:
         """Wait until commands work, the VM has an address, noVNC answers and the desktop is up.
 
         The desktop is up when its VNC server (x11vnc) listens: it starts only once
         the desktop user is logged in, a few seconds after noVNC's web page works.
+        A VM without a desktop (terminal only) is ready once its terminals (ttyd) answer.
         """
         deadline = time.monotonic() + timeout
 
@@ -214,6 +223,19 @@ class VM:
             if time.monotonic() > deadline:
                 raise VMError(f"{self.name}: the VM agent did not come up")
             time.sleep(2)
+
+        if not self.has_desktop():
+            while True:
+                address = self.address()
+                if address:
+                    try:
+                        urllib.request.urlopen(f"http://{address}:{TERMINAL_PORT}/", timeout=3)
+                        return
+                    except OSError:
+                        pass
+                if time.monotonic() > deadline:
+                    raise VMError(f"{self.name}: the terminals (ttyd) did not answer on port {TERMINAL_PORT}")
+                time.sleep(2)
 
         while True:
             address = self.address()
@@ -367,16 +389,24 @@ systemctl set-property systemd-journald.service MemoryMin=64M
         systemd (PID 1) too, so the VM freezes while Incus still says Running. fwupd does this when it
         starts (fwupd-refresh.timer runs it about twice a day). So:
         - The guest kernel gets clearcpuid=user_shstk, so no program can turn shadow stacks on.
-          It applies from the next boot.
+          It applies from the next boot. Fedora sets kernel arguments with grubby, Ubuntu and Debian with a
+          grub.d file and update-grub. Nothing to do when the kernel already runs with it.
         - fwupd is masked, which covers the boot until then. A VM has no firmware to update anyway.
         """
         script = """
 set -e
 systemctl mask --now fwupd.service fwupd-refresh.service fwupd-refresh.timer > /dev/null 2>&1
-file=/etc/default/grub.d/99-sandbox-no-shadow-stack.cfg
-if [ ! -f "$file" ]; then
-    echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT clearcpuid=user_shstk"' > "$file"
-    update-grub > /dev/null 2>&1
+if ! grep -q clearcpuid=user_shstk /proc/cmdline; then
+    if command -v grubby > /dev/null; then
+        grubby --update-kernel=ALL --args=clearcpuid=user_shstk > /dev/null
+    else
+        file=/etc/default/grub.d/99-sandbox-no-shadow-stack.cfg
+        if [ ! -f "$file" ]; then
+            mkdir -p /etc/default/grub.d
+            echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT clearcpuid=user_shstk"' > "$file"
+            update-grub > /dev/null 2>&1
+        fi
+    fi
 fi
 """
         result = self.exec_root(script, timeout=120)

@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Build an image VMs can start from:
 #
-#     sandbox/image/build.sh [name]
+#     sandbox/image/build.sh [name] [recipe folder]
 #
 # SANDBOX_BUILD_FROM (Ubuntu 24.04 desktop) + the tools in provision.sh + the
 # Python packages in python-packages.txt, published as name (default
-# SANDBOX_BUILD_NAME). The VMs page's Images tab runs this too.
+# SANDBOX_BUILD_NAME). Those two files come from the recipe folder: this one by
+# default. The VMs page's Images tab runs this too, with the image's own recipe
+# (a copy of these two files that the image's agent may have changed).
 # Takes about 45-60 minutes (PyTorch and the ML caches are big). Run it again to update the image; VMs that
 # already exist keep their own disk.
 #
@@ -23,6 +25,7 @@ source <(grep -E '^SANDBOX_[A-Z_]+=' ../../.env)
 
 BUILDER=$SANDBOX_BUILD_VM
 NAME=${1:-$SANDBOX_BUILD_NAME}
+RECIPE=${2:-.}
 
 # Whatever happens, don't leave the builder VM behind.
 trap 'incus delete --force "$BUILDER" >/dev/null 2>&1 || true' EXIT
@@ -46,7 +49,7 @@ done
 incus exec "$BUILDER" -- systemctl mask --now fwupd.service fwupd-refresh.service fwupd-refresh.timer
 
 echo "==> Provisioning"
-incus file push provision.sh python-packages.txt "$BUILDER/root/"
+incus file push "$RECIPE/provision.sh" "$RECIPE/python-packages.txt" "$BUILDER/root/"
 incus exec "$BUILDER" \
     --env SANDBOX_VM_NODE_MAJOR="$SANDBOX_VM_NODE_MAJOR" \
     --env SANDBOX_VM_FALLBACK_USER="$SANDBOX_VM_FALLBACK_USER" \
