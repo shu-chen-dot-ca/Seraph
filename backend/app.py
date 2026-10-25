@@ -32,7 +32,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
-from backend import agents_api, explore_api, github_account_api, images_api, inbox_api, issues_api, repos_api, sherpa_api, tracked_api, vms_api
+from backend import agents_api, artifacts_api, explore_api, github_account_api, images_api, inbox_api, issues_api, repos_api, sherpa_api, tracked_api, vms_api
 from backend.shared import agents, explore, images, inbox, issue_facts, issue_tags, issues, jobs, rejections, repo_signals, repos, resource_usage, sherpa, tracked, tracked_issues, vms
 from github_searcher.token_balancer import BALANCER
 
@@ -76,6 +76,7 @@ app.include_router(agents_api.router)
 app.include_router(vms_api.router)
 app.include_router(images_api.router)
 app.include_router(sherpa_api.router)
+app.include_router(artifacts_api.router)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=LOCAL_HOSTS)
 
 

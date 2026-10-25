@@ -458,6 +458,7 @@ export type AgentSummary = {
   created_at: string;
   archived_at: string | null; // archived: stopped, its conversation kept
   prs: number; // PR drafts that wait for you or were approved: it can only be archived, not deleted
+  artifacts_stamp: number; // goes up on every change to its artifacts (the Artifacts tab reads its folder again)
 };
 
 export type Todo = {

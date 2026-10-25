@@ -47,7 +47,7 @@ Everything here runs in the backend's event loop. notify() and the queue callbac
 from request threads, so they hand their work to the loop. version goes up on every change the
 agent list shows (status, history, context, queue), for the live feed.
 
-    agents = Agents(repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues)
+    agents = Agents(repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, ..., artifacts)
     await agents.start()
     agents.send(agent_id, "find good first issues in Python CLI tools")
 """
@@ -85,8 +85,11 @@ OPEN_STATUSES = ["queued", "working"]
 
 
 class Agents:
-    def __init__(self, repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, rejections, repo_signals, issue_tags, explore):
+    def __init__(self, repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, rejections, repo_signals, issue_tags, explore, artifacts):
         self.repos = repos
+        # Each agent's own folder (github_searcher/artifacts.py). A change in one shows in the agent list (artifacts_stamp).
+        self.artifacts = artifacts
+        artifacts.on_change = self.changed
         self.issues = issues
         # The Tracked list (a RepoList) and what each tracked repo's last check found on GitHub.
         self.tracked = tracked
@@ -353,6 +356,8 @@ class Agents:
                     "archived_at": agent.record["archived_at"],
                     # PR drafts that wait for the user or were approved: then it can only be archived, not deleted.
                     "prs": prs.get(agent.id, 0),
+                    # Goes up on every change to its artifacts, so an open Artifacts tab reads its folder again.
+                    "artifacts_stamp": self.artifacts.stamps.get(agent.id, 0),
                 }
             )
         return summaries
@@ -439,6 +444,8 @@ class Agents:
         if vm_name is not None:
             await asyncio.to_thread(agent.computer_tools.cancel, vm_name)
         (self.folder / f"{agent_id}.json").unlink(missing_ok=True)
+        # Its artifacts go with it (an archived agent keeps them).
+        await asyncio.to_thread(self.artifacts.delete_all, agent_id)
 
     async def archive(self, agent_id: str) -> None:
         """Put the agent away: it stops, its open jobs become cancelled and it leaves every VM queue (what it still

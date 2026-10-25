@@ -7,6 +7,10 @@ left; on the right where it stands in a VM queue, its jobs in two lists that eac
 takes it off: the job is cancelled, and the agent is told) and Finished (done and cancelled, newest first), and its
 latest todo list.
 
+The header has two tabs: Chat (all of the above) and Artifacts (AgentArtifacts.tsx: the agent's own folder of files,
+pictures and screenshots). In the conversation, a picture the agent keeps there shows where it writes
+![...](artifact:path).
+
 The header's ⋯ menu has Archive (or Unarchive) and Delete, both asking first. Archive stops the agent, cancels its open
 jobs and takes it out of every VM queue, but keeps this conversation; an archived agent's page says so, and sending it
 a message brings it back. An agent that made PRs can't be deleted, only archived, so it keeps its context for updates.
@@ -76,12 +80,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import AgentArtifacts from "@/AgentArtifacts";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { JobProgressBar, JobSteps, JobTests, currentJob, since, stuckFor, useNow } from "@/components/ui/job-progress";
 import { IssueRefText, Markdown } from "@/components/ui/markdown";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AGENT_TONE, JOB_LABEL, JOB_TONE, StatusDot, VM_TONE } from "@/components/ui/status-dot";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api, useLive, useLiveValue, useLoaded, type HistoryEntry, type Todo, type VMStatus } from "@/live";
@@ -210,6 +216,8 @@ export default function AgentChat(props: { agentId: string }) {
   const [seen, setSeen] = useState(false);
   // The header's confirm dialog: archive or delete this agent; null while closed.
   const [confirmAction, setConfirmAction] = useState<"archive" | "delete" | null>(null);
+  // Chat or Artifacts. The chat stays mounted under Artifacts, so its scroll and desktop stay.
+  const [pageTab, setPageTab] = useState("chat");
   // The job lists (In queue, Finished) folded on the right, by key.
   const [foldedLists, setFoldedLists] = useState<string[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -481,6 +489,16 @@ export default function AgentChat(props: { agentId: string }) {
         <span className="font-mono text-xs text-muted-foreground" title="Its id: unique, and it never changes, also when renamed">
           {summary.id}
         </span>
+        <Tabs value={pageTab} onValueChange={setPageTab}>
+          <TabsList>
+            <TabsTrigger value="chat" className="px-2.5">
+              Chat
+            </TabsTrigger>
+            <TabsTrigger value="artifacts" className="px-2.5">
+              Artifacts
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
         <span className="truncate text-muted-foreground">
           {summary.status === "idle" && "idle"}
           {summary.status === "working" && "working"}
@@ -633,6 +651,13 @@ export default function AgentChat(props: { agentId: string }) {
         </div>
       )}
 
+      {pageTab === "artifacts" && (
+        <div className="min-h-0 flex-1">
+          <AgentArtifacts key={summary.id} agentId={summary.id} stamp={summary.artifacts_stamp ?? 0} />
+        </div>
+      )}
+
+      <div className={pageTab === "chat" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
       <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
         <ResizablePanel defaultSize="70%" minSize="35%">
           <div className="flex h-full flex-col">
@@ -675,7 +700,12 @@ export default function AgentChat(props: { agentId: string }) {
                   }
 
                   if (entry.type === "text") {
-                    return <Markdown key={key} text={entry.text} className="py-1" githubImagesOnly issueRefs />;
+                    // ![...](artifact:path): a picture from its artifacts, loaded from this app.
+                    const text = entry.text.replace(
+                      /\]\(artifact:([^)\s]+)\)/g,
+                      (_, file: string) => `](${window.location.origin}/api/agents/${summary.id}/artifacts/file?path=${encodeURIComponent(file)})`,
+                    );
+                    return <Markdown key={key} text={text} className="py-1" githubImagesOnly issueRefs />;
                   }
 
                   if (entry.type === "thinking") {
@@ -960,6 +990,7 @@ export default function AgentChat(props: { agentId: string }) {
           </div>
         </ResizablePanel>
       </ResizablePanelGroup>
+      </div>
     </div>
   );
 }

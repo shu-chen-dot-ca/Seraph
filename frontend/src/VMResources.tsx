@@ -7,8 +7,8 @@ Drag a file or folder onto the other pane to copy it into the folder that pane s
 never overwrites: a name that is already there is refused. It waits until the copy is done (a toast says so),
 then both panes read their folder again. The VM's pane needs the VM running.
 
-Only you can do this, here: agents have no tool that moves anything between the VM and this computer
-(sandbox/file_transfer.py). The panes come from GET /api/computer/files and GET /api/vms/{name}/files,
+Only you can do this, here, with any folder: agents can only copy between their VM and their own artifacts folder
+(sandbox/file_transfer.py, github_searcher/artifacts.py). The panes come from GET /api/computer/files and GET /api/vms/{name}/files,
 a copy is POST /api/vms/{name}/files/copy.
 */
 

@@ -26,6 +26,10 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   user (draft_question) before the PR. A passing before is needed to go past set_up and an after for
   a PR draft; an official before of another job on the same repo and VM counts too (job_progress
   carries it over), so a project already set up isn't set up again.
+- Artifacts: the agent's own folder on this computer (github_searcher/artifacts.py), the Artifacts tab of its page.
+  It lists it, looks at its pictures and text (artifact_view: a picture comes back as a picture), keeps
+  screenshots of its VM there, and copies files between it and the VM it holds; never anywhere else on this
+  computer, and it can't delete anything there. It shows one of its pictures in chat as ![...](artifact:path).
 - VMs: the agent sees every VM with what its image has (sandbox/images.py lists each image once) and
   picks the one that suits its jobs as its target VM (the user can set it too). It can't make VMs.
   It joins its target VM's queue (sandbox/vm_queue.py) and releases the VM when its jobs there are done.
@@ -53,10 +57,12 @@ from datetime import UTC, datetime, timedelta
 import httpx
 from claude_agent_sdk import tool
 
+from github_searcher.artifacts import ArtifactsError
 from github_searcher.jobs import EVIDENCE_DIR
 from github_searcher.search import get_repository, get_thread
 from sandbox.agent.computer_use import Computer, ComputerError
 from sandbox.agent.tools import HIDE_MIN_LENGTH
+from sandbox.file_transfer import FileTransferError, to_vm
 from sandbox.images import load_inventory
 from sandbox.vms import VMsError
 
@@ -322,6 +328,53 @@ class WorkTools:
                 },
             )(self.draft_question),
             tool(
+                "artifacts_list",
+                "See what is in your artifacts: your own folder on the user's computer, the Artifacts tab of your page. The user "
+                "puts files and folders there for you (pictures to look at, files to use in the VM); you keep your screenshots and "
+                "files from the VM there. path: a folder in it (empty for the top).",
+                {"type": "object", "properties": {"path": {"type": "string"}}},
+            )(self.artifacts_list),
+            tool(
+                "artifact_view",
+                "Look at a file in your artifacts. A picture (PNG, JPEG, GIF or WebP, up to 5 MB) comes back as the picture itself, "
+                "text as text (the first 50,000 characters). path: e.g. 'screenshots/before.jpg'. To show the user a picture in "
+                "chat, write ![what it shows](artifact:screenshots/before.jpg).",
+                {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+            )(self.artifact_view),
+            tool(
+                "artifact_screenshot",
+                "Take a screenshot of your VM's desktop and keep it in your artifacts (only while you hold the VM). path: where, "
+                "e.g. 'screenshots/login-page.jpg' (a JPEG; a name that is taken is refused). region: [x, y, width, height] for "
+                "only that part of the screen.",
+                {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}, "region": {"type": "array", "items": {"type": "integer"}}},
+                    "required": ["path"],
+                },
+            )(self.artifact_screenshot),
+            tool(
+                "artifact_from_vm",
+                "Copy a file or folder from your VM into your artifacts, e.g. a picture you made or a log (only while you hold the "
+                "VM; 200 MB at most). source: its path in the VM (~/ is the home folder). folder: where in your artifacts (empty "
+                "for the top). A name that is already there is refused.",
+                {
+                    "type": "object",
+                    "properties": {"source": {"type": "string"}, "folder": {"type": "string"}},
+                    "required": ["source"],
+                },
+            )(self.artifact_from_vm),
+            tool(
+                "artifact_to_vm",
+                "Copy a file or folder from your artifacts into your VM, e.g. something the user put there for you (only while "
+                "you hold the VM). path: in your artifacts. folder: where in the VM (empty for the home folder). A name that is "
+                "already there is refused.",
+                {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}, "folder": {"type": "string"}},
+                    "required": ["path"],
+                },
+            )(self.artifact_to_vm),
+            tool(
                 "draft_pr",
                 "Draft a pull request for the user's Inbox from your work in the VM (only while you hold it). Only when you are certain the "
                 "fix is right and complete, and your evidence shows it. path is the repo folder in the VM (e.g. ~/click), base what to "
@@ -491,6 +544,16 @@ class WorkTools:
             return "Asking: " + (args.get("question") or "").split("\n")[0][:120]
         if name == "draft_pr":
             return f"Drafting a PR: {args.get('title')}"
+        if name == "artifacts_list":
+            return f"Looking in its artifacts: {args.get('path') or '(top)'}"
+        if name == "artifact_view":
+            return f"Looking at {args.get('path')} in its artifacts"
+        if name == "artifact_screenshot":
+            return f"Screenshot into its artifacts: {args.get('path')}"
+        if name == "artifact_from_vm":
+            return f"Copying {args.get('source')} from the VM into its artifacts"
+        if name == "artifact_to_vm":
+            return f"Copying {args.get('path')} from its artifacts into the VM"
         if name == "evidence_add":
             return f"Evidence, {args.get('stage')}: {args.get('topic')} ({args.get('kind')})"
         if name == "evidence_remove":
@@ -1081,6 +1144,147 @@ class WorkTools:
         self.agents.jobs.update(job["id"], status="waiting_on_user", drafts=job["drafts"] + [draft["id"]])
         text = f"Your question is in the user's Inbox. {job['id']} waits on the user now; move on to your next job. You'll get a message with their answer."
         return {"content": [{"type": "text", "text": text}]}
+
+    async def artifacts_list(self, args: dict) -> dict:
+        try:
+            listing = await asyncio.to_thread(self.agents.artifacts.list, self.agent_id, args.get("path") or "")
+        except ArtifactsError as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        lines = [f"Your artifacts, {listing['path'] or 'the top'}:"]
+        for entry in listing["entries"]:
+            if entry["kind"] == "folder":
+                lines.append(f"{entry['name']}/")
+            else:
+                when = datetime.fromtimestamp(entry["modified"], UTC).strftime("%Y-%m-%d %H:%M")
+                lines.append(f"{entry['name']}  ({entry['size']:,} bytes, {when})")
+        if not listing["entries"]:
+            lines.append("(empty)")
+        return {"content": [{"type": "text", "text": "\n".join(lines)}]}
+
+    async def artifact_view(self, args: dict) -> dict:
+        try:
+            target = self.agents.artifacts.resolve(self.agent_id, args.get("path") or "")
+        except ArtifactsError as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        if not target.is_file():
+            return {"content": [{"type": "text", "text": f"{args.get('path')} is not a file in your artifacts."}], "is_error": True}
+        size = target.stat().st_size
+        with open(target, "rb") as file:
+            start = file.read(16)
+        # The type comes from the file's first bytes, never its name.
+        mime = ""
+        if start.startswith(b"\x89PNG\r\n\x1a\n"):
+            mime = "image/png"
+        elif start.startswith(b"\xff\xd8\xff"):
+            mime = "image/jpeg"
+        elif start.startswith(b"GIF87a") or start.startswith(b"GIF89a"):
+            mime = "image/gif"
+        elif start[:4] == b"RIFF" and start[8:12] == b"WEBP":
+            mime = "image/webp"
+        if mime != "" and size > IMAGE_LIMIT:
+            text = f"{args.get('path')} is a picture over {IMAGE_LIMIT // 1_000_000} MB: too big to look at. Make a smaller copy in the VM."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if mime != "":
+            data = await asyncio.to_thread(target.read_bytes)
+            text = f"{args.get('path')} ({size:,} bytes)"
+            return {"content": [{"type": "text", "text": text}, {"type": "image", "data": base64.b64encode(data).decode(), "mimeType": mime}]}
+        with open(target, "rb") as file:
+            data = file.read(200_000)
+        if b"\0" in data[:8192]:
+            return {"content": [{"type": "text", "text": f"{args.get('path')} is not a picture or text ({size:,} bytes)."}]}
+        text = data.decode("utf-8", errors="replace")[:50_000]
+        if size > 50_000:
+            text += f"\n[cut: the file has {size:,} bytes]"
+        return {"content": [{"type": "text", "text": text}]}
+
+    async def artifact_screenshot(self, args: dict) -> dict:
+        path = (args.get("path") or "").strip()
+        if not path.lower().endswith((".jpg", ".jpeg")):
+            path += ".jpg"
+        region = None
+        if args.get("region"):
+            region = args["region"]
+            if len(region) != 4 or region[2] <= 0 or region[3] <= 0 or region[0] < 0 or region[1] < 0:
+                return {"content": [{"type": "text", "text": "region is [x, y, width, height], all positive."}], "is_error": True}
+            region = tuple(region)
+        vm_name = self.record["target_vm"]
+        if vm_name is None:
+            return {"content": [{"type": "text", "text": "You have no target VM."}], "is_error": True}
+        try:
+            vm_record = self.agents.vms.get(vm_name)
+        except VMsError as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        if vm_record.holder != self.agent_id:
+            text = "You don't hold a VM. Call queue_for_vm and wait for the message that it is yours."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        computer = Computer(vm_record.vm, f"sandbox-agent-{self.agent_id}")
+        try:
+            await asyncio.to_thread(computer.check)
+            data = await asyncio.to_thread(computer.screenshot, EVIDENCE_QUALITY, region)
+        except (ComputerError, subprocess.TimeoutExpired) as error:
+            return {"content": [{"type": "text", "text": f"Could not take the screenshot: {error}"}], "is_error": True}
+        try:
+            saved = await asyncio.to_thread(self.agents.artifacts.save, self.agent_id, path, data)
+        except ArtifactsError as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        text = f"Kept as {saved} in your artifacts. In chat it shows with ![what it shows](artifact:{saved})."
+        return {"content": [{"type": "text", "text": text}, {"type": "image", "data": base64.b64encode(data).decode(), "mimeType": "image/jpeg"}]}
+
+    async def artifact_from_vm(self, args: dict) -> dict:
+        source = (args.get("source") or "").strip()
+        if not source:
+            return {"content": [{"type": "text", "text": "Give the path in the VM."}], "is_error": True}
+        vm_name = self.record["target_vm"]
+        if vm_name is None:
+            return {"content": [{"type": "text", "text": "You have no target VM."}], "is_error": True}
+        try:
+            vm_record = self.agents.vms.get(vm_name)
+        except VMsError as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        if vm_record.holder != self.agent_id:
+            text = "You don't hold a VM. Call queue_for_vm and wait for the message that it is yours."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        # Commands run in the home folder, so ~/x and x are the same; the copy needs the full path.
+        where = await asyncio.to_thread(vm_record.vm.exec, f"realpath -e -- {shlex.quote(source.removeprefix('~/'))}", 30)
+        if where.returncode != 0:
+            return {"content": [{"type": "text", "text": f"{source} is not in the VM."}], "is_error": True}
+        try:
+            saved = await asyncio.to_thread(self.agents.artifacts.from_vm, self.agent_id, vm_record.vm, where.stdout.strip(), args.get("folder") or "")
+        except (ArtifactsError, FileTransferError) as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        return {"content": [{"type": "text", "text": f"Copied into your artifacts as {saved}."}]}
+
+    async def artifact_to_vm(self, args: dict) -> dict:
+        path = (args.get("path") or "").strip()
+        vm_name = self.record["target_vm"]
+        if vm_name is None:
+            return {"content": [{"type": "text", "text": "You have no target VM."}], "is_error": True}
+        try:
+            vm_record = self.agents.vms.get(vm_name)
+        except VMsError as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        if vm_record.holder != self.agent_id:
+            text = "You don't hold a VM. Call queue_for_vm and wait for the message that it is yours."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        try:
+            source = self.agents.artifacts.resolve(self.agent_id, path)
+            # A link would be followed by the copy and could take a file of this computer into the VM.
+            links = await asyncio.to_thread(self.agents.artifacts.has_links, self.agent_id, path)
+        except ArtifactsError as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        if path == "" or not source.exists():
+            return {"content": [{"type": "text", "text": f"{path or 'The top folder'} is not a file or folder in your artifacts."}], "is_error": True}
+        if links:
+            return {"content": [{"type": "text", "text": f"{path} has links in it, which can't be copied."}], "is_error": True}
+        folder = (args.get("folder") or "").strip().removeprefix("~/")
+        where = await asyncio.to_thread(vm_record.vm.exec, f"realpath -e -- {shlex.quote(folder or '.')}", 30)
+        if where.returncode != 0:
+            return {"content": [{"type": "text", "text": f"{args.get('folder')} is not a folder in the VM."}], "is_error": True}
+        try:
+            await asyncio.to_thread(to_vm, vm_record.vm, str(source), where.stdout.strip())
+        except FileTransferError as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        return {"content": [{"type": "text", "text": f"Copied into the VM as {where.stdout.strip()}/{source.name}."}]}
 
     async def draft_pr(self, args: dict) -> dict:
         try:

@@ -1,8 +1,9 @@
 """Copying files and folders between this computer and a VM: the VM page's Resources tab. Only the user does it.
 
-Agents have no way to do this. Their tools (sandbox/agent/tools.py, github_searcher/agent/work_tools.py) only
-work inside the VM, none of them calls anything here, and the VM can't reach this computer. Only the backend's
-endpoints call this (backend/vms_api.py), and the backend only listens on 127.0.0.1, for the browser.
+Agents can't do this with any folder of this computer. The one place they may copy to and from is their own
+artifacts folder (github_searcher/artifacts.py: it checks the paths, and cleans links out of what comes from
+the VM); the VM itself can't reach this computer. Otherwise only the backend's endpoints call this
+(backend/vms_api.py), and the backend only listens on 127.0.0.1, for the browser.
 
 Listing a folder, on this computer (as the backend's user) or in the VM (as its desktop user, uid 1000).
 An empty path is that user's home. Both give back:
