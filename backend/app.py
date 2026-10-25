@@ -48,6 +48,8 @@ async def lifespan(app: FastAPI):
     await agents.start()
     # Sherpa goes on with a turn the restart cut off.
     sherpa.resume()
+    # So does an Explore run, when only the code reloaded.
+    explore.resume()
     keepers = [
         # What is left of every GitHub quota, for the Explore page's bars from the start.
         asyncio.create_task(asyncio.to_thread(BALANCER.prime)),
@@ -57,7 +59,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(tracked_api.keep_tracked()),
     ]
     yield
-    explore.stop()
+    explore.save_for_restart()
     for keeper in keepers:
         keeper.cancel()
     await agents.stop()

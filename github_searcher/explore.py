@@ -45,8 +45,14 @@ and the README judgment is the costly part). The fit is known only after the REA
 
 One run at a time. It lives in memory: the counts, the ones being checked now, why others were skipped and
 the errors. The live feed's explore topic carries it with the found list and the profile (and the backend adds
-the rejections). A backend restart ends a run; what it found stays. version goes up on every change, so the
-page follows along. Everything here runs on the backend's event loop, so the found list needs no lock.
+the rejections). version goes up on every change, so the page follows along.
+
+A run goes on through a reload (the backend restarts whenever the code changes): at shutdown save_for_restart() keeps
+it in DATA_DIR/explore_run.json, with where its searches are and what it looked at (the checks in progress go back to
+be checked again), and at start resume() goes on with it. Only when the same `uv run serve` started both (SERVE_ID):
+when the user closed the backend, the run shows as stopped ("The backend was closed"). What it
+found always stays. The minutes limit counts from when the run started, so the time a reload takes counts too.
+Everything here runs on the backend's event loop, so the found list needs no lock.
 """
 
 import asyncio
@@ -54,7 +60,6 @@ import copy
 import json
 import os
 import re
-import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -70,6 +75,11 @@ load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 DATA_DIR = PROJECT_ROOT / os.environ["DATA_DIR"]
 # The default profile, its types' searches written by hand so the first run needs no planning.
+# Who started this backend: with reload, the `uv run serve` process that watches the code (backend/serve.py). It stays
+# through every reload and is new each time the user starts the backend, so its pid and start time (a pid can be used
+# again later) tell a reload from the user closing the backend. The start time is field 22 of /proc/<pid>/stat.
+SERVE_STAT = Path(f"/proc/{os.getppid()}/stat").read_text()
+SERVE_ID = f"{os.getppid()}:{SERVE_STAT.rsplit(')', 1)[1].split()[19]}"
 DEFAULT_PROFILE = {
     "about": "",
     "lanes": [
@@ -214,6 +224,8 @@ class Explore:
         self.cursors = {}
         # Every repo the run looked at, lower case, so one found by two searches is checked once.
         self.seen = set()
+        # A running run, kept here at shutdown so the next start goes on with it (save_for_restart, resume).
+        self.run_path = DATA_DIR / "explore_run.json"
         # Found repos waiting for the user's decision, kept across runs and restarts.
         self.found_path = DATA_DIR / "explore_found.json"
         self.found = []
@@ -394,18 +406,72 @@ class Explore:
             return
         self.stopping = True
 
+    def save_for_restart(self) -> None:
+        """At shutdown: keep a running run in DATA_DIR/explore_run.json for resume(), then end it here."""
+        if self.run is None or self.run["status"] != "running":
+            return
+        run = copy.deepcopy(self.run)
+        cursors = copy.deepcopy(self.cursors)
+        seen = set(self.seen)
+        # The checks in progress are dropped: back to the front of their lane, to be checked again.
+        for each in run["checking"]:
+            cursors[each["lane"]]["pending"].insert(0, {"name": each["name"]})
+            seen.discard(each["name"].lower())
+            run["looked_at"] -= 1
+            run["lanes"][each["lane"]]["exhausted"] = False
+        run["checking"] = []
+        for state in run["lanes"].values():
+            state["in_flight"] = 0
+        saved = {
+            "serve_id": SERVE_ID,
+            "saved_at": datetime.now(UTC).isoformat(),
+            "run": run,
+            "run_profile": self.run_profile,
+            "cursors": cursors,
+            "seen": sorted(seen),
+        }
+        self.run_path.parent.mkdir(parents=True, exist_ok=True)
+        # Write, then rename: a crash never leaves half a file.
+        temporary = self.run_path.with_name(self.run_path.name + ".tmp")
+        temporary.write_text(json.dumps(saved))
+        temporary.replace(self.run_path)
+        # Its checks stop now, so none finishes after it was saved.
+        self.task.cancel()
+
+    def resume(self) -> None:
+        """At start, on the event loop: go on with the run save_for_restart() kept, when only the code reloaded (the
+        same SERVE_ID). After the user closed the backend it only shows, as stopped."""
+        if not self.run_path.exists():
+            return
+        saved = json.loads(self.run_path.read_text())
+        self.run_path.unlink()
+        self.run = saved["run"]
+        if saved["serve_id"] != SERVE_ID:
+            self.run["status"] = "stopped"
+            self.run["end_reason"] = "The backend was closed"
+            self.run["ended_at"] = saved["saved_at"]
+            self.changed()
+            return
+        self.run_profile = saved["run_profile"]
+        self.cursors = saved["cursors"]
+        self.seen = set(saved["seen"])
+        self.stopping = False
+        self.changed()
+        self.task = asyncio.create_task(self.work())
+
     async def work(self) -> None:
         run = self.run
         tasks = {}
+        # From when the run started, so a run that went on after a reload keeps its end.
         deadline = None
         if run["minutes"] is not None:
-            deadline = time.monotonic() + run["minutes"] * 60
+            deadline = datetime.fromisoformat(run["started_at"]) + timedelta(minutes=run["minutes"])
         try:
             while True:
                 if self.stopping:
                     run["end_reason"] = "Stopped"
                     break
-                if deadline is not None and time.monotonic() > deadline:
+                if deadline is not None and datetime.now(UTC) > deadline:
                     run["end_reason"] = f"{run['minutes']} minutes are up"
                     break
                 if run["count"] is not None and run["found"] >= run["count"]:
