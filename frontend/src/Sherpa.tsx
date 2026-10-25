@@ -11,8 +11,8 @@ It can take a screenshot of the app: the page drawn to an image from its own DOM
 outside the app gets in, no other window or tab. Frames (a VM's desktop, another site) and Sherpa's own chat are
 left out. With numbers on, each usable element's number is drawn on it, for click.
 
-Each message takes the page along, as readPage reads it: the address, the sidebar, the text, and every button, link
-and field, numbered (data-sherpa-id), the values of password and data-secret fields left out. With a pop-up open, only
+Each message takes the page along, as readPage reads it: the address, the sidebar, the text, and every button, link,
+field and fold (a folded section's title, open or closed), numbered (data-sherpa-id), the values of password and data-secret fields left out. With a pop-up open, only
 the pop-up. While a turn runs, the chat comes from GET /api/sherpa every half second, and a page action Sherpa asks
 for (pending) is done here, in the tab the message came from (TAB, kept over a reload), and its answer posted back.
 You can keep typing to Sherpa while it works: what it does on the page never takes the focus from its text box (a pop-up
@@ -53,7 +53,7 @@ import { cn, timeAgo } from "@/lib/utils";
 
 // What Sherpa can use on a page, each given a number for click, fill and point.
 const USABLE =
-  "a[href], button, input, textarea, select, [role=tab], [role=option], [role=menuitem], [role=menuitemcheckbox], [role=menuitemradio], [role=switch], [role=checkbox], [role=radio], [role=combobox]";
+  "a[href], button, input, textarea, select, summary, [role=tab], [role=option], [role=menuitem], [role=menuitemcheckbox], [role=menuitemradio], [role=switch], [role=checkbox], [role=radio], [role=combobox]";
 const ELEMENTS_KEPT = 300;
 const TEXT_KEPT = 6000;
 // How much of a field's value the page shows Sherpa: a text box (a YAML, a job's description) much more than a field.
@@ -131,6 +131,9 @@ function readPage(): string {
         kind = "link";
       } else if (tag === "textarea") {
         kind = "text box";
+      } else if (tag === "summary") {
+        // A folded section's title: a click opens or closes it. What is inside shows in the text only while open.
+        kind = "fold";
       } else if (element instanceof HTMLInputElement) {
         kind = box ? element.type : `${element.type} field`;
       }
@@ -170,6 +173,9 @@ function readPage(): string {
       }
       if (element.getAttribute("aria-expanded") === "true") {
         line += " open";
+      }
+      if (tag === "summary") {
+        line += element.parentElement instanceof HTMLDetailsElement && element.parentElement.open ? " open" : " closed";
       }
       if (element.matches(":disabled") || element.getAttribute("aria-disabled") === "true" || element.hasAttribute("data-disabled")) {
         line += " disabled";

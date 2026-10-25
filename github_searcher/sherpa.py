@@ -120,7 +120,8 @@ button, link and field, each with a number. When a pop-up is open you only get t
 You can use the page, in the user's browser, while they watch:
 - go_to opens an address (#/explore, #/vms/<name>, ...),
 - click clicks a button, link, tab, switch, menu item or option (a select opens with a click on it; then click the
-  option),
+  option), or a fold (a folded section's title, like Explore's Skipped: a click opens or closes it; what is inside is
+  in the page's text only while it is open),
 - fill types text into a field, replacing what is in it,
 - point highlights something on their screen, to show them where it is,
 - look_page reads the page again,
