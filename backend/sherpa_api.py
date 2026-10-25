@@ -1,14 +1,14 @@
-"""The Guide: the round button at the bottom right of every page (github_searcher/guide.py, frontend/src/Guide.tsx).
+"""Sherpa: the round button at the bottom right of every page (github_searcher/sherpa.py, frontend/src/Sherpa.tsx).
 
-The browser sends a message with the page the user is on, follows the chat with GET /api/guide while a turn runs, and
-does the page actions the Guide asks for (pending), posting what happened to /api/guide/result. Its turns run on the
+The browser sends a message with the page the user is on, follows the chat with GET /api/sherpa while a turn runs, and
+does the page actions Sherpa asks for (pending), posting what happened to /api/sherpa/result. Its turns run on the
 event loop, so the endpoints are `async def`.
 """
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.shared import guide
+from backend.shared import sherpa
 
 router = APIRouter(prefix="/api")
 
@@ -25,39 +25,39 @@ class ResultRequest(BaseModel):
     text: str  # the page after it, or why it couldn't be done
 
 
-@router.get("/guide")
-async def guide_chat() -> dict:
+@router.get("/sherpa")
+async def sherpa_chat() -> dict:
     """The conversation, whether a turn runs, and the page action waiting for the browser."""
-    return guide.chat()
+    return sherpa.chat()
 
 
-@router.post("/guide")
-async def message_guide(body: MessageRequest) -> dict:
+@router.post("/sherpa")
+async def message_sherpa(body: MessageRequest) -> dict:
     """Starts a turn with the message and answers at once; GET the chat to follow it."""
     try:
-        guide.send(body.text, body.page, body.tab)
+        sherpa.send(body.text, body.page, body.tab)
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error))
     return {}
 
 
-@router.post("/guide/result")
-async def guide_result(body: ResultRequest) -> dict:
-    guide.result(body.id, body.ok, body.text)
+@router.post("/sherpa/result")
+async def sherpa_result(body: ResultRequest) -> dict:
+    sherpa.result(body.id, body.ok, body.text)
     return {}
 
 
-@router.post("/guide/stop")
-async def stop_guide() -> dict:
-    await guide.interrupt()
+@router.post("/sherpa/stop")
+async def stop_sherpa() -> dict:
+    await sherpa.interrupt()
     return {}
 
 
-@router.delete("/guide")
-async def clear_guide() -> dict:
+@router.delete("/sherpa")
+async def clear_sherpa() -> dict:
     """A new conversation."""
     try:
-        guide.clear()
+        sherpa.clear()
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error))
     return {}

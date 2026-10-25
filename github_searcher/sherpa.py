@@ -1,25 +1,25 @@
-"""The Guide: the round button at the bottom right of every page (frontend/src/Guide.tsx), a Claude conversation that
+"""Sherpa: the round button at the bottom right of every page (frontend/src/Sherpa.tsx), a Claude conversation that
 knows the whole app and can see and use the page the user is on.
 
 What it knows: every page's own description (the comment at the top of each file in frontend/src), put in its prompt
 at each turn, and the app's source, read-only, for the details (read_source, search_source; SOURCE_FOLDERS only, so
 never .env or anything else on this machine).
 What it sees: each message comes with the page the user is on, read by the browser: the address, the sidebar, the text
-on the page, and every button, link and field, numbered (Guide.tsx readPage).
+on the page, and every button, link and field, numbered (Sherpa.tsx readPage).
 What it does: go_to, click, fill and point act on the page in the user's browser tab (the one the message came from),
 and answer with the page as it is after. The browser refuses a click inside a confirmation (Delete, Reject...): the
 user confirms those themselves. look_page reads the page again.
 
-How an action reaches the browser: the tool puts it in `pending`, the browser (which asks GET /api/guide every half
-second while a turn runs) does it and posts what happened (POST /api/guide/result), which the tool waits for, up to
+How an action reaches the browser: the tool puts it in `pending`, the browser (which asks GET /api/sherpa every half
+second while a turn runs) does it and posts what happened (POST /api/sherpa/result), which the tool waits for, up to
 ACTION_TIMEOUT seconds.
 
-One conversation, DATA_DIR/guide_chat.json: {"session_id", "history": [entry, ...], "cost_usd"}, with entries like
+One conversation, DATA_DIR/sherpa_chat.json: {"session_id", "history": [entry, ...], "cost_usd"}, with entries like
 the image agent's (sandbox/image_agent.py). Each turn connects to Claude Code, resumes the conversation by its
 session id, and disconnects at the end. Claude Code's own tools are off: only the tools here.
 
-    guide = Guide()
-    guide.send("how do I give an agent more memory?", page, tab)
+    sherpa = Sherpa()
+    sherpa.send("how do I give an agent more memory?", page, tab)
 """
 
 import asyncio
@@ -37,11 +37,11 @@ load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 DATA_DIR = PROJECT_ROOT / os.environ["DATA_DIR"]
 # Claude Code runs here. With no file tools this only decides where it keeps the conversation.
-AGENT_HOME = DATA_DIR / "guide_home"
-TOOL_SERVER = "guide"
+AGENT_HOME = DATA_DIR / "sherpa_home"
+TOOL_SERVER = "sherpa"
 # How long a page action may take in the browser.
 ACTION_TIMEOUT = 20
-# How much of a tool's result the chat keeps. The Guide gets it in full.
+# How much of a tool's result the chat keeps. Sherpa gets it in full.
 RESULT_CUT = 4000
 # What read_source and search_source may read: the app's own code, nothing else.
 SOURCE_FOLDERS = ["frontend/src", "backend", "github_searcher", "sandbox"]
@@ -49,7 +49,7 @@ SOURCE_TYPES = [".py", ".ts", ".tsx", ".css", ".md", ".yaml", ".sh"]
 SOURCE_LIMIT = 120_000
 SEARCH_LIMIT = 80
 
-PROMPT = """You are the Guide of Seraph, an app on the user's own computer that finds open-source work and does it: Explore
+PROMPT = """You are Sherpa, the guide of Seraph, an app on the user's own computer that finds open-source work and does it: Explore
 finds repos to contribute to, Repos and Tracked keep them, Issues lists issues to work on, AI agents work on them as
 jobs inside VMs (virtual machines the user can watch in the browser), and whatever an agent wants to post on GitHub
 waits in the Inbox for the user to approve. You live in the round button at the bottom right of every page: the user
@@ -87,16 +87,16 @@ The pages:
 """
 
 
-class Guide:
+class Sherpa:
     def __init__(self):
-        self.path = DATA_DIR / "guide_chat.json"
+        self.path = DATA_DIR / "sherpa_chat.json"
         # The turn running now, or None: {"client", "chat", "stopped", "task", "tab"}.
         self.running = None
         # The page action the browser should do now, or None: {"id", "tab", "action"}; and what waits for its answer.
         self.pending = None
         self.waiter = None
         self.action_id = 0
-        # The page the Guide saw last, for naming the element in a click, fill or point ("[12] button "Save"").
+        # The page Sherpa saw last, for naming the element in a click, fill or point ("[12] button "Save"").
         self.last_page = ""
 
     def load(self) -> dict:
@@ -122,7 +122,7 @@ class Guide:
     def send(self, text: str, page: str, tab: str) -> None:
         """Start a turn with the user's message and their page. Answers at once; call it on the event loop."""
         if self.running is not None:
-            raise ValueError("The Guide is still working. Wait, or stop it.")
+            raise ValueError("Sherpa is still working. Wait, or stop it.")
         if not text.strip():
             raise ValueError("The message is empty")
         chat = self.load()
@@ -163,11 +163,11 @@ class Guide:
     def clear(self) -> None:
         """Start a new conversation: the old one is forgotten."""
         if self.running is not None:
-            raise ValueError("The Guide is still working. Stop it first.")
+            raise ValueError("Sherpa is still working. Stop it first.")
         self.path.unlink(missing_ok=True)
 
     async def run(self, text: str) -> None:
-        """One turn: send the message and add to the chat until the Guide ends its turn."""
+        """One turn: send the message and add to the chat until Sherpa ends its turn."""
         AGENT_HOME.mkdir(parents=True, exist_ok=True)
         running = self.running
         chat = running["chat"]
@@ -218,7 +218,7 @@ class Guide:
                 strict_mcp_config=True,
                 resume=chat["session_id"],
                 cwd=str(AGENT_HOME),
-                # The backend runs in this repo: its CLAUDE.md and Claude Code's memory are not for the Guide.
+                # The backend runs in this repo: its CLAUDE.md and Claude Code's memory are not for Sherpa.
                 env={"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"},
             )
         )
@@ -244,7 +244,7 @@ class Guide:
                         history.append({"type": "system", "text": f"Error: {error}", "time": datetime.now(UTC).isoformat()})
                     history.append({"type": "turn_end", "stopped": stopped, "cost_usd": cost, "time": datetime.now(UTC).isoformat()})
 
-                # Text and tool calls come in the Guide's messages; tool results come back in user messages.
+                # Text and tool calls come in Sherpa's messages; tool results come back in user messages.
                 blocks = []
                 if isinstance(message, (AssistantMessage, UserMessage)) and isinstance(message.content, list):
                     blocks = message.content
@@ -293,7 +293,7 @@ class Guide:
                 pass
 
     # --- Tools ---------------------------------------------------------------------
-    # An exception here reaches the Guide as a failed tool call.
+    # An exception here reaches Sherpa as a failed tool call.
 
     async def act(self, action: dict) -> dict:
         """Have the browser tab the message came from do a page action, and wait for what happened."""

@@ -2,7 +2,7 @@
 
 Every router imports what it needs from here, so all of them work on the same
 lists (and the facts, difficulty and signals about their issues and repos), the Tracked list (and its repos' issues),
-the rejected repos, Explore, jobs, inbox, VMs, their images (and the images' agents), VM queue, agents and the Guide. The order matters: the queue
+the rejected repos, Explore, jobs, inbox, VMs, their images (and the images' agents), VM queue, agents and Sherpa. The order matters: the queue
 keeps its state on the VM records, and Agents needs everything else (it also
 sets the queue's on_grant / on_kick callbacks). Agents only starts its worker
 tasks in the app's lifespan (backend/app.py), because they need the running
@@ -11,7 +11,7 @@ event loop.
 
 from github_searcher.agents import Agents
 from github_searcher.explore import Explore
-from github_searcher.guide import Guide
+from github_searcher.sherpa import Sherpa
 from github_searcher.inbox import Inbox
 from github_searcher.issue_tags import IssueTags
 from github_searcher.issue_facts import IssueFacts
@@ -41,5 +41,5 @@ vms = VMs()
 images = Images(vms)
 image_agents = ImageAgents(images)
 queue = VMQueue(vms)
-guide = Guide()
+sherpa = Sherpa()
 agents = Agents(repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, rejections, repo_signals, issue_tags, explore)

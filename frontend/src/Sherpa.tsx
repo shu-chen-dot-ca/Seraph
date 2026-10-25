@@ -1,18 +1,18 @@
 /*
-The Guide: a round button at the bottom right of every page that opens a chat with an agent who knows the whole app
-(github_searcher/guide.py). Ask it how something works, where something is, or to do something: it sees the page you
+Sherpa: a round button at the bottom right of every page that opens a chat with an agent who knows the whole app
+(github_searcher/sherpa.py). Ask it how something works, where something is, or to do something: it sees the page you
 are on and can use it while you watch: open pages, click, type into fields (a job's description, a VM's settings...)
 and highlight what it talks about (a pulsing ring, gone at your next click outside the chat). It never answers an
 "are you sure?" pop-up for you, and it leaves lasting changes (Save, Create, Delete...) to you unless you ask.
 
 Each message takes the page along, as readPage reads it: the address, the sidebar, the text, and every button, link
-and field, numbered (data-guide-id), the values of password and data-secret fields left out. With a pop-up open, only
-the pop-up. While a turn runs, the chat comes from GET /api/guide every half second, and a page action the Guide asks
+and field, numbered (data-sherpa-id), the values of password and data-secret fields left out. With a pop-up open, only
+the pop-up. While a turn runs, the chat comes from GET /api/sherpa every half second, and a page action Sherpa asks
 for (pending) is done here, in the tab the message came from (TAB, kept over a reload), and its answer posted back.
 That goes on with the chat closed. One conversation for the whole app; New chat starts over.
 
 The chat works while a pop-up (Dialog) is open, to help fill it in: those keep focus, clicks and scrolling inside
-themselves and close on a click outside, so the Guide's own events never reach them (the listeners on document).
+themselves and close on a click outside, so Sherpa's own events never reach them (the listeners on document).
 */
 
 import { ArrowUp, Bot, Loader2, MessageSquarePlus, Square, Wrench, X } from "lucide-react";
@@ -22,33 +22,33 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/ui/markdown";
 import { Textarea } from "@/components/ui/textarea";
-import { api, type GuideChat } from "@/live";
+import { api, type SherpaChat } from "@/live";
 import { cn } from "@/lib/utils";
 
-// What the Guide can use on a page, each given a number for click, fill and point.
+// What Sherpa can use on a page, each given a number for click, fill and point.
 const USABLE =
   "a[href], button, input, textarea, select, [role=tab], [role=option], [role=menuitem], [role=menuitemcheckbox], [role=menuitemradio], [role=switch], [role=checkbox], [role=radio], [role=combobox]";
 const ELEMENTS_KEPT = 300;
 const TEXT_KEPT = 6000;
 
-// This browser tab: the Guide's page actions happen in the tab its message came from.
+// This browser tab: Sherpa's page actions happen in the tab its message came from.
 let TAB = "";
 try {
-  TAB = sessionStorage.getItem("guide-tab") ?? "";
+  TAB = sessionStorage.getItem("sherpa-tab") ?? "";
   if (TAB === "") {
     TAB = crypto.randomUUID();
-    sessionStorage.setItem("guide-tab", TAB);
+    sessionStorage.setItem("sherpa-tab", TAB);
   }
 } catch {
   // Storage blocked (private window): a new id each load.
   TAB = crypto.randomUUID();
 }
 
-// The page as the Guide sees it: the address, the sidebar, the text, and every button, link and field, numbered.
+// The page as Sherpa sees it: the address, the sidebar, the text, and every button, link and field, numbered.
 // With a pop-up open, only the pop-up (and a list or menu opened from it): the rest can't be used then.
 function readPage(): string {
-  for (const old of document.querySelectorAll("[data-guide-id]")) {
-    old.removeAttribute("data-guide-id");
+  for (const old of document.querySelectorAll("[data-sherpa-id]")) {
+    old.removeAttribute("data-sherpa-id");
   }
   const popups = document.querySelectorAll<HTMLElement>("[role=dialog], [role=alertdialog]");
   const popup = popups.length > 0 ? popups[popups.length - 1] : null;
@@ -67,14 +67,14 @@ function readPage(): string {
   let count = 0;
   for (const root of roots) {
     for (const element of root.querySelectorAll<HTMLElement>(USABLE)) {
-      if (count >= ELEMENTS_KEPT || element.hasAttribute("data-guide-id") || element.getClientRects().length === 0) {
+      if (count >= ELEMENTS_KEPT || element.hasAttribute("data-sherpa-id") || element.getClientRects().length === 0) {
         continue;
       }
-      if (element.closest("[data-guide-panel]") !== null || element.closest("[aria-hidden=true]") !== null) {
+      if (element.closest("[data-sherpa-panel]") !== null || element.closest("[aria-hidden=true]") !== null) {
         continue;
       }
       count += 1;
-      element.setAttribute("data-guide-id", String(count));
+      element.setAttribute("data-sherpa-id", String(count));
       const tag = element.tagName.toLowerCase();
       const field = element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement;
       const box = element instanceof HTMLInputElement && (element.type === "checkbox" || element.type === "radio");
@@ -133,9 +133,9 @@ function readPage(): string {
   return lines.join("\n");
 }
 
-export default function Guide() {
+export default function Sherpa() {
   const [open, setOpen] = useState(false);
-  const [chat, setChat] = useState<GuideChat | null>(null);
+  const [chat, setChat] = useState<SherpaChat | null>(null);
   const [error, setError] = useState("");
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -143,25 +143,25 @@ export default function Guide() {
   const [follow, setFollow] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   // The page actions done here already (the chat is asked again before the backend has the answer), and what the
-  // Guide points at now.
+  // Sherpa points at now.
   const doneActions = useRef<number[]>([]);
   const pointed = useRef<HTMLElement | null>(null);
 
   const busy = chat !== null && chat.busy;
   const historyLength = chat === null ? 0 : chat.history.length;
 
-  // Pop-ups' focus trap, click-outside and scroll lock never see the Guide's own events; a click outside the Guide
+  // Pop-ups' focus trap, click-outside and scroll lock never see Sherpa's own events; a click outside Sherpa
   // ends its pointing.
   useEffect(() => {
     const kinds = ["focusin", "focusout", "pointerdown", "wheel", "touchmove"];
     function keep(event: Event) {
       const target = event.type === "focusout" ? (event as FocusEvent).relatedTarget : event.target;
-      const inGuide = target instanceof Element && target.closest("[data-guide-panel]") !== null;
-      if (inGuide) {
+      const inSherpa = target instanceof Element && target.closest("[data-sherpa-panel]") !== null;
+      if (inSherpa) {
         event.stopPropagation();
       }
-      if (event.type === "pointerdown" && !inGuide && pointed.current !== null) {
-        pointed.current.classList.remove("guide-point");
+      if (event.type === "pointerdown" && !inSherpa && pointed.current !== null) {
+        pointed.current.classList.remove("sherpa-point");
         pointed.current = null;
       }
     }
@@ -175,13 +175,13 @@ export default function Guide() {
     };
   }, []);
 
-  // The chat: now, and every half second while the Guide works, doing the page actions it asks this tab for.
+  // The chat: now, and every half second while Sherpa works, doing the page actions it asks this tab for.
   useEffect(() => {
     let stopped = false;
     let timer = 0;
     async function load() {
       try {
-        const answer = await api<GuideChat>("/api/guide");
+        const answer = await api<SherpaChat>("/api/sherpa");
         if (stopped) {
           return;
         }
@@ -190,7 +190,7 @@ export default function Guide() {
         if (pending !== null && pending.tab === TAB && !doneActions.current.includes(pending.id)) {
           doneActions.current.push(pending.id);
           const action = pending.action;
-          const element = "element" in action ? document.querySelector<HTMLElement>(`[data-guide-id="${action.element}"]`) : null;
+          const element = "element" in action ? document.querySelector<HTMLElement>(`[data-sherpa-id="${action.element}"]`) : null;
           let ok = true;
           let result = "";
           if (action.kind === "look") {
@@ -203,8 +203,8 @@ export default function Guide() {
             ok = false;
             result = `Element ${action.element} isn't on the page any more. The page now:\n\n${readPage()}`;
           } else if (action.kind === "point" || (action.kind === "click" && element.closest("[role=alertdialog]") !== null)) {
-            pointed.current?.classList.remove("guide-point");
-            element.classList.add("guide-point");
+            pointed.current?.classList.remove("sherpa-point");
+            element.classList.add("sherpa-point");
             element.scrollIntoView({ block: "nearest" });
             pointed.current = element;
             ok = action.kind === "point";
@@ -232,7 +232,7 @@ export default function Guide() {
             ok = false;
             result = "That isn't a text field: fill only types into fields.";
           }
-          await api("/api/guide/result", { method: "POST", body: { id: pending.id, ok, text: result } });
+          await api("/api/sherpa/result", { method: "POST", body: { id: pending.id, ok, text: result } });
         }
         if (answer.busy && !stopped) {
           timer = window.setTimeout(load, 500);
@@ -264,7 +264,7 @@ export default function Guide() {
     setSending(true);
     setError("");
     try {
-      await api("/api/guide", { method: "POST", body: { text: text, page: readPage(), tab: TAB } });
+      await api("/api/sherpa", { method: "POST", body: { text: text, page: readPage(), tab: TAB } });
       setText("");
       setFollow(follow + 1);
     } catch (err) {
@@ -275,7 +275,7 @@ export default function Guide() {
 
   async function stop() {
     try {
-      await api("/api/guide/stop", { method: "POST" });
+      await api("/api/sherpa/stop", { method: "POST" });
     } catch (err) {
       toast.error(`Could not stop it: ${err instanceof Error ? err.message : err}`);
     }
@@ -283,7 +283,7 @@ export default function Guide() {
 
   async function newChat() {
     try {
-      await api("/api/guide", { method: "DELETE" });
+      await api("/api/sherpa", { method: "DELETE" });
       setFollow(follow + 1);
     } catch (err) {
       toast.error(`Could not start a new chat: ${err instanceof Error ? err.message : err}`);
@@ -294,18 +294,18 @@ export default function Guide() {
     <>
       {open && (
         <div
-          data-guide-panel
+          data-sherpa-panel
           className="fixed right-4 bottom-[72px] z-[60] flex h-[560px] max-h-[calc(100vh-6rem)] w-[380px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-lg border bg-background shadow-xl"
-          // A pop-up sets pointer-events: none on everything outside itself; the Guide still takes clicks.
+          // A pop-up sets pointer-events: none on everything outside itself; Sherpa still takes clicks.
           style={{ pointerEvents: "auto" }}
         >
           <div className="flex h-9 shrink-0 items-center gap-1 border-b pr-1 pl-3">
             <Bot className="size-4 text-primary" />
-            <span className="ml-1 font-semibold">Guide</span>
+            <span className="ml-1 font-semibold">Sherpa</span>
             <Button size="icon-sm" variant="ghost" className="ml-auto" title="New chat" aria-label="New chat" disabled={busy || historyLength === 0} onClick={newChat}>
               <MessageSquarePlus />
             </Button>
-            <Button size="icon-sm" variant="ghost" title="Close" aria-label="Close the Guide" onClick={() => setOpen(false)}>
+            <Button size="icon-sm" variant="ghost" title="Close" aria-label="Close Sherpa" onClick={() => setOpen(false)}>
               <X />
             </Button>
           </div>
@@ -377,7 +377,7 @@ export default function Guide() {
               autoFocus
               className="max-h-40 min-h-9 flex-1 resize-none"
               rows={2}
-              placeholder="Ask the Guide"
+              placeholder="Ask Sherpa"
               value={text}
               onChange={(event) => setText(event.target.value)}
               onKeyDown={(event) => {
@@ -388,7 +388,7 @@ export default function Guide() {
               }}
             />
             {busy ? (
-              <Button size="icon" variant="outline" title="Stop" aria-label="Stop the Guide" onClick={stop}>
+              <Button size="icon" variant="outline" title="Stop" aria-label="Stop Sherpa" onClick={stop}>
                 <Square />
               </Button>
             ) : (
@@ -402,11 +402,11 @@ export default function Guide() {
 
       <button
         type="button"
-        data-guide-panel
+        data-sherpa-panel
         className="fixed right-4 bottom-4 z-[60] flex size-11 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-transform hover:scale-105"
         style={{ pointerEvents: "auto" }}
-        title={open ? "Close the Guide" : "Guide: ask anything about the app"}
-        aria-label={open ? "Close the Guide" : "Open the Guide"}
+        title={open ? "Close Sherpa" : "Sherpa: ask anything about the app"}
+        aria-label={open ? "Close Sherpa" : "Open Sherpa"}
         onClick={() => setOpen(!open)}
       >
         {open ? <X className="size-5" /> : <Bot className="size-5" />}

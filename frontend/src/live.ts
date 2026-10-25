@@ -542,20 +542,20 @@ export type ImageAgentEntry =
 
 export type ImageAgentChat = { history: ImageAgentEntry[]; busy: boolean; cost_usd: number };
 
-// The Guide (github_searcher/guide.py), from GET /api/guide: its chat (entries like the image agent's), and the page
+// Sherpa (github_searcher/sherpa.py), from GET /api/sherpa: its chat (entries like the image agent's), and the page
 // action it waits for, done by the browser tab its message came from.
-export type GuideAction =
+export type SherpaAction =
   | { kind: "look" }
   | { kind: "go_to"; address: string }
   | { kind: "click"; element: number }
   | { kind: "fill"; element: number; text: string }
   | { kind: "point"; element: number };
 
-export type GuideChat = {
+export type SherpaChat = {
   history: ImageAgentEntry[];
   busy: boolean;
   cost_usd: number;
-  pending: { id: number; tab: string; action: GuideAction } | null;
+  pending: { id: number; tab: string; action: SherpaAction } | null;
 };
 
 // The agent making a new image (New image), a build (by Rebuild or the agent), a VM being saved as an image, or an inspect.

@@ -1,8 +1,8 @@
 /*
 The whole app: a 36px header, the sidebar tree on the left, and one page on the right.
 The header starts with a View menu; Reset view puts every panel, fold, sort and column back to its default.
-On its right: this repo on GitHub (a new tab, so the app stays open). The Guide's round button sits at the bottom
-right of every page (Guide.tsx).
+On its right: this repo on GitHub (a new tab, so the app stays open). Sherpa's round button sits at the bottom
+right of every page (Sherpa.tsx).
 
 The page lives in the URL hash, so refresh and back/forward work and switching pages never reloads:
   #/inbox  #/inbox/<draft id>  #/issues  #/issues?repo=owner/name  #/jobs  #/jobs/<job id>  #/explore  #/repos  #/tracked
@@ -19,7 +19,7 @@ import { useEffect, useState } from "react";
 import AgentChat from "@/AgentChat";
 import Agents from "@/Agents";
 import Explore from "@/Explore";
-import Guide from "@/Guide";
+import Sherpa from "@/Sherpa";
 import Inbox from "@/Inbox";
 import Issues from "@/Issues";
 import Jobs from "@/Jobs";
@@ -196,9 +196,9 @@ export default function App() {
         accent={accent}
         onAccent={changeAccent}
       />
-      {/* Toasts sit above the Guide's round button. */}
+      {/* Toasts sit above Sherpa's round button. */}
       <Toaster theme={theme} position="bottom-right" offset={{ bottom: 72 }} />
-      <Guide />
+      <Sherpa />
       <TitleTooltips />
     </TooltipProvider>
   );

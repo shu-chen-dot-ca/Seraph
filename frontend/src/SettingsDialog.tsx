@@ -230,7 +230,7 @@ export default function SettingsDialog(props: {
                     className="min-w-0 flex-1 font-mono text-xs"
                     placeholder="value"
                     type={row.shown ? "text" : "password"}
-                    // The Guide never reads it, shown or not.
+                    // Sherpa never reads it, shown or not.
                     data-secret
                     autoComplete="off"
                     spellCheck={false}
