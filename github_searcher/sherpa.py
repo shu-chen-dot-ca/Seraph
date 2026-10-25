@@ -8,7 +8,9 @@ What it sees: each message comes with the page the user is on, read by the brows
 on the page, and every button, link and field, numbered (Sherpa.tsx readPage).
 What it does: go_to, click, fill and point act on the page in the user's browser tab (the one the message came from),
 and answer with the page as it is after. The browser refuses a click inside a confirmation (Delete, Reject...): the
-user confirms those themselves. look_page reads the page again.
+user confirms those themselves.
+look_page reads the page again, and screenshot shows it: the browser draws the app's own page to an image (nothing
+outside the app, no other window), with each element's number on it when asked.
 
 How an action reaches the browser: the tool puts it in `pending`, the browser (which asks GET /api/sherpa every half
 second while a turn runs) does it and posts what happened (POST /api/sherpa/result), which the tool waits for, up to
@@ -100,7 +102,10 @@ You can use the page, in the user's browser, while they watch:
   option),
 - fill types text into a field, replacing what is in it,
 - point highlights something on their screen, to show them where it is,
-- look_page reads the page again.
+- look_page reads the page again,
+- screenshot shows you how the page looks (the app only; a VM's desktop comes out blank). With numbers, each usable
+  element's number is drawn on it. Take one when how it looks matters (a layout, a color, a chart, where something
+  sits), not for every step: the page's text is usually enough.
 Each of them answers with the page as it is after, numbered again: always use the numbers from the latest page.
 
 How to help:
@@ -263,14 +268,14 @@ class Sherpa:
         # Kept, so the task isn't garbage collected while it runs.
         self.running["task"] = asyncio.get_running_loop().create_task(self.run(message))
 
-    def result(self, action_id: int, ok: bool, text: str) -> None:
+    def result(self, action_id: int, ok: bool, text: str, image: str) -> None:
         """What the browser did with a page action. An answer that comes too late is dropped."""
         if self.pending is None or self.pending["id"] != action_id or self.waiter is None or self.waiter.done():
             return
         # The browser numbered the page again when it read it (also when the action failed).
         if "Address:" in text:
             self.last_page = text[text.index("Address:"):]
-        self.waiter.set_result((ok, text))
+        self.waiter.set_result((ok, text, image))
 
     async def interrupt(self) -> None:
         running = self.running
@@ -280,7 +285,7 @@ class Sherpa:
         running["stopped"] = True
         # A page action it waits for ends now.
         if self.waiter is not None and not self.waiter.done():
-            self.waiter.set_result((False, "Stopped by the user."))
+            self.waiter.set_result((False, "Stopped by the user.", ""))
         if running["client"] is None:
             return
         try:
@@ -329,6 +334,11 @@ class Sherpa:
 
         tools = [
             tool("look_page", "Read the user's page again: the address, the text, and every button, link and field, numbered.", {})(self.look_page),
+            tool(
+                "screenshot",
+                "See the user's page as an image (the app only), with the page's text. numbers: draw each usable element's number on it.",
+                {"numbers": bool},
+            )(self.screenshot),
             tool("go_to", "Open an address of the app in the user's tab, like #/explore or #/vms/vm1. Answers with the page.", {"address": str})(self.go_to),
             tool(
                 "click",
@@ -365,6 +375,8 @@ class Sherpa:
                 strict_mcp_config=True,
                 resume=chat["session_id"],
                 cwd=str(AGENT_HOME),
+                # Screenshots make big messages; the default limit is 1MB.
+                max_buffer_size=10 * 1024 * 1024,
                 # The backend runs in this repo: its CLAUDE.md and Claude Code's memory are not for Sherpa. Compact at the cap.
                 env={
                     "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1",
@@ -424,6 +436,8 @@ class Sherpa:
                         summary = tool_name
                         if tool_name == "look_page":
                             summary = "Looked at the page"
+                        if tool_name == "screenshot":
+                            summary = "Took a screenshot"
                         if tool_name == "go_to":
                             summary = f"Went to {block.input.get('address', '')}"
                         if tool_name == "click":
@@ -478,7 +492,7 @@ class Sherpa:
         self.pending = {"id": self.action_id, "tab": self.running["tab"], "action": action}
         self.waiter = asyncio.get_running_loop().create_future()
         try:
-            ok, text = await asyncio.wait_for(self.waiter, ACTION_TIMEOUT)
+            ok, text, image = await asyncio.wait_for(self.waiter, ACTION_TIMEOUT)
         except TimeoutError:
             raise ValueError("The user's page didn't answer: its tab may be closed or asleep. Tell the user.")
         finally:
@@ -486,10 +500,15 @@ class Sherpa:
             self.waiter = None
         if not ok:
             raise ValueError(text)
+        if image:
+            return {"content": [{"type": "image", "data": image, "mimeType": "image/jpeg"}, {"type": "text", "text": text}]}
         return {"content": [{"type": "text", "text": text}]}
 
     async def look_page(self, args: dict) -> dict:
         return await self.act({"kind": "look"})
+
+    async def screenshot(self, args: dict) -> dict:
+        return await self.act({"kind": "screenshot", "numbers": bool(args.get("numbers"))})
 
     async def go_to(self, args: dict) -> dict:
         if not args["address"].startswith("#/"):

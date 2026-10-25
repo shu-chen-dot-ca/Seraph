@@ -5,6 +5,10 @@ are on and can use it while you watch: open pages, click, type into fields (a jo
 and highlight what it talks about (a pulsing ring, gone at your next click outside the chat). It never answers an
 "are you sure?" pop-up for you, and it leaves lasting changes (Save, Create, Delete...) to you unless you ask.
 
+It can take a screenshot of the app: the page drawn to an image from its own DOM (modern-screenshot), so nothing
+outside the app gets in, no other window or tab. Frames (a VM's desktop, another site) and Sherpa's own chat are
+left out. With numbers on, each usable element's number is drawn on it, for click.
+
 Each message takes the page along, as readPage reads it: the address, the sidebar, the text, and every button, link
 and field, numbered (data-sherpa-id), the values of password and data-secret fields left out. With a pop-up open, only
 the pop-up. While a turn runs, the chat comes from GET /api/sherpa every half second, and a page action Sherpa asks
@@ -35,6 +39,7 @@ themselves and close on a click outside, so Sherpa's own events never reach them
 */
 
 import { ArrowUp, Bot, History, Loader2, MessageSquarePlus, Minimize2, Square, Trash2, Wrench, X } from "lucide-react";
+import { domToCanvas } from "modern-screenshot";
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { toast } from "sonner";
 
@@ -332,8 +337,42 @@ export default function Sherpa() {
           const element = "element" in action ? document.querySelector<HTMLElement>(`[data-sherpa-id="${action.element}"]`) : null;
           let ok = true;
           let result = "";
+          // A screenshot, as base64 JPEG.
+          let image = "";
           if (action.kind === "look") {
             result = readPage();
+          } else if (action.kind === "screenshot") {
+            result = readPage();
+            try {
+              const canvas = await domToCanvas(document.body, {
+                width: window.innerWidth,
+                height: window.innerHeight,
+                scale: 1,
+                backgroundColor: getComputedStyle(document.body).backgroundColor,
+                filter: (node) => !(node instanceof HTMLIFrameElement) && !(node instanceof Element && node.hasAttribute("data-sherpa-panel")),
+                features: { restoreScrollPosition: true },
+              });
+              const context = canvas.getContext("2d");
+              if (action.numbers && context !== null) {
+                // Each number in a small red tag at its element's top left, for the ones on screen.
+                context.font = "bold 11px sans-serif";
+                for (const element of document.querySelectorAll<HTMLElement>("[data-sherpa-id]")) {
+                  const rect = element.getBoundingClientRect();
+                  if (rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth) {
+                    continue;
+                  }
+                  const label = element.getAttribute("data-sherpa-id") ?? "";
+                  context.fillStyle = "rgba(220, 38, 38, 0.9)";
+                  context.fillRect(rect.left, rect.top, context.measureText(label).width + 6, 14);
+                  context.fillStyle = "white";
+                  context.fillText(label, rect.left + 3, rect.top + 11);
+                }
+              }
+              image = canvas.toDataURL("image/jpeg", 0.8).split(",")[1];
+            } catch (err) {
+              ok = false;
+              result = `The screenshot failed: ${err instanceof Error ? err.message : err}`;
+            }
           } else if (action.kind === "go_to") {
             window.location.hash = action.address;
             await new Promise((resolve) => setTimeout(resolve, 600));
@@ -371,7 +410,7 @@ export default function Sherpa() {
             ok = false;
             result = "That isn't a text field: fill only types into fields.";
           }
-          await api("/api/sherpa/result", { method: "POST", body: { id: pending.id, ok, text: result } });
+          await api("/api/sherpa/result", { method: "POST", body: { id: pending.id, ok, text: result, image } });
         }
         if (answer.busy && !stopped) {
           timer = window.setTimeout(load, 500);

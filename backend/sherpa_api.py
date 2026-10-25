@@ -24,6 +24,7 @@ class ResultRequest(BaseModel):
     id: int  # the page action's id
     ok: bool
     text: str  # the page after it, or why it couldn't be done
+    image: str = ""  # a screenshot of the app, as base64 JPEG
 
 
 @router.get("/sherpa")
@@ -44,7 +45,7 @@ async def message_sherpa(body: MessageRequest) -> dict:
 
 @router.post("/sherpa/result")
 async def sherpa_result(body: ResultRequest) -> dict:
-    sherpa.result(body.id, body.ok, body.text)
+    sherpa.result(body.id, body.ok, body.text, body.image)
     return {}
 
 

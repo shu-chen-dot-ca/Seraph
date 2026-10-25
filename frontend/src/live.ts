@@ -546,6 +546,7 @@ export type ImageAgentChat = { history: ImageAgentEntry[]; busy: boolean; cost_u
 // action it waits for, done by the browser tab its message came from.
 export type SherpaAction =
   | { kind: "look" }
+  | { kind: "screenshot"; numbers: boolean }
   | { kind: "go_to"; address: string }
   | { kind: "click"; element: number }
   | { kind: "fill"; element: number; text: string }
