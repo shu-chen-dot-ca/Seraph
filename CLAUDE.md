@@ -5,3 +5,9 @@
 - Don't create __init__.py if not nessasary, if its nessasary do not create it with content. Only if it is a must or break then __init__.py can be filled.
 
 - Core folders are github_searcher/ and sandbox/. Do not change that without my knowledge. If we are working on something outside of those folders andn you have to change it, ask me first.
+
+- Commit messages use Conventional Commits: `type(scope): short summary`, one line only.
+  - Types: feat, fix, refactor, docs, style, test, chore, perf. Scope is the area changed (sandbox, search, agent, frontend, images, ...).
+  - Imperative mood ("add X", not "added X"), lowercase, no period, under 72 characters.
+  - No body or description, just the summary line.
+  - No Co-Authored-By line or any other attribution.
