@@ -1,13 +1,16 @@
 /*
 The left tree, like Proxmox's resource tree. Every line is a link to a page, in the order the work flows, in three parts:
 - finding work: Explore (the search for new repos; shows how many found repos wait for the user's approve or reject,
-  with a green dot while a run goes), Repos, Tracked (new issues in the repos the user keeps an eye on), Issues;
+  with a green dot while a run goes), Repos, Tracked (new issues in the repos the user keeps an eye on), Issues
+  (one child per issue an agent is on now: its latest job queued, working or waiting on you, waiting on you first;
+  each with the issue's number and the job's progress bar and step, like the Issues page's Status column; hover for
+  its repo, title, agent and the agent's headline; a click opens the issue's row on the Issues page);
 - doing it, under a line: Jobs (open / all), Agents (one child per agent), then under another line VMs (one child per VM);
 - the computer, under another line: Resource (this computer's CPU, memory, GPUs, disk, network and battery,
   Resource.tsx);
 - pinned at the bottom: Inbox and Settings (below).
 Counts and status dots come straight from the live store, so the tree updates itself.
-The chevrons only fold Agents / VMs; clicking a name opens that page.
+The chevrons only fold Issues / Agents / VMs; clicking a name opens that page.
 Hovering Jobs, Agents or VMs fades its count into a + that makes a new one right there:
 New job opens NewJobDialog, + on Agents makes an agent with the next free name (agent-N) and opens it, + on VMs
 opens NewVMDialog.
@@ -40,11 +43,13 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { AGENT_TONE, StatusDot, VM_TONE } from "@/components/ui/status-dot";
-import { api, useLive, useLiveValue } from "@/live";
+import { JobProgressBar } from "@/components/ui/job-progress";
+import { AGENT_TONE, JOB_LABEL, StatusDot, VM_TONE } from "@/components/ui/status-dot";
+import { api, useLive, useLiveValue, type IssueItem, type Job } from "@/live";
 import { cn } from "@/lib/utils";
 
 export default function Sidebar(props: { page: string; id: string | null; onOpenSettings: () => void }) {
+  const [issuesOpen, setIssuesOpen] = useState(true);
   const [agentsOpen, setAgentsOpen] = useState(true);
   const [vmsOpen, setVMsOpen] = useState(true);
   const [newJob, setNewJob] = useState(false);
@@ -84,6 +89,31 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
     }
   }
   const openJobs = jobs.filter((job) => job.status === "queued" || job.status === "working" || job.status === "waiting_on_user").length;
+
+  // The issues an agent is on now, under Issues: those whose latest job is waiting on you, then working, then queued.
+  const latestJob: Record<string, Job> = {};
+  for (const job of jobs) {
+    if (job.issue === null) {
+      continue;
+    }
+    const current = latestJob[job.issue];
+    if (current === undefined || job.created_at > current.created_at) {
+      latestJob[job.issue] = job;
+    }
+  }
+  const activeIssues: { issue: IssueItem; job: Job }[] = [];
+  for (const status of ["waiting_on_user", "working", "queued"]) {
+    for (const issue of issues.items) {
+      const job = latestJob[issue.id];
+      if (job !== undefined && job.status === status) {
+        activeIssues.push({ issue, job });
+      }
+    }
+  }
+  const agentNames: Record<string, string> = {};
+  for (const agent of agents) {
+    agentNames[agent.id] = agent.name;
+  }
 
   // No name: the backend gives it the next free "agent-N".
   async function createAgent() {
@@ -203,11 +233,38 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
           )}
         </a>
 
-        <a href="#/issues" className={cn(row, "pl-6", props.page === "issues" && selected)}>
-          <CircleDot className="size-4 text-muted-foreground" />
-          Issues
-          <span className="ml-auto text-muted-foreground tabular-nums">{issues.items.length}</span>
-        </a>
+        <div className={cn(row, "gap-0 px-0", props.page === "issues" && selected)}>
+          <button
+            type="button"
+            className="flex h-7 w-6 shrink-0 items-center justify-center text-muted-foreground"
+            aria-label={issuesOpen ? "Fold active issues" : "Unfold active issues"}
+            onClick={() => setIssuesOpen(!issuesOpen)}
+          >
+            <ChevronRight className={cn("size-3.5 transition-transform", issuesOpen && "rotate-90")} />
+          </button>
+          <a href="#/issues" className="flex h-7 min-w-0 flex-1 items-center gap-2 pr-2">
+            <CircleDot className="size-4 text-muted-foreground" />
+            Issues
+            <span className="ml-auto text-muted-foreground tabular-nums">{issues.items.length}</span>
+          </a>
+        </div>
+        {issuesOpen &&
+          activeIssues.map(({ issue, job }) => {
+            const agentName = agentNames[job.agent] ?? job.agent;
+            const step = job.step !== null ? `, ${job.step.replace(/_/g, " ")}` : "";
+            const headline = job.headline !== "" ? `\n${job.headline}` : "";
+            return (
+              <a
+                key={issue.id}
+                href={`#/issues?open=${encodeURIComponent(issue.id)}`}
+                className={cn(row, "pl-6")}
+                title={`${issue.id}: ${issue.facts?.title ?? issue.title}\n${agentName}: ${JOB_LABEL[job.status] ?? job.status}${step}${headline}`}
+              >
+                <span className="shrink-0 text-muted-foreground tabular-nums">#{issue.number}</span>
+                <JobProgressBar job={job} />
+              </a>
+            );
+          })}
 
         {/* The work: what runs (jobs), who runs it (agents) and where (VMs). */}
         <div className="-mx-1.5 my-1.5 border-t" />
