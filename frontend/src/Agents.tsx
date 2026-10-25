@@ -1,5 +1,6 @@
 /*
-The Agents overview: one row per agent with where it stands (idle, working, waiting in a VM's queue,
+The Agents overview: one row per agent with its name and id (agent_ and 6 hex digits: unique, and it never
+changes, also when the agent is renamed; jobs, drafts and VM queues know it by it), where it stands (idle, working, waiting in a VM's queue,
 using a VM), its target VM, the job it is on and how far that is, how many open jobs it has, how full
 its context is and what it did last. Under an agent with a job: the agent's headline for it in everyday
 words, its todo count, how long it has been on this step, and a warning when it has been quiet too long.
@@ -30,7 +31,7 @@ import { AGENT_TONE, StatusDot } from "@/components/ui/status-dot";
 import { api, useLive, useLoaded, type AgentSummary } from "@/live";
 import { cn } from "@/lib/utils";
 
-const COLUMNS = "grid grid-cols-[minmax(120px,180px)_190px_100px_minmax(200px,320px)_80px_150px_minmax(0,1fr)_32px] items-center gap-3";
+const COLUMNS = "grid grid-cols-[minmax(120px,180px)_96px_190px_100px_minmax(200px,320px)_80px_150px_minmax(0,1fr)_32px] items-center gap-3";
 
 // The bar's full width: the backend compacts the conversation at AGENT_CONTEXT_CAP (500k) tokens,
 // or earlier when the model's window is smaller.
@@ -85,6 +86,7 @@ export default function Agents() {
 
       <div className={cn(COLUMNS, "h-7 shrink-0 border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground")}>
         <span>Name</span>
+        <span>ID</span>
         <span>Status</span>
         <span>Target VM</span>
         <span>Job</span>
@@ -119,6 +121,9 @@ export default function Agents() {
               <a href={`#/agents/${agent.id}`} className="truncate font-medium" onClick={(event) => event.stopPropagation()}>
                 {agent.name}
               </a>
+              <span className="truncate font-mono text-xs text-muted-foreground" title="Its id: unique, and it never changes">
+                {agent.id}
+              </span>
               <span className="flex min-w-0 items-center gap-1.5">
                 <StatusDot tone={stuck !== "" ? "amber" : (AGENT_TONE[agent.status] ?? "gray")} />
                 <span className="truncate">
@@ -175,7 +180,7 @@ export default function Agents() {
               </Button>
             </div>
             {job !== undefined && (job.headline !== "" || stuck !== "" || (agent.busy && agent.todo_total > 0)) && (
-              <div className="flex min-w-0 items-center gap-3 pb-1.5 pl-[192px] text-xs text-muted-foreground tabular-nums">
+              <div className="flex min-w-0 items-center gap-3 pb-1.5 pl-[300px] text-xs text-muted-foreground tabular-nums">
                 {job.headline !== "" && (
                   <span className="truncate text-foreground/80" title={job.headline}>
                     {job.headline}

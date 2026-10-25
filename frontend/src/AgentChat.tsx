@@ -1,10 +1,11 @@
 /*
-One agent's page: under the header, the job it is on now (every step, the current one marked, the
-agent's headline in everyday words, the project's test suite runs, what it does this moment, its todo count and times, and a warning
-when it has been quiet too long); the conversation on the left; on the right where it stands in a VM
-queue, its jobs in two lists that each fold with their header: In queue (still to do, being done or waiting on
-you, in the order it takes them, with their progress; a queued one has an x that takes it off: the job is cancelled,
-and the agent is told) and Finished (done and cancelled, newest first), and its latest todo list.
+One agent's page: its name and id in the header (the id is unique and never changes); under the header, the job it is
+on now (every step, the current one marked, the agent's headline in everyday words, the project's test suite runs, what
+it does this moment, its todo count and times, and a warning when it has been quiet too long); the conversation on the
+left; on the right where it stands in a VM queue, its jobs in two lists that each fold with their header: In queue
+(still to do, being done or waiting on you, in the order it takes them, with their progress; a queued one has an x that
+takes it off: the job is cancelled, and the agent is told) and Finished (done and cancelled, newest first), and its
+latest todo list.
 
 The conversation is the agent's history (HistoryEntry in live.ts; append-only on the server). The page
 loads the last 200 entries, then fetches only the new part (/history?since=<end>) whenever the live
@@ -459,6 +460,9 @@ export default function AgentChat(props: { agentId: string }) {
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
         <StatusDot tone={AGENT_TONE[summary.status] ?? "gray"} />
         <h1 className="font-semibold">{summary.name}</h1>
+        <span className="font-mono text-xs text-muted-foreground" title="Its id: unique, and it never changes, also when renamed">
+          {summary.id}
+        </span>
         <span className="truncate text-muted-foreground">
           {summary.status === "idle" && "idle"}
           {summary.status === "working" && "working"}
