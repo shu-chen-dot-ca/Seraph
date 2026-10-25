@@ -24,6 +24,9 @@ comment), then sends it to GitHub as you (github_searcher/github_account.py): a 
 its pictures uploaded there. If GitHub refuses, nothing is decided and the error shows. Without an account nothing is
 sent; you send it yourself. A sent item's bar links to it on GitHub. One approved but not sent (approved before you
 connected) has Send to GitHub, with the same question. The bar says who Approve sends as.
+A decided item's bar says what you decided, and has a box to message its agent about it: the message goes into the
+agent's chat (its page, #/agents/<id>, which Open chat opens), saying which item it is about. An archived agent comes
+back for it; a deleted one can't get messages.
 After a decision the next pending item opens (the one after it in the list, or else before).
 J / K (or the arrow keys) move through the list when you are not typing.
 Delete: a decided item's bar has Delete, and many are picked like in a mail app (components/ui/row-selection.tsx):
@@ -82,7 +85,7 @@ export default function Inbox(props: { selected: string | null }) {
   const loaded = useLoaded("inbox");
   // Overview, diff or message. Every item opens on its overview.
   const [prTab, setPRTab] = useState("overview");
-  // The reply box's text per draft, so switching items keeps what you typed.
+  // The reply box's text per draft (or the message to its agent, once decided), so switching items keeps what you typed.
   const [replies, setReplies] = useState<Record<string, string>>({});
   // Diff files folded open or shut by hand, by "draft id:path"; others follow BIG_FILE_LINES.
   const [fileOpen, setFileOpen] = useState<Record<string, boolean>>({});
@@ -360,6 +363,34 @@ export default function Inbox(props: { selected: string | null }) {
       }
     } catch (err) {
       toast.error(`Could not ${send ? "send it" : action}: ${err instanceof Error ? err.message : err}`);
+    }
+    setBusy("");
+  }
+
+  // A message to a decided item's agent, in its chat, saying which item it is about.
+  async function messageAgent() {
+    if (draft === undefined) {
+      return;
+    }
+    const text = (replies[draft.id] ?? "").trim();
+    if (text === "") {
+      return;
+    }
+    const agentId = draft.agent;
+    setBusy("message");
+    try {
+      await api(`/api/agents/${agentId}/message`, { method: "POST", body: { text: `About ${draft.id} (${draft.title}) in the Inbox:\n${text}` } });
+      setReplies((current) => ({ ...current, [draft.id]: "" }));
+      toast.success(`Sent to ${agentNames[agentId] ?? agentId}`, {
+        action: {
+          label: "Open chat",
+          onClick: () => {
+            window.location.hash = `#/agents/${agentId}`;
+          },
+        },
+      });
+    } catch (err) {
+      toast.error(`Could not send it: ${err instanceof Error ? err.message : err}`);
     }
     setBusy("");
   }
@@ -887,6 +918,33 @@ export default function Inbox(props: { selected: string | null }) {
                   </div>
                 </div>
                 {draft.reply !== "" && <div className="mt-1 border-l-2 border-muted-foreground/30 pl-3 whitespace-pre-wrap">{draft.reply}</div>}
+                <Textarea
+                  placeholder={
+                    draft.agent in agentNames
+                      ? `A message to ${agentNames[draft.agent]} about this, in its chat. Ctrl+Enter sends it.`
+                      : "Its agent was deleted, so it can't get messages."
+                  }
+                  className="mt-2 max-h-40 min-h-14 bg-background"
+                  disabled={!(draft.agent in agentNames)}
+                  value={reply}
+                  onChange={(event) => setReplies((current) => ({ ...current, [draft.id]: event.target.value }))}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                      event.preventDefault();
+                      messageAgent();
+                    }
+                  }}
+                />
+                <div className="mt-2 flex items-center justify-end gap-1.5">
+                  <Button variant="ghost" size="sm" asChild>
+                    <a href={`#/agents/${draft.agent}`}>
+                      <MessageSquare /> Open chat
+                    </a>
+                  </Button>
+                  <Button size="sm" disabled={busy !== "" || reply.trim() === "" || !(draft.agent in agentNames)} onClick={() => messageAgent()}>
+                    {busy === "message" ? <Loader2 className="animate-spin" /> : <Send />} Send to agent
+                  </Button>
+                </div>
               </div>
             )}
 
