@@ -200,7 +200,8 @@ class WorkTools:
             )(self.issues_add),
             tool(
                 "issues_remove",
-                "Remove issues from the Issues list, each as owner/name#number, e.g. when someone else took one or it got fixed.",
+                "Remove issues from the Issues list, each as owner/name#number, e.g. when someone else took one or it got fixed. "
+                "An issue an agent is working on (a job on it queued, working or waiting on the user) stays: kept_working lists them.",
                 {"type": "object", "properties": {"ids": names}, "required": ["ids"]},
             )(self.issues_remove),
             tool(
@@ -847,9 +848,9 @@ class WorkTools:
         return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
     async def issues_remove(self, args: dict) -> dict:
-        removed = await asyncio.to_thread(self.agents.issues.remove, args["ids"])
-        missing = [issue_id for issue_id in args["ids"] if issue_id not in removed]
-        text = json.dumps({"removed": removed, "not_in_list": missing})
+        result = await asyncio.to_thread(self.agents.issues.remove, args["ids"])
+        missing = [issue_id for issue_id in args["ids"] if issue_id not in result["removed"] and issue_id not in result["working"]]
+        text = json.dumps({"removed": result["removed"], "kept_working": result["working"], "not_in_list": missing})
         return {"content": [{"type": "text", "text": text}]}
 
     async def issues_note(self, args: dict) -> dict:

@@ -42,6 +42,9 @@ rectangle, Ctrl+A; a bar at the bottom then removes them at once, as one undo st
 Remove assigned (in the bar on top) takes out every issue someone else is on (assigned on GitHub, or tagged Assigned)
 in one go, whatever the tab and filters, except ones an agent here has a job for (its latest not cancelled); it asks
 first too, and is one undo step.
+Nothing removes an issue an agent is working on (a job on it queued, working or waiting on you): its X is greyed
+out, the bar at the bottom and Remove assigned leave it out (the bottom bar's question says how many stay), and
+undo / redo keep it too (the backend checks, for agents as well). Cancel its job first to remove it.
 */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -200,13 +203,22 @@ export default function Issues(props: { repo: string | null; open: string | null
     repoStars[repo.full_name] = repo.stars;
   }
 
+  // Issues an agent is working on: a job on it queued, working or waiting on you. Nothing here removes them (the
+  // backend keeps them anyway).
+  const workingIds: string[] = [];
+  for (const job of jobs) {
+    if (job.issue !== null && (job.status === "queued" || job.status === "working" || job.status === "waiting_on_user")) {
+      workingIds.push(job.issue);
+    }
+  }
+
   // Issues someone else is on (assigned on GitHub, or tagged Assigned) that no agent here works on: no job, or the
   // latest cancelled. Remove assigned takes them all out.
   const assignedIds = issues.items
     .filter((issue) => {
       const job = latestJob[issue.id];
       const isAssigned = (issue.facts?.assignees.length ?? 0) > 0 || issue.tags?.status === "assigned";
-      return isAssigned && (job === undefined || job.status === "cancelled");
+      return isAssigned && (job === undefined || job.status === "cancelled") && !workingIds.includes(issue.id);
     })
     .map((issue) => issue.id);
 
@@ -567,6 +579,8 @@ export default function Issues(props: { repo: string | null; open: string | null
   const rowIds = rows.map((issue) => issue.id);
   const listedIds = issues.items.map((issue) => issue.id);
   const chosen = selected.filter((id) => listedIds.includes(id));
+  // The picked ones the bottom bar may remove: not the ones an agent is working on.
+  const removable = chosen.filter((id) => !workingIds.includes(id));
 
   // A ctrl-click picks or unpicks one row; a shift-click does the same to every row shown from the last one clicked.
   function select(id: string, shift: boolean) {
@@ -796,7 +810,8 @@ export default function Issues(props: { repo: string | null; open: string | null
                         variant="ghost"
                         size="icon-xs"
                         aria-label={`Remove ${issue.id}`}
-                        title="Remove from the list"
+                        title={workingIds.includes(issue.id) ? "An agent is working on it: cancel its job first to remove it" : "Remove from the list"}
+                        disabled={workingIds.includes(issue.id)}
                         onClick={(event) => {
                           event.stopPropagation();
                           remove([issue.id]);
@@ -1022,7 +1037,13 @@ export default function Issues(props: { repo: string | null; open: string | null
       </div>
 
       <RowSelection listRef={scrollRef} ids={rowIds} selected={chosen} onSelect={setSelected}>
-        <Button size="xs" variant="ghost" onClick={() => setConfirmRemove(true)}>
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={removable.length === 0}
+          title={removable.length === 0 ? "Agents are working on all of them: cancel their jobs first to remove them" : undefined}
+          onClick={() => setConfirmRemove(true)}
+        >
           <X /> Remove
         </Button>
       </RowSelection>
@@ -1033,13 +1054,17 @@ export default function Issues(props: { repo: string | null; open: string | null
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Remove {chosen.length} {chosen.length === 1 ? "issue" : "issues"}?
+              Remove {removable.length} {removable.length === 1 ? "issue" : "issues"}?
             </AlertDialogTitle>
-            <AlertDialogDescription>They leave the Issues list; their jobs stay. Undo brings them back.</AlertDialogDescription>
+            <AlertDialogDescription>
+              They leave the Issues list; their jobs stay. Undo brings them back.
+              {chosen.length > removable.length &&
+                ` ${chosen.length - removable.length} of the picked ${chosen.length - removable.length === 1 ? "one stays" : "ones stay"}: an agent is working on ${chosen.length - removable.length === 1 ? "it" : "them"}.`}
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={() => remove(chosen)}>
+            <AlertDialogAction variant="destructive" onClick={() => remove(removable)}>
               Remove
             </AlertDialogAction>
           </AlertDialogFooter>

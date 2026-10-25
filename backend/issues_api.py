@@ -1,5 +1,8 @@
 """The Issues page: remove rows, undo/redo, read one issue's thread, assign an issue to an agent, and refresh the facts.
 
+Removing never takes out an issue an agent is working on (a job on it queued, working or waiting on the user), and
+neither does an undo or redo (github_searcher/issue_list.py): its job has to be cancelled first.
+
 Agents fill the list; the list reaches the browser through /api/live. The
 thread is fetched from GitHub each time the user expands a row. Assigning goes
 through Agents.assign, which makes a job for the issue and wakes the agent, so
@@ -63,11 +66,14 @@ class IdsRequest(BaseModel):
 
 @router.post("/issues/remove")
 def remove_issues(body: IdsRequest) -> dict:
-    """Remove one or many issues (the page's multi-select) as one undo step."""
-    removed = issues.remove(body.ids)
-    if not removed:
+    """Remove one or many issues (the page's multi-select) as one undo step. The ones an agent is working on stay:
+    working lists them."""
+    result = issues.remove(body.ids)
+    if not result["removed"] and result["working"]:
+        raise HTTPException(status_code=409, detail="An agent is working on them: cancel its job first.")
+    if not result["removed"]:
         raise HTTPException(status_code=404, detail="None of them is in the list.")
-    return {"removed": removed}
+    return result
 
 
 @router.post("/issues/undo")

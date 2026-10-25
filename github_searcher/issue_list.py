@@ -12,6 +12,10 @@ in the order they were added. Undo/redo is snapshot based, so it undoes an agent
 same way as the user's: every change pushes a copy of the whole list onto "undo" (the last
 UNDO_LIMIT are kept) and clears "redo".
 
+An issue an agent is working on (a job on it queued, working or waiting on the user: WORKING) is never taken
+out, by the user, an agent or Remove assigned: remove skips it and says so, and an undo or redo that would drop it
+keeps it. Cancel its job first.
+
 The backend keeps one IssueList that the API and every agent share, so each method takes the
 lock. version goes up by one on every change; the live feed compares it to see what to send.
 """
@@ -24,6 +28,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from github_searcher.jobs import Jobs
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # override: the backend reloads itself on code changes, and .env changes should apply then too.
 load_dotenv(PROJECT_ROOT / ".env", override=True)
@@ -33,10 +39,12 @@ UNDO_LIMIT = 100
 # Only the last few undo/redo steps go into the file: with a long list, all UNDO_LIMIT copies
 # make it tens of MB, written on every change. The others last until the backend restarts.
 SAVED_STEPS = 10
+WORKING = ["queued", "working", "waiting_on_user"]
 
 
 class IssueList:
-    def __init__(self):
+    def __init__(self, jobs: Jobs):
+        self.jobs = jobs
         self.path = DATA_DIR / "issues.json"
         self.lock = threading.Lock()
         self.version = 0
@@ -91,19 +99,26 @@ class IssueList:
             self.save()
             return [item["id"] for item in new]
 
-    def remove(self, ids: list[str]) -> list[str]:
-        """Remove issues as one undo step. Returns the ids that were in the list."""
+    def remove(self, ids: list[str]) -> dict:
+        """Remove issues as one undo step, but not the ones an agent is working on.
+
+        Returns {"removed": the ids taken out, "working": the ids in the list kept because an agent is on them}.
+        """
+        # Asked before taking the lock, so this lock and the jobs' are never held at once.
+        working = [job["issue"] for job in self.jobs.list() if job["status"] in WORKING]
         with self.lock:
-            removed = [item["id"] for item in self.data["items"] if item["id"] in ids]
+            listed = [item["id"] for item in self.data["items"] if item["id"] in ids]
+            removed = [issue_id for issue_id in listed if issue_id not in working]
+            kept = [issue_id for issue_id in listed if issue_id in working]
             if not removed:
-                return []
+                return {"removed": [], "working": kept}
 
             self.data["undo"].append(copy.deepcopy(self.data["items"]))
             self.data["undo"] = self.data["undo"][-UNDO_LIMIT:]
             self.data["redo"] = []
-            self.data["items"] = [item for item in self.data["items"] if item["id"] not in ids]
+            self.data["items"] = [item for item in self.data["items"] if item["id"] not in removed]
             self.save()
-            return removed
+            return {"removed": removed, "working": kept}
 
     def set_note(self, id: str, note: str) -> None:
         """Replace an issue's note as one undo step. KeyError if the issue is not in the list."""
@@ -121,23 +136,37 @@ class IssueList:
 
     def undo(self) -> bool:
         """Go back one step. False when there is nothing to undo."""
+        working = [job["issue"] for job in self.jobs.list() if job["status"] in WORKING]
         with self.lock:
             if not self.data["undo"]:
                 return False
             # The lists move between the stacks, nothing is shared, so no copy is needed.
-            self.data["redo"].append(self.data["items"])
+            current = self.data["items"]
+            self.data["redo"].append(current)
             self.data["redo"] = self.data["redo"][-UNDO_LIMIT:]
             self.data["items"] = self.data["undo"].pop()
+            # An issue an agent is working on stays, even when the step undone is the one that added it.
+            ids = [item["id"] for item in self.data["items"]]
+            for item in current:
+                if item["id"] in working and item["id"] not in ids:
+                    self.data["items"].append(copy.deepcopy(item))
             self.save()
             return True
 
     def redo(self) -> bool:
         """Go forward one undone step. False when there is nothing to redo."""
+        working = [job["issue"] for job in self.jobs.list() if job["status"] in WORKING]
         with self.lock:
             if not self.data["redo"]:
                 return False
-            self.data["undo"].append(self.data["items"])
+            current = self.data["items"]
+            self.data["undo"].append(current)
             self.data["undo"] = self.data["undo"][-UNDO_LIMIT:]
             self.data["items"] = self.data["redo"].pop()
+            # An issue an agent is working on stays, even when the step redone is the one that removed it.
+            ids = [item["id"] for item in self.data["items"]]
+            for item in current:
+                if item["id"] in working and item["id"] not in ids:
+                    self.data["items"].append(copy.deepcopy(item))
             self.save()
             return True
