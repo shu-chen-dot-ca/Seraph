@@ -54,6 +54,9 @@ const USABLE =
   "a[href], button, input, textarea, select, [role=tab], [role=option], [role=menuitem], [role=menuitemcheckbox], [role=menuitemradio], [role=switch], [role=checkbox], [role=radio], [role=combobox]";
 const ELEMENTS_KEPT = 300;
 const TEXT_KEPT = 6000;
+// How much of a field's value the page shows Sherpa: a text box (a YAML, a job's description) much more than a field.
+const FIELD_KEPT = 300;
+const TEXT_BOX_KEPT = 8000;
 // The messages that may wait for their turn at once (MAX_QUEUED in sherpa.py).
 const MAX_QUEUED = 10;
 const DRAFT_STORAGE = "draft:sherpa";
@@ -141,7 +144,9 @@ function readPage(): string {
       }
       if (field && !box) {
         const secret = (element instanceof HTMLInputElement && element.type === "password") || element.hasAttribute("data-secret");
-        line += secret ? " = (hidden)" : ` = "${element.value.slice(0, 300)}"`;
+        const kept = element instanceof HTMLTextAreaElement ? TEXT_BOX_KEPT : FIELD_KEPT;
+        const value = element.value.length > kept ? element.value.slice(0, kept) + "[...cut]" : element.value;
+        line += secret ? " = (hidden)" : ` = "${value}"`;
         if (element.value === "" && element.placeholder !== "" && element.placeholder !== name) {
           line += `, placeholder "${element.placeholder.slice(0, 120)}"`;
         }

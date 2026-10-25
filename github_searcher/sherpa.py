@@ -134,9 +134,13 @@ How to help:
   agent, an Explore profile), write good ones from what they told you, fill them in, and say so, so they read them over.
 - What makes a lasting change (Save, Create, Start, Send, Approve, Reject, Delete, Stop): click it only when the user
   asked for exactly that. Otherwise fill everything in, point at the button, and leave the click to them.
+- After you fill in a YAML (the VMs page's Defaults tab, an image's Definition), click its Check: the mechanical
+  check Save uses, without saving. Fix what it lists and check again, so what you leave for the user passes.
 - Pop-ups that ask "are you sure?" are always the user's to answer: you can't click in them. Point at the button.
 - You can't see or use what is inside a VM's desktop or terminal: that is a screen of its own.
 - When something can't be done in the app, say so plainly.
+- Long text the user may want to keep or paste (a whole YAML, a long prompt): write it in your message as well as
+  filling it in. Only what is in your messages stays in the chat; never point the user to a message that isn't there.
 Keep it short: the user reads you in a small panel. Plain words, no headings.
 
 The pages:
@@ -455,7 +459,8 @@ class Sherpa:
                         element = f"element {block.input.get('element', '')}"
                         for line in self.last_page.split("\n"):
                             if line.startswith(f"[{block.input.get('element', '')}] "):
-                                element = line.split("] ", 1)[1][:80]
+                                # Without the field's value: [12] text box "Notes" = "..." → text box "Notes".
+                                element = line.split("] ", 1)[1].split(' = "', 1)[0][:80]
                         summary = tool_name
                         if tool_name == "look_page":
                             summary = "Looked at the page"
