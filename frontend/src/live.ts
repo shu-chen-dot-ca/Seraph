@@ -474,7 +474,8 @@ export type PRsData = {
   refreshing: boolean;
 };
 
-// Settings' GitHub account (GET /api/github_account), the one that sends what you approve. Never the token.
+// Your GitHub account (GET /api/github_account, the GitHub page's Account tab), the one that sends what you approve.
+// Never the token.
 export type GithubAccountStatus = {
   connected: boolean;
   login?: string;

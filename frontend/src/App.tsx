@@ -5,7 +5,7 @@ On its right: this repo on GitHub (a new tab, so the app stays open). Sherpa's r
 right of every page (Sherpa.tsx).
 
 The page lives in the URL hash, so refresh and back/forward work and switching pages never reloads:
-  #/inbox  #/inbox/<draft id>  #/prs  #/issues  #/issues?repo=owner/name  #/jobs  #/jobs/<job id>  #/explore  #/repos  #/tracked
+  #/inbox  #/inbox/<draft id>  #/github  #/github?tab=closed|account  #/issues  #/issues?repo=owner/name  #/jobs  #/jobs/<job id>  #/explore  #/repos  #/tracked
   #/agents  #/agents/<agent id>  #/vms  #/vms?tab=images  #/vms?tab=defaults  #/vms/<vm name>  #/resource
 Links are plain <a href="#/..."> everywhere; App only reads the hash.
 
@@ -19,11 +19,11 @@ import { useEffect, useState } from "react";
 import AgentChat from "@/AgentChat";
 import Agents from "@/Agents";
 import Explore from "@/Explore";
+import GitHub from "@/GitHub";
 import Sherpa from "@/Sherpa";
 import Inbox from "@/Inbox";
 import Issues from "@/Issues";
 import Jobs from "@/Jobs";
-import PRs from "@/PRs";
 import Repos from "@/Repos";
 import Resource from "@/Resource";
 import SettingsDialog, { type ThemeMode } from "@/SettingsDialog";
@@ -38,7 +38,7 @@ import TitleTooltips from "@/components/ui/title-tooltips";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useConnected, useLiveValue, useLoaded } from "@/live";
 
-const PAGES = ["inbox", "prs", "issues", "jobs", "explore", "repos", "tracked", "agents", "vms", "resource"];
+const PAGES = ["inbox", "github", "issues", "jobs", "explore", "repos", "tracked", "agents", "vms", "resource"];
 const GITHUB_URL = "https://github.com/shu-chen-dot-ca/seraph";
 
 export default function App() {
@@ -172,7 +172,7 @@ export default function App() {
           <Sidebar page={page} id={id} onOpenSettings={() => setSettingsOpen(true)} />
           <main className="relative min-w-0 flex-1 overflow-hidden">
             {page === "inbox" && <Inbox selected={id} />}
-            {page === "prs" && <PRs />}
+            {page === "github" && <GitHub key={query.get("tab") ?? ""} tab={query.get("tab")} />}
             {page === "issues" && <Issues key={query.get("open") ?? ""} repo={query.get("repo")} open={query.get("open")} />}
             {page === "jobs" && <Jobs key={id ?? ""} selected={id} />}
             {page === "explore" && <Explore />}

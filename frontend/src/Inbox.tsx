@@ -18,7 +18,7 @@ Bottom: the open item (#/inbox/<id>), in tabs. The first two are for you, the la
 The bar at the bottom decides: Reject, Reply & keep working, or Approve, with an optional reply (Taken: Stop the
 agent or Keep working, with an optional note). A decision goes to the agent (and the draft's job goes back to the
 agent's queue).
-With your GitHub account connected (Settings), Approve on a PR or comment first asks "are you sure?" (Open PR / Post
+With your GitHub account connected (the GitHub page, Account), Approve on a PR or comment first asks "are you sure?" (Open PR / Post
 comment), then sends it to GitHub as you (github_searcher/github_account.py): a PR from a new branch in your fork,
 its pictures uploaded there. If GitHub refuses, nothing is decided and the error shows. Without an account nothing is
 sent; you send it yourself. A sent item's bar links to it on GitHub. One approved but not sent (approved before you
@@ -81,7 +81,7 @@ export default function Inbox(props: { selected: string | null }) {
   // Diff files folded open or shut by hand, by "draft id:path"; others follow BIG_FILE_LINES.
   const [fileOpen, setFileOpen] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState("");
-  // Settings' GitHub account: who Approve sends PRs and comments as (null until known).
+  // Your GitHub account (the GitHub page): who Approve sends PRs and comments as (null until known).
   const [account, setAccount] = useState<GithubAccountStatus | null>(null);
   // The "are you sure?" before sending: for Approve, or for Send to GitHub on an approved item.
   const [confirming, setConfirming] = useState<"" | "approve" | "send">("");
@@ -123,7 +123,7 @@ export default function Inbox(props: { selected: string | null }) {
     getItemKey: (index) => rows[index].id,
   });
 
-  // Who the GitHub account is: at first, and again when Settings connects or disconnects one.
+  // Who the GitHub account is: at first, and again when the GitHub page connects or disconnects one.
   useEffect(() => {
     function load() {
       api<GithubAccountStatus>("/api/github_account")

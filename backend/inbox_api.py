@@ -3,7 +3,7 @@ the app's own question when an issue an agent works on gets taken (approve: keep
 reject: stop the agent).
 
 Approving tells the agent. Only with send (the Inbox asks "are you sure?" first, and only when your
-GitHub account is connected in Settings) does Approve on a PR or comment send it to GitHub as you,
+GitHub account is connected on the GitHub page) does Approve on a PR or comment send it to GitHub as you,
 before the agent is told; if GitHub refuses, nothing is decided. POST /send does the same for one
 approved before (while no account was connected). Sending runs in a thread (github_account.py).
 Every decision goes through Agents.decide, which also puts the draft's job back in the queue and

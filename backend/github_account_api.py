@@ -1,4 +1,4 @@
-"""Settings' GitHub account: connect your own account with a token, see who it is connected as, disconnect.
+"""The GitHub page's Account tab: connect your own account with a token, see who it is connected as, disconnect.
 
 The token goes one way. The browser sends it once (PUT), and nothing ever sends it back: GET only says
 who it is and what the token may do (github_searcher/github_account.py). Approve in the Inbox then

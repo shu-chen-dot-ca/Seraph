@@ -1,9 +1,9 @@
 """Your GitHub account: the one token that sends what you approve in the Inbox, as you.
 
-Settings (SettingsDialog.tsx) takes the token. connect() checks it with GitHub and keeps it in
-DATA_DIR/github_account.json, a file only this computer's user may read. The browser only ever gets
-status(): who it is connected as and what the token may do, never the token. Agents, Sherpa and the
-VMs never get it either; only the Inbox's Approve and Send to GitHub use it (backend/inbox_api.py).
+The GitHub page's Account tab (frontend/src/GitHub.tsx) takes the token. connect() checks it with GitHub
+and keeps it in DATA_DIR/github_account.json, a file only this computer's user may read. The browser only
+ever gets status(): who it is connected as and what the token may do, never the token. Agents, Sherpa and
+the VMs never get it either; only the Inbox's Approve and Send to GitHub use it (backend/inbox_api.py).
 It is kept apart from the search tokens in .env (token_balancer.py), which only read.
 
 It must be a classic token with the public_repo scope: GitHub's fine-grained tokens can't open a PR
@@ -146,7 +146,7 @@ class GithubAccount:
         """Sends a PR or comment draft to GitHub as you, once. Returns the draft with "sent". Runs in a thread."""
         account = self.load()
         if account is None:
-            raise SendError("Connect your GitHub account in Settings first.")
+            raise SendError("Connect your GitHub account first: the GitHub page, Account.")
         headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {account['token']}", "X-GitHub-Api-Version": "2022-11-28"}
         with self.send_lock:
             draft = self.inbox.get(draft_id)
@@ -178,7 +178,7 @@ class GithubAccount:
                 if details:
                     message += ": " + "; ".join(details)
                 if response.status_code == 401:
-                    message += ". Connect your account again in Settings, with a new token."
+                    message += ". Connect your account again (the GitHub page, Account), with a new token."
                 raise SendError(f"GitHub refused while {self.step}: {message}") from None
             except httpx.HTTPError as error:
                 raise SendError(f"Could not reach GitHub while {self.step}: {error}") from None

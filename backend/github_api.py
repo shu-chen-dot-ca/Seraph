@@ -1,7 +1,8 @@
-"""The PRs page: your PRs on GitHub and how each one stands (github_searcher/pr_tracking.py).
+"""The GitHub page: your PRs on GitHub and how each one stands (github_searcher/pr_tracking.py). Its Account tab
+connects your GitHub account (backend/github_account_api.py).
 
-keep_prs(), which the app runs in the background, reads them all again every PRS_REFRESH_SECONDS, and at once
-when Approve just sent a PR that isn't followed yet. Check now (POST /api/prs/refresh) reads them at once.
+keep_prs(), which the app runs in the background, reads the PRs again every PRS_REFRESH_SECONDS, and at once
+when Approve just sent a PR that isn't followed yet. Check now (POST /api/github/refresh) reads them at once.
 The PRs reach the browser through /api/live (topic "prs").
 """
 
@@ -18,7 +19,7 @@ PRS_CHECK_SECONDS = 15
 PRS_REFRESH_SECONDS = 5 * 60
 
 
-@router.post("/prs/refresh")
+@router.post("/github/refresh")
 async def refresh_prs() -> dict:
     """Read every PR again now. Takes a few seconds per PR."""
     await asyncio.to_thread(pr_tracking.refresh)

@@ -607,7 +607,7 @@ def get_tracked_issues(owner: str, repo: str) -> dict:
     return data["data"]["repository"]
 
 
-# One PR as it stands, for the PRs page (pr_tracking.py): its state, labels, reviews, latest comment, the issues it
+# One PR as it stands, for the GitHub page (pr_tracking.py): its state, labels, reviews, latest comment, the issues it
 # says it fixes, and its newest commit's checks.
 PR_STATUS_QUERY = """
 query($owner: String!, $name: String!, $number: Int!) {

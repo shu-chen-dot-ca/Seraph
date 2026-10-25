@@ -8,8 +8,8 @@ The left tree, like Proxmox's resource tree. Every line is a link to a page, in 
 - doing it, under a line: Jobs (open / all), Agents (one child per agent), then under another line VMs (one child per VM);
 - the computer, under another line: Resource (this computer's CPU, memory, GPUs, disk, network and battery,
   Resource.tsx);
-- pinned at the bottom: Inbox, PRs (your PRs on GitHub and how each stands, with how many are open; PRs.tsx) and
-  Settings (below).
+- pinned at the bottom: Inbox, GitHub (your PRs on GitHub and how each stands, and your account, with how
+  many PRs are open; GitHub.tsx) and Settings (below).
 Counts and status dots come straight from the live store, so the tree updates itself.
 The chevrons only fold Issues / Agents / VMs; clicking a name opens that page.
 Hovering Jobs, Agents or VMs fades its count into a + that makes a new one right there:
@@ -19,11 +19,11 @@ Each agent and VM line, like a chat in claude.ai's sidebar, fades its status int
 (a small dialog) and Delete (asks first), and for an agent Archive (asks first). Deleting the one whose page is open
 goes back to its list. Archived agents aren't listed here (they are on the Agents page); an agent that made PRs
 can only be archived, not deleted.
-Inbox (pending drafts), PRs (open ones) and Settings stay pinned at the bottom while the tree scrolls; Settings opens SettingsDialog
+Inbox (pending drafts), GitHub (open PRs) and Settings stay pinned at the bottom while the tree scrolls; Settings opens SettingsDialog
 (theme and accent color), which App owns.
 */
 
-import { Archive, Bot, ChevronRight, CircleDot, Compass, Eye, FolderGit2, Gauge, GitPullRequest, Inbox, ListTodo, Monitor, MoreHorizontal, Pencil, Plus, Settings, Trash2 } from "lucide-react";
+import { Archive, Bot, ChevronRight, CircleDot, Compass, Eye, FolderGit2, Gauge, Inbox, ListTodo, Monitor, MoreHorizontal, Pencil, Plus, Settings, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -442,9 +442,12 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
           </span>
         </a>
         {/* Like Sent under a mail app's Inbox: what went out, and how it is doing. */}
-        <a href="#/prs" className={cn(row, "pl-6", props.page === "prs" && selected)}>
-          <GitPullRequest className="size-4 text-muted-foreground" />
-          PRs
+        <a href="#/github" className={cn(row, "pl-6", props.page === "github" && selected)}>
+          {/* GitHub's mark (lucide has no brand icons). */}
+          <svg viewBox="0 0 16 16" className="size-4 text-muted-foreground" fill="currentColor" aria-hidden="true">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
+          </svg>
+          GitHub
           <span className="ml-auto text-muted-foreground tabular-nums">{openPRs}</span>
         </a>
         <button type="button" className={cn(row, "w-full pl-6")} onClick={props.onOpenSettings}>

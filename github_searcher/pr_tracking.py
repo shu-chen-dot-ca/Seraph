@@ -1,4 +1,4 @@
-"""Your PRs on GitHub and how each one stands, for the PRs page (frontend/src/PRs.tsx).
+"""Your PRs on GitHub and how each one stands, for the GitHub page (frontend/src/GitHub.tsx).
 
 Which PRs: every PR the Inbox's Approve sent (a draft's "sent", github_account.py), and, with your GitHub
 account connected, your other open and closed PRs on other people's projects (a search for author:<you>), so
@@ -27,7 +27,7 @@ commented, or none. issues are the issues the PR says it fixes. role is GitHub's
 COLLABORATOR, OWNER, CONTRIBUTOR, NONE, or BOT). draft_id, job and agent link a PR the app sent to its draft.
 
 refresh() reads them all again, one GraphQL query and one Actions call each; the backend calls it every few
-minutes and at once when a PR was just sent (backend/prs_api.py). A PR that fails to read keeps its last
+minutes and at once when a PR was just sent (backend/github_api.py). A PR that fails to read keeps its last
 status, with the error. error at the top is why the search for your PRs failed. version goes up on every change.
 """
 
