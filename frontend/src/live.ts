@@ -556,6 +556,9 @@ export type SherpaChat = {
   history: ImageAgentEntry[];
   busy: boolean;
   cost_usd: number;
+  context_used: number; // tokens the chat fills of the context window
+  context_cap: number; // where it is compacted (the agents' cap, 500k)
+  queued: string[]; // messages waiting for the turn to end, oldest first
   pending: { id: number; tab: string; action: SherpaAction } | null;
 };
 

@@ -17,12 +17,19 @@ ACTION_TIMEOUT seconds.
 Chats are kept, one file each, for the panel's history (the newest first; open one to go on with it, or delete it):
 
     DATA_DIR/sherpa_chats/<id>.json   {"id", "title", "created_at", "updated_at", "session_id", "history": [entry, ...],
-                                       "cost_usd"}
+                                       "cost_usd", "context_used", "queue": [{"text", "page", "tab"}, ...]}
 
 with entries like the image agent's (sandbox/image_agent.py). The title is the first message. One chat is open
 (`current`): at start the one used last; New chat opens an empty one, saved once its first message is sent. Each turn
 connects to Claude Code, resumes the open chat's conversation by its session id, and disconnects at the end. Claude
 Code's own tools are off: only the tools here. While a turn runs, the open chat stays open.
+A message sent while Sherpa works waits for its turn to end, like an agent's (MAX_QUEUED at most, each gets a turn of
+its own; its page isn't read, as that would number the page again under the turn using it, so Sherpa reads it then);
+stopping a turn lets the next one in. The queue is kept in the
+chat's file, so a restart doesn't lose it. "/compact" goes to Claude Code as it is: it summarizes the chat to free
+context.
+context_used is how much of the context window the chat fills (the panel's bar, up to CONTEXT_CAP): each reply's
+usage while a turn runs, and Claude Code's own count at its end. Like the agents, it is compacted at CONTEXT_CAP.
 
     sherpa = Sherpa()
     sherpa.send("how do I give an agent more memory?", page, tab)
@@ -49,6 +56,8 @@ AGENT_HOME = DATA_DIR / "sherpa_home"
 CHATS_DIR = DATA_DIR / "sherpa_chats"
 CHAT_ID = re.compile(r"[0-9a-f]{12}")
 TITLE_CHARS = 80
+# Messages that may wait for the turn to end at once, like an agent's (agents.py MAX_QUEUED).
+MAX_QUEUED = 10
 TOOL_SERVER = "sherpa"
 # How long a page action may take in the browser.
 ACTION_TIMEOUT = 20
@@ -58,6 +67,8 @@ RESULT_CUT = 4000
 SOURCE_FOLDERS = ["frontend/src", "backend", "github_searcher", "sandbox"]
 SOURCE_TYPES = [".py", ".ts", ".tsx", ".css", ".md", ".yaml", ".sh"]
 SOURCE_LIMIT = 120_000
+# The same cap as the agents: the bar's end, where Claude Code compacts the conversation.
+CONTEXT_CAP = int(os.environ["AGENT_CONTEXT_CAP"])
 SEARCH_LIMIT = 80
 
 PROMPT = """You are Sherpa, the guide of Seraph, an app on the user's own computer that finds open-source work and does it: Explore
@@ -105,7 +116,8 @@ class Sherpa:
         chats = self.chats()
         if chats:
             self.current = chats[0]["id"]
-        # The turn running now, or None: {"client", "chat", "stopped", "task", "tab"}.
+        # The turn running now, or None: {"client", "chat", "stopped", "task", "tab"}. Its chat's "queue" has the
+        # messages waiting for it to end.
         self.running = None
         # The page action the browser should do now, or None: {"id", "tab", "action"}; and what waits for its answer.
         self.pending = None
@@ -117,7 +129,7 @@ class Sherpa:
     def load(self, chat_id: str | None) -> dict:
         """A chat by its id; a new, empty one for None (or one that was deleted)."""
         if chat_id is None or not (CHATS_DIR / f"{chat_id}.json").exists():
-            return {"id": None, "title": "", "created_at": None, "updated_at": None, "session_id": None, "history": [], "cost_usd": 0.0}
+            return {"id": None, "title": "", "created_at": None, "updated_at": None, "session_id": None, "history": [], "cost_usd": 0.0, "context_used": 0}
         return json.loads((CHATS_DIR / f"{chat_id}.json").read_text())
 
     def save(self, chat: dict) -> None:
@@ -150,16 +162,29 @@ class Sherpa:
             "history": chat["history"],
             "busy": self.running is not None,
             "cost_usd": chat["cost_usd"],
+            # Chats from before it was counted: 0 until their next turn.
+            "context_used": chat.get("context_used", 0),
+            "context_cap": CONTEXT_CAP,
+            "queued": [each["text"] for each in chat.get("queue", [])],
             "pending": self.pending,
         }
 
     def send(self, text: str, page: str, tab: str) -> None:
-        """Start a turn on the open chat with the user's message and their page (a new chat is kept from now on).
-        Answers at once; call it on the event loop."""
-        if self.running is not None:
-            raise ValueError("Sherpa is still working. Wait, or stop it.")
+        """Start a turn with the user's message and their page, or queue it while a turn runs. Answers at once; call it
+        on the event loop."""
         if not text.strip():
             raise ValueError("The message is empty")
+        if self.running is not None:
+            queue = self.running["chat"].setdefault("queue", [])
+            if len(queue) >= MAX_QUEUED:
+                raise ValueError(f"{MAX_QUEUED} messages wait already. Send more when one has gone in.")
+            queue.append({"text": text.strip(), "page": page, "tab": tab})
+            self.save(self.running["chat"])
+            return
+        self.start(text.strip(), page, tab)
+
+    def start(self, text: str, page: str, tab: str) -> None:
+        """A turn on the open chat with this message (a new chat is kept from now on)."""
         chat = self.load(self.current)
         if chat["id"] is None:
             # A new chat: kept from its first message on, named after it.
@@ -167,11 +192,19 @@ class Sherpa:
             chat["title"] = " ".join(text.split())[:TITLE_CHARS]
             chat["created_at"] = datetime.now(UTC).isoformat()
             self.current = chat["id"]
-        chat["history"].append({"type": "user", "text": text.strip(), "time": datetime.now(UTC).isoformat()})
+        chat["history"].append({"type": "user", "text": text, "time": datetime.now(UTC).isoformat()})
+        message = f"[The page the user is on now]\n{page}\n\n[The user]\n{text}"
+        # Sent while Sherpa worked: the browser didn't read the page then, as that would number it again under the
+        # turn that was using it.
+        if page == "":
+            message = f"[The user, while you were working]\n{text}\n\n[Their page wasn't read with this message: look_page reads it.]"
+        # A slash command goes to Claude Code as it is.
+        if text == "/compact":
+            message = text
         self.save(chat)
-        self.last_page = page
+        if page != "":
+            self.last_page = page
         self.running = {"client": None, "chat": chat, "stopped": False, "task": None, "tab": tab}
-        message = f"[The page the user is on now]\n{page}\n\n[The user]\n{text.strip()}"
         # Kept, so the task isn't garbage collected while it runs.
         self.running["task"] = asyncio.get_running_loop().create_task(self.run(message))
 
@@ -277,8 +310,12 @@ class Sherpa:
                 strict_mcp_config=True,
                 resume=chat["session_id"],
                 cwd=str(AGENT_HOME),
-                # The backend runs in this repo: its CLAUDE.md and Claude Code's memory are not for Sherpa.
-                env={"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"},
+                # The backend runs in this repo: its CLAUDE.md and Claude Code's memory are not for Sherpa. Compact at the cap.
+                env={
+                    "CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1",
+                    "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+                    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(CONTEXT_CAP),
+                },
             )
         )
         running["client"] = client
@@ -291,6 +328,16 @@ class Sherpa:
                 # The conversation's id comes first, so a turn cut off by a restart can still be continued.
                 if isinstance(message, SystemMessage) and message.subtype == "init" and message.data.get("session_id"):
                     chat["session_id"] = message.data["session_id"]
+
+                if isinstance(message, SystemMessage) and message.subtype == "compact_boundary":
+                    history.append({"type": "system", "text": "Context compacted", "time": datetime.now(UTC).isoformat()})
+
+                # Each reply's usage is the whole conversation it was given, plus what it wrote.
+                if isinstance(message, AssistantMessage) and message.usage:
+                    chat["context_used"] = message.usage.get("input_tokens", 0)
+                    chat["context_used"] += message.usage.get("cache_creation_input_tokens", 0)
+                    chat["context_used"] += message.usage.get("cache_read_input_tokens", 0)
+                    chat["context_used"] += message.usage.get("output_tokens", 0)
 
                 if isinstance(message, ResultMessage):
                     chat["session_id"] = message.session_id
@@ -338,10 +385,16 @@ class Sherpa:
                         result = "\n".join(part.get("text", "") for part in parts if part.get("type") == "text")
                         history.append({"type": "tool_result", "id": block.tool_use_id, "text": result[:RESULT_CUT], "is_error": bool(block.is_error)})
                 self.save(chat)
+            # Claude Code's own count at the end of the turn, the exact one.
+            try:
+                usage = await client.get_context_usage()
+                chat["context_used"] = usage["totalTokens"]
+            except Exception:
+                # Not known: the last reply's count stays.
+                pass
         except Exception as error:
             history.append({"type": "system", "text": f"Error: {error}", "time": datetime.now(UTC).isoformat()})
         finally:
-            self.running = None
             self.pending = None
             self.waiter = None
             self.save(chat)
@@ -350,6 +403,14 @@ class Sherpa:
             except Exception:
                 # A Claude Code that already died has nothing left to close.
                 pass
+            # Running until here, so a message sent meanwhile is queued. Then the next message that waited goes in, with a
+            # turn of its own, at once (no await in between).
+            self.running = None
+            queue = chat.get("queue", [])
+            if queue:
+                waiting = queue.pop(0)
+                self.save(chat)
+                self.start(waiting["text"], waiting["page"], waiting["tab"])
 
     # --- Tools ---------------------------------------------------------------------
     # An exception here reaches Sherpa as a failed tool call.

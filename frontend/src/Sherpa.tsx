@@ -9,10 +9,18 @@ Each message takes the page along, as readPage reads it: the address, the sideba
 and field, numbered (data-sherpa-id), the values of password and data-secret fields left out. With a pop-up open, only
 the pop-up. While a turn runs, the chat comes from GET /api/sherpa every half second, and a page action Sherpa asks
 for (pending) is done here, in the tab the message came from (TAB, kept over a reload), and its answer posted back.
-That goes on with the chat closed.
+You can keep typing to Sherpa while it works: what it does on the page never takes the focus from its text box (a pop-up
+it opens, a select's list), so your typing never lands in the page; and a message sent then doesn't read the page,
+which would number it again under the turn using it. That goes on with the chat closed.
 
 Chats are kept. New chat opens an empty one; History (the clock) lists them all, the newest first, named after their
 first message: a click opens one to go on with it, the bin on hover deletes it. The open one is highlighted.
+
+The chat works like an agent's (AgentChat.tsx): a message sent while Sherpa works waits for its turn to end, shown
+over the text box as queued (MAX_QUEUED at most, each gets a turn of its own); Esc while Sherpa has focus stops the
+turn, and the next queued message goes in. New messages scroll the chat down only while it is at the bottom, so
+reading further up is never interrupted. What you type and don't send is kept in this browser (localStorage), also
+after a reload. Compact (the arrows in the header) summarizes the chat to free context, when it nears the cap.
 
 The panel stays at the bottom right; drag its left edge, top edge or top left corner to resize it. The grip reaches
 8px past the border on each side, so it is easy to catch. Its size is remembered in this browser. The chat keeps its
@@ -25,7 +33,7 @@ The chat works while a pop-up (Dialog) is open, to help fill it in: those keep f
 themselves and close on a click outside, so Sherpa's own events never reach them (the listeners on document).
 */
 
-import { ArrowUp, Bot, History, Loader2, MessageSquarePlus, Square, Trash2, Wrench, X } from "lucide-react";
+import { ArrowUp, Bot, History, Loader2, MessageSquarePlus, Minimize2, Square, Trash2, Wrench, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { toast } from "sonner";
 
@@ -40,6 +48,9 @@ const USABLE =
   "a[href], button, input, textarea, select, [role=tab], [role=option], [role=menuitem], [role=menuitemcheckbox], [role=menuitemradio], [role=switch], [role=checkbox], [role=radio], [role=combobox]";
 const ELEMENTS_KEPT = 300;
 const TEXT_KEPT = 6000;
+// The messages that may wait for their turn at once (MAX_QUEUED in sherpa.py).
+const MAX_QUEUED = 10;
+const DRAFT_STORAGE = "draft:sherpa";
 
 // The panel's size, as last dragged in this browser, and how small it may get.
 const SIZE_STORAGE = "sherpa-size";
@@ -160,7 +171,15 @@ export default function Sherpa() {
   const [open, setOpen] = useState(false);
   const [chat, setChat] = useState<SherpaChat | null>(null);
   const [error, setError] = useState("");
-  const [text, setText] = useState("");
+  // The unsent message: from localStorage at first, and saved there as you type.
+  const [text, setText] = useState(() => {
+    try {
+      return localStorage.getItem(DRAFT_STORAGE) ?? "";
+    } catch {
+      // Storage blocked (private window): start empty.
+      return "";
+    }
+  });
   const [sending, setSending] = useState(false);
   // The history instead of the chat, and its chats (null while loading).
   const [showHistory, setShowHistory] = useState(false);
@@ -177,9 +196,27 @@ export default function Sherpa() {
   // Sherpa points at now.
   const doneActions = useRef<number[]>([]);
   const pointed = useRef<HTMLElement | null>(null);
+  // For keeping the user's typing in Sherpa while it works: whether their last click or key was in Sherpa, where in
+  // Sherpa they had focus last, and whether a turn runs (for the listeners).
+  const userInSherpa = useRef(false);
+  const sherpaFocus = useRef<HTMLElement | null>(null);
+  const busyRef = useRef(false);
 
   const busy = chat !== null && chat.busy;
   const historyLength = chat === null ? 0 : chat.history.length;
+  const queued = chat?.queued ?? [];
+
+  useEffect(() => {
+    try {
+      if (text === "") {
+        localStorage.removeItem(DRAFT_STORAGE);
+      } else {
+        localStorage.setItem(DRAFT_STORAGE, text);
+      }
+    } catch {
+      // Storage blocked (private window): the draft just isn't kept.
+    }
+  }, [text]);
 
   useEffect(() => {
     try {
@@ -211,6 +248,43 @@ export default function Sherpa() {
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", stop);
   }
+
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
+
+  // While Sherpa works, what it does on the page never takes the focus from the user typing to it: a pop-up it opens
+  // focuses itself, one that closes gives focus back to its button, a select focuses its list. Such a move is undone at
+  // once, so the typing stays in Sherpa's text box and never lands in the page. The user's own click or Tab elsewhere
+  // still moves it (only the user's real input counts: isTrusted).
+  useEffect(() => {
+    function onUserInput(event: Event) {
+      if (!event.isTrusted) {
+        return;
+      }
+      const inSherpa = event.target instanceof Element && event.target.closest("[data-sherpa-panel]") !== null;
+      userInSherpa.current = inSherpa && !(event instanceof KeyboardEvent && event.key === "Tab");
+    }
+    function onFocusIn(event: FocusEvent) {
+      const target = event.target;
+      if (target instanceof HTMLElement && target.closest("[data-sherpa-panel]") !== null) {
+        sherpaFocus.current = target;
+        return;
+      }
+      const back = sherpaFocus.current;
+      if (busyRef.current && userInSherpa.current && back !== null && back.isConnected) {
+        back.focus({ preventScroll: true });
+      }
+    }
+    document.addEventListener("pointerdown", onUserInput, true);
+    document.addEventListener("keydown", onUserInput, true);
+    document.addEventListener("focusin", onFocusIn, true);
+    return () => {
+      document.removeEventListener("pointerdown", onUserInput, true);
+      document.removeEventListener("keydown", onUserInput, true);
+      document.removeEventListener("focusin", onFocusIn, true);
+    };
+  }, []);
 
   // Pop-ups' focus trap, click-outside and scroll lock never see Sherpa's own events; a click outside Sherpa
   // ends its pointing.
@@ -312,12 +386,20 @@ export default function Sherpa() {
     };
   }, [follow]);
 
-  // New messages, opening the chat, and coming back from the history, scroll it to the bottom.
+  // New messages scroll the chat down only while it is at the bottom, so reading further up is never interrupted.
+  useEffect(() => {
+    if (scrollRef.current !== null && fromBottom.current < 40) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [historyLength, busy, queued.length]);
+
+  // Opening the chat, and coming back from the history, start at the bottom.
   useEffect(() => {
     if (scrollRef.current !== null) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      fromBottom.current = 0;
     }
-  }, [historyLength, open, showHistory]);
+  }, [open, showHistory]);
 
   // A new size keeps the chat as far from its end as it was, before the browser paints.
   useLayoutEffect(() => {
@@ -326,20 +408,33 @@ export default function Sherpa() {
     }
   }, [size]);
 
+  // Sent at once, or queued while Sherpa works. Sending takes the chat to the bottom, to follow the answer.
   async function send() {
-    if (text.trim() === "" || busy || sending) {
+    if (text.trim() === "" || sending || queued.length >= MAX_QUEUED) {
       return;
     }
     setSending(true);
     setError("");
+    fromBottom.current = 0;
     try {
-      await api("/api/sherpa", { method: "POST", body: { text: text, page: readPage(), tab: TAB } });
+      // While it works the page isn't read: that would number it again under the turn using it. Sherpa reads it later.
+      await api("/api/sherpa", { method: "POST", body: { text: text, page: busy ? "" : readPage(), tab: TAB } });
       setText("");
       setFollow(follow + 1);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      toast.error(`Could not send: ${err instanceof Error ? err.message : err}`);
     }
     setSending(false);
+  }
+
+  async function compact() {
+    fromBottom.current = 0;
+    try {
+      await api("/api/sherpa", { method: "POST", body: { text: "/compact", page: "", tab: TAB } });
+      setFollow(follow + 1);
+    } catch (err) {
+      toast.error(`Could not compact: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   async function stop() {
@@ -420,6 +515,13 @@ export default function Sherpa() {
           {/* Focusable (tabIndex -1), so a click anywhere in it, not only in the text box, gives it focus and lights its border. */}
           <div
             tabIndex={-1}
+            // Esc stops the turn; the next queued message then goes in. A pop-up that takes Esc first marks it handled.
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && busy && !event.defaultPrevented) {
+                event.preventDefault();
+                stop();
+              }
+            }}
             className={cn(
               "flex h-full w-full flex-col overflow-hidden rounded-lg border bg-background shadow-xl transition-colors outline-none focus-within:border-primary focus-within:ring-1 focus-within:ring-primary",
               resizing !== null && "border-primary ring-1 ring-primary",
@@ -428,8 +530,35 @@ export default function Sherpa() {
             <div className="flex h-9 shrink-0 items-center gap-1 border-b pr-1 pl-3">
               <Bot className="size-4 text-primary" />
               <span className="ml-1 font-semibold">Sherpa</span>
+              {/* How much of the context window the chat fills, like an agent's on the Agents page; amber past 80%. */}
+              {chat !== null && (
+                <span
+                  className="ml-2 flex items-center gap-1.5"
+                  title={`${chat.context_used.toLocaleString()} of ${chat.context_cap.toLocaleString()} tokens. The chat is compacted when it gets there.`}
+                >
+                  <span className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-muted">
+                    <span
+                      className={cn("block h-full", chat.context_used / chat.context_cap > 0.8 ? "bg-warn" : "bg-primary")}
+                      style={{ width: `${Math.min(100, (chat.context_used / chat.context_cap) * 100)}%` }}
+                    />
+                  </span>
+                  <span className="text-xs tabular-nums">
+                    {Math.round(chat.context_used / 1000)}k / {chat.context_cap >= 1_000_000 ? `${chat.context_cap / 1_000_000}M` : `${Math.round(chat.context_cap / 1000)}k`}
+                  </span>
+                </span>
+              )}
               <Button size="icon-sm" variant={showHistory ? "secondary" : "ghost"} className="ml-auto" title="History" aria-label="History" onClick={toggleHistory}>
                 <History />
+              </Button>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                title="Compact: summarize the chat to free context"
+                aria-label="Compact"
+                disabled={historyLength === 0 || queued.length >= MAX_QUEUED}
+                onClick={compact}
+              >
+                <Minimize2 />
               </Button>
               <Button size="icon-sm" variant="ghost" title="New chat" aria-label="New chat" disabled={busy || historyLength === 0} onClick={newChat}>
                 <MessageSquarePlus />
@@ -540,30 +669,49 @@ export default function Sherpa() {
               {error !== "" && <p className="text-destructive">{error}</p>}
             </div>
 
-            <div className={cn("flex shrink-0 items-end gap-2 border-t p-2", showHistory && "hidden")}>
-              <Textarea
-                autoFocus
-                className="max-h-40 min-h-9 flex-1 resize-none"
-                rows={2}
-                placeholder="Ask Sherpa"
-                value={text}
-                onChange={(event) => setText(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                    event.preventDefault();
-                    send();
+            <div className={cn("shrink-0 border-t p-2", showHistory && "hidden")}>
+              {queued.length > 0 && (
+                <div className="mb-2 space-y-1">
+                  <div className="text-xs">
+                    {queued.length} of {MAX_QUEUED} queued, each gets its own turn · Esc stops this turn and sends the next
+                  </div>
+                  {queued.map((message, index) => (
+                    <div key={index} className="truncate rounded-sm border border-dashed px-2 py-1" title={message}>
+                      {message}
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-end gap-2">
+                <Textarea
+                  autoFocus
+                  className="max-h-40 min-h-9 flex-1 resize-none"
+                  rows={2}
+                  placeholder={
+                    queued.length >= MAX_QUEUED
+                      ? `${MAX_QUEUED} messages wait; send more when one has gone in`
+                      : busy
+                        ? "Message Sherpa (sent when this turn ends)"
+                        : "Ask Sherpa"
                   }
-                }}
-              />
-              {busy ? (
-                <Button size="icon" variant="outline" title="Stop" aria-label="Stop Sherpa" onClick={stop}>
-                  <Square />
-                </Button>
-              ) : (
-                <Button size="icon" title="Send" aria-label="Send" disabled={text.trim() === "" || sending} onClick={send}>
+                  value={text}
+                  onChange={(event) => setText(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                      event.preventDefault();
+                      send();
+                    }
+                  }}
+                />
+                {busy && (
+                  <Button size="icon" variant="outline" title="Stop this turn; the next queued message goes in (Esc)" aria-label="Stop Sherpa" onClick={stop}>
+                    <Square />
+                  </Button>
+                )}
+                <Button size="icon" title="Send (Enter)" aria-label="Send" disabled={text.trim() === "" || sending || queued.length >= MAX_QUEUED} onClick={send}>
                   {sending ? <Loader2 className="animate-spin" /> : <ArrowUp />}
                 </Button>
-              )}
+              </div>
             </div>
           </div>
         </div>
