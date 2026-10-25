@@ -18,12 +18,12 @@ what a VM was made from (its image_fingerprint) is known for good, also after it
 How images come and change. Builds, saves and inspects run in the background, as tasks shown above the list:
 - New image: only saves image.yaml, the defaults with the system, desktop and description picked; nothing is built
   and no agent runs. Until its first build it is listed as not built (unbuilt in the live feed), with Build, Edit
-  image.yaml and Delete. Sherpa helps the user change it (it can fill the YAML in).
+  image.yaml and Delete. Sherpa helps the user change it (it can fill the YAML in and press Check).
 - Build (Rebuild once there is an image): image.yaml is built, with no agent (image_build.py, "build" task). Only
   what changed since the last build runs again: its builder VM keeps snapshots between builds. The new build
   replaces the image; VMs made from the old one keep their own disk.
 - The user changes image.yaml in Details > Definition, or asks the image's agent to. Every change is checked first
-  (image_build.parse_definition). Nothing changes in the image until it is rebuilt: definition_changed (in the live
+  (image_build.check_definition). Nothing changes in the image until it is rebuilt: definition_changed (in the live
   feed) says image.yaml differs from what the image was built from, and the Images tab shows a dot. Changing the
   defaults changes no image: they are only where new ones start.
 - save a VM: `incus publish` of a stopped VM (a few minutes): everything on its disk comes along. It has no
@@ -462,11 +462,10 @@ class Images:
         return {"defaults": image_build.read_defaults()}
 
     def write_defaults(self, text: str) -> None:
-        """Change the defaults, only to ones that are right. Only images made from now on start from them."""
-        try:
-            image_build.parse_definition(text, defaults=True)
-        except image_build.DefinitionError as error:
-            raise ImagesError(str(error))
+        """Change the defaults, only to ones that pass the mechanical check. Only images made from now on start from them."""
+        problems = image_build.check_definition(text, defaults=True)
+        if problems:
+            raise ImagesError("\n".join(problems))
         # Write, then rename: a crash never leaves half a file.
         temporary = image_build.DEFAULTS_FILE.with_suffix(".yaml.tmp")
         temporary.write_text(text)
@@ -516,12 +515,11 @@ class Images:
         return path.read_text() if path.exists() else ""
 
     def write_definition(self, name: str, text: str) -> None:
-        """Change image.yaml, only to one that is right (image_build.parse_definition says what isn't). The image
-        itself only changes when it is rebuilt."""
-        try:
-            image_build.parse_definition(text)
-        except image_build.DefinitionError as error:
-            raise ImagesError(str(error))
+        """Change image.yaml, only to one that passes the mechanical check (image_build.check_definition says what
+        doesn't). The image itself only changes when it is rebuilt."""
+        problems = image_build.check_definition(text)
+        if problems:
+            raise ImagesError("\n".join(problems))
         # An image never built has only its folder; a built one may go by another of its names.
         if not (DEFINITIONS_DIR / name).exists():
             name = self.find(name)["name"]
@@ -575,10 +573,9 @@ class Images:
         text = self.read_definition(name)
         if not text:
             raise ImagesError(f"{name} has no image.yaml, so it can't be built. Write one in its Definition first.")
-        try:
-            image_build.parse_definition(text)
-        except image_build.DefinitionError as error:
-            raise ImagesError(f"{name}'s image.yaml isn't right: {error}")
+        problems = image_build.check_definition(text)
+        if problems:
+            raise ImagesError(f"{name}'s image.yaml isn't right: {'; '.join(problems)}")
         with self.lock:
             building = [task for task in self.tasks if task["status"] == "running" and task["kind"] == "build"]
             busy = [task for task in self.tasks if task["status"] == "running" and task["name"] == name]

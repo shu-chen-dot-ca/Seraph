@@ -4,19 +4,22 @@ and desktop picked in New image. They are the user's, built here: the app has no
 own image.yaml, so a change here only reaches images made after it.
 
 The same keys as image.yaml, without system and desktop: packages (one list, or split into apt: and dnf: where the
-names differ), python, node, docker and steps. A change is checked before it is saved (a wrong one is refused with
-the reason).
+names differ), python, node, docker and steps. The defaults are built mechanically, so they are checked mechanically:
+Check (while editing) runs the same check as Save without saving: the YAML's keys and values, and every step's bash
+(bash -n: read, never run). It lists what is wrong, or says there are no problems; a change that doesn't pass isn't
+saved. Its answer shows in the row of the buttons, where the hint is otherwise. Sherpa presses Check after it fills
+the YAML in, and fixes what it reports.
 
 Comes from GET /api/image-defaults; Save is PUT /api/image-defaults.
 */
 
-import { Loader2, Pencil } from "lucide-react";
+import { ListChecks, Loader2, Pencil } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { api, type ImageDefaults } from "@/live";
+import { api, type ImageCheck, type ImageDefaults } from "@/live";
 
 // tabs: the VMs page's tabs, which share the header row.
 export default function Defaults(props: { tabs: ReactNode }) {
@@ -25,6 +28,9 @@ export default function Defaults(props: { tabs: ReactNode }) {
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // The last Check: what was checked and what is wrong with it. Shown while the draft is still that text.
+  const [checked, setChecked] = useState<{ text: string; problems: string[] } | null>(null);
+  const [checking, setChecking] = useState(false);
 
   useEffect(() => {
     api<ImageDefaults>("/api/image-defaults")
@@ -47,6 +53,21 @@ export default function Defaults(props: { tabs: ReactNode }) {
       setError(err instanceof Error ? err.message : String(err));
     }
     setSaving(false);
+  }
+
+  // A Check answer counts while the draft is still what was checked.
+  const fresh = checked !== null && checked.text === draft;
+
+  async function check() {
+    const text = draft;
+    setChecking(true);
+    try {
+      const answer = await api<ImageCheck>("/api/image-check", { method: "POST", body: { text: text, defaults: true } });
+      setChecked({ text: text, problems: answer.problems });
+    } catch (err) {
+      toast.error(`Could not check it: ${err instanceof Error ? err.message : err}`);
+    }
+    setChecking(false);
   }
 
   return (
@@ -101,15 +122,24 @@ export default function Defaults(props: { tabs: ReactNode }) {
             <Button size="sm" disabled={saving || draft === defaults.defaults} onClick={save}>
               {saving && <Loader2 className="animate-spin" />} Save
             </Button>
+            <Button size="sm" variant="outline" disabled={checking} onClick={check}>
+              {checking ? <Loader2 className="animate-spin" /> : <ListChecks />} Check
+            </Button>
             <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
               Cancel
             </Button>
-            <span className="text-xs text-muted-foreground">Only new images start from a change; images already made keep theirs.</span>
+            {!fresh && <span className="text-xs text-muted-foreground">Only new images start from a change; images already made keep theirs.</span>}
+            {fresh && checked.problems.length === 0 && (
+              <span className="text-xs text-ok">No problems: the keys and values are right, and every step's bash parses.</span>
+            )}
+            {fresh && checked.problems.length > 0 && (
+              <span className="min-w-0 flex-1 text-xs whitespace-pre-wrap text-destructive">{checked.problems.join("\n")}</span>
+            )}
           </div>
         </div>
       )}
 
-      {error !== "" && <p className="shrink-0 border-t px-3 py-2 text-destructive">{error}</p>}
+      {error !== "" && <p className="shrink-0 border-t px-3 py-2 whitespace-pre-wrap text-destructive">{error}</p>}
     </div>
   );
 }

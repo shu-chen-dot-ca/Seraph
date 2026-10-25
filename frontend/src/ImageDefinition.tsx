@@ -2,7 +2,10 @@
 An image's image.yaml: the one place it is defined (sandbox/images.py): the system, the desktop, package lists and
 steps. The app builds the image from it, mechanically, from official sources (Rebuild, no agent); what the app needs
 in every image comes from its own base layer, never from here. The agent writes it; you can read and change it here
-too, and a change that isn't right is refused with the reason. A new image's image.yaml starts as the defaults
+too. It is built mechanically, so it is checked mechanically: Check (while editing) runs the same check as Save
+without saving, the YAML's keys and values and every step's bash (bash -n: read, never run), and lists what is
+wrong (in the row of the buttons); a change that doesn't pass isn't saved. Sherpa presses Check after it fills the
+YAML in. A new image's image.yaml starts as the defaults
 (the VMs page's Defaults tab); from then on it is the image's own. Nothing changes in the image until it is
 rebuilt, so when image.yaml differs from what the image was built from, an amber dot shows, its changes can be
 shown, and the top offers Discard (back to what it was built from) and Rebuild.
@@ -12,7 +15,7 @@ fetched again every 2 s as the agent writes). Comes from GET /api/images/<name>/
 updatedAt (the live feed's definition_updated_at) moves. Saving is PUT /api/images/<name>/definition.
 */
 
-import { Hammer, Loader2, Pencil, Undo2 } from "lucide-react";
+import { Hammer, ListChecks, Loader2, Pencil, Undo2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -29,7 +32,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { StatusDot } from "@/components/ui/status-dot";
 import { Textarea } from "@/components/ui/textarea";
-import { api, type ImageDefinition as Definition } from "@/live";
+import { api, type ImageCheck, type ImageDefinition as Definition } from "@/live";
 import { cn } from "@/lib/utils";
 
 export default function ImageDefinition(props: { name: string; updatedAt: number; editable: boolean; follow: boolean; onRebuild?: () => void }) {
@@ -43,6 +46,9 @@ export default function ImageDefinition(props: { name: string; updatedAt: number
   // Bumped after a save or discard, so image.yaml is fetched again.
   const [reload, setReload] = useState(0);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // The last Check: what was checked and what is wrong with it. Shown while the draft is still that text.
+  const [checked, setChecked] = useState<{ text: string; problems: string[] } | null>(null);
+  const [checking, setChecking] = useState(false);
 
   // image.yaml: now, when it changed, and every 2 s while following a build.
   useEffect(() => {
@@ -86,6 +92,21 @@ export default function ImageDefinition(props: { name: string; updatedAt: number
       toast.error(`Could not save image.yaml: ${err instanceof Error ? err.message : err}`);
     }
     setSaving(false);
+  }
+
+  // A Check answer counts while the draft is still what was checked.
+  const fresh = checked !== null && checked.text === draft;
+
+  async function check() {
+    const checkedText = draft;
+    setChecking(true);
+    try {
+      const answer = await api<ImageCheck>("/api/image-check", { method: "POST", body: { text: checkedText } });
+      setChecked({ text: checkedText, problems: answer.problems });
+    } catch (err) {
+      toast.error(`Could not check it: ${err instanceof Error ? err.message : err}`);
+    }
+    setChecking(false);
   }
 
   async function discard() {
@@ -156,10 +177,19 @@ export default function ImageDefinition(props: { name: string; updatedAt: number
             <Button size="sm" disabled={saving || draft === text} onClick={save}>
               {saving && <Loader2 className="animate-spin" />} Save
             </Button>
+            <Button size="sm" variant="outline" disabled={checking} onClick={check}>
+              {checking ? <Loader2 className="animate-spin" /> : <ListChecks />} Check
+            </Button>
             <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
               Cancel
             </Button>
-            <span className="text-xs text-muted-foreground">A saved image.yaml changes the image at its next Rebuild.</span>
+            {!fresh && <span className="text-xs text-muted-foreground">A saved image.yaml changes the image at its next Rebuild.</span>}
+            {fresh && checked.problems.length === 0 && (
+              <span className="text-xs text-ok">No problems: the keys and values are right, and every step's bash parses.</span>
+            )}
+            {fresh && checked.problems.length > 0 && (
+              <span className="min-w-0 flex-1 text-xs whitespace-pre-wrap text-destructive">{checked.problems.join("\n")}</span>
+            )}
           </div>
         </>
       )}

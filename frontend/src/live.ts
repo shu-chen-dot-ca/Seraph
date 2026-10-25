@@ -520,6 +520,9 @@ export type Image = {
 // from ("" when the same, or never built).
 export type ImageDefinition = { definition: string; diff: string };
 
+// The mechanical check of an image.yaml or the defaults (POST /api/image-check): what is wrong, or nothing.
+export type ImageCheck = { problems: string[] };
+
 // The defaults every new image.yaml starts as (GET /api/image-defaults): the user's, "" before they wrote any.
 export type ImageDefaults = { defaults: string };
 

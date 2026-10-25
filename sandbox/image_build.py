@@ -270,6 +270,22 @@ def parse_definition(text: str, defaults: bool = False) -> dict:
     }
 
 
+def check_definition(text: str, defaults: bool = False) -> list[str]:
+    """The mechanical check of image.yaml (or, with defaults=True, the defaults), without building: what
+    parse_definition finds wrong, or else each step whose run bash can't parse (bash -n only reads it, it runs
+    nothing). No problems: an empty list. A build can still fail on what it downloads or installs."""
+    try:
+        definition = parse_definition(text, defaults)
+    except DefinitionError as error:
+        return [str(error)]
+    problems = []
+    for step in definition["steps"]:
+        result = subprocess.run(["bash", "-n"], input=step["run"], capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            problems.append(f"Step {step['name']}: " + "; ".join(line.removeprefix("bash: ") for line in result.stderr.strip().splitlines()))
+    return problems
+
+
 def stages(definition: dict) -> list[list[tuple[str, str]]]:
     """The three stages' scripts of an image (parse_definition()), each (title, bash run as root): base, middle, lists."""
     system = [system for system in SYSTEMS if system["id"] == definition["system"]][0]

@@ -2,7 +2,7 @@
 with the system, desktop and description picked; nothing is built), Build or Rebuild (image.yaml is built, no agent),
 save a VM as an image, what each image has
 (its inventory: system, languages, tools, packages), its image.yaml and its agent, and the defaults every new
-image.yaml starts as (the Defaults tab).
+image.yaml starts as (the Defaults tab). Check runs the mechanical check of either without saving it.
 
 The list itself reaches the browser through /api/live (topic "images"). Builds and saves run in the
 background and answer at once; the task shows in the list until it is done. Most of this makes Incus
@@ -17,6 +17,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from backend.shared import image_agents, images
+from sandbox import image_build
 from sandbox.images import ImagesError, load_inventory
 
 router = APIRouter(prefix="/api")
@@ -35,6 +36,11 @@ class NewImageRequest(BaseModel):
 
 class DefinitionRequest(BaseModel):
     text: str
+
+
+class CheckRequest(BaseModel):
+    text: str
+    defaults: bool = False  # the defaults rather than an image.yaml
 
 
 class SaveRequest(BaseModel):
@@ -87,6 +93,13 @@ def delete_image(name: str) -> dict:
 def new_image_options() -> dict:
     """What New image offers: systems and desktops."""
     return images.new_options()
+
+
+@router.post("/image-check")
+def check_image_yaml(body: CheckRequest) -> dict:
+    """The mechanical check of an image.yaml or the defaults, the same as Save's, without saving: the YAML's keys and
+    values, and every step's bash (bash -n, nothing runs). No problems: an empty list."""
+    return {"problems": image_build.check_definition(body.text, body.defaults)}
 
 
 @router.get("/image-defaults")

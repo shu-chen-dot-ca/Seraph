@@ -11,8 +11,8 @@ An amber dot after the name: its image.yaml changed since it was built, so a Reb
 
 New image (NewImageDialog) only saves an image.yaml, the defaults with a system, desktop and description: nothing
 is built and no agent runs. Such an image is listed below the built ones as "not built", with Build (its first
-build) and a menu: Edit image.yaml (the same editor as an image's Definition), Rename and Delete.
-Sherpa helps change it: it can fill the YAML in.
+build) and a menu: Edit image.yaml (the same editor, with Check, as an image's Definition), Rename and Delete.
+Sherpa helps change it: it can fill the YAML in and press Check.
 Save a VM makes an image from that VM's disk as it is (a few
 minutes). Build and Rebuild build image.yaml mechanically, with no agent; only what changed since the last build
 runs again. One image builds at a time.
@@ -343,7 +343,7 @@ export default function Images(props: { tabs: ReactNode }) {
             <DialogTitle>image.yaml of {definitionOf}</DialogTitle>
             <DialogDescription>
               {definitionEditable
-                ? "What defines the image. Change it here, then Build it from its row."
+                ? "What defines the image. Change it here, check it, then Build it from its row."
                 : "What defines the image. Once it is built, change it in its Details."}
             </DialogDescription>
           </DialogHeader>
