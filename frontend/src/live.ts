@@ -204,13 +204,14 @@ export type TrackedIssue = {
   tags?: IssueTags | null; // Merged in by the live feed; null until made.
 };
 
-// A tracked repo's latest check. An issue is new for three days after it was opened.
+// A tracked repo's latest check. An issue is new for three days after it was opened, unless it is in read.
 export type TrackedCheck = {
   checked_at: string;
   error: string | null; // why the last check failed (the issues are from the check before)
   stars: number | null;
   description: string;
   issues: TrackedIssue[]; // newest first
+  read?: number[]; // the issues Mark all as read saw; missing in checks made before it was there
 };
 
 // A repo in the Tracked list, with its latest check merged in by the live feed (null until the first one).

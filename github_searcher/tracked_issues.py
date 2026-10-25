@@ -7,14 +7,17 @@ an eye on. This store keeps what GitHub says about their issues, in DATA_DIR/tra
 
     Check = {"checked_at", "error": str | None, "stars", "description",
              "issues": [{"number", "title", "url", "created_at", "updated_at", "author", "labels",
-                         "comments", "assignees"}, ...]}
+                         "comments", "assignees"}, ...],
+             "read": [number, ...]}
 
 issues are the repo's 100 newest open issues, plus every open issue under a good-first-issue or
 help-wanted kind of label (GOOD_FIRST matches the label's name), newest first. Whether an issue is free
 to take, how hard it is and what kind are its tags (issue_tags.py), made from these and the issue's text;
 updated_at tells when it needs them again. An issue is new for three days after it was opened (the page
-and the agent tools work that out). Times are in GitHub's format (2026-10-23T03:39:11Z), so they compare
-as text. error is why the last check failed (the issues of the check before stay).
+and the agent tools work that out), unless the user marked it read: read is the issues the Tracked page's
+Mark all as read saw (mark_read), kept from check to check while they stay open. Times are in GitHub's
+format (2026-10-23T03:39:11Z), so they compare as text. error is why the last check failed (the issues of
+the check before stay).
 
 Kept apart from the list on purpose, like issue_facts.py: the list's undo/redo should only undo what
 agents and the user did, not bring back old checks. The backend checks every tracked repo now and then
@@ -80,7 +83,7 @@ class TrackedIssues:
             data = get_tracked_issues(owner, repo)
         except Exception as error:
             with self.lock:
-                check = self.checks.get(full_name, {"stars": None, "description": "", "issues": []})
+                check = self.checks.get(full_name, {"stars": None, "description": "", "issues": [], "read": []})
                 check["checked_at"] = now
                 check["error"] = str(error) or type(error).__name__
                 self.checks[full_name] = check
@@ -117,12 +120,25 @@ class TrackedIssues:
             )
         issues.sort(key=lambda issue: issue["created_at"], reverse=True)
 
+        numbers = [issue["number"] for issue in issues]
         with self.lock:
+            # The issues marked read stay read; closed ones are dropped.
+            read = []
+            if full_name in self.checks:
+                read = [number for number in self.checks[full_name].get("read", []) if number in numbers]
             self.checks[full_name] = {
                 "checked_at": now,
                 "error": None,
                 "stars": data["stargazerCount"],
                 "description": data["description"] or "",
                 "issues": issues,
+                "read": read,
             }
+            self.save()
+
+    def mark_read(self) -> None:
+        """Mark all as read: every issue the checks found so far isn't new anymore. Ones found later are."""
+        with self.lock:
+            for check in self.checks.values():
+                check["read"] = [issue["number"] for issue in check["issues"]]
             self.save()

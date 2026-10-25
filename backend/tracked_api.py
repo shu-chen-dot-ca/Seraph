@@ -6,7 +6,8 @@ The list and each repo's latest check reach the browser through /api/live.
 
 A repo's check is its open issues on GitHub (github_searcher/tracked_issues.py). keep_tracked(), which
 the app runs in the background, checks a newly added repo within TRACKED_CHECK_SECONDS and every repo
-again every TRACKED_REFRESH_SECONDS; Check now does one at once.
+again every TRACKED_REFRESH_SECONDS; Check now does one at once. Mark all as read (mark_read) makes every
+issue found so far not new anymore.
 
 An issue the user likes goes into the Issues list from here (add_issue), and its repo into Repos if
 missing, both from what the last check found, so it takes no GitHub call.
@@ -133,6 +134,13 @@ async def check_now(body: NameRequest) -> dict:
         await asyncio.to_thread(tracked_issues.check, body.name)
     except Exception as error:
         raise HTTPException(status_code=502, detail=f"GitHub: {error}")
+    return {}
+
+
+@router.post("/tracked/mark_read")
+def mark_read() -> dict:
+    """Mark all as read: the issues new now aren't anymore; ones the next checks find are."""
+    tracked_issues.mark_read()
     return {}
 
 

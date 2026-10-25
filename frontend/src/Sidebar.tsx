@@ -67,13 +67,14 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
 
   const pending = inbox.filter((draft) => draft.status === "pending").length;
   const running = vms.filter((vm) => vm.status === "running").length;
-  // Issues opened in tracked repos in the last three days.
+  // Issues opened in tracked repos in the last three days and not marked read (the Tracked page's Mark all as read).
   const newSince = Date.now() - 3 * 24 * 60 * 60 * 1000;
   let trackedNew = 0;
   for (const repo of tracked.items) {
     const check = repo.check;
     if (check !== null) {
-      trackedNew += check.issues.filter((issue) => new Date(issue.created_at).getTime() > newSince).length;
+      const read = check.read ?? [];
+      trackedNew += check.issues.filter((issue) => new Date(issue.created_at).getTime() > newSince && !read.includes(issue.number)).length;
     }
   }
   const openJobs = jobs.filter((job) => job.status === "queued" || job.status === "working" || job.status === "waiting_on_user").length;
@@ -173,7 +174,7 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
         <a
           href="#/tracked"
           className={cn(row, "pl-6", props.page === "tracked" && selected)}
-          title={trackedNew > 0 ? `${trackedNew} issues opened in the last 3 days in ${tracked.items.length} tracked repos` : `${tracked.items.length} tracked repos`}
+          title={trackedNew > 0 ? `${trackedNew} issues opened in the last 3 days and not marked read, in ${tracked.items.length} tracked repos` : `${tracked.items.length} tracked repos`}
         >
           <Eye className="size-4 text-muted-foreground" />
           Tracked

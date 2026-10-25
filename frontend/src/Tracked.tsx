@@ -1,12 +1,12 @@
 /*
 The Tracked list: repos the user wants to keep an eye on for new issues. The user tracks them from the Repos page (its
 Track column); agents can add and remove them too (their tracked_* tools), and undo / redo (Ctrl+Z / Ctrl+Y) works on
-both, like Repos. The bar on top has Expand all (Collapse all when every row is open) and Refresh all (Check now for
-every repo).
+both, like Repos. The bar on top has Expand all (Collapse all when every row is open), Refresh all (Check now for
+every repo) and Mark all as read (every issue new now isn't anymore; only ones found later are new).
 
 The backend checks each repo's open issues every few minutes (github_searcher/tracked_issues.py): the newest
-ones and every good first or help wanted one. An issue is new for three days after it was opened, assigned or not;
-the row shows how many are new, the sidebar the total. Check now asks GitHub at once.
+ones and every good first or help wanted one. An issue is new for three days after it was opened, assigned or not,
+unless Mark all as read saw it; the row shows how many are new, the sidebar the total. Check now asks GitHub at once.
 
 GitHub's labels aren't shown: each issue carries the app's own tags instead, the same as on the Issues page
 (github_searcher/issue_tags.py, made by Claude in the background): Free or Assigned, Easy / Medium / Hard, and its
@@ -31,7 +31,7 @@ Many rows are picked like in a mail app (components/ui/row-selection.tsx): Ctrl-
 Ctrl+A; a bar at the bottom then stops tracking them at once, as one undo step (it asks first; Enter confirms).
 */
 
-import { ArrowDown, ArrowUp, ChevronsDownUp, ChevronsUpDown, Loader2, MessageSquare, Plus, RefreshCw, Star, Tags, X } from "lucide-react";
+import { ArrowDown, ArrowUp, CheckCheck, ChevronsDownUp, ChevronsUpDown, Loader2, MessageSquare, Plus, RefreshCw, Star, Tags, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -83,7 +83,7 @@ const TRACKED_COLUMNS: { key: TrackedKey; label: string; title: string; better?:
   { key: "maintainers", label: "Maintainers", title: "People who merged a PR in the last 30 days" },
   { key: "unanswered", label: "Unanswered", title: "Outside contributors' PRs open over 30 days that nobody answered" },
   { key: "stars", label: "Stars", title: "Stars on GitHub" },
-  { key: "new", label: "New", title: "Open issues opened in the last 3 days, assigned or not" },
+  { key: "new", label: "New", title: "Open issues opened in the last 3 days and not marked read, assigned or not" },
   { key: "free", label: "Free", title: "Open issues a newcomer can start on now: nobody is on it and the maintainers want it done" },
   { key: "easy", label: "Easy", title: "Free issues Claude rates easy" },
   { key: "open", label: "Open", title: "Open issues its last check found" },
@@ -141,12 +141,16 @@ export default function Tracked() {
   }, []);
 
   const inIssues = new Set(issues.items.map((issue) => issue.id));
-  // An issue is new for three days after it was opened, assigned or not. How many of each repo's are.
+  // An issue is new for three days after it was opened, assigned or not, unless Mark all as read saw it. How many of
+  // each repo's are, and of all.
   const newSince = Date.now() - 3 * 24 * 60 * 60 * 1000;
   const newCounts: Record<string, number> = {};
+  let newTotal = 0;
   for (const repo of tracked.items) {
     const check = repo.check;
-    newCounts[repo.full_name] = check !== null ? check.issues.filter((issue) => new Date(issue.created_at).getTime() > newSince).length : 0;
+    const read = check !== null ? (check.read ?? []) : [];
+    newCounts[repo.full_name] = check !== null ? check.issues.filter((issue) => new Date(issue.created_at).getTime() > newSince && !read.includes(issue.number)).length : 0;
+    newTotal += newCounts[repo.full_name];
   }
 
   async function remove(names: string[]) {
@@ -318,6 +322,14 @@ export default function Tracked() {
     await Promise.all(names.map((name) => checkNow(name)));
   }
 
+  async function markAllRead() {
+    try {
+      await api("/api/tracked/mark_read", { method: "POST" });
+    } catch (err) {
+      toast.error(`Could not mark them as read: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
   // Claude reads the repo's unassigned issues again now (the assigned ones need no reading). A few minutes for many.
   async function tagAgain(repo: TrackedRepo) {
     if (repo.check === null) {
@@ -389,7 +401,7 @@ export default function Tracked() {
 
   return (
     <div className="relative flex h-full flex-col">
-      {/* The same bar as on the other pages: Expand all / Collapse all and Refresh all on the left. */}
+      {/* The same bar as on the other pages: Expand all / Collapse all, Refresh all and Mark all as read on the left. */}
       <div className="flex h-9 shrink-0 items-center border-b px-3">
         {names.length > 0 && (
           <span className="flex items-center gap-1">
@@ -404,6 +416,9 @@ export default function Tracked() {
             )}
             <Button variant="ghost" size="xs" disabled={checking.length > 0} title="Check every tracked repo on GitHub now" onClick={() => checkAll()}>
               <RefreshCw className={cn(checking.length > 0 && "animate-spin")} /> Refresh all
+            </Button>
+            <Button variant="ghost" size="xs" disabled={newTotal === 0} title="The issues new now aren't new anymore; only ones found later are" onClick={() => markAllRead()}>
+              <CheckCheck /> Mark all as read
             </Button>
           </span>
         )}
@@ -640,7 +655,7 @@ export default function Tracked() {
                           )}
                           {shown.map((issue) => {
                             const id = `${repo.full_name}#${issue.number}`;
-                            const isNew = new Date(issue.created_at).getTime() > newSince;
+                            const isNew = new Date(issue.created_at).getTime() > newSince && !(check.read ?? []).includes(issue.number);
                             const tags = issue.tags ?? null;
                             const isAssigned = issue.assignees > 0 || tags?.status === "assigned";
                             return (
