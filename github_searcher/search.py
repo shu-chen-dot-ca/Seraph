@@ -1,4 +1,5 @@
-"""Reads from GitHub: repos, files, READMEs, PR and issue activity, threads, merged PRs, issue facts, issue and code search.
+"""Reads from GitHub: repos, files, READMEs, PR and issue activity, threads, merged PRs, issue facts, issue and code search,
+and how your sent PRs stand (their checks and GitHub Actions runs).
 
 Every request goes through token_balancer.py, which spreads them over the team's tokens, paces
 them and waits out rate limits. Errors come back as httpx.HTTPStatusError, as before.
@@ -604,3 +605,46 @@ def get_tracked_issues(owner: str, repo: str) -> dict:
     if data.get("errors"):
         raise ValueError(data["errors"][0]["message"])
     return data["data"]["repository"]
+
+
+# One PR as it stands, for the PRs page (pr_tracking.py): its state, labels, reviews, latest comment, the issues it
+# says it fixes, and its newest commit's checks.
+PR_STATUS_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      number title url state isDraft createdAt updatedAt closedAt mergedAt reviewDecision
+      author { login }
+      mergedBy { login }
+      labels(first: 20) { nodes { name } }
+      comments(last: 1) { totalCount nodes { createdAt authorAssociation body author { login __typename } } }
+      reviews(last: 30) { nodes { state submittedAt authorAssociation author { login __typename } } }
+      closingIssuesReferences(first: 5) { nodes { number title url state stateReason assignees(first: 5) { nodes { login } } } }
+      commits(last: 1) { nodes { commit { oid statusCheckRollup { state } } } }
+    }
+  }
+}
+"""
+
+
+def get_pr_status(owner: str, repo: str, number: int) -> dict | None:
+    # Never cached: it is asked for to see what changed. None when the PR is gone.
+    response = BALANCER.request(
+        "POST",
+        "https://api.github.com/graphql",
+        json={"query": PR_STATUS_QUERY, "variables": {"owner": owner, "name": repo, "number": number}},
+        timeout=60,
+    )
+    response.raise_for_status()
+    data = response.json()
+    if data.get("errors"):
+        raise ValueError(data["errors"][0]["message"])
+    return data["data"]["repository"]["pullRequest"]
+
+
+def get_action_runs(owner: str, repo: str, sha: str) -> list[dict]:
+    # The repo's GitHub Actions runs for one commit. Never cached. A first-time contributor's runs wait as
+    # "action_required" until a maintainer approves them, which the checks above don't show.
+    response = BALANCER.request("GET", f"https://api.github.com/repos/{owner}/{repo}/actions/runs", params={"head_sha": sha, "per_page": 100})
+    response.raise_for_status()
+    return response.json()["workflow_runs"]

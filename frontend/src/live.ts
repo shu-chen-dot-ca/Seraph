@@ -2,7 +2,7 @@
 Live data from the backend, and the one fetch helper.
 
 One websocket to /api/live. On connect the server sends every topic, then only the topics that changed:
-{"topic": "repos" | "issues" | "tracked" | "explore" | "github" | "jobs" | "inbox" | "agents" | "vms" | "images" | "resource",
+{"topic": "repos" | "issues" | "tracked" | "explore" | "github" | "jobs" | "inbox" | "prs" | "agents" | "vms" | "images" | "resource",
 "data": ...}.
 Each message replaces that topic in the store, and components read it with useLive(topic), so the page never
 polls and never re-fetches lists. When the socket drops it reconnects after a second, and the server sends
@@ -437,6 +437,43 @@ export type DraftSent = {
   id?: number; // comment: its id on GitHub
 };
 
+// One of your PRs on GitHub and how it stands (github_searcher/pr_tracking.py): the ones Approve sent, and your
+// other PRs on other people's projects. role is GitHub's word for the person (MEMBER, COLLABORATOR, OWNER, ..., BOT).
+export type TrackedPR = {
+  id: string; // "owner/name#number"
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  state: "open" | "merged" | "closed";
+  draft: boolean; // GitHub's draft PR
+  opened_at: string;
+  updated_at: string;
+  closed_at: string | null;
+  merged_by: string | null;
+  labels: string[];
+  checks: "waiting" | "running" | "passed" | "failed" | "none"; // waiting: GitHub Actions waits for a maintainer to approve
+  waiting_runs: number;
+  review: "approved" | "changes_requested" | "commented" | "none";
+  reviewers: { login: string; state: string; at: string; role: string }[]; // each reviewer's latest review
+  comments: number;
+  last_comment: { login: string; role: string; at: string; text: string } | null;
+  issues: { number: number; title: string; url: string; state: "open" | "closed"; reason: string | null; assignees: string[] }[];
+  draft_id: string | null; // the Inbox draft it was sent from
+  job: string | null;
+  agent: string | null;
+  checked_at: string;
+  error: string | null; // why the last read failed (the status before stays)
+};
+
+export type PRsData = {
+  items: TrackedPR[]; // the newest change first
+  checked_at: string | null;
+  error: string | null; // why the search for your PRs failed
+  refreshing: boolean;
+};
+
 // Settings' GitHub account (GET /api/github_account), the one that sends what you approve. Never the token.
 export type GithubAccountStatus = {
   connected: boolean;
@@ -758,6 +795,7 @@ export type Topics = {
   github: GithubStatus | null;
   jobs: Job[];
   inbox: Draft[];
+  prs: PRsData;
   agents: AgentSummary[];
   vms: VMSummary[];
   images: ImagesData;
@@ -775,6 +813,7 @@ const store = {
     github: null,
     jobs: [],
     inbox: [],
+    prs: { items: [], checked_at: null, error: null, refreshing: false },
     agents: [],
     vms: [],
     images: { images: [], unbuilt: [], default: "", tasks: [] },

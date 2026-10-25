@@ -8,7 +8,8 @@ The left tree, like Proxmox's resource tree. Every line is a link to a page, in 
 - doing it, under a line: Jobs (open / all), Agents (one child per agent), then under another line VMs (one child per VM);
 - the computer, under another line: Resource (this computer's CPU, memory, GPUs, disk, network and battery,
   Resource.tsx);
-- pinned at the bottom: Inbox and Settings (below).
+- pinned at the bottom: Inbox, PRs (your PRs on GitHub and how each stands, with how many are open; PRs.tsx) and
+  Settings (below).
 Counts and status dots come straight from the live store, so the tree updates itself.
 The chevrons only fold Issues / Agents / VMs; clicking a name opens that page.
 Hovering Jobs, Agents or VMs fades its count into a + that makes a new one right there:
@@ -18,11 +19,11 @@ Each agent and VM line, like a chat in claude.ai's sidebar, fades its status int
 (a small dialog) and Delete (asks first), and for an agent Archive (asks first). Deleting the one whose page is open
 goes back to its list. Archived agents aren't listed here (they are on the Agents page); an agent that made PRs
 can only be archived, not deleted.
-Inbox (pending drafts) and Settings stay pinned at the bottom while the tree scrolls; Settings opens SettingsDialog
+Inbox (pending drafts), PRs (open ones) and Settings stay pinned at the bottom while the tree scrolls; Settings opens SettingsDialog
 (theme and accent color), which App owns.
 */
 
-import { Archive, Bot, ChevronRight, CircleDot, Compass, Eye, FolderGit2, Gauge, Inbox, ListTodo, Monitor, MoreHorizontal, Pencil, Plus, Settings, Trash2 } from "lucide-react";
+import { Archive, Bot, ChevronRight, CircleDot, Compass, Eye, FolderGit2, Gauge, GitPullRequest, Inbox, ListTodo, Monitor, MoreHorizontal, Pencil, Plus, Settings, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -77,6 +78,8 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
   const exploreWaiting = useLiveValue((topics) => topics.explore.found.length);
 
   const pending = inbox.filter((draft) => draft.status === "pending").length;
+  // Only the count: the PRs topic changes whenever a PR is read again.
+  const openPRs = useLiveValue((topics) => topics.prs.items.filter((pr) => pr.state === "open").length);
   const running = vms.filter((vm) => vm.status === "running").length;
   // Issues opened in tracked repos in the last three days and not marked read (the Tracked page's Mark all as read).
   const newSince = Date.now() - 3 * 24 * 60 * 60 * 1000;
@@ -436,6 +439,12 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
           >
             {pending}
           </span>
+        </a>
+        {/* Like Sent under a mail app's Inbox: what went out, and how it is doing. */}
+        <a href="#/prs" className={cn(row, "pl-6", props.page === "prs" && selected)}>
+          <GitPullRequest className="size-4 text-muted-foreground" />
+          PRs
+          <span className="ml-auto text-muted-foreground tabular-nums">{openPRs}</span>
         </a>
         <button type="button" className={cn(row, "w-full pl-6")} onClick={props.onOpenSettings}>
           <Settings className="size-4 text-muted-foreground" />
