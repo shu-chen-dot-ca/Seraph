@@ -6,7 +6,7 @@ What an image has and what makes it, shown in the Details dialog of the Images t
   Docker, Playwright). The full list comes from GET /api/images/inventory/<fingerprint>.
 - Definition: the image's image.yaml, the one place it is defined (ImageDefinition). Overview and Packages are what
   the build has; once image.yaml differs from what it was built from, the tab has an amber dot until a Rebuild.
-- Agent: a chat with the image's agent, which writes image.yaml and changes it when asked (ImageAgent).
+- Agent: a chat with the image's agent, which changes image.yaml when asked (ImageAgent).
 
 A list never changes once made, so each one is fetched once and kept: for the session (inventories below)
 and in localStorage, so it opens at once after a reload too. Kept by fingerprint and when it was listed, since

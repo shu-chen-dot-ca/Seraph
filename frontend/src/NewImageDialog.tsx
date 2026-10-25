@@ -1,13 +1,15 @@
 /*
-New image: the image's agent makes it (sandbox/image_agent.py). It writes the image's image.yaml: the system, the
-desktop (GNOME by default, KDE Plasma, or none: terminal only; Firefox and what the app needs come with every
-desktop), whether the defaults (the VMs page's Defaults tab) go under it, and what the comments ask for beyond
-them, and builds it from official sources. What you pick here goes to the agent (its chat starts with it); the
-image itself is only image.yaml, with the defaults under it.
+New image: saves a new image's image.yaml, nothing more. It is the defaults (the VMs page's Defaults tab) with the
+system and desktop picked here (GNOME by default, KDE Plasma, or none: terminal only; Firefox and what the app needs
+come with every desktop), and the description, if one is written here, as its description field. No agent runs:
+Sherpa helps fill this in and change image.yaml afterwards.
+
+Save only saves it: the image is listed as "not built", with Build and Edit image.yaml, until its first build. Save
+and build also starts that build (minutes).
 
 The name starts as the system and the first free number (ubuntu-1), like vm1 and agent-1, until you type one.
-The choices come from GET /api/images/new/options. POST /api/images/new starts the agent, which shows as a task
-above the image list.
+The choices come from GET /api/images/new/options. Saving is POST /api/images/new, building POST
+/api/images/<name>/rebuild.
 */
 
 import { Loader2 } from "lucide-react";
@@ -18,7 +20,6 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { api, useLive, type NewImageOptions } from "@/live";
 
@@ -29,8 +30,7 @@ export default function NewImageDialog(props: { onClose: () => void }) {
   const [nameTouched, setNameTouched] = useState(false);
   const [system, setSystem] = useState("");
   const [desktop, setDesktop] = useState("");
-  const [useDefaults, setUseDefaults] = useState(true);
-  const [comments, setComments] = useState("");
+  const [description, setDescription] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -46,29 +46,42 @@ export default function NewImageDialog(props: { onClose: () => void }) {
 
   const terminalOnly = options !== null && desktop === options.desktops[options.desktops.length - 1];
 
-  // The first free <system>-<n> (ubuntu-1), counting images and the ones being made.
+  // The first free <system>-<n> (ubuntu-1), counting images, the ones never built and the ones being made.
   const base = system.split("-")[0];
-  const taken = [...data.images.flatMap((image) => image.aliases), ...data.tasks.map((task) => task.name)];
+  const taken = [...data.images.flatMap((image) => image.aliases), ...data.unbuilt.map((image) => image.name), ...data.tasks.map((task) => task.name)];
   let number = 1;
   while (taken.includes(`${base}-${number}`)) {
     number += 1;
   }
   const shownName = nameTouched ? name : `${base}-${number}`;
 
-  async function submit() {
+  // build: also start its first build once it is saved.
+  async function submit(build: boolean) {
+    const imageName = shownName.trim();
     setBusy(true);
     setError("");
     try {
       await api("/api/images/new", {
         method: "POST",
-        body: { name: shownName.trim(), system: system, desktop: desktop, defaults: useDefaults, comments: comments },
+        body: { name: imageName, system: system, desktop: desktop, description: description },
       });
-      toast.success(`The agent is making ${shownName.trim()}. Follow it above the image list.`);
-      props.onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setBusy(false);
+      return;
     }
+    if (!build) {
+      toast.success(`Saved ${imageName}. Change its image.yaml from its row, or Build it when it is ready.`);
+      props.onClose();
+      return;
+    }
+    try {
+      await api(`/api/images/${encodeURIComponent(imageName)}/rebuild`, { method: "POST" });
+      toast.success(`Saved ${imageName} and building it. Follow it above the image list.`);
+    } catch (err) {
+      toast.error(`Saved ${imageName}, but could not build it: ${err instanceof Error ? err.message : err}`);
+    }
+    props.onClose();
   }
 
   return (
@@ -84,8 +97,8 @@ export default function NewImageDialog(props: { onClose: () => void }) {
         <DialogHeader>
           <DialogTitle>New image</DialogTitle>
           <DialogDescription>
-            An agent writes image.yaml, what defines the image, from what you pick here, and builds it from official sources. It
-            picks sensible defaults for the rest. Rebuild later builds the same image.yaml.
+            Saves an image.yaml: the defaults (the Defaults tab) on this system and desktop. Change it from the image's row (Sherpa
+            can help), then build it from official sources.
           </DialogDescription>
         </DialogHeader>
 
@@ -136,25 +149,15 @@ export default function NewImageDialog(props: { onClose: () => void }) {
             <p className="col-start-2 text-xs text-muted-foreground">
               {terminalOnly
                 ? "No desktop or browser: the VM page shows its terminal."
-                : "With Firefox. Agents use the mouse and keyboard through X11; if this desktop has no X11 session on that system, the agent picks the other one and says so."}
+                : "With Firefox. Agents use the mouse and keyboard through X11, which GNOME no longer has on Fedora and Ubuntu 26.04: pick KDE Plasma there."}
             </p>
 
-            <label htmlFor="new-image-defaults" className="text-muted-foreground">
-              Defaults
-            </label>
-            <div className="flex h-5 items-center gap-2">
-              <Switch id="new-image-defaults" checked={useDefaults} onCheckedChange={setUseDefaults} />
-              <span className="text-xs text-muted-foreground">
-                {useDefaults ? "Everything in the Defaults tab, under this image's own image.yaml." : "Left out: only what the comments ask for."}
-              </span>
-            </div>
-
-            <label className="self-start pt-1 text-muted-foreground">Comments</label>
+            <label className="self-start pt-1 text-muted-foreground">Description</label>
             <Textarea
               rows={2}
-              placeholder="Optional, what it needs beyond the defaults, e.g. Rust and Go, Postgres 16 and Redis"
-              value={comments}
-              onChange={(event) => setComments(event.target.value)}
+              placeholder="Optional, what it is for, e.g. Rust and Go for the backend repos"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
             />
 
             <p className="col-start-2 text-xs text-muted-foreground">
@@ -171,8 +174,11 @@ export default function NewImageDialog(props: { onClose: () => void }) {
           <Button variant="outline" onClick={props.onClose}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={busy || options === null || shownName.trim() === ""}>
-            {busy && <Loader2 className="animate-spin" />} Create
+          <Button variant="outline" onClick={() => submit(true)} disabled={busy || options === null || shownName.trim() === ""}>
+            Save and build
+          </Button>
+          <Button onClick={() => submit(false)} disabled={busy || options === null || shownName.trim() === ""}>
+            {busy && <Loader2 className="animate-spin" />} Save
           </Button>
         </DialogFooter>
       </DialogContent>

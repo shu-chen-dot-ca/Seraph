@@ -1,16 +1,16 @@
 /*
-The Defaults tab of the VMs page: the defaults, a YAML file that goes under every image's own image.yaml, unless
-that says defaults: false (sandbox/image_build.py combines them).
+The Defaults tab of the VMs page: the defaults, the YAML every new image's image.yaml starts as, with the system
+and desktop picked in New image. They are the user's, built here: the app has none of its own (empty until written). The image's agent adds and takes out from there; images already made keep their
+own image.yaml, so a change here only reaches images made after it.
 
 The same keys as image.yaml, without system and desktop: packages (one list, or split into apt: and dnf: where the
-names differ), python, node, docker and steps. Lists get the defaults' items first, then the image's; default steps
-run first, and an image step with a default step's name takes its place. A change is checked before it is saved
-(a wrong one is refused with the reason), and images get it at their next Rebuild: until then they show a dot.
+names differ), python, node, docker and steps. A change is checked before it is saved (a wrong one is refused with
+the reason).
 
-Comes from GET /api/image-defaults (with the app's own first defaults, to go back to); Save is PUT /api/image-defaults.
+Comes from GET /api/image-defaults; Save is PUT /api/image-defaults.
 */
 
-import { Loader2, Pencil, Undo2 } from "lucide-react";
+import { Loader2, Pencil } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
@@ -42,7 +42,7 @@ export default function Defaults(props: { tabs: ReactNode }) {
       await api("/api/image-defaults", { method: "PUT", body: { text: draft } });
       setDefaults({ ...defaults, defaults: draft });
       setEditing(false);
-      toast.success("Saved. Images get the new defaults at their next Rebuild.");
+      toast.success("Saved. New images start from these.");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -54,7 +54,7 @@ export default function Defaults(props: { tabs: ReactNode }) {
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
         {props.tabs}
         <span className="min-w-0 flex-1 truncate text-muted-foreground">
-          Under every image's image.yaml, unless it says defaults: false. The desktop, Firefox and what the app needs are always in.
+          Every new image's image.yaml starts as this. The desktop, Firefox and what the app needs are always in.
         </span>
         {defaults !== null && !editing && (
           <Button
@@ -77,8 +77,15 @@ export default function Defaults(props: { tabs: ReactNode }) {
         </div>
       )}
 
+      {defaults !== null && (
+        <p className="shrink-0 border-b px-3 py-1.5 text-xs text-muted-foreground">
+          The keys of image.yaml without system and desktop: packages (one list, or apt: and dnf: lists where the names differ),
+          python, node, docker and steps. Explain a step in its description field, not in # comments.
+        </p>
+      )}
+
       {defaults !== null && !editing && (
-        <pre className="min-h-0 flex-1 overflow-auto bg-muted/40 p-3 font-mono text-xs whitespace-pre-wrap">{defaults.defaults || "No defaults."}</pre>
+        <pre className="min-h-0 flex-1 overflow-auto bg-muted/40 p-3 font-mono text-xs whitespace-pre-wrap">{defaults.defaults || "No defaults yet: new images start with only their system and desktop. Edit to write them."}</pre>
       )}
 
       {defaults !== null && editing && (
@@ -97,10 +104,7 @@ export default function Defaults(props: { tabs: ReactNode }) {
             <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
               Cancel
             </Button>
-            <Button size="sm" variant="ghost" disabled={draft === defaults.original} onClick={() => setDraft(defaults.original)}>
-              <Undo2 /> The app's own defaults
-            </Button>
-            <span className="text-xs text-muted-foreground">Images get a change at their next Rebuild.</span>
+            <span className="text-xs text-muted-foreground">Only new images start from a change; images already made keep theirs.</span>
           </div>
         </div>
       )}

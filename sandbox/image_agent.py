@@ -1,15 +1,12 @@
 """The agent of an image (the Agent tab of its Details): a Claude conversation that writes the image's image.yaml.
 
-An image is defined by one file, image.yaml (images.py), with the defaults (the Defaults tab, the same for every
-image) under it unless it says defaults: false. The app builds the two, mechanically, from official sources only
-(image_build.py). The agent only writes image.yaml; it reads the defaults but never changes them, and it never
-builds or publishes anything by hand. Turns:
-- New image: the agent turns what the user picked into image.yaml and builds it with build: the same build as
-  Rebuild, as a "build" task, which publishes the image when everything works. When it fails, the agent reads the
-  log, fixes image.yaml and builds again; only the changed part runs again. Its steps go to the "agent" task's log.
-- Chat: the user asks for changes, and the agent edits image.yaml. Nothing changes in the image until it is
-  rebuilt: by the user (Rebuild), or by the agent when the user asks for it. last_build shows the agent why a
-  Rebuild failed. The user can also edit image.yaml in Details > Definition.
+An image is defined by one file, image.yaml (images.py), and the app builds it, mechanically, from official
+sources only (image_build.py). A new image's image.yaml starts as a copy of the defaults (the Defaults tab) with the
+system, desktop and description picked, saved by New image with no agent (Sherpa helps there). Once the image is
+built, the user can ask its agent for changes: it adds and takes out on top of what is there, reads the defaults but
+never changes them, and never builds or publishes anything by hand. Nothing changes in the image until it is
+rebuilt: by the user (Rebuild), or by the agent with build (the same build, as a "build" task) when the user asks
+for it. last_build shows the agent why a Rebuild failed. The user can also edit image.yaml in Details > Definition.
 To try things first (a package's name on a system), start_try_vm starts a throwaway VM and run runs commands in it;
 it is deleted when the turn ends and nothing in it goes into the image.
 Its tools come from one in-process MCP server, and Claude Code's own tools are off: it runs commands only inside
@@ -30,7 +27,6 @@ turns are rare, and nothing stays connected for an image that is renamed or dele
 backend's event loop; the browser asks for the chat again while it runs.
 
     image_agents = ImageAgents(images)
-    image_agents.build("ubuntu-1", "New image ubuntu-1\\nSystem: Ubuntu 24.04 LTS (ubuntu-24.04)\\n...")
     image_agents.send("ubuntu-1", "add pydantic")
 """
 
@@ -70,35 +66,37 @@ SYSTEMS_TEXT = "; ".join(f"{system['id']} ({', '.join(system['sources'])})" for 
 PROMPT = f"""You look after one VM image, {{name}}, in an app where AI agents work on GitHub issues inside VMs made from
 images, and a human watches those VMs in the browser.
 
-The image is defined by one file, image.yaml, and the defaults under it: the app builds the image from the two,
-mechanically, from official sources only. read_definition, edit_definition and write_definition work on image.yaml;
-read_definition also shows what a build makes of it with the defaults. Every change is checked, and a wrong one is
-refused with the reason. The user sees it (Details > Definition) and may change it too.
+The image is defined by one file, image.yaml, and nothing else: the app builds the image from it, mechanically,
+from official sources only. read_definition, edit_definition and write_definition work on it. Every change is
+checked, and a wrong one is refused with the reason. The user sees it (Details > Definition) and may change it too.
 
-The defaults are the user's, the same for every image (the Defaults tab), and you never change them: read_defaults
-shows them. They go under image.yaml unless it says defaults: false: lists get the defaults' items first, then
-image.yaml's, default steps run first, and a step in image.yaml with a default step's name takes its place (that is
-how to change a default step for this image). So image.yaml only has what this image needs beyond the defaults;
-never repeat what they have. To leave out only part of the defaults, write defaults: false and copy into image.yaml
-the parts this image keeps.
+A new image's image.yaml starts as a copy of the defaults: the user's starting point for every image (the Defaults
+tab), with the system, desktop and description picked. You work on top of what is there: add what the user asks for
+and take out what they don't want; keep the rest as it is. The defaults themselves are the user's and you never change them
+(read_defaults shows them, e.g. to put back something taken out). An image with an empty image.yaml (saved from a
+VM) starts from them too.
 
 image.yaml has these keys, and no others:
   system: the system and the desktops it offers: {SYSTEMS_TEXT}
   desktop: gnome, kde or none (terminal only)
-  defaults: true or false; true when left out
-  packages: the system's own packages (apt on Ubuntu and Debian, dnf on Fedora), by their names there
+  description: optional, what the image is for and needs, in plain words. The user's: keep it true to what they
+    asked (when they ask for a change in chat, update it to match), and don't add your own notes to it.
+  packages: the system's own packages (apt on Ubuntu and Debian, dnf on Fedora), by their names there. One list, or
+    split into apt: and dnf: lists (as the defaults are, since names differ); a build takes only the system's.
   python: Python, uv and a shared venv at $SANDBOX_VM_PY_VENV, first on PATH, that everyone may write to
     packages: pip packages for that venv
   node: Node.js from nodejs.org
-    version: its major version (when left out: the defaults', or {image_build.NODE_MAJOR})
+    version: its major version ({image_build.NODE_MAJOR} when left out)
     packages: global npm packages
   docker: Docker with Compose from Docker's own repository; the desktop user may use it without sudo
     images: Docker images pulled into the image
-  steps: anything the lists can't say, in order. Each has name: and run: (bash, run as root after
+  steps: anything the lists can't say, in order. Each has name:, an optional description: (what it does and why,
+    for a person reading it) and run: (bash, run as root after
     "set -euxo pipefail", with DEBIAN_FRONTEND=noninteractive and these settings in its environment: {SETTINGS_TEXT};
     also SANDBOX_FAMILY, apt or dnf, and SANDBOX_DESKTOP, gnome, kde or none).
 Leave out what isn't wanted: without python:, there is no venv. Lists are names only, one per item (pip and npm
-version specs are fine, without spaces).
+version specs are fine, without spaces). Never write # comments, in the YAML or in a step's run: nothing reads them.
+What a person should know goes in a description.
 
 Every image already has the app's base layer (read_base_layer shows it), so image.yaml never has any of it: the
 desktop with an X11 session that logs in by itself, Firefox, x11vnc and noVNC, browser terminals (ttyd, tmux), the
@@ -119,33 +117,20 @@ that changed: a changed list takes a few minutes, a changed package or step runs
 system or desktop runs everything. So builds stay quick: put what changes often in the lists, nothing big is built
 from source or downloaded only to warm a cache, and each script ends within 30 minutes.
 
-1. New image: a [System] message asks you to make a new image, with what the user picked: the system, the desktop,
-whether the defaults go in, and comments. Write image.yaml for it: the system, the desktop, defaults: false when they
-are left out, and what the comments ask for beyond the defaults (pick sensible choices where they leave something
-open, and say which). Then build. To find out something first
-(a package's name on that system), start_try_vm and run; nothing you do there goes into the image. When a build
-fails, its log says where: fix image.yaml and build again. If something can't be done, say why and end.
-
-2. Chat: the user asks for a change ("add pydantic", "use KDE"). Change image.yaml and say what you changed.
-Nothing changes in the image until it is rebuilt, and the user does that with Rebuild: only build when they ask you
-to. When a Rebuild failed, last_build shows why. find_installed shows what the current build has. Ask when a
-request is unclear.
-
-When a build is done, say in a few plain sentences what the image has and which defaults you picked.
+The user asks for a change ("add pydantic", "use KDE"). Change image.yaml and say what you changed. Make sure a
+package exists on that system: to find out (its name there), start_try_vm and run; nothing you do there goes into
+the image. Nothing changes in the image until it is rebuilt, and the user does that with Rebuild: only build when
+they ask you to. When a build fails, its log says where: fix image.yaml and build again. When a Rebuild failed,
+last_build shows why. find_installed shows what the current build has. Ask when a request is unclear.
+When a build is done, say in a few plain sentences what the image has.
 """
-
-BUILD_MESSAGE = """[System] Make this new image: write its image.yaml (there is none yet), then build it. The user follows \
-your steps in the image list and sees image.yaml as you write it.
-
-{request}"""
-
 
 class ImageAgents:
     def __init__(self, images: Images):
         self.images = images
         # The turns running now, by image name:
-        # {"client", "chat", "stopped", "task", "agent_task" (the New image task, or None in a chat turn),
-        #  "build_task" (the id of a build it waits for, or None), "published", "try_vm" (its throwaway VM is up)}.
+        # {"client", "chat", "stopped", "task", "build_task" (the id of a build it waits for, or None),
+        #  "try_vm" (its throwaway VM is up)}.
         self.running: dict[str, dict] = {}
 
     def load(self, name: str) -> dict:
@@ -182,25 +167,9 @@ class ImageAgents:
         chat = self.load(name)
         chat["history"].append({"type": "user", "text": text.strip(), "time": datetime.now(UTC).isoformat()})
         self.save(name, chat)
-        self.running[name] = {"client": None, "chat": chat, "stopped": False, "task": None, "agent_task": None, "build_task": None,
-                              "published": False, "try_vm": False}
+        self.running[name] = {"client": None, "chat": chat, "stopped": False, "task": None, "build_task": None, "try_vm": False}
         # Kept, so the task isn't garbage collected while it runs.
         self.running[name]["task"] = asyncio.get_running_loop().create_task(self.run(name, text.strip()))
-
-    def build(self, name: str, request: str) -> None:
-        """Start the turn that makes a new image: the agent writes its image.yaml and builds it. Answers at once."""
-        if name in self.running:
-            raise ImagesError(f"{name}'s agent is still working. Wait, or stop it.")
-        agent_task = self.images.start_agent_build(name)
-        self.images.log_task(agent_task["id"], "The agent is starting")
-        chat = self.load(name)
-        # What the user picked, as their message: the chat starts with it.
-        chat["history"].append({"type": "user", "text": request, "time": datetime.now(UTC).isoformat()})
-        self.save(name, chat)
-        self.running[name] = {"client": None, "chat": chat, "stopped": False, "task": None, "agent_task": agent_task, "build_task": None,
-                              "published": False, "try_vm": False}
-        message = BUILD_MESSAGE.format(request=request)
-        self.running[name]["task"] = asyncio.get_running_loop().create_task(self.run(name, message))
 
     async def interrupt(self, name: str) -> None:
         running = self.running.get(name)
@@ -229,14 +198,13 @@ class ImageAgents:
         running = self.running[name]
         chat = running["chat"]
         history = chat["history"]
-        agent_task = running["agent_task"]
         tools = [
             tool(
                 "read_definition",
-                "Read image.yaml as it is now, and what a build makes of it with the defaults under it.",
+                "Read image.yaml as it is now.",
                 {},
             )(functools.partial(self.read_definition, name)),
-            tool("read_defaults", "Read the defaults: the user's, the same for every image. You can't change them.", {})(
+            tool("read_defaults", "Read the defaults: the user's starting point for every new image.yaml. You can't change them.", {})(
                 functools.partial(self.read_defaults, name)
             ),
             tool(
@@ -325,8 +293,6 @@ class ImageAgents:
                     if message.is_error and not stopped:
                         error = "; ".join(message.errors or []) or message.result or message.subtype
                         history.append({"type": "system", "text": f"Error: {error}", "time": datetime.now(UTC).isoformat()})
-                        if agent_task is not None:
-                            self.images.log_task(agent_task["id"], f"Error: {error}")
                     history.append({"type": "turn_end", "stopped": stopped, "cost_usd": cost, "time": datetime.now(UTC).isoformat()})
 
                 # Text and tool calls come in the agent's messages; tool results come back in user messages.
@@ -336,8 +302,6 @@ class ImageAgents:
                 for block in blocks:
                     if isinstance(block, TextBlock) and isinstance(message, AssistantMessage) and block.text.strip():
                         history.append({"type": "text", "text": block.text})
-                        if agent_task is not None:
-                            self.images.log_task(agent_task["id"], block.text)
                     if isinstance(block, ToolUseBlock):
                         tool_name = block.name.removeprefix(f"mcp__{TOOL_SERVER}__")
                         summary = tool_name
@@ -362,19 +326,13 @@ class ImageAgents:
                         if tool_name == "run":
                             summary = "$ " + str(block.input.get("command", "")).strip().split("\n")[0][:200]
                         history.append({"type": "tool", "id": block.id, "name": tool_name, "summary": summary})
-                        if agent_task is not None:
-                            self.images.log_task(agent_task["id"], summary)
                     if isinstance(block, ToolResultBlock):
                         parts = block.content if isinstance(block.content, list) else [{"type": "text", "text": block.content or ""}]
                         result = "\n".join(part.get("text", "") for part in parts if part.get("type") == "text")
                         history.append({"type": "tool_result", "id": block.tool_use_id, "text": result[:RESULT_CUT], "is_error": bool(block.is_error)})
-                        if agent_task is not None and block.is_error:
-                            self.images.log_task(agent_task["id"], f"Error: {result}")
                 self.save(name, chat)
         except Exception as error:
             history.append({"type": "system", "text": f"Error: {error}", "time": datetime.now(UTC).isoformat()})
-            if agent_task is not None:
-                self.images.log_task(agent_task["id"], f"Error: {error}")
         finally:
             del self.running[name]
             self.save(name, chat)
@@ -391,24 +349,13 @@ class ImageAgents:
                     pass
             if running["try_vm"]:
                 await asyncio.to_thread(VM(TRY_PREFIX + name).delete)
-            # Making a new image worked once a build published it; otherwise its task stays, with its log, until dismissed.
-            if agent_task is not None:
-                error = None
-                if not running["published"]:
-                    error = "The agent ended without a build that worked; its log says why."
-                if not running["published"] and running["stopped"]:
-                    error = "Stopped by you."
-                await asyncio.to_thread(self.images.end_agent_build, agent_task["id"], error)
 
     # --- Tools ---------------------------------------------------------------------
     # An exception here reaches the agent as a failed tool call.
 
     async def read_definition(self, name: str, args: dict) -> dict:
-        definition = self.images.definition(name)
-        if not definition["definition"]:
-            return {"content": [{"type": "text", "text": "image.yaml is empty: not written yet."}]}
-        text = f"{definition['definition']}\n--- What a build makes of it, with the defaults under it:\n{definition['combined']}"
-        return {"content": [{"type": "text", "text": text}]}
+        text = self.images.read_definition(name)
+        return {"content": [{"type": "text", "text": text or "image.yaml is empty: not written yet. Start from read_defaults."}]}
 
     async def read_defaults(self, name: str, args: dict) -> dict:
         return {"content": [{"type": "text", "text": self.images.read_defaults()["defaults"]}]}
@@ -483,8 +430,6 @@ class ImageAgents:
             task = await asyncio.to_thread(self.images.build, name)
         except ImagesError as error:
             raise ValueError(str(error))
-        if running["agent_task"] is not None:
-            self.images.log_task(running["agent_task"]["id"], "The build runs as its own task (above); its Log has every step")
         running["build_task"] = task["id"]
         status, error = "running", None
         while status == "running" and not running["stopped"]:
@@ -494,15 +439,11 @@ class ImageAgents:
             raise ValueError("Stopped by the user; the build stops too.")
         running["build_task"] = None
         if status == "done":
-            running["published"] = True
-            text = f"Built and published {name}, and listed what it has. Tell the user what it has and which defaults you picked."
+            text = f"Built and published {name}, and listed what it has. Tell the user what it has."
             return {"content": [{"type": "text", "text": text}]}
         log = self.images.read_log(task["id"])
         if len(log) > OUTPUT_LIMIT:
             log = "[...cut]\n" + log[-OUTPUT_LIMIT:]
-        # While making a new image, the agent's own task tells the story: its failed builds don't pile up in the list.
-        if running["agent_task"] is not None:
-            await asyncio.to_thread(self.images.dismiss, task["id"])
         raise ValueError(f"The build failed: {error}\n\nIts log:\n{log}")
 
     async def start_try_vm(self, name: str, args: dict) -> dict:

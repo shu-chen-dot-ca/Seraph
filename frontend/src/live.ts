@@ -511,17 +511,17 @@ export type Image = {
   used_by: string[]; // names of the VMs made from this exact image, stopped ones too
   inventory: InventoryHighlights | null; // null until it is inspected
   inspecting: boolean; // a build, save or inspect of it is running
-  definition_changed: boolean; // its image.yaml, or the defaults it has, changed since it was built: a Rebuild applies it
+  definition_changed: boolean; // its image.yaml changed since it was built: a Rebuild applies it
   definition_updated_at: number; // when its image.yaml last changed (seconds), so a view of it knows to fetch again
+  description: string; // the description in its image.yaml ("" without one)
 };
 
-// An image's image.yaml, what defines it (GET /api/images/<name>/definition), a diff from what it was built from
-// ("" when the same, or never built), whether the defaults it has changed since that build, and what a build makes
-// of it now, with the defaults under it ("" while image.yaml isn't right).
-export type ImageDefinition = { definition: string; diff: string; defaults_changed: boolean; combined: string };
+// An image's image.yaml, what defines it (GET /api/images/<name>/definition), and a diff from what it was built
+// from ("" when the same, or never built).
+export type ImageDefinition = { definition: string; diff: string };
 
-// The defaults that go under every image's image.yaml (GET /api/image-defaults), and the app's own first ones.
-export type ImageDefaults = { defaults: string; original: string };
+// The defaults every new image.yaml starts as (GET /api/image-defaults): the user's, "" before they wrote any.
+export type ImageDefaults = { defaults: string };
 
 // What New image offers (GET /api/images/new/options): system ids and labels, desktops (the first is the default,
 // the last is "None (terminal only)"), and the system picked first.
@@ -566,11 +566,11 @@ export type SherpaChat = {
 // A chat in Sherpa's history (GET /api/sherpa/chats), the newest first. Its title is its first message.
 export type SherpaChatSummary = { id: string; title: string; updated_at: string };
 
-// The agent making a new image (New image), a build (by Rebuild or the agent), a VM being saved as an image, or an inspect.
+// A build (Build, Rebuild or the image agent), a VM being saved as an image, or an inspect.
 // Tasks that worked disappear once their image is listed; failed ones stay until dismissed.
 export type ImageTask = {
   id: string;
-  kind: "agent" | "build" | "save" | "inspect";
+  kind: "build" | "save" | "inspect";
   name: string;
   vm: string | null; // the VM being saved
   status: "running" | "failed";
@@ -579,8 +579,18 @@ export type ImageTask = {
   log_tail: string[];
 };
 
+// An image with an image.yaml (saved by New image) that was never built: no Incus image yet.
+export type UnbuiltImage = {
+  name: string;
+  system: string; // its system's label ("" while image.yaml isn't right)
+  description: string; // the description in its image.yaml ("" without one)
+  updated_at: number; // when its image.yaml last changed (seconds)
+  building: boolean; // its first build is running
+};
+
 export type ImagesData = {
   images: Image[];
+  unbuilt: UnbuiltImage[];
   default: string;
   tasks: ImageTask[];
 };
@@ -672,7 +682,7 @@ const store = {
     inbox: [],
     agents: [],
     vms: [],
-    images: { images: [], default: "", tasks: [] },
+    images: { images: [], unbuilt: [], default: "", tasks: [] },
   } as Topics,
   loaded: {} as Partial<Record<keyof Topics, boolean>>,
   connected: false,

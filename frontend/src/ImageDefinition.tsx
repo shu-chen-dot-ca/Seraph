@@ -2,11 +2,10 @@
 An image's image.yaml: the one place it is defined (sandbox/images.py): the system, the desktop, package lists and
 steps. The app builds the image from it, mechanically, from official sources (Rebuild, no agent); what the app needs
 in every image comes from its own base layer, never from here. The agent writes it; you can read and change it here
-too, and a change that isn't right is refused with the reason. "With defaults" shows what a build makes of it, with
-the defaults (the VMs page's Defaults tab) under it. Nothing changes in the image until it is rebuilt, so when
-image.yaml differs from what the image was built from, an amber dot shows, its changes can be shown, and the top
-offers Discard (back to what it was built from) and Rebuild. When only the defaults changed since, the dot and
-Rebuild show too.
+too, and a change that isn't right is refused with the reason. A new image's image.yaml starts as the defaults
+(the VMs page's Defaults tab); from then on it is the image's own. Nothing changes in the image until it is
+rebuilt, so when image.yaml differs from what the image was built from, an amber dot shows, its changes can be
+shown, and the top offers Discard (back to what it was built from) and Rebuild.
 
 Shown in the Definition tab of an image's Details (editable), and next to the log of a build (follow: read-only,
 fetched again every 2 s as the agent writes). Comes from GET /api/images/<name>/definition, again whenever
@@ -36,8 +35,8 @@ import { cn } from "@/lib/utils";
 export default function ImageDefinition(props: { name: string; updatedAt: number; editable: boolean; follow: boolean; onRebuild?: () => void }) {
   const [definition, setDefinition] = useState<Definition | null>(null);
   const [error, setError] = useState("");
-  // What the box shows: image.yaml, its changes since the build, or what a build makes of it with the defaults.
-  const [view, setView] = useState<"definition" | "diff" | "combined">("definition");
+  // What the box shows: image.yaml, or its changes since the build.
+  const [view, setView] = useState<"definition" | "diff">("definition");
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
@@ -74,13 +73,8 @@ export default function ImageDefinition(props: { name: string; updatedAt: number
 
   const text = definition === null ? "" : definition.definition;
   const diff = definition === null ? "" : definition.diff;
-  const defaultsChanged = definition !== null && definition.defaults_changed;
-  const combined = definition === null ? "" : definition.combined;
-  // Changes or the combined view that went away (saved, or image.yaml isn't right now) show image.yaml.
-  let shown = view;
-  if ((view === "diff" && diff === "") || (view === "combined" && combined === "")) {
-    shown = "definition";
-  }
+  // Changes that went away (saved, or discarded) show image.yaml.
+  const shown = view === "diff" && diff === "" ? "definition" : view;
 
   async function save() {
     setSaving(true);
@@ -108,14 +102,13 @@ export default function ImageDefinition(props: { name: string; updatedAt: number
   return (
     <div className="space-y-2">
       <div className="flex min-h-9 items-center gap-2 border px-2.5 py-1">
-        {(diff !== "" || defaultsChanged) && <StatusDot tone="amber" />}
-        <span className={cn("min-w-0 flex-1", diff === "" && !defaultsChanged && "text-muted-foreground")}>
+        {diff !== "" && <StatusDot tone="amber" />}
+        <span className={cn("min-w-0 flex-1", diff === "" && "text-muted-foreground")}>
           {diff !== "" && "image.yaml changed since this build. The image has none of it until you rebuild."}
-          {diff === "" && defaultsChanged && "The defaults changed since this build. The image has none of it until you rebuild."}
-          {diff === "" && !defaultsChanged && props.follow && "What defines the image, as its agent writes it, with the defaults under it."}
-          {diff === "" && !defaultsChanged && !props.follow && "What defines this image, with the defaults under it. A Rebuild only runs what changed."}
+          {diff === "" && props.follow && "What defines the image: the defaults, as its agent changes them for this image."}
+          {diff === "" && !props.follow && "What defines this image. A Rebuild only runs what changed since the last build."}
         </span>
-        {!editing && (
+        {!editing && diff !== "" && (
           <Button size="xs" variant={shown === "definition" ? "secondary" : "ghost"} onClick={() => setView("definition")}>
             image.yaml
           </Button>
@@ -125,17 +118,12 @@ export default function ImageDefinition(props: { name: string; updatedAt: number
             Changes
           </Button>
         )}
-        {!editing && combined !== "" && (
-          <Button size="xs" variant={shown === "combined" ? "secondary" : "ghost"} onClick={() => setView("combined")}>
-            With defaults
-          </Button>
-        )}
         {diff !== "" && props.onRebuild !== undefined && (
           <Button size="xs" variant="ghost" onClick={() => setConfirmDiscard(true)}>
             <Undo2 /> Discard
           </Button>
         )}
-        {(diff !== "" || defaultsChanged) && props.onRebuild !== undefined && (
+        {diff !== "" && props.onRebuild !== undefined && (
           <Button size="xs" variant="outline" onClick={props.onRebuild}>
             <Hammer /> Rebuild
           </Button>
@@ -179,7 +167,6 @@ export default function ImageDefinition(props: { name: string; updatedAt: number
       {definition !== null && !editing && (
         <pre className="h-96 overflow-auto border bg-muted/40 p-2 font-mono text-xs whitespace-pre-wrap">
           {shown === "definition" && (text || "Not written yet.")}
-          {shown === "combined" && combined}
           {shown === "diff" &&
             diff.split("\n").map((line, index) => (
               <div

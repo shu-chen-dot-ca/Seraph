@@ -4,25 +4,28 @@ An image is defined by one file, image.yaml (see images.py), for example:
 
     system: ubuntu-24.04        # one of SYSTEMS
     desktop: gnome              # gnome, kde or none (terminal only); not every system has every desktop
-    defaults: true              # the defaults go under it (left out: true); false leaves them out
-    packages: [git, ripgrep]    # the system's own packages (apt on Ubuntu and Debian, dnf on Fedora)
+    description: Rust and Go    # optional: what the image is for and needs, in plain words (no build effect)
+    packages: [git, ripgrep]    # the system's own packages (apt on Ubuntu and Debian, dnf on Fedora); may be split
+                                # into apt: and dnf: lists, and the build takes the system's
     python:                     # Python, uv and the shared venv SANDBOX_VM_PY_VENV
       packages: [pydantic]
-    node:                       # Node.js from nodejs.org, its major version (SANDBOX_VM_NODE_MAJOR when nobody says)
+    node:                       # Node.js from nodejs.org, its major version (SANDBOX_VM_NODE_MAJOR when left out)
       version: 24
       packages: [pnpm, yarn]    # global npm packages
     docker:                     # Docker with Compose, from Docker's own repository
       images: [postgres:17]     # pulled into the image
     steps:                      # anything the lists can't say: bash run as root, in order
       - name: VS Code
+        description: ...        # optional: what the step does and why (no build effect)
         run: |
           ...
 
-The defaults (DEFAULTS_FILE, edited in the Defaults tab; it starts as DEFAULTS_TEMPLATE) have the same keys without
-system, desktop and defaults, and packages may be split into apt: and dnf: lists. combine() puts them under an image:
-lists get the defaults' items first, then the image's; default steps run first, and an image step with a default
-step's name takes its place. Everything the app needs (the desktop, Firefox, VNC, noVNC, ttyd, the desktop user,
-the demo service) is in neither: sandbox/image/base_layer.sh puts that in every image first.
+What a person or the image's agent should know is in description fields, never in # comments: nothing depends on
+those. A new image's image.yaml starts as a copy of the defaults (DEFAULTS_FILE, which the user builds in the
+Defaults tab; none until then): the same keys without system and desktop. From then on it is the image's own: its agent adds and
+takes out on top of that copy, and a change to the defaults only reaches images made after it. Everything the app
+needs (the desktop, Firefox, VNC, noVNC, ttyd, the desktop user, the demo service) is in neither:
+sandbox/image/base_layer.sh puts that in every image first.
 
 A build runs in three stages, in the image's builder VM (BUILDER_PREFIX + its name), which stays, stopped, between
 builds and keeps a snapshot after each of the first two stages:
@@ -35,9 +38,8 @@ then a reboot and check (everything the app needs comes up by itself), clean up,
 image of that name. A key is a hash of everything its stage and the ones before it run, so a build starts from the
 latest snapshot that still matches: a changed list only runs stage 3, a changed package or step stages 2 and 3, a
 changed system or desktop everything. The builder VM only has the snapshots of the image's current build.
-What a build was made from is kept in BUILT_DIR: <fingerprint>.yaml (its image.yaml) and <fingerprint>.defaults.yaml
-(the defaults, when it had them), so a VM's image_fingerprint says exactly what it was made from, also after its
-image is rebuilt or the defaults change.
+The image.yaml a build was made from is kept in BUILT_DIR/<fingerprint>.yaml, so a VM's image_fingerprint says
+exactly what it was made from, also after its image is rebuilt.
 
 Builds run as their own process (so a backend restart doesn't stop them), as a task of images.py:
 
@@ -69,9 +71,8 @@ load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 BASE_LAYER = PROJECT_ROOT / "sandbox" / "image" / "base_layer.sh"
 BUILT_DIR = PROJECT_ROOT / os.environ["DATA_DIR"] / "images" / "built"
+# What every new image.yaml starts as (without system and desktop): the user's, built in the Defaults tab.
 DEFAULTS_FILE = PROJECT_ROOT / os.environ["DATA_DIR"] / "images" / "defaults.yaml"
-# What the defaults are until the user changes them.
-DEFAULTS_TEMPLATE = PROJECT_ROOT / "sandbox" / "image" / "defaults.yaml"
 # The builder VM of image <name> is BUILDER_PREFIX + name. Not named like the app's VMs (SANDBOX_VM_PREFIX), so the
 # VM list never picks it up.
 BUILDER_PREFIX = "image-build-"
@@ -89,7 +90,7 @@ SYSTEMS = [
     {"id": "debian-13", "label": "Debian 13", "family": "apt", "sources": {"gnome": "debian/13", "kde": "debian/13", "none": "debian/13"}},
     {"id": "debian-12", "label": "Debian 12", "family": "apt", "sources": {"gnome": "debian/12", "kde": "debian/12", "none": "debian/12"}},
 ]
-KEYS = ["system", "desktop", "defaults", "packages", "python", "node", "docker", "steps"]
+KEYS = ["system", "desktop", "description", "packages", "python", "node", "docker", "steps"]
 # The defaults have the same keys, without the ones only an image has.
 DEFAULTS_KEYS = ["packages", "python", "node", "docker", "steps"]
 NODE_MAJOR = int(os.environ["SANDBOX_VM_NODE_MAJOR"])
@@ -172,28 +173,21 @@ class DefinitionError(ValueError):
     pass
 
 
-class LiteralDumper(yaml.SafeDumper):
-    """Writes text with line breaks (a step's run) as a | block, the way a person writes it."""
-
-
-LiteralDumper.add_representer(str, lambda dumper, value: dumper.represent_scalar("tag:yaml.org,2002:str", value, style="|" if "\n" in value else None))
-
-
 def read_defaults() -> str:
-    """The defaults as they are now: DEFAULTS_FILE, or DEFAULTS_TEMPLATE until the user changed them."""
+    """The defaults as they are now ("" before the user wrote any)."""
     if DEFAULTS_FILE.exists():
         return DEFAULTS_FILE.read_text()
-    return DEFAULTS_TEMPLATE.read_text()
+    return ""
 
 
 def parse_definition(text: str, defaults: bool = False) -> dict:
-    """Check image.yaml (or, with defaults=True, the defaults: the same without system, desktop and defaults) and give
-    it back complete:
+    """Check image.yaml (or, with defaults=True, the defaults: the same without system and desktop) and give it back
+    complete:
 
-        {"system", "desktop" (None for the defaults), "defaults" (whether the defaults go under it),
+        {"system", "desktop" (None for the defaults), "description" ("" when none),
          "packages": {"apt": [...], "dnf": [...]}, "python": {"in", "packages"},
          "node": {"in", "version" (None when it doesn't say), "packages"}, "docker": {"in", "images"},
-         "steps": [{"name", "run"}]}
+         "steps": [{"name", "description", "run"}]}
 
     "in": the key is there, even with nothing under it ("python:" still means Python is in).
     Raises DefinitionError saying what is wrong."""
@@ -219,9 +213,8 @@ def parse_definition(text: str, defaults: bool = False) -> dict:
     if not defaults and data["desktop"] not in systems[0]["sources"]:
         offered = ", ".join(systems[0]["sources"])
         raise DefinitionError(f"{systems[0]['label']}'s {DESKTOPS[data['desktop']]} has no X11 session, which the agents need. It offers: {offered}")
-    use_defaults = data.get("defaults", True)
-    if not isinstance(use_defaults, bool):
-        raise DefinitionError("defaults must be true or false: whether the defaults (the Defaults tab) go under this image")
+    if not isinstance(data.get("description", ""), str):
+        raise DefinitionError("description must be text: what the image is for and needs, in plain words")
 
     python = data["python"] if data.get("python") is not None else {}
     node = data["node"] if data.get("node") is not None else {}
@@ -253,12 +246,14 @@ def parse_definition(text: str, defaults: bool = False) -> dict:
 
     steps = data.get("steps") or []
     if not isinstance(steps, list):
-        raise DefinitionError("steps must be a list of {name, run}")
+        raise DefinitionError("steps must be a list of {name, description, run}")
     for step in steps:
-        if not isinstance(step, dict) or set(step) != {"name", "run"}:
-            raise DefinitionError("each step must have exactly name: and run: (bash, as root)")
+        if not isinstance(step, dict) or "name" not in step or "run" not in step or not set(step) <= {"name", "description", "run"}:
+            raise DefinitionError("each step has name: and run: (bash, as root), and may have description:")
         if not isinstance(step["name"], str) or not step["name"].strip() or not isinstance(step["run"], str) or not step["run"].strip():
             raise DefinitionError("each step's name and run must be text")
+        if not isinstance(step.get("description", ""), str):
+            raise DefinitionError("a step's description must be text")
     names = [step["name"].strip() for step in steps]
     if len(set(names)) != len(names):
         raise DefinitionError("each step needs a name of its own")
@@ -266,77 +261,30 @@ def parse_definition(text: str, defaults: bool = False) -> dict:
     return {
         "system": None if defaults else systems[0]["id"],
         "desktop": None if defaults else data["desktop"],
-        "defaults": use_defaults and not defaults,
+        "description": data.get("description", ""),
         "packages": {"apt": apt, "dnf": dnf},
         "python": {"in": "python" in data, "packages": lists["python packages"]},
         "node": {"in": "node" in data, "version": version, "packages": lists["node packages"]},
         "docker": {"in": "docker" in data, "images": lists["docker images"]},
-        "steps": [{"name": step["name"].strip(), "run": step["run"]} for step in steps],
+        "steps": [{"name": step["name"].strip(), "description": step.get("description", ""), "run": step["run"]} for step in steps],
     }
 
 
-def combine(definition: dict, defaults: dict) -> dict:
-    """The image as a build makes it: the defaults (parsed) under its image.yaml (parsed), or image.yaml alone when it
-    says defaults: false. Lists have the defaults' items first, then the image's; default steps run first, and an
-    image step with a default step's name takes its place. Packages are the system's own (apt or dnf). Like
-    parse_definition's, with "packages" one list and node's version always a number."""
-    if not definition["defaults"]:
-        defaults = parse_definition("", defaults=True)
-    family = [system for system in SYSTEMS if system["id"] == definition["system"]][0]["family"]
-    steps = list(defaults["steps"])
-    names = [step["name"] for step in steps]
-    for step in definition["steps"]:
-        if step["name"] in names:
-            steps[names.index(step["name"])] = step
-        else:
-            steps.append(step)
-    return {
-        "system": definition["system"],
-        "desktop": definition["desktop"],
-        "packages": list(dict.fromkeys(defaults["packages"][family] + definition["packages"][family])),
-        "python": {
-            "in": defaults["python"]["in"] or definition["python"]["in"],
-            "packages": list(dict.fromkeys(defaults["python"]["packages"] + definition["python"]["packages"])),
-        },
-        "node": {
-            "in": defaults["node"]["in"] or definition["node"]["in"],
-            "version": definition["node"]["version"] or defaults["node"]["version"] or NODE_MAJOR,
-            "packages": list(dict.fromkeys(defaults["node"]["packages"] + definition["node"]["packages"])),
-        },
-        "docker": {
-            "in": defaults["docker"]["in"] or definition["docker"]["in"],
-            "images": list(dict.fromkeys(defaults["docker"]["images"] + definition["docker"]["images"])),
-        },
-        "steps": steps,
-    }
-
-
-def combined_yaml(combined: dict) -> str:
-    """The combined image (combine()) written like an image.yaml, to show what a build makes."""
-    data = {"system": combined["system"], "desktop": combined["desktop"], "packages": combined["packages"]}
-    if combined["python"]["in"]:
-        data["python"] = {"packages": combined["python"]["packages"]}
-    if combined["node"]["in"]:
-        data["node"] = {"version": combined["node"]["version"], "packages": combined["node"]["packages"]}
-    if combined["docker"]["in"]:
-        data["docker"] = {"images": combined["docker"]["images"]}
-    data["steps"] = combined["steps"]
-    return yaml.dump(data, Dumper=LiteralDumper, sort_keys=False, allow_unicode=True)
-
-
-def stages(combined: dict) -> list[list[tuple[str, str]]]:
-    """The three stages' scripts of a combined image (combine()), each (title, bash run as root): base, middle, lists."""
-    system = [system for system in SYSTEMS if system["id"] == combined["system"]][0]
+def stages(definition: dict) -> list[list[tuple[str, str]]]:
+    """The three stages' scripts of an image (parse_definition()), each (title, bash run as root): base, middle, lists."""
+    system = [system for system in SYSTEMS if system["id"] == definition["system"]][0]
+    # The packages for the system's own package manager.
+    system_packages = definition["packages"][system["family"]]
     base = [("Base layer: the desktop, Firefox and what the app needs", BASE_LAYER.read_text())]
 
     middle = []
-    if combined["packages"] and system["family"] == "apt":
-        packages = " ".join(shlex.quote(package) for package in combined["packages"])
+    if system_packages and system["family"] == "apt":
+        packages = " ".join(shlex.quote(package) for package in system_packages)
         middle.append(("Packages", f"apt-get -y -o DPkg::Lock::Timeout=900 update\napt-get -y -o DPkg::Lock::Timeout=900 install {packages}\n"))
-    if combined["packages"] and system["family"] == "dnf":
-        packages = " ".join(shlex.quote(package) for package in combined["packages"])
+    if system_packages and system["family"] == "dnf":
+        packages = " ".join(shlex.quote(package) for package in system_packages)
         middle.append(("Packages", f"dnf -y install {packages}\n"))
-    if combined["python"]["in"]:
+    if definition["python"]["in"]:
         middle.append((
             "Python: uv and the shared venv",
             "# uv from its official installer; the venv everyone may write to, first on PATH (/etc/environment).\n"
@@ -344,8 +292,8 @@ def stages(combined: dict) -> list[list[tuple[str, str]]]:
             f"uv venv {shlex.quote(PY_VENV)} --python /usr/bin/python3 --seed\n"
             f"chmod -R a+rwX {shlex.quote(PY_VENV)}\n",
         ))
-    if combined["node"]["in"]:
-        major = combined["node"]["version"]
+    if definition["node"]["in"]:
+        major = definition["node"]["version"] or NODE_MAJOR
         middle.append((
             f"Node.js {major}",
             "# The latest release of this major version, from nodejs.org, checksum verified.\n"
@@ -356,7 +304,7 @@ def stages(combined: dict) -> list[list[tuple[str, str]]]:
             'tar -xJf "/tmp/$node_file" -C /usr/local --strip-components=1 --no-same-owner\n'
             'rm "/tmp/$node_file"\n',
         ))
-    if combined["docker"]["in"]:
+    if definition["docker"]["in"]:
         middle.append((
             "Docker with Compose",
             "# Docker's own repository, through its official install script; the desktop user may use it without sudo.\n"
@@ -364,18 +312,18 @@ def stages(combined: dict) -> list[list[tuple[str, str]]]:
             "systemctl enable --now docker\n"
             'usermod -aG docker "$(id -nu 1000)"\n',
         ))
-    for step in combined["steps"]:
+    for step in definition["steps"]:
         middle.append((f"Step: {step['name']}", step["run"]))
 
     lists = []
-    if combined["docker"]["in"] and combined["docker"]["images"]:
-        pulls = "".join(f"docker pull {shlex.quote(image)}\n" for image in combined["docker"]["images"])
+    if definition["docker"]["in"] and definition["docker"]["images"]:
+        pulls = "".join(f"docker pull {shlex.quote(image)}\n" for image in definition["docker"]["images"])
         lists.append(("Docker images", f"systemctl start docker\n{pulls}"))
-    if combined["node"]["in"] and combined["node"]["packages"]:
-        packages = " ".join(shlex.quote(package) for package in combined["node"]["packages"])
+    if definition["node"]["in"] and definition["node"]["packages"]:
+        packages = " ".join(shlex.quote(package) for package in definition["node"]["packages"])
         lists.append(("npm packages", f"npm install -g --no-audit --no-fund {packages}\n"))
-    if combined["python"]["in"] and combined["python"]["packages"]:
-        packages = " ".join(shlex.quote(package) for package in combined["python"]["packages"])
+    if definition["python"]["in"] and definition["python"]["packages"]:
+        packages = " ".join(shlex.quote(package) for package in definition["python"]["packages"])
         lists.append((
             "Python packages",
             f"uv pip install --python {shlex.quote(PY_VENV + '/bin/python')} {packages}\nchmod -R a+rwX {shlex.quote(PY_VENV)}\n",
@@ -493,16 +441,14 @@ def main() -> None:
     # Stopping the task sends SIGTERM: end like a failure, so the builder VM is still stopped (finally).
     signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(1))
     text = (folder / "image.yaml").read_text()
-    defaults_text = read_defaults()
     try:
         definition = parse_definition(text)
-        combined = combine(definition, parse_definition(defaults_text, defaults=True))
     except DefinitionError as error:
         print(error)
         sys.exit(1)
     system = [system for system in SYSTEMS if system["id"] == definition["system"]][0]
     source = system["sources"][definition["desktop"]]
-    scripts = stages(combined)
+    scripts = stages(definition)
     settings = [os.environ[key] for key in SCRIPT_SETTINGS]
     key_a = hashlib.sha256(json.dumps([source, definition["desktop"], settings, scripts[0]]).encode()).hexdigest()[:16]
     key_b = hashlib.sha256(json.dumps([key_a, scripts[1]]).encode()).hexdigest()[:16]
@@ -556,8 +502,6 @@ def main() -> None:
         fingerprint = publish(vm, name)
         BUILT_DIR.mkdir(parents=True, exist_ok=True)
         (BUILT_DIR / f"{fingerprint}.yaml").write_text(text)
-        if definition["defaults"]:
-            (BUILT_DIR / f"{fingerprint}.defaults.yaml").write_text(defaults_text)
     except subprocess.CalledProcessError as error:
         print(f"{error}\n{error.stderr}")
         sys.exit(1)

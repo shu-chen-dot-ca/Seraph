@@ -1,7 +1,8 @@
 /*
-The Agent tab of an image's Details: a chat with the image's agent (sandbox/image_agent.py). It wrote the image's
-image.yaml (the Definition tab) when the image was made, and its steps from then show here; it changes image.yaml
-when asked. Nothing changes in the image until it is rebuilt (by Rebuild, or by the agent when you ask it to).
+The Agent tab of an image's Details: a chat with the image's agent (sandbox/image_agent.py), once the image is
+built. It changes image.yaml (the Definition tab) when asked; making a new image needs no agent (New image saves
+image.yaml from the defaults). Nothing changes in the image until it is rebuilt (by Rebuild, or by the agent when you
+ask it to).
 
 The chat comes from GET /api/images/<name>/agent, asked again every second while the agent works. What you type
 and don't send is kept in this browser per image (localStorage), so it is still there when you come back, after a

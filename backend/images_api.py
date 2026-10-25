@@ -1,12 +1,13 @@
-"""The Images tab on the VMs page: the default image, rename, delete, New image (the image's agent writes its
-image.yaml and builds it), Rebuild (image.yaml is built again, no agent), save a VM as an image, what each image has
-(its inventory: system, languages, tools, packages), its image.yaml and its agent, and the defaults that go under
-every image's image.yaml (the Defaults tab).
+"""The Images tab on the VMs page: the default image, rename, delete, New image (saves its image.yaml, the defaults
+with the system, desktop and description picked; nothing is built), Build or Rebuild (image.yaml is built, no agent),
+save a VM as an image, what each image has
+(its inventory: system, languages, tools, packages), its image.yaml and its agent, and the defaults every new
+image.yaml starts as (the Defaults tab).
 
 The list itself reaches the browser through /api/live (topic "images"). Builds and saves run in the
 background and answer at once; the task shows in the list until it is done. Most of this makes Incus
-calls that block, so those endpoints are plain `def` (FastAPI runs them in a thread pool). The agent's
-endpoints (chat, New image, stopping its build) are `async def`: its turns run on the event loop.
+calls that block, so those endpoints are plain `def` (FastAPI runs them in a thread pool). The image agent's
+endpoints (its chat) are `async def`: its turns run on the event loop.
 """
 
 import asyncio
@@ -29,8 +30,7 @@ class NewImageRequest(BaseModel):
     name: str
     system: str
     desktop: str
-    defaults: bool = True
-    comments: str = ""
+    description: str = ""
 
 
 class DefinitionRequest(BaseModel):
@@ -58,7 +58,8 @@ def set_default_image(name: str) -> dict:
 
 @router.put("/images/{name}")
 def rename_image(name: str, body: RenameRequest) -> dict:
-    """Give it another name. VMs made from it keep pointing at it. Its image.yaml, agent chat and builder VM move along."""
+    """Give it another name, built or not. VMs made from it keep pointing at it. Its image.yaml, agent chat and builder
+    VM move along."""
     if image_agents.busy(name):
         raise HTTPException(status_code=409, detail=f"{name}'s agent is working. Wait, or stop it.")
     try:
@@ -71,7 +72,8 @@ def rename_image(name: str, body: RenameRequest) -> dict:
 
 @router.delete("/images/{name}")
 def delete_image(name: str) -> dict:
-    """Only an image no VM was made from (stopped ones count too). Its image.yaml, agent chat and builder VM go too."""
+    """Only an image no VM was made from (stopped ones count too). Its image.yaml, agent chat and builder VM go too.
+    Also one never built (its image.yaml)."""
     if image_agents.busy(name):
         raise HTTPException(status_code=409, detail=f"{name}'s agent is working. Wait, or stop it.")
     try:
@@ -89,13 +91,13 @@ def new_image_options() -> dict:
 
 @router.get("/image-defaults")
 def image_defaults() -> dict:
-    """The defaults that go under every image's image.yaml (unless it says defaults: false), and the app's own first ones."""
+    """The defaults every new image.yaml starts as ("" before the user wrote any)."""
     return images.read_defaults()
 
 
 @router.put("/image-defaults")
 def change_image_defaults(body: DefinitionRequest) -> dict:
-    """Change the defaults (refused, with the reason, when they aren't right). Images get them at their next Rebuild."""
+    """Change the defaults (refused, with the reason, when they aren't right). Only images made from now on start from them."""
     try:
         images.write_defaults(body.text)
     except ImagesError as error:
@@ -104,12 +106,11 @@ def change_image_defaults(body: DefinitionRequest) -> dict:
 
 
 @router.post("/images/new")
-async def new_image(body: NewImageRequest) -> dict:
-    """Starts the new image's agent with what the user picked: it writes image.yaml and builds it. Answers at once."""
-    name = body.name.strip()
+def new_image(body: NewImageRequest) -> dict:
+    """Saves the new image's image.yaml: the system, desktop and description picked, then the defaults. Nothing is
+    built; it is listed as not built until POST /images/<name>/rebuild."""
     try:
-        request = images.new_request(name, body.system, body.desktop, body.defaults, body.comments)
-        image_agents.build(name, request)
+        images.new_image(body.name.strip(), body.system, body.desktop, body.description)
     except ImagesError as error:
         raise HTTPException(status_code=409, detail=str(error))
     return {}
@@ -117,7 +118,8 @@ async def new_image(body: NewImageRequest) -> dict:
 
 @router.post("/images/{name}/rebuild")
 def rebuild_image(name: str) -> dict:
-    """Builds the image from its image.yaml again (no agent), as a task; the new build replaces it. Answers at once."""
+    """Builds the image from its image.yaml (no agent), as a task; the new build replaces it. Also the first build of
+    one never built. Answers at once."""
     if image_agents.busy(name):
         raise HTTPException(status_code=409, detail=f"{name}'s agent is working. Wait, or stop it.")
     try:
@@ -168,7 +170,7 @@ def change_image_definition(name: str, body: DefinitionRequest) -> dict:
     if image_agents.busy(name):
         raise HTTPException(status_code=409, detail=f"{name}'s agent is working on its image.yaml. Wait, or stop it.")
     try:
-        images.write_definition(images.find(name)["name"], body.text)
+        images.write_definition(name, body.text)
     except ImagesError as error:
         raise HTTPException(status_code=400, detail=str(error))
     return {}
@@ -232,13 +234,9 @@ def task_log(task_id: str) -> str:
 
 @router.post("/images/tasks/{task_id}/stop")
 async def stop_task(task_id: str) -> dict:
-    """The agent's work stops by interrupting the agent (a build it waits for stops too); others are killed."""
+    """Stops a build, save or inspect: its processes are killed."""
     try:
-        task = images.get_task(task_id)
-        if task["kind"] == "agent":
-            await image_agents.interrupt(task["name"])
-        else:
-            await asyncio.to_thread(images.stop, task_id)
+        await asyncio.to_thread(images.stop, task_id)
     except ImagesError as error:
         raise HTTPException(status_code=404, detail=str(error))
     return {}
