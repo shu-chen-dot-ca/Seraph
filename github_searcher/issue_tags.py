@@ -11,7 +11,9 @@ each issue instead and gives it tags we define. One JSON file, DATA_DIR/issue_ta
 status weighs everything about who may take it: assignees, open pull requests that would close it, the labels
 (good first issue, help wanted and the like invite outside contributors), what the issue template says about the
 author fixing it themselves ("Are you willing to submit a PR?"), claims in the comments, and whether the maintainers
-want it done. free: anyone can start on it now. assigned: someone is on it.
+want it done. A fix posted in a comment, even with no pull request (a branch in someone's fork, a patch, "my account
+can't open PRs, a maintainer can open one from it"), counts as someone on it: we don't build on or race another
+person's fix. free: the user can take it up now. assigned: someone is on it.
 waiting: nobody is, but it isn't ready (it needs a decision, a design, more information).
 
 level is how hard the fix is for us: our agent writing it in its sandbox VM, then seeing and proving it works there.
@@ -346,12 +348,16 @@ class IssueTags:
                 "invite outside contributors, but they are a hint, not the answer); who opened it; what the issue template says "
                 "about the author fixing it themselves (a checked 'I am willing to submit a PR' or a 'Yes' there means the author "
                 "means to do it); what the comments say (someone asking to take it or saying they are on it, a maintainer handing "
-                "it out or turning people down, a pull request or a fix mentioned, a maintainer saying it isn't wanted); and the "
+                "it out or turning people down, a pull request mentioned, a maintainer saying it isn't wanted); and the "
                 "pull requests tied to it, listed under the issue with their state and last comment.\n"
                 "- assigned: someone is on it: the author said they will fix it, a commenter claimed it and was not turned down, "
                 "a maintainer gave it to someone, or one of its pull requests is open and alive. A claim in the comments holds for "
                 "about two months even with no pull request yet, unless that person gave up or a maintainer opened it to others; "
                 "an open pull request untouched for months doesn't count.\n"
+                "  A fix posted in a comment counts too, even with no pull request of theirs tied to the issue: a branch or "
+                "commit in someone's fork, a patch or the whole change pasted ('my account is blocked', 'happy for a maintainer "
+                "to open a PR from it'). Someone did the work, and a newcomer shouldn't build on it or race it: assigned, like a "
+                "claim, unless a maintainer turned that fix down.\n"
                 "  A pull request closed without merging ends its author's claim: read its last comment for why (for example "
                 "closed under the project's AI policy, or the approach was turned down) and say so in the reason when it matters. "
                 "A merged one usually means it is fixed and only needs closing: then waiting. Never say that no pull request "
