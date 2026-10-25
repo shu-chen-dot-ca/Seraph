@@ -34,8 +34,10 @@ One bar on top: the run controls on the left, then GithubLimits (how much of eac
 tokens, live), and Profile on the right.
 Empty parts of the page show nothing (no "nothing yet" lines), so it stays quiet until there is something to see.
 
-The page also shows what is being checked right now, why the others were skipped, errors, and the rejected repos
-when there are any (Allow again ends a block early; the history stays). The clock ticks every second while a run goes.
+The page also shows what is being checked right now, then two folded sections, closed until clicked: Skipped (why the
+others were skipped, how many in all on the fold; a repo that failed counts as an error there, the errors themselves
+aren't shown) and Rejected (the rejected repos, how many on the fold; Allow again ends a block early; the history
+stays). Each shows only when it has something. The clock ticks every second while a run goes.
 */
 
 import { ArrowDown, ArrowUp, Ban, Check, ExternalLink, ListFilter, Loader2, Play, Settings2, Square, SquareCheck, Star } from "lucide-react";
@@ -461,6 +463,10 @@ export default function Explore() {
   }
 
   const skipped = run !== null ? Object.entries(run.skipped).sort((a, b) => b[1] - a[1]) : [];
+  let skippedTotal = 0;
+  for (const [, number] of skipped) {
+    skippedTotal += number;
+  }
   const rejections = [...explore.rejections].sort((a, b) => (b.history.at(-1)?.at ?? "").localeCompare(a.history.at(-1)?.at ?? ""));
 
   return (
@@ -677,27 +683,13 @@ export default function Explore() {
             )}
 
             {skipped.length > 0 && (
-              <div className="border-b px-3 py-2">
-                <div className="mb-1 text-xs font-medium text-muted-foreground">Skipped</div>
-                <div className="flex flex-wrap gap-x-5 gap-y-1">
+              <details className="border-b px-3 py-2">
+                <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Skipped ({skippedTotal})</summary>
+                <div className="mt-1 flex flex-wrap gap-x-5 gap-y-1">
                   {skipped.map(([reason, number]) => (
                     <span key={reason}>
                       <span className="tabular-nums">{number}</span> <span className="text-muted-foreground">{reason.charAt(0).toLowerCase() + reason.slice(1)}</span>
                     </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {run.errors.length > 0 && (
-              <details className="border-b px-3 py-2">
-                <summary className="cursor-pointer text-xs font-medium text-muted-foreground">Errors ({run.errors.length})</summary>
-                <div className="mt-1 space-y-0.5">
-                  {run.errors.map((each, index) => (
-                    <div key={index} className="flex gap-3">
-                      <span className="shrink-0 font-medium">{each.name}</span>
-                      <span className="min-w-0 break-words text-destructive">{each.error}</span>
-                    </div>
                   ))}
                 </div>
               </details>
@@ -706,8 +698,8 @@ export default function Explore() {
         )}
 
         {rejections.length > 0 && (
-          <div className="px-3 py-2">
-            <div className="mb-1 text-xs font-medium text-muted-foreground">Rejected</div>
+          <details className="px-3 py-2">
+            <summary className="mb-1 cursor-pointer text-xs font-medium text-muted-foreground">Rejected ({rejections.length})</summary>
             {rejections.map((rejection) => {
               const isBlocked = blocked.has(rejection.name);
               const last = rejection.history.at(-1)?.at;
@@ -733,7 +725,7 @@ export default function Explore() {
                 </div>
               );
             })}
-          </div>
+          </details>
         )}
       </div>
 
