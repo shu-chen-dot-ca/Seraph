@@ -1,4 +1,6 @@
-"""The Inbox: the user decides on the agents' drafts (PRs, comments, questions).
+"""The Inbox: the user decides on the agents' drafts (PRs, comments, questions), and on
+the app's own question when an issue an agent works on gets taken (approve: keep working,
+reject: stop the agent).
 
 Approving tells the agent. Only with send (the Inbox asks "are you sure?" first, and only when your
 GitHub account is connected in Settings) does Approve on a PR or comment send it to GitHub as you,

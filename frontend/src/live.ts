@@ -386,7 +386,7 @@ export type DraftStatus = "pending" | "approved" | "rejected" | "replied";
 
 export type Draft = {
   id: string;
-  kind: "pr" | "comment" | "question";
+  kind: "pr" | "comment" | "question" | "taken"; // taken: made by the app, an issue an agent works on isn't free anymore
   agent: string;
   job: string | null;
   repo: string | null;

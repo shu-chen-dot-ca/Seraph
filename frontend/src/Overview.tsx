@@ -3,7 +3,7 @@ A draft's Overview tab in the Inbox: what it is about and the proof, written for
 
 Top: the project in one line, then the agent's plain-words explanation (github_searcher/inbox.py): the
 problem as someone using the project sees it, its cause, the fix and what could still go wrong (for a
-comment: the problem and why post it; a question is shown as it is).
+comment: the problem and why post it; a question, and the app's "taken" notice, are shown as they are).
 
 Below, "Before and after": the agent's evidence, grouped by topic in the order it was added. Each topic
 starts with its context (what is shown and how to read it), then its before and after side by side (an
@@ -188,7 +188,7 @@ export default function Overview(props: { draft: Draft; files: number; added: nu
         </div>
       )}
 
-      {draft.kind === "question" && <Markdown text={draft.body || "*No text.*"} repo={draft.repo ?? undefined} githubImagesOnly />}
+      {(draft.kind === "question" || draft.kind === "taken") && <Markdown text={draft.body || "*No text.*"} repo={draft.repo ?? undefined} githubImagesOnly />}
 
       {rows.length > 0 && (
         <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-2.5">
@@ -210,7 +210,7 @@ export default function Overview(props: { draft: Draft; files: number; added: nu
           )}
         </div>
       )}
-      {rows.length === 0 && draft.kind !== "question" && (
+      {rows.length === 0 && draft.kind !== "question" && draft.kind !== "taken" && (
         <div className="text-muted-foreground">This draft was made before overviews existed. Its text is in the last tab.</div>
       )}
 

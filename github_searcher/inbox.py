@@ -6,7 +6,7 @@ Approving tells the agent. With the user's GitHub account connected (Settings, g
 Approve on a PR or comment also sends it to GitHub as them, first; "sent" then says what went out
 (mark_sent). Each draft is one JSON file, DATA_DIR/inbox/<id>.json:
 
-    {"id": "draft_a1b2c3", "kind": "pr" | "comment" | "question", "agent": "<agent id>",
+    {"id": "draft_a1b2c3", "kind": "pr" | "comment" | "question" | "taken", "agent": "<agent id>",
      "job": "job_..." | null, "repo": "owner/name" | null, "target": "owner/name#n" | null,
      "title", "body": "markdown",
      "diff": "unified diff (pr only)", "branch": "branch in the VM (pr only)", "base": "origin/main (pr only)",
@@ -24,6 +24,10 @@ project: plain words on what is wrong and what the draft does about it.
     comment: {"project", "problem", "why"}  (why post this comment now)
 
 "template" is the repo's PR template a PR's body was checked against (none: the repo has none).
+
+"taken" is the one kind the app makes, not the agent (Agents.issue_taken): an issue an agent has a job
+for went from free to assigned. Its body says who seems to be on it; approved means keep working,
+rejected means stop the agent (its job is cancelled). It takes no reply.
 
 A draft is decided once. Drafts are never deleted, so the Inbox keeps the history.
 

@@ -31,6 +31,12 @@ VM is killed).
 The user's side: assign() turns an issue into a job for an agent, decide() passes the user's
 decision on a draft back to its agent (with the link, when Approve sent it to GitHub).
 
+When an issue an agent has a job for goes from free to assigned (someone else is on it now: the
+tags say so, backend/issues_api.py), issue_taken() asks the user in the Inbox ("taken", one pending
+per job): Keep working tells the agent to go on; Stop the agent cancels the job, and when the agent
+is busy with it right now, stops its turn and what it runs in the VM. The agent itself never stops
+for it on its own.
+
 Everything here runs in the backend's event loop. notify() and the queue callbacks may be called
 from request threads, so they hand their work to the loop. version goes up on every change the
 agent list shows (status, history, context, queue), for the live feed.
@@ -44,6 +50,7 @@ import asyncio
 import functools
 import json
 import os
+import re
 import secrets
 import threading
 from datetime import UTC, datetime
@@ -577,12 +584,58 @@ class Agents:
         self.notify(agent_id, text)
         return job
 
+    def issue_taken(self, issue_id: str, reason: str) -> None:
+        """The issue went from free to assigned: someone else is on it now. Every open job on it gets an item in the
+        Inbox, so the user decides whether its agent keeps working or stops. One pending item per job at most."""
+        asked = [draft["job"] for draft in self.inbox.list() if draft["kind"] == "taken" and draft["status"] == "pending"]
+        # reason is the tags' sentence on who has it, then one on how hard it is ("Easy: ..."); only the first part matters here.
+        why = re.split(r"\s(?:Easy|Medium|Hard): ", reason)[0]
+        for job in self.jobs.list():
+            if job["issue"] != issue_id or job["status"] in ["done", "cancelled"] or job["id"] in asked:
+                continue
+            agent = self.agents.get(job["agent"])
+            if agent is None:
+                continue
+            body = (
+                f"Your agent {agent.name} has this issue as {job['id']} ({job['title']}). It was free, but someone else "
+                f"seems to be on it now: {why}\n\n"
+                "- **Keep working**: the agent carries on; you still decide on its PR.\n"
+                "- **Stop the agent**: the job is cancelled, and the agent stops working on it right away."
+            )
+            self.inbox.create("taken", job["agent"], f"{issue_id} isn't free anymore", body, job=job["id"], repo=job["repo"], target=issue_id, vm=job["vm"])
+
     def decide(self, draft_id: str, decision: str, reply: str = "") -> dict:
         """The user's decision on a draft (approved, rejected or replied) goes to its agent, and its job is open again."""
+        if decision == "replied" and self.inbox.get(draft_id)["kind"] == "taken":
+            raise ValueError("Keep working or stop the agent; this one takes no reply")
         draft = self.inbox.decide(draft_id, decision, reply)
         job = None
         if draft["job"] is not None:
             job = self.jobs.get(draft["job"])
+
+        # The app asked whether the agent keeps working on an issue someone else took (issue_taken). approved: keep
+        # working, rejected: stop. A job that ended in the meantime has nothing left to decide.
+        if draft["kind"] == "taken":
+            if job is None or job["status"] in ["done", "cancelled"]:
+                return draft
+            note = ""
+            if reply:
+                note = f" Their note: {reply}"
+            if decision == "approved":
+                self.notify(draft["agent"], f"{draft['target']} isn't free anymore on GitHub, but the user wants you to keep working on {job['id']}.{note}")
+                return draft
+            was_working = job["status"] == "working"
+            self.jobs.update(job["id"], status="cancelled")
+            self.notify(draft["agent"], f"{draft['target']} isn't free anymore on GitHub, so the user cancelled {job['id']}. Stop working on it and go on with your other jobs.{note}")
+            # Busy with that job right now: its turn stops, and so does what it still runs in the VM.
+            agent = self.agents.get(draft["agent"])
+            if agent is not None and agent.busy and was_working:
+                self.loop.create_task(agent.interrupt())
+                vm_name, place = self.queue.place(agent.id)
+                if place == 0:
+                    self.loop.create_task(asyncio.to_thread(agent.computer_tools.cancel, vm_name))
+            return draft
+
         if job is not None and job["status"] == "waiting_on_user":
             job = self.jobs.update(job["id"], status="queued")
 

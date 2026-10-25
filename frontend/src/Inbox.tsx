@@ -1,5 +1,7 @@
 /*
-The Inbox: everything the agents want to send (PRs, comments) or ask (questions), waiting for you.
+The Inbox: everything the agents want to send (PRs, comments) or ask (questions), waiting for you. And one
+kind the app makes itself, Taken: an issue an agent has a job for isn't free anymore (someone else is on it
+now, github_searcher/agents.py issue_taken); you pick Keep working or Stop the agent (its job is cancelled).
 
 Top: the list (Pending / Decided / All), newest first; only the rows on screen are drawn.
 Bottom: the open item (#/inbox/<id>), in tabs. The first two are for you, the last is what would be sent:
@@ -10,8 +12,9 @@ Bottom: the open item (#/inbox/<id>), in tabs. The first two are for you, the la
   before and after pictures are in its text as ![...](evidence:ev_...): shown here in place, and listed above it with
   Copy picture and Download, since GitHub needs its own copy (sending uploads them to your fork; by hand, paste
   each over its line in GitHub's PR box).
-The bar at the bottom decides: Reject, Reply & keep working, or Approve, with an optional reply. A decision goes to
-the agent (and the draft's job goes back to the agent's queue).
+The bar at the bottom decides: Reject, Reply & keep working, or Approve, with an optional reply (Taken: Stop the
+agent or Keep working, with an optional note). A decision goes to the agent (and the draft's job goes back to the
+agent's queue).
 With your GitHub account connected (Settings), Approve on a PR or comment first asks "are you sure?" (Open PR / Post
 comment), then sends it to GitHub as you (github_searcher/github_account.py): a PR from a new branch in your fork,
 its pictures uploaded there. If GitHub refuses, nothing is decided and the error shows. Without an account nothing is
@@ -22,7 +25,7 @@ J / K (or the arrow keys) move through the list when you are not typing.
 */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Check, ChevronRight, CircleHelp, Copy, Download, ExternalLink, FileCheck, GitPullRequest, Images, Loader2, MessageSquare, Reply, Send, X } from "lucide-react";
+import { Check, ChevronRight, CircleHelp, Copy, Download, ExternalLink, FileCheck, GitPullRequest, Images, Loader2, MessageSquare, Reply, Send, Square, UserX, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -49,9 +52,11 @@ import { cn } from "@/lib/utils";
 
 const COLUMNS = "grid grid-cols-[12px_88px_120px_190px_minmax(0,1fr)_44px] items-center gap-2";
 
-const KIND_LABEL: Record<string, string> = { pr: "PR", comment: "Comment", question: "Question" };
+const KIND_LABEL: Record<string, string> = { pr: "PR", comment: "Comment", question: "Question", taken: "Taken" };
 
 const DECISION_LABEL: Record<string, string> = { pending: "Pending", approved: "Approved", rejected: "Rejected", replied: "Replied" };
+// A Taken notice is decided with Keep working (approved) or Stop the agent (rejected).
+const TAKEN_LABEL: Record<string, string> = { pending: "Pending", approved: "Kept working", rejected: "Stopped the agent" };
 
 // A file in a PR's diff starts collapsed when it changes more lines than this.
 const BIG_FILE_LINES = 400;
@@ -402,12 +407,12 @@ export default function Inbox(props: { selected: string | null }) {
   const targetMatch = draft !== undefined && draft.target !== null ? draft.target.match(/^(.+)#(\d+)$/) : null;
   const targetUrl = targetMatch !== null ? `https://github.com/${targetMatch[1]}/issues/${targetMatch[2]}` : null;
   const reply = draft !== undefined ? (replies[draft.id] ?? "") : "";
-  // A question is only its overview; only PRs have a diff.
+  // A question and a Taken notice are only their overview; only PRs have a diff.
   let shownTab = prTab;
-  if (draft === undefined || draft.kind === "question" || (shownTab === "diff" && draft.kind !== "pr")) {
+  if (draft === undefined || draft.kind === "question" || draft.kind === "taken" || (shownTab === "diff" && draft.kind !== "pr")) {
     shownTab = "overview";
   }
-  const showTabs = draft !== undefined && draft.kind !== "question";
+  const showTabs = draft !== undefined && draft.kind !== "question" && draft.kind !== "taken";
   // The pictures a PR's text shows (![...](evidence:ev_...)): here they load from this app.
   const pictures = draft !== undefined ? draft.evidence.filter((item) => item.file !== null && draft.body.includes(`evidence:${item.id}`)) : [];
   let shownBody = draft !== undefined ? draft.body : "";
@@ -453,7 +458,7 @@ export default function Inbox(props: { selected: string | null }) {
             {!loaded && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
             {loaded && rows.length === 0 && (
               <div className="px-3 py-2 text-muted-foreground">
-                {tab === "pending" ? "Nothing waiting for you. Agents put PRs, comments and questions here." : "Nothing here."}
+                {tab === "pending" ? "Nothing waiting for you. Agents put PRs, comments and questions here, and the app asks when someone else takes an issue an agent works on." : "Nothing here."}
               </div>
             )}
             <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
@@ -484,6 +489,7 @@ export default function Inbox(props: { selected: string | null }) {
                       {each.kind === "pr" && <GitPullRequest className="size-3.5" />}
                       {each.kind === "comment" && <MessageSquare className="size-3.5" />}
                       {each.kind === "question" && <CircleHelp className="size-3.5" />}
+                      {each.kind === "taken" && <UserX className="size-3.5" />}
                       {KIND_LABEL[each.kind] ?? each.kind}
                     </span>
                     <span className="truncate">{agentNames[each.agent] ?? each.agent}</span>
@@ -524,6 +530,7 @@ export default function Inbox(props: { selected: string | null }) {
                     {draft.kind === "pr" && <GitPullRequest />}
                     {draft.kind === "comment" && <MessageSquare />}
                     {draft.kind === "question" && <CircleHelp />}
+                    {draft.kind === "taken" && <UserX />}
                     {KIND_LABEL[draft.kind] ?? draft.kind}
                   </Badge>
                   {draft.target !== null && targetUrl !== null && (
@@ -538,7 +545,7 @@ export default function Inbox(props: { selected: string | null }) {
                     </a>
                   )}
                   <span>
-                    by{" "}
+                    {draft.kind === "taken" ? "agent" : "by"}{" "}
                     <a href={`#/agents/${draft.agent}`} className="text-primary hover:underline">
                       {agentNames[draft.agent] ?? draft.agent}
                     </a>
@@ -676,7 +683,29 @@ export default function Inbox(props: { selected: string | null }) {
               {shownTab === "diff" && diffView}
             </div>
 
-            {draft.status === "pending" && (
+            {draft.status === "pending" && draft.kind === "taken" && (
+              <div className="shrink-0 space-y-2 border-t bg-muted/30 px-4 py-2">
+                <Textarea
+                  placeholder="A note for the agent (optional)."
+                  className="max-h-40 min-h-14 bg-background"
+                  value={reply}
+                  onChange={(event) => setReplies((current) => ({ ...current, [draft.id]: event.target.value }))}
+                />
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Stop cancels the job, and the agent stops working on it right away.</span>
+                  <div className="ml-auto flex items-center gap-1.5">
+                    <Button variant="outline" size="sm" disabled={busy !== ""} onClick={() => decide("reject")}>
+                      {busy === "reject" ? <Loader2 className="animate-spin" /> : <Square />} Stop the agent
+                    </Button>
+                    <Button size="sm" disabled={busy !== ""} onClick={() => decide("approve")}>
+                      {busy === "approve" ? <Loader2 className="animate-spin" /> : <Check />} Keep working
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {draft.status === "pending" && draft.kind !== "taken" && (
               <div className="shrink-0 space-y-2 border-t bg-muted/30 px-4 py-2">
                 <Textarea
                   placeholder={
@@ -736,7 +765,7 @@ export default function Inbox(props: { selected: string | null }) {
               <div className="shrink-0 border-t bg-muted/30 px-4 py-2">
                 <div className="flex items-center gap-2">
                   <StatusDot tone={DRAFT_TONE[draft.status]} />
-                  <span className="font-medium">{DECISION_LABEL[draft.status] ?? draft.status}</span>
+                  <span className="font-medium">{(draft.kind === "taken" ? TAKEN_LABEL[draft.status] : DECISION_LABEL[draft.status]) ?? draft.status}</span>
                   {draft.decided_at !== null && <span className="text-xs text-muted-foreground">{new Date(draft.decided_at).toLocaleString()}</span>}
                   {draft.sent !== null && (
                     <a href={draft.sent.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-primary hover:underline">
