@@ -1,11 +1,10 @@
 /*
-One agent's page: its name and id in the header (the id is unique and never changes); under the header, the job it is
-on now (every step, the current one marked, the agent's headline in everyday words, the project's test suite runs, what
-it does this moment, its todo count and times, and a warning when it has been quiet too long); the conversation on the
-left; on the right where it stands in a VM queue, its jobs in two lists that each fold with their header: In queue
-(still to do, being done or waiting on you, in the order it takes them, with their progress; a queued one has an x that
-takes it off: the job is cancelled, and the agent is told) and Finished (done and cancelled, newest first), and its
-latest todo list.
+One agent's page: its name and id in the header (the id is unique and never changes); under the header, the job it is on now (its title and every step, the current one marked, and a
+warning when it has been quiet too long; the rest of its progress is on the Jobs page); the conversation on the left;
+on the right where it stands in a VM queue, its jobs in two lists that each fold with their header: In queue (still to
+do, being done or waiting on you, in the order it takes them, with their progress; a queued one has an x that takes it
+off: the job is cancelled, and the agent is told) and Finished (done and cancelled, newest first), and its latest todo
+list.
 
 The header has two tabs: Chat (all of the above) and Artifacts (AgentArtifacts.tsx: the agent's own folder of files,
 pictures and screenshots). In the conversation, a picture the agent keeps there shows where it writes
@@ -82,7 +81,7 @@ import {
 import { Button } from "@/components/ui/button";
 import AgentArtifacts from "@/AgentArtifacts";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { JobProgressBar, JobSteps, JobTests, currentJob, since, stuckFor, useNow } from "@/components/ui/job-progress";
+import { JobProgressBar, JobSteps, currentJob, stuckFor, useNow } from "@/components/ui/job-progress";
 import { IssueRefText, Markdown } from "@/components/ui/markdown";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -620,34 +619,7 @@ export default function AgentChat(props: { agentId: string }) {
             </a>
             <JobSteps job={job} />
           </div>
-          {job.about !== "" && <div className="text-xs text-muted-foreground">{job.about}</div>}
-          {job.kind === "fix_issue" && <JobTests job={job} />}
-          {job.headline !== "" && (
-            <div title={job.detail !== "" ? job.detail : undefined}>{job.headline}</div>
-          )}
-          {job.headline === "" && <div className="text-muted-foreground">{job.status === "queued" ? "Not started yet." : "No progress reported yet."}</div>}
-          <div className="flex min-w-0 items-center gap-3 text-xs text-muted-foreground tabular-nums">
-            {summary.busy && summary.activity !== "" && (
-              <span className="truncate" title={summary.activity}>
-                Now: {summary.activity}
-                {summary.in_tool && summary.last_event_at !== null && ` · ${since(summary.last_event_at, now)}`}
-              </span>
-            )}
-            {summary.busy && summary.todo_total > 0 && (
-              <span className="shrink-0">
-                todo {summary.todo_done}/{summary.todo_total}
-              </span>
-            )}
-            {job.started_at !== null && <span className="shrink-0">job {since(job.started_at, now)}</span>}
-            {job.status === "working" && job.step_at !== null && <span className="shrink-0">this step {since(job.step_at, now)}</span>}
-            {stuck !== "" && <span className="shrink-0 text-warn">no activity for {stuck}: it may be stuck, or running something slow</span>}
-          </div>
-          {job.detail !== "" && (
-            <details className="text-xs">
-              <summary className="cursor-pointer text-muted-foreground select-none">Technical detail</summary>
-              <div className="mt-1 font-mono whitespace-pre-wrap">{job.detail}</div>
-            </details>
-          )}
+          {stuck !== "" && <div className="text-xs text-warn">No activity for {stuck}: it may be stuck, or running something slow.</div>}
         </div>
       )}
 
