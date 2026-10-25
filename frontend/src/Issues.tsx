@@ -2,8 +2,9 @@
 The Issues list: issues the agents picked, and what is being done about each one.
 
 An issue's status comes from its latest job: no job = New, else queued / working / waiting on you / done
-(a cancelled latest job counts as New again, so it can be reassigned). Tabs filter by that status,
-the repo chip filters by repo (it lives in the URL: #/issues?repo=owner/name, which the Repos page links to).
+(a cancelled latest job counts as New again, so it can be reassigned). The bar on top has no tabs or filters, only
+Active and the buttons; a link from another page may still show one repo's issues (#/issues?repo=owner/name, the
+Repos page's link), then a chip with the repo's name and an X to show them all again.
 
 Each row shows what helps decide whether an issue is worth fixing, from its facts (github_searcher/issue_facts.py,
 kept fresh by the backend; Refresh on top fetches them all now, then has Claude read every open issue and its comments
@@ -27,8 +28,7 @@ a Level: how hard the fix is for our agent in its sandbox VM, decided by fixed r
 answers (the goal is clear, it runs in our VM, its effect is easy to see, easy to prove fixed, general programming
 knowledge is enough, the change stays local). easy: all yes, so the agent can vibe code it, see it and prove it in the
 VM; hard: it can't run in our VM, the change ripples, or two or more are no; medium: one is no. The reason on hover ends
-with which checks failed. A level is kept once given: it changes only when the issue changes on GitHub. The level
-picker shows one level only. Tag again (in the open row) has Claude read it again now.
+with which checks failed. A level is kept once given: it changes only when the issue changes on GitHub. Tag again (in the open row) has Claude read it again now.
 
 Rows open in place: the tags and why, the facts in full (author and role, last comment and who wrote it, assignees, linked PRs,
 the repo's last push), the agent's note, the issue body and its comments below it, each with who wrote it and when
@@ -39,8 +39,12 @@ Assign opens AssignDialog; the arrow button next to it (and the #) opens the iss
 Only the rows on screen are drawn, so thousands of issues stay fast. Undo / redo like the Repos page.
 Many rows are picked like in a mail app (components/ui/row-selection.tsx): Ctrl-click, Shift-click, dragging a
 rectangle, Ctrl+A; a bar at the bottom then removes them at once, as one undo step (it asks first; Enter confirms).
+Active (first in the bar on top) drops down every issue an agent is on now (its latest job queued, working or waiting
+on you), whatever the repo: waiting on you first, then working, then queued. Each shows its title, the agent's
+headline under it, the agent, and the same progress bar as the Status column; a click opens that issue's row (like a
+link from the Jobs page). The sidebar lists the same issues under Issues.
 Remove assigned (in the bar on top) takes out every issue someone else is on (assigned on GitHub, or tagged Assigned)
-in one go, whatever the tab and filters, except ones an agent here has a job for (its latest not cancelled); it asks
+in one go, whatever the repo, except ones an agent here has a job for (its latest not cancelled); it asks
 first too, and is one undo step.
 Nothing removes an issue an agent is working on (a job on it queued, working or waiting on you): its X is greyed
 out, the bar at the bottom and Remove assigned leave it out (the bottom bar's question says how many stay), and
@@ -48,7 +52,7 @@ undo / redo keep it too (the backend checks, for agents as well). Cancel its job
 */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ArrowUp, ExternalLink, Loader2, RefreshCw, Redo2, Tags, Undo2, UserPlus, UserX, X } from "lucide-react";
+import { Activity, ArrowDown, ArrowUp, ChevronDown, ExternalLink, Loader2, RefreshCw, Redo2, Tags, Undo2, UserPlus, UserX, X } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -65,13 +69,11 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { JobProgressBar, JobSteps } from "@/components/ui/job-progress";
 import { Markdown } from "@/components/ui/markdown";
 import { RowSelection } from "@/components/ui/row-selection";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { JOB_LABEL, JOB_TONE, StatusDot } from "@/components/ui/status-dot";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api, useLive, useLoaded, type IssueItem, type Job, type Thread } from "@/live";
 import { useColumnWidths } from "@/lib/column-widths";
@@ -130,19 +132,6 @@ const LEVEL_VARIANT: Record<string, "ok" | "warn" | "bad"> = {
   medium: "warn",
   hard: "bad",
 };
-const ALL_LEVELS = "__all__";
-
-// Tab → which latest-job statuses it shows. "new" also takes issues without a job.
-const TABS = [
-  { value: "all", label: "All", statuses: [] as string[] },
-  { value: "new", label: "New", statuses: ["cancelled"] },
-  { value: "queued", label: "Queued", statuses: ["queued"] },
-  { value: "working", label: "Working", statuses: ["working"] },
-  { value: "waiting", label: "Waiting", statuses: ["waiting_on_user"] },
-  { value: "done", label: "Done", statuses: ["done"] },
-];
-
-const ALL_REPOS = "__all__";
 
 // open: an issue id whose row starts open and in view (#/issues?open=owner/name%23n, from the Jobs page).
 export default function Issues(props: { repo: string | null; open: string | null }) {
@@ -151,9 +140,6 @@ export default function Issues(props: { repo: string | null; open: string | null
   const jobs = useLive("jobs");
   const agents = useLive("agents");
   const loaded = useLoaded("issues");
-  const [tab, setTab] = useState("all");
-  const [level, setLevel] = useState(ALL_LEVELS);
-  const [filter, setFilter] = useState("");
   const [open, setOpen] = useState<string[]>(props.open !== null ? [props.open] : []);
   const [threads, setThreads] = useState<Record<string, Thread>>({});
   const [threadErrors, setThreadErrors] = useState<Record<string, string>>({});
@@ -222,40 +208,23 @@ export default function Issues(props: { repo: string | null; open: string | null
     })
     .map((issue) => issue.id);
 
-  // Count per tab (within the repo filter), then the rows of the current tab.
-  const inRepo = issues.items.filter((issue) => props.repo === null || issue.repo === props.repo);
-  const tabCounts: Record<string, number> = {};
-  for (const item of TABS) {
-    tabCounts[item.value] = inRepo.filter((issue) => {
-      const job = latestJob[issue.id];
-      if (item.value === "all") {
-        return true;
-      }
-      if (job === undefined) {
-        return item.value === "new";
-      }
-      return item.statuses.includes(job.status);
-    }).length;
-  }
-  const tabStatuses = TABS.find((item) => item.value === tab)?.statuses ?? [];
-  const needle = filter.trim().toLowerCase();
-  const rows = inRepo.filter((issue) => {
+  // Issues an agent is on now, for the Active menu: waiting on you first, then working, then queued; the latest
+  // change first within each.
+  const active = issues.items.filter((issue) => {
     const job = latestJob[issue.id];
-    if (level !== ALL_LEVELS && issue.tags?.level !== level) {
-      return false;
-    }
-    if (tab !== "all" && job === undefined && tab !== "new") {
-      return false;
-    }
-    if (tab !== "all" && job !== undefined && !tabStatuses.includes(job.status)) {
-      return false;
-    }
-    if (needle === "") {
-      return true;
-    }
-    const text = `${issue.id} ${issue.title} ${issue.note} ${issue.tags?.status ?? ""} ${issue.tags?.kind ?? ""}`.toLowerCase();
-    return text.includes(needle);
+    return job !== undefined && (job.status === "queued" || job.status === "working" || job.status === "waiting_on_user");
   });
+  active.sort((a, b) => {
+    const first = latestJob[a.id];
+    const second = latestJob[b.id];
+    if (first.status !== second.status) {
+      return STATUS_RANK[second.status] - STATUS_RANK[first.status];
+    }
+    return second.updated_at.localeCompare(first.updated_at);
+  });
+
+  // Every issue, or one repo's when a link asked for it.
+  const rows = issues.items.filter((issue) => props.repo === null || issue.repo === props.repo);
 
   // The value an issue sorts by in a column: a number, or text. null when it hasn't one (it goes last).
   function sortValue(issue: IssueItem, key: SortKey): number | string | null {
@@ -520,12 +489,6 @@ export default function Issues(props: { repo: string | null; open: string | null
     setRefreshing(false);
   }
 
-  // The repo chip offers the Repos list, plus the URL's repo if it isn't listed there.
-  const repoNames = repos.items.map((repo) => repo.full_name);
-  if (props.repo !== null && !repoNames.includes(props.repo)) {
-    repoNames.unshift(props.repo);
-  }
-
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
@@ -619,10 +582,6 @@ export default function Issues(props: { repo: string | null; open: string | null
     }
   }
 
-  function setRepo(value: string) {
-    window.location.hash = value === ALL_REPOS ? "#/issues" : `#/issues?repo=${encodeURIComponent(value)}`;
-  }
-
   // Ctrl+Z / Ctrl+Y (and Ctrl+Shift+Z), unless typing in a field or a dialog is open.
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -649,51 +608,44 @@ export default function Issues(props: { repo: string | null; open: string | null
   return (
     <div className="relative flex h-full flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-        <Tabs value={tab} onValueChange={setTab}>
-          <TabsList>
-            {TABS.map((item) => (
-              <TabsTrigger key={item.value} value={item.value} className="px-2.5">
-                {item.label}
-                <span className="text-xs text-muted-foreground tabular-nums">{tabCounts[item.value]}</span>
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
-        <div className="ml-auto flex items-center gap-1">
-          <Select value={props.repo ?? ALL_REPOS} onValueChange={setRepo}>
-            <SelectTrigger className={cn("max-w-56", props.repo !== null && "border-primary text-primary")}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent position="popper" align="end">
-              <SelectItem value={ALL_REPOS}>All repos</SelectItem>
-              {repoNames.map((name) => (
-                <SelectItem key={name} value={name}>
-                  {name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {props.repo !== null && (
-            <Button variant="ghost" size="icon-sm" aria-label="Clear the repo filter" onClick={() => setRepo(ALL_REPOS)}>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="sm" title="Every issue an agent is on now, and how far it got">
+              <Activity /> Active <span className={cn("text-xs tabular-nums", active.length > 0 ? "text-primary" : "text-muted-foreground")}>{active.length}</span>
+              <ChevronDown />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-[36rem] max-w-[calc(100vw-2rem)]">
+            {active.length === 0 && <div className="px-2 py-1 text-muted-foreground">No agent is on an issue now.</div>}
+            {active.map((issue) => {
+              const job = latestJob[issue.id];
+              return (
+                <DropdownMenuItem key={issue.id} asChild>
+                  <a href={`#/issues?open=${encodeURIComponent(issue.id)}`} className="grid grid-cols-[minmax(0,1fr)_96px_180px] gap-3">
+                    <span className="min-w-0">
+                      <span className="block truncate">{issue.facts?.title ?? issue.title}</span>
+                      <span className="block truncate text-xs text-muted-foreground">{job.headline !== "" ? `${issue.id} · ${job.headline}` : issue.id}</span>
+                    </span>
+                    <span className="truncate">{agentNames[job.agent] ?? job.agent}</span>
+                    <JobProgressBar job={job} />
+                  </a>
+                </DropdownMenuItem>
+              );
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
+        {/* Only after a link to one repo's issues (the Repos page's); the X shows them all again. */}
+        {props.repo !== null && (
+          <span className="flex items-center gap-1 rounded-md border border-primary pl-2 text-primary">
+            {props.repo}
+            <Button variant="ghost" size="icon-xs" aria-label="Show every repo's issues" title="Show every repo's issues" onClick={() => (window.location.hash = "#/issues")}>
               <X />
             </Button>
-          )}
-          <Select value={level} onValueChange={setLevel}>
-            <SelectTrigger className={cn("w-28", level !== ALL_LEVELS && "border-primary text-primary")}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent position="popper" align="end">
-              <SelectItem value={ALL_LEVELS}>All levels</SelectItem>
-              <SelectItem value="easy">Easy</SelectItem>
-              <SelectItem value="medium">Medium</SelectItem>
-              <SelectItem value="hard">Hard</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <Input className="w-52" placeholder="Filter issues" value={filter} onChange={(event) => setFilter(event.target.value)} />
+          </span>
+        )}
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button variant="ghost" size="sm" disabled={refreshing} onClick={refreshAll}>
+            <Button variant="ghost" size="sm" className="ml-auto" disabled={refreshing} onClick={refreshAll}>
               <RefreshCw className={cn(refreshing && "animate-spin")} /> Refresh
             </Button>
           </TooltipTrigger>
