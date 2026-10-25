@@ -54,9 +54,9 @@
 <rect class="card-shadow" x="40" y="270" width="200" height="136" rx="9"/>
 <rect class="c-browser" x="40" y="268" width="200" height="136" rx="9" stroke-width="1.3"/>
 <text x="56" y="292" class="h" text-anchor="start">React app</text>
-<text x="56" y="312" class="s" text-anchor="start">Inbox · Issues · Jobs</text>
-<text x="56" y="330" class="s" text-anchor="start">Repos · Tracked</text>
-<text x="56" y="348" class="s" text-anchor="start">Agents · VMs</text>
+<text x="56" y="312" class="s" text-anchor="start">Explore · Repos · Tracked</text>
+<text x="56" y="330" class="s" text-anchor="start">Issues · Jobs · Agents</text>
+<text x="56" y="348" class="s" text-anchor="start">VMs · Inbox · Sherpa</text>
 <text x="56" y="366" class="m" text-anchor="start">Tailwind · shadcn/ui</text>
 <rect class="card-shadow" x="40" y="520" width="200" height="56" rx="9"/>
 <rect class="c-browser" x="40" y="518" width="200" height="56" rx="9" stroke-width="1.3"/>
@@ -71,7 +71,7 @@
 <rect class="card-shadow" x="432" y="110" width="352" height="52" rx="9"/>
 <rect class="c-ext" x="432" y="108" width="352" height="52" rx="9" stroke-width="1.3"/>
 <text x="608.0" y="132" class="h" text-anchor="middle">GitHub API</text>
-<text x="608.0" y="152" class="s" text-anchor="middle">REST + GraphQL · read only</text>
+<text x="608.0" y="152" class="s" text-anchor="middle">REST + GraphQL · reads; posts what you approve</text>
 <rect class="card-shadow" x="984" y="110" width="224" height="52" rx="9"/>
 <rect class="c-ext" x="984" y="108" width="224" height="52" rx="9" stroke-width="1.3"/>
 <text x="1096.0" y="132" class="h" text-anchor="middle">Anthropic API</text>

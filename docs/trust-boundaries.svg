@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="744" viewBox="0 0 1280 744" role="img" aria-label="Trust boundaries. The backend loads the GitHub and Claude tokens from .env and only reads GitHub. Claude Code has no host shell, file or web tools. Agent commands reach a VM only through incus exec, for the agent holding it. Tokens never enter a VM; a VM reaches the internet but not this machine or the LAN; the API only answers localhost pages, so a VM&#x27;s desktop page gets 403.">
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="744" viewBox="0 0 1280 744" role="img" aria-label="Trust boundaries. The backend loads the GitHub and Claude tokens from .env and only reads GitHub with them; it posts only the PRs and comments you approve, with your own account&#x27;s token. Claude Code has no host shell, file or web tools. Agent commands reach a VM only through incus exec, for the agent holding it. Tokens never enter a VM; a VM reaches the internet but not this machine or the LAN; the API only answers localhost pages, so a VM&#x27;s desktop page gets 403.">
 <title>What stays where</title>
-<desc>Trust boundaries. The backend loads the GitHub and Claude tokens from .env and only reads GitHub. Claude Code has no host shell, file or web tools. Agent commands reach a VM only through incus exec, for the agent holding it. Tokens never enter a VM; a VM reaches the internet but not this machine or the LAN; the API only answers localhost pages, so a VM&#x27;s desktop page gets 403.</desc>
+<desc>Trust boundaries. The backend loads the GitHub and Claude tokens from .env and only reads GitHub with them; it posts only the PRs and comments you approve, with your own account&#x27;s token. Claude Code has no host shell, file or web tools. Agent commands reach a VM only through incus exec, for the agent holding it. Tokens never enter a VM; a VM reaches the internet but not this machine or the LAN; the API only answers localhost pages, so a VM&#x27;s desktop page gets 403.</desc>
 <style>
   text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; fill: #1f2328; }
   .bg { fill: #ffffff; stroke: #d0d7de; }
@@ -34,7 +34,7 @@
 <defs><marker id="ah-edge" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="a-edge" d="M0,0.5 L10,5 L0,9.5 z"/></marker><marker id="ah-you" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="a-you" d="M0,0.5 L10,5 L0,9.5 z"/></marker><marker id="ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="a-ok" d="M0,0.5 L10,5 L0,9.5 z"/></marker><marker id="ah-no" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="a-no" d="M0,0.5 L10,5 L0,9.5 z"/></marker></defs>
 <rect class="bg" x="0.5" y="0.5" width="1279" height="743" rx="14"/>
 <text x="24" y="42" class="title" text-anchor="start">What stays where</text>
-<text x="24" y="66" class="sub" text-anchor="start">Secrets stay where they are needed, and every line that could leak one or post to GitHub is cut.</text>
+<text x="24" y="66" class="sub" text-anchor="start">Secrets stay where they are needed, and every line that could leak one or post to GitHub without you is cut.</text>
 <rect class="z-ext" x="24" y="92" width="1232" height="88" rx="12" stroke-width="1.2"/>
 <text x="40" y="114" class="zl l-ext" text-anchor="start">INTERNET</text>
 <rect class="z-browser" x="24" y="204" width="240" height="492" rx="12" stroke-width="1.2"/>
@@ -111,12 +111,10 @@
 <text x="444" y="520" class="el" text-anchor="start">loaded</text>
 <path class="line e-ok" d="M536,476 L536.0,499.0 Q536,508 545.0,508.0 L991.0,508.0 Q1000,508 1000.0,499.0 L1000,476" marker-end="url(#ah-ok)"/>
 <text x="768" y="500" class="el" text-anchor="middle">incus exec, only for the agent holding the VM</text>
-<path class="line e-no dash" d="M470,372 L470,164" marker-end="url(#ah-no)"/>
-<circle class="halo x-no" cx="470" cy="268" r="8" stroke-width="1.8"/>
-<path class="x x-no" d="M466.5,264.5 L473.5,271.5 M473.5,264.5 L466.5,271.5"/>
-<text x="482" y="248" class="el" text-anchor="start">posting: never;</text>
-<text x="482" y="264" class="el" text-anchor="start">drafts wait in</text>
-<text x="482" y="280" class="el" text-anchor="start">your Inbox</text>
+<path class="line e-ok" d="M470,372 L470,164" marker-end="url(#ah-ok)"/>
+<text x="482" y="248" class="el" text-anchor="start">posts only what</text>
+<text x="482" y="264" class="el" text-anchor="start">you approve, as</text>
+<text x="482" y="280" class="el" text-anchor="start">your account</text>
 <path class="line e-no dash" d="M700,372 L700,316" marker-end="url(#ah-no)"/>
 <circle class="halo x-no" cx="700" cy="344" r="8" stroke-width="1.8"/>
 <path class="x x-no" d="M696.5,340.5 L703.5,347.5 M703.5,340.5 L696.5,347.5"/>

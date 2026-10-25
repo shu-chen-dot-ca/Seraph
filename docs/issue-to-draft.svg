@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="716" viewBox="0 0 1400 716" role="img" aria-label="Swimlane flow. An agent finds issues on GitHub and lists them. You assign one, which makes a queued job. The agent queues for its VM, works there (set up, reproduce, tests before, fix, evidence, tests after), then drafts a PR, and the job waits on you in the Inbox. Reply sends it back to work; approve marks it done and you open the PR on GitHub yourself.">
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="716" viewBox="0 0 1400 716" role="img" aria-label="Swimlane flow. An agent finds issues on GitHub and lists them. You assign one, which makes a queued job. The agent queues for its VM, works there (set up, reproduce, tests before, fix, evidence, tests after), then drafts a PR, and the job waits on you in the Inbox. Reply sends it back to work; approve marks it done and, once you confirm, opens the PR on GitHub from your account.">
 <title>From good first issue to draft PR</title>
-<desc>Swimlane flow. An agent finds issues on GitHub and lists them. You assign one, which makes a queued job. The agent queues for its VM, works there (set up, reproduce, tests before, fix, evidence, tests after), then drafts a PR, and the job waits on you in the Inbox. Reply sends it back to work; approve marks it done and you open the PR on GitHub yourself.</desc>
+<desc>Swimlane flow. An agent finds issues on GitHub and lists them. You assign one, which makes a queued job. The agent queues for its VM, works there (set up, reproduce, tests before, fix, evidence, tests after), then drafts a PR, and the job waits on you in the Inbox. Reply sends it back to work; approve marks it done and, once you confirm, opens the PR on GitHub from your account.</desc>
 <style>
   text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; fill: #1f2328; }
   .bg { fill: #ffffff; stroke: #d0d7de; }
@@ -34,7 +34,7 @@
 <defs><marker id="ah-edge" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="a-edge" d="M0,0.5 L10,5 L0,9.5 z"/></marker><marker id="ah-you" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="a-you" d="M0,0.5 L10,5 L0,9.5 z"/></marker><marker id="ah-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="a-ok" d="M0,0.5 L10,5 L0,9.5 z"/></marker><marker id="ah-no" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="a-no" d="M0,0.5 L10,5 L0,9.5 z"/></marker></defs>
 <rect class="bg" x="0.5" y="0.5" width="1399" height="715" rx="14"/>
 <text x="24" y="42" class="title" text-anchor="start">From good first issue to draft PR</text>
-<text x="24" y="66" class="sub" text-anchor="start">Agents do the legwork, you make every decision, and nothing reaches GitHub until you send it yourself. Pills show the job&#x27;s status at each hand-off.</text>
+<text x="24" y="66" class="sub" text-anchor="start">Agents do the legwork, you make every decision, and nothing reaches GitHub until you approve it. Pills show the job&#x27;s status at each hand-off.</text>
 <clipPath id="lanes"><rect x="24" y="92" width="1352" height="600" rx="12"/></clipPath><g clip-path="url(#lanes)">
 <rect class="z-you" x="24" y="92" width="1352" height="144" stroke-width="1.2"/>
 <text x="40" y="120" class="zl l-you" text-anchor="start">YOU</text>
@@ -101,9 +101,9 @@
 <text x="200" y="658" class="s" text-anchor="start">how maintainers review</text>
 <rect class="card-shadow" x="1136" y="598" width="192" height="72" rx="9"/>
 <rect class="c-ext" x="1136" y="596" width="192" height="72" rx="9" stroke-width="1.3"/>
-<text x="1152" y="620" class="h" text-anchor="start">You open the PR</text>
-<text x="1152" y="640" class="s" text-anchor="start">on GitHub, yourself.</text>
-<text x="1152" y="658" class="s" text-anchor="start">The app never posts.</text>
+<text x="1152" y="620" class="h" text-anchor="start">The PR opens</text>
+<text x="1152" y="640" class="s" text-anchor="start">as you, once you confirm.</text>
+<text x="1152" y="658" class="s" text-anchor="start">Agents never post.</text>
 <path class="line e-edge" d="M282,596 L282,374" marker-end="url(#ah-edge)"/>
 <text x="290" y="488" class="el" text-anchor="start">reads</text>
 <path class="line e-edge" d="M282,262 L282.0,175.0 Q282,166 291.0,166.0 L412,166" marker-end="url(#ah-edge)"/>
