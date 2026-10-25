@@ -1,4 +1,5 @@
-"""The VMs pages: create, rename and delete VMs, power, settings, the desktop viewer, and each VM's queue.
+"""The VMs pages: create, rename and delete VMs, power, settings, the desktop viewer, each VM's queue, and copying
+files between this computer and a VM (the Resources tab; only the user can, see sandbox/file_transfer.py).
 
 Create, start, stop and restart run in background threads inside
 sandbox/vms.py and answer at once; the browser follows the state through
@@ -17,9 +18,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.shared import agents, images, queue, vms
+from sandbox import file_transfer
+from sandbox.file_transfer import FileTransferError
 from sandbox.images import ImagesError
 from sandbox.vm import VMError
-from sandbox.vms import VMsError
+from sandbox.vms import VMRecord, VMsError
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 
@@ -285,6 +288,76 @@ def set_env(name: str, body: EnvRequest) -> dict:
         raise HTTPException(status_code=400, detail=str(error))
     except VMError as error:
         raise HTTPException(status_code=500, detail=str(error))
+    return {}
+
+
+@router.get("/vms/global_env")
+def get_global_env() -> dict:
+    """The env vars for all VMs, with their values, for the Settings dialog (the user set them)."""
+    return {"env": VMRecord.global_env}
+
+
+@router.put("/vms/global_env")
+def set_global_env(body: EnvRequest) -> dict:
+    """The env vars for all VMs (secrets). Running VMs get them now; agents only ever see the names.
+
+    "failed" lists the running VMs they could not be written to, each with why.
+    """
+    try:
+        failed = vms.set_global_env(body.env)
+    except VMsError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    return {"failed": failed}
+
+
+@router.get("/computer/files")
+def computer_files(path: str = "") -> dict:
+    """A folder on this computer for the Resources tab. Empty: the home folder."""
+    try:
+        return file_transfer.list_computer(path)
+    except FileTransferError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+
+@router.get("/vms/{name}/files")
+def vm_files(name: str, path: str = "") -> dict:
+    """A folder in the VM for the Resources tab, as its desktop user sees it. Empty: their home."""
+    try:
+        record = vms.get(name)
+    except VMsError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    if record.vm.status() != "Running":
+        raise HTTPException(status_code=409, detail="The VM is off.")
+    try:
+        return file_transfer.list_vm(record.vm, path)
+    except FileTransferError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+
+class CopyRequest(BaseModel):
+    to: str  # "vm" or "computer"
+    source: str  # The file or folder, on the other side.
+    target_dir: str  # The folder it goes in.
+
+
+@router.post("/vms/{name}/files/copy")
+def copy_files(name: str, body: CopyRequest) -> dict:
+    """Copies a file or folder between this computer and the VM. Answers once it is copied (a big folder takes minutes)."""
+    try:
+        record = vms.get(name)
+    except VMsError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    if record.vm.status() != "Running":
+        raise HTTPException(status_code=409, detail="The VM is off.")
+    try:
+        if body.to == "vm":
+            file_transfer.to_vm(record.vm, body.source, body.target_dir)
+        elif body.to == "computer":
+            file_transfer.to_computer(record.vm, body.source, body.target_dir)
+        else:
+            raise FileTransferError('to must be "vm" or "computer"')
+    except FileTransferError as error:
+        raise HTTPException(status_code=400, detail=str(error))
     return {}
 
 

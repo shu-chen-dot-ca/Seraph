@@ -12,6 +12,9 @@ build, since an image can be rebuilt or renamed later. A fork (a copy of a stopp
 source's image and "forked_from" names the source. "secrets_in_vm" are the env variables whose values
 are written in the VM's files right now, so an image is never saved from a VM that still holds them.
 
+The env variables for all VMs (set in the Settings dialog) are in DATA_DIR/global_env.json, not in vms/
+(every .json there is a VM's record). Every VM gets them, with its own on top (see VMRecord.write_env).
+
 holder and queue belong to VMQueue (vm_queue.py); they live here so they are saved with the VM.
 Only kept while the backend runs: usage (on, whether it answers, CPU %, memory and disk in use, internet
 download and upload speed), samples (the last 60 of those, one per second) and locked_by (who locked the
@@ -61,6 +64,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 VMS_DIR = PROJECT_ROOT / os.environ["DATA_DIR"] / "vms"
+GLOBAL_ENV_PATH = PROJECT_ROOT / os.environ["DATA_DIR"] / "global_env.json"
 VM_PREFIX = os.environ["SANDBOX_VM_PREFIX"]
 # The VM that builds the image may have the same prefix but is not one of ours.
 BUILD_VM = os.environ["SANDBOX_BUILD_VM"]
@@ -104,6 +108,10 @@ class VMsError(Exception):
 
 
 class VMRecord:
+    # The env variables for all VMs (the Settings dialog), the same for every record. VMs loads it and
+    # replaces it whole on a change, so a reader never sees half of it.
+    global_env: dict[str, str] = {}
+
     def __init__(self, record: dict, changed):
         self.name = record["name"]
         self.incus_name = record["incus_name"]
@@ -482,21 +490,27 @@ class VMRecord:
             self.write_env()
 
     def write_env(self) -> None:
-        """Put the variables in the VM (it must be running).
+        """Put the variables in the VM (it must be running): the ones for all VMs, and the VM's own.
 
+        A name the VM has itself wins over the one for all VMs, unless its value is empty (an agent
+        asked for it and nobody filled it in): then the value for all VMs is used.
         They go in VM_ENV_FILE, which login shells read (the browser terminals, the agent).
         Terminals opened on the desktop are not login shells and only read ~/.bashrc,
         so ~/.bashrc gets a line that reads the file too (once).
         """
-        lines = ["# Set in the VM's Settings tab. Rewritten whenever they change."]
+        env = dict(self.global_env)
         for key, value in self.env.items():
+            if value or key not in env:
+                env[key] = value
+        lines = ["# Set in Settings (all VMs) and the VM's Settings tab. Rewritten whenever they change."]
+        for key, value in env.items():
             lines.append(f"export {key}={shlex.quote(value)}")
         try:
             self.vm.write_file(VM_ENV_FILE, "\n".join(lines) + "\n")
         except Exception as error:
             raise VMsError(str(error))
         line = f"[ -f {VM_ENV_FILE} ] && . {VM_ENV_FILE}  # sandbox environment variables"
-        self.secrets_in_vm = [key for key, value in self.env.items() if value]
+        self.secrets_in_vm = [key for key, value in env.items() if value]
         self.save()
         result = self.vm.exec(f"grep -qxF {shlex.quote(line)} ~/.bashrc || echo {shlex.quote(line)} >> ~/.bashrc", timeout=30)
         if result.returncode != 0:
@@ -540,6 +554,8 @@ class VMs:
         self.records: dict[str, VMRecord] = {}
         self.lock = threading.Lock()  # Guards self.records and self.version.
         self.version = 0
+        if GLOBAL_ENV_PATH.exists():
+            VMRecord.global_env = json.loads(GLOBAL_ENV_PATH.read_text())
         for path in sorted(VMS_DIR.glob("*.json")):
             record = VMRecord(json.loads(path.read_text()), self.changed)
             record.refresh()
@@ -680,6 +696,33 @@ class VMs:
         with self.lock:
             records = list(self.records.values())
         return sorted(records, key=lambda record: record.created_at)
+
+    def set_global_env(self, env: dict[str, str]) -> list[str]:
+        """The env variables for all VMs (the Settings dialog). Running VMs get them now, the others when they start.
+
+        Gives back the running VMs they could not be written to, each with why; the others got them.
+        """
+        for key in env:
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+                raise VMsError(f"Not a valid variable name: {key}")
+        GLOBAL_ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
+        # Write, then rename: a crash never leaves half a file.
+        temporary = GLOBAL_ENV_PATH.parent / "global_env.json.tmp"
+        temporary.write_text(json.dumps(env, indent=2))
+        temporary.replace(GLOBAL_ENV_PATH)
+        VMRecord.global_env = dict(env)
+        with self.lock:
+            records = list(self.records.values())
+        failed = []
+        for record in records:
+            # One that is starting writes them itself once it is up.
+            if record.status != "running":
+                continue
+            try:
+                record.write_env()
+            except Exception as error:
+                failed.append(f"{record.name}: {error}")
+        return failed
 
     def get(self, name: str) -> VMRecord:
         with self.lock:

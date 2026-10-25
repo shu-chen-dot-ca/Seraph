@@ -8,7 +8,8 @@ Overview is three areas with draggable dividers:
 Settings is VMSettings. Fork (only while stopped) makes a new VM that starts as a copy of this one (ForkVMDialog).
 
 App keeps this page mounted (hidden) after you leave it, and the Overview stays mounted while the
-Settings tab is open, so the desktop iframe never reloads: coming back is instant. The iframe only
+Settings tab is open, so the desktop iframe never reloads: coming back is instant, and always to the
+Overview (the tab you were on isn't remembered). The iframe only
 exists while the VM runs; its address comes from GET /api/vms/{name}/viewer, asked again (every 3 s)
 until the VM has one. A VM from a terminal-only image has no desktop: the same area shows its terminal (ttyd).
 
@@ -90,6 +91,12 @@ export default function VMPage(props: { name: string; active: boolean }) {
   const agents = useLive("agents");
   const jobs = useLive("jobs");
   const [tab, setTab] = useState("overview");
+  // Leaving the page puts it back on the Overview, so coming back always starts there.
+  useEffect(() => {
+    if (!props.active) {
+      setTab("overview");
+    }
+  }, [props.active]);
   const [desktopUrl, setDesktopUrl] = useState<string | null>(null);
   // The VM has no desktop (a terminal-only image): desktopUrl is its terminal.
   const [terminalOnly, setTerminalOnly] = useState(false);

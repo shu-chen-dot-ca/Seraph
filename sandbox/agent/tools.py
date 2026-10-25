@@ -291,7 +291,7 @@ class ComputerTools:
             raise ValueError("You lost the VM while the command ran; it was stopped. " + NOT_HOLDER)
         # Read after the command: the user may have changed them meanwhile.
         # Longest first, so a value that contains another one is hidden whole.
-        values = sorted(record.env.values(), key=len, reverse=True)
+        values = sorted(list(record.global_env.values()) + list(record.env.values()), key=len, reverse=True)
         for value in values:
             if len(value) >= HIDE_MIN_LENGTH:
                 output = output.replace(value, "[hidden]")
@@ -302,6 +302,11 @@ class ComputerTools:
         lines = []
         for name, value in record.env.items():
             lines.append(f"{name}: {'set' if value else 'empty'}")
+        for name, value in record.global_env.items():
+            # The VM's own value wins over the one for all VMs.
+            if record.env.get(name):
+                continue
+            lines.append(f"{name}: {'set' if value else 'empty'} (for all VMs)")
         return {"content": [{"type": "text", "text": "\n".join(lines) or "No environment variables are set."}]}
 
     async def env_var_add(self, args: dict) -> dict:
@@ -309,6 +314,8 @@ class ComputerTools:
         name = args["name"]
         if name in record.env:
             raise ValueError(f"{name} already exists")
+        if record.global_env.get(name):
+            raise ValueError(f"{name} is already set, for all VMs")
         env = dict(record.env)
         env[name] = ""
         await asyncio.to_thread(record.set_env, env)
@@ -377,7 +384,7 @@ class ComputerTools:
             lines.append("No out-of-memory kills or crashes on the console since the VM last started.")
         # Process command lines can hold the user's secrets (e.g. --api-key "$KEY"): hidden as in bash.
         text = "\n".join(lines)
-        for value in sorted(record.env.values(), key=len, reverse=True):
+        for value in sorted(list(record.global_env.values()) + list(record.env.values()), key=len, reverse=True):
             if len(value) >= HIDE_MIN_LENGTH:
                 text = text.replace(value, "[hidden]")
         return {"content": [{"type": "text", "text": text}]}

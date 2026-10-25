@@ -377,7 +377,8 @@ export default function VMSettings(props: { name: string }) {
           )}
           <p className="mt-2 text-xs text-muted-foreground">
             For secrets, in every shell in the VM (shells opened after saving). Agents see each name and whether it has a value, never the
-            value: command output shows [hidden] instead. They can add empty ones for you to fill in.
+            value: command output shows [hidden] instead. They can add empty ones for you to fill in. Env vars for all VMs (in Settings, at
+            the bottom of the sidebar) apply here too; a name set here wins unless it is empty.
           </p>
         </section>
 
