@@ -86,7 +86,7 @@ export default function TitleTooltips() {
   return (
     <div
       role="tooltip"
-      className="pointer-events-none fixed z-[100] max-w-sm animate-in rounded-md bg-foreground px-2.5 py-1.5 text-xs whitespace-pre-line text-background fade-in-0"
+      className="pointer-events-none fixed z-[100] max-w-sm animate-in rounded-md border bg-popover px-2.5 py-1.5 text-xs whitespace-pre-line text-popover-foreground shadow-overlay fade-in-0 duration-150 ease-out"
       style={{
         left: tip.right ? undefined : tip.x - 8,
         right: tip.right ? window.innerWidth - tip.x - 8 : undefined,

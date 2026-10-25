@@ -300,7 +300,7 @@ export default function Resource() {
             const hoverY = hoveredValue === null || hoveredValue === undefined ? 0 : 100 - Math.min(hoveredValue / card.max, 1) * 100;
             const secondsAgo = hovered === null ? 0 : values.length - 1 - hovered;
             return (
-              <div key={card.key} className="rounded-md border p-3">
+              <div key={card.key} className="rounded-lg border bg-card p-3">
                 <div className="flex items-baseline gap-2">
                   <span className="font-medium">{card.label}</span>
                   <span className="ml-auto font-medium tabular-nums">{card.value}</span>
@@ -395,7 +395,7 @@ export default function Resource() {
           <div className="mb-1 font-medium">Running VMs</div>
           {running.length === 0 && <div className="text-muted-foreground">No VM is running.</div>}
           {running.length > 0 && (
-            <div className="rounded-md border">
+            <div className="rounded-lg border bg-card">
               <div className={cn(columns, "h-7 border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground")}>
                 <span>Name</span>
                 <span>CPU</span>

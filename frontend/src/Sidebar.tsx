@@ -185,8 +185,9 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
     }
   }
 
-  // No color transition: picking a page should show at once, not fade in.
-  const row = "flex h-7 items-center gap-2 rounded-sm px-2 hover:bg-sidebar-accent";
+  // Rows like OpenClaw's nav: 32px, rounded, a step quieter than the page until hovered or open. Hovering in is
+  // instant and only leaving fades (index.css), so picking a page shows at once.
+  const row = "flex h-8 items-center gap-2 rounded-md px-2 font-medium hover:bg-sidebar-accent hover:text-foreground";
   // The count fades out and the + fades in, in the same spot, while the row is hovered or the + has focus.
   const count = "ml-auto text-muted-foreground tabular-nums transition-opacity group-hover:opacity-0 group-focus-within:opacity-0";
   const plus =
@@ -198,11 +199,11 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
   const child = cn(row, "group relative p-0 has-[[data-state=open]]:bg-sidebar-accent");
 
   // The open page: an accent wash, and its icon in the accent (the icon is the row's first svg, or its link's).
-  const selected = "bg-selected text-foreground hover:bg-selected [&>a>svg]:text-primary [&>svg]:text-primary";
+  const selected = "bg-selected text-foreground ring-1 ring-primary/15 ring-inset hover:bg-selected [&>a>svg]:text-primary [&>svg]:text-primary";
 
   return (
-    <nav className="flex w-52 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground select-none">
-      <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+    <nav className="flex w-56 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground select-none">
+      <div className="min-h-0 flex-1 overflow-y-auto p-2">
         <a
           href="#/explore"
           className={cn(row, "pl-6", props.page === "explore" && selected)}
@@ -239,13 +240,13 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
         <div className={cn(row, "gap-0 px-0", props.page === "issues" && selected)}>
           <button
             type="button"
-            className="flex h-7 w-6 shrink-0 items-center justify-center text-muted-foreground"
+            className="flex h-8 w-6 shrink-0 items-center justify-center text-muted-foreground"
             aria-label={issuesOpen ? "Fold active issues" : "Unfold active issues"}
             onClick={() => setIssuesOpen(!issuesOpen)}
           >
             <ChevronRight className={cn("size-3.5 transition-transform", issuesOpen && "rotate-90")} />
           </button>
-          <a href="#/issues" className="flex h-7 min-w-0 flex-1 items-center gap-2 pr-2">
+          <a href="#/issues" className="flex h-8 min-w-0 flex-1 items-center gap-2 pr-2">
             <CircleDot className="size-4 text-muted-foreground" />
             Issues
             <span className="ml-auto text-muted-foreground tabular-nums">{issues.items.length}</span>
@@ -270,10 +271,10 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
           })}
 
         {/* The work: what runs (jobs), who runs it (agents) and where (VMs). */}
-        <div className="-mx-1.5 my-1.5 border-t" />
+        <div className="mx-1 my-2 border-t" />
 
         <div className={cn(row, "group relative p-0", props.page === "jobs" && selected)}>
-          <a href="#/jobs" className="flex h-7 min-w-0 flex-1 items-center gap-2 pr-2 pl-6">
+          <a href="#/jobs" className="flex h-8 min-w-0 flex-1 items-center gap-2 pr-2 pl-6">
             <ListTodo className="size-4 text-muted-foreground" />
             Jobs
             <span className={count}>
@@ -288,13 +289,13 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
         <div className={cn(row, "group relative gap-0 px-0", props.page === "agents" && props.id === null && selected)}>
           <button
             type="button"
-            className="flex h-7 w-6 shrink-0 items-center justify-center text-muted-foreground"
+            className="flex h-8 w-6 shrink-0 items-center justify-center text-muted-foreground"
             aria-label={agentsOpen ? "Fold agents" : "Unfold agents"}
             onClick={() => setAgentsOpen(!agentsOpen)}
           >
             <ChevronRight className={cn("size-3.5 transition-transform", agentsOpen && "rotate-90")} />
           </button>
-          <a href="#/agents" className="flex h-7 min-w-0 flex-1 items-center gap-2 pr-2">
+          <a href="#/agents" className="flex h-8 min-w-0 flex-1 items-center gap-2 pr-2">
             <Bot className="size-4 text-muted-foreground" />
             Agents
             <span className={count}>{activeAgents.length}</span>
@@ -306,7 +307,7 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
         {agentsOpen &&
           activeAgents.map((agent) => (
             <div key={agent.id} className={cn(child, props.page === "agents" && props.id === agent.id && selected)}>
-              <a href={`#/agents/${agent.id}`} className="flex h-7 min-w-0 flex-1 items-center gap-2 pr-2 pl-6" title={agent.activity}>
+              <a href={`#/agents/${agent.id}`} className="flex h-8 min-w-0 flex-1 items-center gap-2 pr-2 pl-6" title={agent.activity}>
                 <StatusDot tone={AGENT_TONE[agent.status]} />
                 <span className="truncate">{agent.name}</span>
                 {agent.status === "in_queue" && <span className={status}>#{agent.place}</span>}
@@ -355,18 +356,18 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
             </div>
           ))}
 
-        <div className="-mx-1.5 my-1.5 border-t" />
+        <div className="mx-1 my-2 border-t" />
 
         <div className={cn(row, "group relative gap-0 px-0", props.page === "vms" && props.id === null && selected)}>
           <button
             type="button"
-            className="flex h-7 w-6 shrink-0 items-center justify-center text-muted-foreground"
+            className="flex h-8 w-6 shrink-0 items-center justify-center text-muted-foreground"
             aria-label={vmsOpen ? "Fold VMs" : "Unfold VMs"}
             onClick={() => setVMsOpen(!vmsOpen)}
           >
             <ChevronRight className={cn("size-3.5 transition-transform", vmsOpen && "rotate-90")} />
           </button>
-          <a href="#/vms" className="flex h-7 min-w-0 flex-1 items-center gap-2 pr-2">
+          <a href="#/vms" className="flex h-8 min-w-0 flex-1 items-center gap-2 pr-2">
             <Monitor className="size-4 text-muted-foreground" />
             VMs
             <span className={count}>
@@ -380,7 +381,7 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
         {vmsOpen &&
           vms.map((vm) => (
             <div key={vm.name} className={cn(child, props.page === "vms" && props.id === vm.name && selected)}>
-              <a href={`#/vms/${vm.name}`} className="flex h-7 min-w-0 flex-1 items-center gap-2 pr-2 pl-6">
+              <a href={`#/vms/${vm.name}`} className="flex h-8 min-w-0 flex-1 items-center gap-2 pr-2 pl-6">
                 <StatusDot tone={VM_TONE[vm.status]} />
                 <span className="truncate">{vm.name}</span>
                 <span className={status}>{vm.status !== "running" ? "off" : vm.holder !== null ? "busy" : "free"}</span>
@@ -418,7 +419,7 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
             </div>
           ))}
 
-        <div className="-mx-1.5 my-1.5 border-t" />
+        <div className="mx-1 my-2 border-t" />
 
         <a href="#/resource" className={cn(row, "pl-6", props.page === "resource" && selected)}>
           <Gauge className="size-4 text-muted-foreground" />
@@ -426,7 +427,7 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
         </a>
       </div>
 
-      <div className="border-t p-1.5">
+      <div className="border-t p-2">
         <a href="#/inbox" className={cn(row, "pl-6", props.page === "inbox" && selected)}>
           <Inbox className="size-4 text-muted-foreground" />
           Inbox

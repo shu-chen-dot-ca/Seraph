@@ -204,20 +204,20 @@ export default function SettingsDialog(props: {
                           key={layer}
                           className={cn(
                             "absolute inset-0 flex",
-                            dark ? "bg-zinc-950" : "bg-white",
+                            dark ? "bg-[#0e1015]" : "bg-[#faf9f7]",
                             mode.id === "system" && dark && "[clip-path:polygon(100%_0,100%_100%,0_100%)]",
                           )}
                         >
-                          <div className={cn("w-1/3 space-y-1 border-r p-1.5", dark ? "border-white/10 bg-zinc-900" : "border-zinc-200 bg-zinc-50")}>
+                          <div className={cn("w-1/3 space-y-1 border-r p-1.5", dark ? "border-[#20232c] bg-[#111319]" : "border-[#e8e4dc] bg-[#f4f1ec]")}>
                             <div className="h-1.5 rounded-full bg-primary/70" />
-                            <div className={cn("h-1.5 rounded-full", dark ? "bg-zinc-700" : "bg-zinc-200")} />
-                            <div className={cn("h-1.5 rounded-full", dark ? "bg-zinc-700" : "bg-zinc-200")} />
-                            <div className={cn("h-1.5 w-2/3 rounded-full", dark ? "bg-zinc-700" : "bg-zinc-200")} />
+                            <div className={cn("h-1.5 rounded-full", dark ? "bg-[#2e3040]" : "bg-[#e8e4dc]")} />
+                            <div className={cn("h-1.5 rounded-full", dark ? "bg-[#2e3040]" : "bg-[#e8e4dc]")} />
+                            <div className={cn("h-1.5 w-2/3 rounded-full", dark ? "bg-[#2e3040]" : "bg-[#e8e4dc]")} />
                           </div>
                           <div className="flex-1 space-y-1.5 p-2">
-                            <div className={cn("h-1.5 w-3/4 rounded-full", dark ? "bg-zinc-500" : "bg-zinc-300")} />
-                            <div className={cn("h-1.5 w-full rounded-full", dark ? "bg-zinc-700" : "bg-zinc-200")} />
-                            <div className={cn("h-1.5 w-1/2 rounded-full", dark ? "bg-zinc-700" : "bg-zinc-200")} />
+                            <div className={cn("h-1.5 w-3/4 rounded-full", dark ? "bg-[#55586a]" : "bg-[#d6d0c5]")} />
+                            <div className={cn("h-1.5 w-full rounded-full", dark ? "bg-[#2e3040]" : "bg-[#e8e4dc]")} />
+                            <div className={cn("h-1.5 w-1/2 rounded-full", dark ? "bg-[#2e3040]" : "bg-[#e8e4dc]")} />
                             <div className="h-2.5 w-7 rounded-sm bg-primary" />
                           </div>
                         </div>
@@ -253,7 +253,7 @@ export default function SettingsDialog(props: {
                   aria-pressed={selected}
                   onClick={() => props.onAccent(each.id)}
                   className={cn(
-                    "flex size-7 items-center justify-center rounded-full bg-primary text-primary-foreground ring-offset-2 ring-offset-background transition-shadow hover:ring-2 hover:ring-primary/40",
+                    "flex size-7 items-center justify-center rounded-full bg-primary text-primary-foreground ring-offset-2 ring-offset-popover transition-shadow hover:ring-2 hover:ring-primary/40",
                     selected && "ring-2 ring-primary hover:ring-primary",
                   )}
                 >

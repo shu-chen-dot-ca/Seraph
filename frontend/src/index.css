@@ -1,7 +1,13 @@
-/* Tailwind v4 + shadcn's zinc theme, tuned to look dense and flat like Proxmox.
+/* Tailwind v4 + shadcn, with OpenClaw's colors and feel (its Control UI's "claw" theme): a blue-black dark mode,
+   a warm paper light mode, soft borders, rounded corners and quick eased motion. Still dense: 13px text, 28-32px rows.
    Dark is the default: <html class="dark"> (set in index.html, changed in the sidebar's Settings).
-   Text is 13px Inter; code, diffs and terminal text use JetBrains Mono.
-   One accent (--primary), blue unless another is picked in Settings (the data-accent rules below). Status colors: --ok green, --warn amber, --idle gray, --destructive red.
+   Text is 13px Instrument Sans (OpenClaw's font); code, diffs and terminal text use JetBrains Mono.
+   One accent (--primary), blue unless another is picked in Settings (the data-accent rules below).
+   Status colors: --ok green, --warn amber, --idle gray, --destructive red.
+
+   Motion (the base layer below): anything clickable eases its colors out over 150ms, but turns on at once on hover,
+   so a click shows right away; a page fades up 4px as it opens (not when the OS asks for reduced motion);
+   pop-ups and menus fade and grow in.
 
    Where color goes:
    - The accent marks what you can act on and where you are: the main button, links, the selected row, the focus ring,
@@ -14,71 +20,77 @@
 
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "@fontsource-variable/inter";
+@import "@fontsource-variable/instrument-sans";
 @import "@fontsource-variable/jetbrains-mono";
 @plugin "@tailwindcss/typography";
 
 @custom-variant dark (&:is(.dark *));
 
+/* Light: OpenClaw's warm paper. Dark (.dark below): its blue-black. The values are OpenClaw's own tokens
+   (--bg, --card, --bg-elevated, --bg-hover, --border, --muted, ...), mapped onto shadcn's names.
+   The sidebar's text is a step quieter than the page's, like OpenClaw's nav; the open page's row is full strength. */
 :root {
   color-scheme: light;
-  --radius: 0.375rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.141 0.005 285.823);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.141 0.005 285.823);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.141 0.005 285.823);
+  --radius: 0.5rem;
+  --background: #faf9f7;
+  --foreground: #211e1a;
+  --card: #ffffff;
+  --card-foreground: #211e1a;
+  --popover: #ffffff;
+  --popover-foreground: #211e1a;
   --primary: oklch(0.546 0.245 262.881);
   --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.967 0.001 286.375);
-  --secondary-foreground: oklch(0.21 0.006 285.885);
-  --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.5 0.016 285.938);
-  --accent: oklch(0.955 0.002 286.375);
-  --accent-foreground: oklch(0.21 0.006 285.885);
-  --destructive: oklch(0.53 0.22 27.4);
-  --border: oklch(0.92 0.004 286.32);
-  --input: oklch(0.87 0.006 286.286);
+  --secondary: #f4f1ec;
+  --secondary-foreground: #403c35;
+  --muted: #f4f1ec;
+  --muted-foreground: #6e6960;
+  --accent: #efebe4;
+  --accent-foreground: #211e1a;
+  --destructive: #b91c1c;
+  --border: #e8e4dc;
+  --input: #d6d0c5;
   --ring: oklch(0.546 0.245 262.881);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.141 0.005 285.823);
-  --sidebar-accent: oklch(0.94 0.004 286.32);
-  --sidebar-border: oklch(0.92 0.004 286.32);
-  --ok: oklch(0.5 0.14 150);
-  --warn: oklch(0.52 0.12 70);
-  --idle: oklch(0.6 0.015 286.067);
+  --sidebar: #f4f1ec;
+  --sidebar-foreground: #56524a;
+  --sidebar-accent: #e9e4dc;
+  --sidebar-border: #e8e4dc;
+  --ok: #166534;
+  --warn: #92400e;
+  --idle: #8a857c;
   --selected: oklch(0.546 0.245 262.881 / 12%);
+  /* Menus, pop-ups and toasts float on this (OpenClaw's --overlay-shadow). */
+  --overlay-shadow: 0 1px 2px #3c2a1809, 0 8px 24px #3c2a1817;
 }
 
 .dark {
   color-scheme: dark;
-  --background: oklch(0.141 0.005 285.823);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.21 0.006 285.885);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.21 0.006 285.885);
-  --popover-foreground: oklch(0.985 0 0);
+  --background: #0e1015;
+  --foreground: #e6e6ea;
+  --card: #161920;
+  --card-foreground: #f0f0f2;
+  --popover: #191c24;
+  --popover-foreground: #f0f0f2;
   --primary: oklch(0.623 0.214 259.815);
   --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.274 0.006 286.033);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.21 0.006 285.885);
-  --muted-foreground: oklch(0.705 0.015 286.067);
-  --accent: oklch(0.274 0.006 286.033);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
+  --secondary: #1f2330;
+  --secondary-foreground: #f0f0f2;
+  --muted: #191c24;
+  --muted-foreground: #8b8b94;
+  --accent: #1f2330;
+  --accent-foreground: #f0f0f2;
+  --destructive: #f87171;
+  --border: #20232c;
+  --input: #2e3040;
   --ring: oklch(0.623 0.214 259.815);
-  --sidebar: oklch(0.175 0.005 285.823);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.274 0.006 286.033);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --ok: oklch(0.723 0.19 149.579);
-  --warn: oklch(0.769 0.165 70.08);
-  --idle: oklch(0.6 0.016 285.938);
-  --selected: oklch(0.623 0.214 259.815 / 18%);
+  --sidebar: #111319;
+  --sidebar-foreground: #a4a4ac;
+  --sidebar-accent: #1c1f29;
+  --sidebar-border: #20232c;
+  --ok: #22c55e;
+  --warn: #f59e0b;
+  --idle: #6e6e78;
+  --selected: oklch(0.623 0.214 259.815 / 13%);
+  --overlay-shadow: 0 1px 2px #0000002e, 0 8px 24px #00000052;
 }
 
 /* Accent colors, picked in Settings: <html data-accent="violet"> (set in index.html, changed by SettingsDialog).
@@ -99,7 +111,7 @@
   --primary: oklch(0.623 0.214 259.815);
   --primary-foreground: oklch(0.985 0 0);
   --ring: oklch(0.623 0.214 259.815);
-  --selected: oklch(0.623 0.214 259.815 / 18%);
+  --selected: oklch(0.623 0.214 259.815 / 13%);
 }
 
 [data-accent="indigo"] {
@@ -114,7 +126,7 @@
   --primary: oklch(0.62 0.17 277);
   --primary-foreground: oklch(0.985 0 0);
   --ring: oklch(0.62 0.17 277);
-  --selected: oklch(0.62 0.17 277 / 18%);
+  --selected: oklch(0.62 0.17 277 / 13%);
 }
 
 [data-accent="violet"] {
@@ -129,7 +141,7 @@
   --primary: oklch(0.64 0.18 295);
   --primary-foreground: oklch(0.985 0 0);
   --ring: oklch(0.64 0.18 295);
-  --selected: oklch(0.64 0.18 295 / 18%);
+  --selected: oklch(0.64 0.18 295 / 13%);
 }
 
 [data-accent="pink"] {
@@ -144,7 +156,7 @@
   --primary: oklch(0.66 0.18 354);
   --primary-foreground: oklch(0.985 0 0);
   --ring: oklch(0.66 0.18 354);
-  --selected: oklch(0.66 0.18 354 / 18%);
+  --selected: oklch(0.66 0.18 354 / 13%);
 }
 
 [data-accent="orange"] {
@@ -159,7 +171,7 @@
   --primary: oklch(0.72 0.16 52);
   --primary-foreground: oklch(0.141 0.005 285.823);
   --ring: oklch(0.72 0.16 52);
-  --selected: oklch(0.72 0.16 52 / 16%);
+  --selected: oklch(0.72 0.16 52 / 12%);
 }
 
 [data-accent="green"] {
@@ -174,7 +186,7 @@
   --primary: oklch(0.7 0.15 152);
   --primary-foreground: oklch(0.141 0.005 285.823);
   --ring: oklch(0.7 0.15 152);
-  --selected: oklch(0.7 0.15 152 / 16%);
+  --selected: oklch(0.7 0.15 152 / 12%);
 }
 
 [data-accent="teal"] {
@@ -189,7 +201,7 @@
   --primary: oklch(0.72 0.11 186);
   --primary-foreground: oklch(0.141 0.005 285.823);
   --ring: oklch(0.72 0.11 186);
-  --selected: oklch(0.72 0.11 186 / 16%);
+  --selected: oklch(0.72 0.11 186 / 12%);
 }
 
 /* Graphite: no color at all, like shadcn's neutral. Buttons are near-black in light mode, near-white in dark. */
@@ -209,12 +221,17 @@
 }
 
 @theme inline {
-  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
   --radius-sm: calc(var(--radius) - 2px);
   --radius-md: var(--radius);
   --radius-lg: calc(var(--radius) + 2px);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-xl: calc(var(--radius) + 6px);
+  /* OpenClaw's --ease-out: fast at first, then settles. Every transition and ease-out uses it. */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --default-transition-duration: 150ms;
+  --default-transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  --shadow-overlay: var(--overlay-shadow);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -267,16 +284,46 @@
     @apply font-mono;
   }
 
-  /* Thin scrollbars, so dense panels don't lose 15px to each one. */
+  /* Thin scrollbars, so dense panels don't lose 15px to each one: a soft thumb on no track, like OpenClaw's. */
   * {
     scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent) transparent;
   }
 
   /* Selected text takes a light wash of the accent, like the selected row. */
   ::selection {
     background-color: color-mix(in oklab, var(--primary) 30%, transparent);
   }
+
+  /* Smooth hover. Anything clickable (links, buttons, menu items, tabs, rows with cursor-pointer) eases its colors
+     back out over 150ms when the pointer leaves, so moving down a list leaves a short fading trail. Hovering in is
+     instant, so a click, and the page or row it picks, shows at once. A transition-* class still wins. */
+  :where(a, button, summary, [role="button"], [role="tab"], [role="menuitem"], [role="option"], .cursor-pointer) {
+    transition-property: color, background-color, border-color, box-shadow, opacity;
+    transition-duration: 150ms;
+    transition-timing-function: var(--ease-out);
+  }
+
+  :where(a, button, summary, [role="button"], [role="tab"], [role="menuitem"], [role="option"], .cursor-pointer):hover {
+    transition-duration: 0ms;
+  }
 }
+
+/* A page fades up into place as it opens, like OpenClaw's cards rising in (shorter, so it never feels slow).
+   Each page is a direct child of App's <main>; a kept VM page plays it again when it is shown. */
+@media (prefers-reduced-motion: no-preference) {
+  main > * {
+    animation: page-in 180ms var(--ease-out);
+  }
+}
+
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
 
 /* Rendered markdown (README, issue bodies, drafts, agent replies) at the same 13px as the rest of the UI.
    Used as: <div className="prose prose-sm dark:prose-invert markdown"> (see components/ui/markdown.tsx). */

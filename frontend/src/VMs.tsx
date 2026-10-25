@@ -39,7 +39,7 @@ const INTERNET_CHART_MIN = 100_000;
 // How often the Desktop card takes a new picture of the screen.
 const SCREEN_EVERY_MS = 5000;
 // Every card in a VM's row: the same size.
-const CARD = "h-36 rounded-md border";
+const CARD = "h-36 rounded-lg border bg-card";
 
 // Data in the units a phone's data counter uses: 1 MB = 1,000,000 bytes (the same as the VM page).
 function formatBytes(bytes: number): string {
