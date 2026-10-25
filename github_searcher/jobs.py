@@ -25,13 +25,16 @@ Progress, which the agent sets with job_progress so the user can follow along wi
 
 Waiting on the user, done and cancelled are not steps: the job's status says them.
 
-The project's full test suite, run by the agent with run_tests: first on the unchanged code (it must
-pass before the agent changes anything), then on the finished change (it must pass again, with the
-same command, before a PR can be drafted):
+The project's tests, run by the agent with run_tests: first on the unchanged code (they must pass
+before the agent changes anything), then on the finished change (they must pass again, with the
+same command, before a PR can be drafted). The scope is focused, the basic checks (the tests that cover
+the change: the default), or full, the project's official checks (what its rules ask to run before a PR;
+when those would take over an hour the agent asks the user first):
 
     "tests": {"before": Run | null, "after": Run | null}
-    Run: {"command", "base", "exit_code", "passed", "diff_hash" (sha256 of the diff it ran on, "" for
-          before), "evidence": "ev_..." (its output), "seconds", "at"}
+    Run: {"command", "scope": "full" | "focused" (missing on old runs: full), "base", "exit_code",
+          "passed", "diff_hash" (sha256 of the diff it ran on, "" for before), "evidence": "ev_..."
+          (its output), "seconds", "at"}
 
 Evidence is what the agent shows the user so they can decide on its drafts: screenshots, images
 from the VM (a plot, a render) and command runs (a failing test, then the same test passing).

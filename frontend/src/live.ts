@@ -355,12 +355,13 @@ export type Job = {
   about: string; // what the job is about, in everyday words
   headline: string; // where it stands now, in everyday words
   detail: string; // the same, technical
-  // The project's full test suite: on the unchanged code (must pass before any change) and on the finished change.
+  // The project's tests: on the unchanged code (must pass before any change) and on the finished change.
   tests: { before: TestRun | null; after: TestRun | null };
 };
 
 export type TestRun = {
   command: string;
+  scope?: "full" | "focused"; // full: the project's official checks; focused: the basic ones, the tests that cover the change. Missing: full
   base: string;
   exit_code: number | null; // null: stopped at the time limit
   passed: boolean;

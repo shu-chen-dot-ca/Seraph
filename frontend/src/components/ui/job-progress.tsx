@@ -181,8 +181,10 @@ function JobSteps(props: { job: Job; className?: string }) {
   )
 }
 
-// The project's full test suite for a job, in plain words: on the code as it was, then with the change.
+// The project's tests for a job, in plain words: on the code as it was, then with the change.
 // Both must pass: the first before the agent may change anything, the second before it may draft a PR.
+// The basic checks (the tests that cover the change), or the project's official checks (what its rules ask to run
+// before a PR); it says which.
 function JobTests(props: { job: Job; className?: string }) {
   const before = props.job.tests?.before ?? null
   const after = props.job.tests?.after ?? null
@@ -195,7 +197,9 @@ function JobTests(props: { job: Job; className?: string }) {
   ]
   return (
     <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-1 text-xs", props.className)}>
-      <span className="text-muted-foreground">Project's tests:</span>
+      <span className="text-muted-foreground">
+        {before !== null && before.scope === "focused" ? "Basic checks (the project's tests that cover the change):" : "Project's official checks:"}
+      </span>
       {runs.map((item) => (
         <span key={item.label} className="flex items-center gap-1">
           {item.run === null && <span className="text-muted-foreground">not run {item.label} yet</span>}

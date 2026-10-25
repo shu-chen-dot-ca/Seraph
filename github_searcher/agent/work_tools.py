@@ -16,6 +16,12 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   files from the VM (a plot, a render) and command runs (a test failing, then passing), each
   "before" or "after" the agent's change, under a topic that pairs them. It is kept on the job
   (jobs.py), and each draft gets a copy. A PR draft needs at least one before and one after.
+- Tests: run_tests runs the project's tests in the VM on the unchanged code (before), then on the
+  change (after), with the same command. Two scopes: focused, the basic checks (the tests that cover
+  the change, the default), and full, the project's official checks (what its rules ask to run before
+  a PR). When the official checks would take over an hour, the agent runs the basic ones and asks the
+  user (draft_question) before the PR. A passing before is needed to go past set_up and an after for
+  a PR draft.
 - VMs: the agent sees every VM with what its image has (sandbox/images.py lists each image once) and
   picks the one that suits its jobs as its target VM (the user can set it too). It can't make VMs.
   It joins its target VM's queue (sandbox/vm_queue.py) and releases the VM when its jobs there are done.
@@ -67,16 +73,27 @@ OUTPUT_LIMIT = 20_000
 # The live feed carries only the end of a command's output: this many lines, at most TAIL_CHARS.
 TAIL_LINES = 20
 TAIL_CHARS = 2000
-# The full test suite may run this long; then it is stopped and counts as failed.
-TEST_TIMEOUT = 3600
-# A fix_issue job can't go past set_up until the full suite passed on the unchanged code.
+# A test run may take this long; then it is stopped and counts as failed.
+TEST_TIMEOUT = 3 * 3600
+# A fix_issue job can't go past set_up until its tests passed on the unchanged code.
 STEPS_AFTER_SETUP = ["reproduce", "fix", "test", "draft"]
+# What a test run covers: focused, the basic checks (the tests that cover the change: the default), or full, the
+# project's official checks (what its rules ask to run before a PR, e.g. the whole suite and its lint script).
+TEST_SCOPES = ["full", "focused"]
 # The evidence each test run adds, the same for its before and after, so the Inbox pairs them.
-TESTS_TOPIC = "full test suite"
-TESTS_CONTEXT = (
-    "The project's own automatic checks, all of them, run once on the code as it was and once with the change. "
-    "Both must pass: the first shows the checks work in the VM, the second that the change broke nothing they check."
-)
+TESTS_TOPICS = {"full": "full test suite", "focused": "tests that cover the change"}
+TESTS_CONTEXTS = {
+    "full": (
+        "The project's official automatic checks, all it asks contributors to run before a pull request, run once on the "
+        "code as it was and once with the change. Both must pass: the first shows the checks work in the VM, the second "
+        "that the change broke nothing they check."
+    ),
+    "focused": (
+        "The project's own automatic checks for the part the change touches (not all of them, only the ones that matter "
+        "for this change), run once on the code as it was and once with the change. Both must pass: the first shows the "
+        "checks work in the VM, the second that the change broke nothing they check."
+    ),
+}
 # The overview is for a user who doesn't know the project: short, plain words. These caps keep it that way.
 OVERVIEW_PROJECT_CHARS = 150
 OVERVIEW_PART_CHARS = 400
@@ -248,13 +265,16 @@ class WorkTools:
             )(self.job_progress),
             tool(
                 "run_tests",
-                "Run the project's FULL test suite in the VM for one of your fix jobs (only while you hold the VM), and keep the "
-                "result on the job and as evidence. command: the whole suite as the project's CI runs it, e.g. `pytest -n 2` or "
-                "`npm test` (setup belongs in bash before, not here). path: the repo folder (e.g. ~/click); base: what you branch "
-                "from (e.g. origin/main). when: before (on the unchanged code: the folder must not differ from base; it has to pass "
-                "before you change anything), or after (on your finished change, with exactly the same command; it has to pass "
-                "before draft_pr). A PR draft is refused unless the last after run passed on exactly the code being drafted. "
-                f"Takes as long as the suite; stopped after {TEST_TIMEOUT // 60} minutes.",
+                "Run the project's tests in the VM for one of your fix jobs (only while you hold the VM), and keep the result on "
+                "the job and as evidence. scope: focused (the basic checks, the default: the test files and folders that cover "
+                "the code you change, e.g. `pytest tests/test_parser.py tests/cli/`) or full (the project's official checks: what "
+                "its rules ask to run before a PR, as one command, e.g. `pytest -n 2 && ruff check .`). command: what runs them "
+                "(setup belongs in bash before, not here). "
+                "path: the repo folder (e.g. ~/click); base: what you branch from (e.g. origin/main). when: before (on the "
+                "unchanged code: the folder must not differ from base; it has to pass before you change anything), or after (on "
+                "your finished change, with exactly the same command and scope; it has to pass before draft_pr). A PR draft is "
+                "refused unless the last after run passed on exactly the code being drafted. "
+                f"Takes as long as the tests; stopped after {TEST_TIMEOUT // 60} minutes.",
                 {
                     "type": "object",
                     "properties": {
@@ -262,9 +282,10 @@ class WorkTools:
                         "path": {"type": "string"},
                         "base": {"type": "string"},
                         "command": {"type": "string"},
+                        "scope": {"type": "string", "enum": TEST_SCOPES},
                         "when": {"type": "string", "enum": ["before", "after"]},
                     },
-                    "required": ["job_id", "path", "base", "command", "when"],
+                    "required": ["job_id", "path", "base", "command", "scope", "when"],
                 },
             )(self.run_tests),
             tool(
@@ -453,10 +474,10 @@ class WorkTools:
             return f"{str(args['step']).replace('_', ' ').capitalize()}: {args.get('headline')}"
         if name == "job_progress":
             return f"Progress: {args.get('headline')}"
-        if name == "run_tests" and args.get("when") == "before":
-            return f"Running the full test suite on the unchanged code: `{args.get('command')}`"
         if name == "run_tests":
-            return f"Running the full test suite with the change: `{args.get('command')}`"
+            tests = "the basic checks" if args.get("scope") == "focused" else "the project's official checks"
+            code = "on the unchanged code" if args.get("when") == "before" else "with the change"
+            return f"Running {tests} {code}: `{args.get('command')}`"
         if name == "draft_comment":
             return f"Drafting a comment on {args.get('target')}"
         if name == "draft_question":
@@ -945,7 +966,7 @@ class WorkTools:
         before = job["tests"]["before"]
         if job["kind"] == "fix_issue" and step in STEPS_AFTER_SETUP and (before is None or not before["passed"]):
             text = (
-                "You are still in set_up: get the project's full test suite passing on the unchanged code first "
+                "You are still in set_up: get the project's tests passing on the unchanged code first "
                 "(run_tests with when: before), then go on."
             )
             return {"content": [{"type": "text", "text": text}], "is_error": True}
@@ -1069,7 +1090,7 @@ class WorkTools:
         overview["risks"] = risks
         # The user decides on evidence, not on the agent's word: no PR without a before and an after
         # of the problem itself (the test suite's runs are kept apart: they show nothing about the issue).
-        stages = [item["stage"] for item in job["evidence"] if item["topic"] != TESTS_TOPIC]
+        stages = [item["stage"] for item in job["evidence"] if item["topic"] not in TESTS_TOPICS.values()]
         if "before" not in stages or "after" not in stages:
             text = (
                 "A PR draft needs evidence the user can judge it by: at least one 'before' (the problem without your change) "
@@ -1172,21 +1193,21 @@ class WorkTools:
             )
             return {"content": [{"type": "text", "text": text}], "is_error": True}
 
-        # Finished means the full test suite passes: before the change, and after it on exactly this code.
+        # Finished means the project's tests pass: before the change, and after it on exactly this code.
         before = job["tests"]["before"]
         after = job["tests"]["after"]
         if before is None or not before["passed"]:
             text = (
-                "No PR without the full test suite: it must have passed on the unchanged code first (run_tests with when: before). "
+                "No PR without the project's tests: they must have passed on the unchanged code first (run_tests with when: before). "
                 "If you already changed the code, `git stash -u`, run it, then `git stash pop`."
             )
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         if after is None or not after["passed"] or after["command"] != before["command"]:
-            text = f"No PR until the full test suite passes with your change: run_tests with when: after and the command `{before['command']}`."
+            text = f"No PR until the tests pass with your change: run_tests with when: after and the command `{before['command']}`."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         if after["diff_hash"] != hashlib.sha256(diff.encode()).hexdigest():
             text = (
-                "The code changed since the full test suite last passed (or the test run left new files behind: add those to "
+                "The code changed since the tests last passed (or the test run left new files behind: add those to "
                 ".git/info/exclude). Run run_tests with when: after again on the code as it is now, then draft."
             )
             return {"content": [{"type": "text", "text": text}], "is_error": True}
@@ -1403,10 +1424,13 @@ class WorkTools:
     async def run_tests(self, args: dict) -> dict:
         when = args.get("when") or ""
         command = (args.get("command") or "").strip()
+        scope = args.get("scope") or ""
         if when not in ["before", "after"]:
             return {"content": [{"type": "text", "text": "when must be before (the unchanged code) or after (your finished change)."}], "is_error": True}
+        if scope not in TEST_SCOPES:
+            return {"content": [{"type": "text", "text": "scope must be focused (the tests that cover your change) or full (the project's official checks)."}], "is_error": True}
         if not command:
-            return {"content": [{"type": "text", "text": "Give the command that runs the whole test suite."}], "is_error": True}
+            return {"content": [{"type": "text", "text": "Give the command that runs the tests."}], "is_error": True}
         try:
             job = self.agents.jobs.get(args["job_id"])
         except KeyError:
@@ -1418,7 +1442,10 @@ class WorkTools:
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         before = job["tests"]["before"]
         if when == "after" and (before is None or not before["passed"]):
-            text = "First get the full suite passing on the unchanged code (when: before)."
+            text = "First get the tests passing on the unchanged code (when: before)."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if when == "after" and scope != before.get("scope", "full"):
+            text = f"Run it with the same scope as on the unchanged code: {before.get('scope', 'full')}."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         if when == "after" and command != before["command"]:
             text = (
@@ -1501,9 +1528,9 @@ class WorkTools:
             command = command.replace(value, "[hidden]")
         passed = exit_code == 0
 
-        # The VM may have been taken from it, or the job cancelled, while the suite ran.
+        # The VM may have been taken from it, or the job cancelled, while the tests ran.
         if vm_record.holder != self.agent_id:
-            return {"content": [{"type": "text", "text": "You lost the VM while the suite ran; the run doesn't count."}], "is_error": True}
+            return {"content": [{"type": "text", "text": "You lost the VM while the tests ran; the run doesn't count."}], "is_error": True}
         job = self.agents.jobs.get(job["id"])
         if job["status"] in CLOSED_STATUSES:
             text = f"{job['id']} is {job['status']} now (the user may have cancelled it): the run wasn't kept. Move on."
@@ -1511,17 +1538,18 @@ class WorkTools:
 
         # The output goes to the user as evidence: this run's before or after of the suite.
         minutes = f"{seconds // 60}m {seconds % 60}s" if seconds >= 60 else f"{seconds}s"
-        caption = f"{'Passed' if passed else 'Failed'}: the whole test suite {'on the code as it was' if when == 'before' else 'with the change'}, in {minutes}"
+        tests = "the tests that cover the change" if scope == "focused" else "the project's official checks"
+        caption = f"{'Passed' if passed else 'Failed'}: {tests} {'on the code as it was' if when == 'before' else 'with the change'}, in {minutes}"
         if exit_code is None:
-            caption = f"Stopped: the whole test suite took over {TEST_TIMEOUT // 60} minutes"
+            caption = f"Stopped: {tests} took over {TEST_TIMEOUT // 60} minutes"
         evidence_id = "ev_" + secrets.token_hex(3)
         tail = "\n".join(output.rstrip("\n").split("\n")[-TAIL_LINES:])
         item = {
             "id": evidence_id,
             "kind": "command",
-            "topic": TESTS_TOPIC,
+            "topic": TESTS_TOPICS[scope],
             "stage": when,
-            "context": TESTS_CONTEXT,
+            "context": TESTS_CONTEXTS[scope],
             "caption": caption,
             "file": None,
             "command": command,
@@ -1540,6 +1568,7 @@ class WorkTools:
 
         run = {
             "command": command,
+            "scope": scope,
             "base": args["base"].strip(),
             "exit_code": exit_code,
             "passed": passed,
