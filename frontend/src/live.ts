@@ -2,15 +2,19 @@
 Live data from the backend, and the one fetch helper.
 
 One websocket to /api/live. On connect the server sends every topic, then only the topics that changed:
-{"topic": "repos" | "issues" | "tracked" | "explore" | "github" | "jobs" | "inbox" | "agents" | "vms" | "images", "data": ...}.
+{"topic": "repos" | "issues" | "tracked" | "explore" | "github" | "jobs" | "inbox" | "agents" | "vms" | "images" | "resource",
+"data": ...}.
 Each message replaces that topic in the store, and components read it with useLive(topic), so the page never
 polls and never re-fetches lists. When the socket drops it reconnects after a second, and the server sends
 everything again.
 
+The page sends one thing back: {"watch_resource": true | false}, whether a Resource page is open
+(useWatchResource). Only then does the backend ask the NVIDIA GPU for its numbers, so it can sleep otherwise.
+
 The types below mirror the records in the spec (data/*.json and the live summaries).
 */
 
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 // ---- Records ----
 
@@ -658,6 +662,46 @@ export type Thread = {
   html_url: string;
 };
 
+// This computer's use (sandbox/resource_usage.py), a new reading about once a second. Rates are bytes a second.
+// A number is null when this computer doesn't have it, or before the second reading.
+export type GPUState = "on" | "asleep" | "not_watched" | "in_vm" | "no_driver" | "unknown" | "error";
+
+export type GPUUsage = {
+  address: string; // PCI address, "0000:01:00.0"
+  vendor: "nvidia" | "amd" | "intel" | "other";
+  name: string;
+  state: GPUState; // only "on" has numbers
+  percent: number | null;
+  memory_used_gb: number | null;
+  memory_total_gb: number | null;
+  shared_used_gb: number | null; // system memory a built-in GPU borrows
+  shared_total_gb: number | null;
+  temp_c: number | null;
+  power_w: number | null;
+  mhz: number | null;
+};
+
+export type ResourceSample = {
+  cpu_percent: number | null;
+  memory_used_gb: number;
+  gpu_percent: (number | null)[]; // one per GPU, in the order of gpus
+  disk_read_rate: number | null;
+  disk_write_rate: number | null;
+  net_down_rate: number | null;
+  net_up_rate: number | null;
+};
+
+export type ResourceUsage = {
+  cpu: { name: string; threads: number; percent: number | null; per_thread: (number | null)[]; mhz: number | null; temp_c: number | null };
+  memory: { total_gb: number; used_gb: number; swap_total_gb: number; swap_used_gb: number };
+  gpus: GPUUsage[];
+  disk: { total_gb: number; used_gb: number; read_rate: number | null; write_rate: number | null; temp_c: number | null };
+  network: { interface: string | null; down_rate: number | null; up_rate: number | null };
+  battery: { percent: number; status: string; power_w: number | null; plugged_in: boolean | null } | null;
+  fans: number[]; // rpm
+  samples: ResourceSample[]; // the last 60, one a second
+};
+
 // ---- The live store ----
 
 export type Topics = {
@@ -671,6 +715,7 @@ export type Topics = {
   agents: AgentSummary[];
   vms: VMSummary[];
   images: ImagesData;
+  resource: ResourceUsage | null; // null until the backend's first reading
 };
 
 // Empty until the first message, so components never deal with "not loaded yet".
@@ -687,12 +732,17 @@ const store = {
     agents: [],
     vms: [],
     images: { images: [], unbuilt: [], default: "", tasks: [] },
+    resource: null,
   } as Topics,
   loaded: {} as Partial<Record<keyof Topics, boolean>>,
   connected: false,
 };
 
 const listeners = new Set<() => void>();
+
+// The open socket, and how many Resource pages this tab shows (useWatchResource).
+let liveSocket: WebSocket | null = null;
+let resourceWatchers = 0;
 
 function subscribe(listener: () => void) {
   listeners.add(listener);
@@ -706,6 +756,11 @@ function connect() {
   const socket = new WebSocket(`${protocol}//${window.location.host}/api/live`);
 
   socket.onopen = () => {
+    liveSocket = socket;
+    // A new connection starts not watching: say so again when a Resource page is open.
+    if (resourceWatchers > 0) {
+      socket.send(JSON.stringify({ watch_resource: true }));
+    }
     store.connected = true;
     listeners.forEach((listener) => listener());
   };
@@ -720,6 +775,7 @@ function connect() {
 
   // onclose also follows onerror, so this is the one place that reconnects.
   socket.onclose = () => {
+    liveSocket = null;
     if (store.connected) {
       store.connected = false;
       listeners.forEach((listener) => listener());
@@ -745,6 +801,22 @@ export function useLiveValue<T extends string | number | boolean>(select: (topic
 // Whether a topic has arrived at least once since the page loaded.
 export function useLoaded(topic: keyof Topics): boolean {
   return useSyncExternalStore(subscribe, () => store.loaded[topic] === true);
+}
+
+// For a Resource page: tells the backend one is open while it is mounted, so the NVIDIA GPU's numbers are read.
+export function useWatchResource() {
+  useEffect(() => {
+    resourceWatchers += 1;
+    if (resourceWatchers === 1 && liveSocket !== null) {
+      liveSocket.send(JSON.stringify({ watch_resource: true }));
+    }
+    return () => {
+      resourceWatchers -= 1;
+      if (resourceWatchers === 0 && liveSocket !== null) {
+        liveSocket.send(JSON.stringify({ watch_resource: false }));
+      }
+    };
+  }, []);
 }
 
 // Whether the websocket is open right now (the header shows "Offline" when it is not).

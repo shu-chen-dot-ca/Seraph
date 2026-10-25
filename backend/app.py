@@ -9,6 +9,9 @@ topic when it connects, then only the topics that changed. Every store has a
 `version` number that goes up on each change, so finding the changes is a
 cheap comparison every 250 ms.
 
+The browser also says, on the same websocket, whether it shows a Resource page: {"watch_resource": true or false}.
+While none does, the NVIDIA GPU is never asked for its numbers, so it can sleep (sandbox/resource_usage.py).
+
 Only this machine's own pages may use the API: the Host must be localhost or
 127.0.0.1 (no DNS rebinding), and a request or websocket with an Origin must
 come from a page on localhost or 127.0.0.1 (the Vite dev server, on whatever
@@ -17,6 +20,7 @@ agent controls) or another website, get 403.
 """
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -29,7 +33,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
 from backend import agents_api, explore_api, images_api, inbox_api, issues_api, repos_api, sherpa_api, tracked_api, vms_api
-from backend.shared import agents, explore, images, inbox, issue_facts, issue_tags, issues, jobs, rejections, repo_signals, repos, sherpa, tracked, tracked_issues, vms
+from backend.shared import agents, explore, images, inbox, issue_facts, issue_tags, issues, jobs, rejections, repo_signals, repos, resource_usage, sherpa, tracked, tracked_issues, vms
 from github_searcher.token_balancer import BALANCER
 
 # override: the backend reloads itself on code changes, and .env changes should apply then too.
@@ -100,8 +104,19 @@ async def live(websocket: WebSocket) -> None:
         await websocket.close(code=1008)
         return
     await websocket.accept()
+    # Whether this browser counts as one of resource_usage.watchers now: counted out again however the feed ends.
+    watch = {"resource": False}
+    try:
+        await feed(websocket, watch)
+    finally:
+        if watch["resource"]:
+            resource_usage.watchers -= 1
+
+
+async def feed(websocket: WebSocket, watch: dict) -> None:
+    """The live feed of one browser, until it goes away."""
     # The version of each topic this browser has; None until it is sent.
-    sent = {"repos": None, "issues": None, "tracked": None, "explore": None, "github": None, "jobs": None, "inbox": None, "agents": None, "vms": None, "images": None}
+    sent = {"repos": None, "issues": None, "tracked": None, "explore": None, "github": None, "jobs": None, "inbox": None, "agents": None, "vms": None, "images": None, "resource": None}
     while True:
         # The version is noted before the data is read: a change in between is sent again next tick, never lost.
         messages = []
@@ -173,6 +188,10 @@ async def live(websocket: WebSocket) -> None:
         if sent["images"] != (images.version, vm_images):
             sent["images"] = (images.version, vm_images)
             messages.append({"topic": "images", "data": images.summary()})
+        # This computer's use (resource_usage.py): a new reading about once a second.
+        if sent["resource"] != resource_usage.version:
+            sent["resource"] = resource_usage.version
+            messages.append({"topic": "resource", "data": resource_usage.summary()})
 
         try:
             for message in messages:
@@ -185,3 +204,13 @@ async def live(websocket: WebSocket) -> None:
             return
         if received["type"] == "websocket.disconnect":
             return
+        # The only thing a browser sends: whether it shows a Resource page now.
+        if received.get("text") is None:
+            continue
+        message = json.loads(received["text"])
+        if message.get("watch_resource") is True and not watch["resource"]:
+            watch["resource"] = True
+            resource_usage.watchers += 1
+        if message.get("watch_resource") is False and watch["resource"]:
+            watch["resource"] = False
+            resource_usage.watchers -= 1
