@@ -18,13 +18,14 @@ repo's tags (its signals, the same as the Repos page's columns: AI policy, newco
 activity, contributors, maintainers, unanswered PRs; hover a tag for what it means), then its issues' numbers. Every
 column is as wide as its widest cell (one CSS grid, each row a subgrid) and all of them sit on the left, the room left
 over going before the row's buttons. The text is in the page's own color (blue for new issues, green for free ones,
-red for a failed check; the tags' own colors). A click on a header sorts by that column, one at a time: the best
-first (the most, the latest check, the fastest reply, the friendliest tag; A to Z for the name), again the other way
-round, again back to the list's order; the sorted header is blue with an arrow.
+red for a failed check; the tags' own colors). A click on a header adds that column to the sort, the best first (the
+most, the latest check, the fastest reply, the friendliest tag; A to Z for the name); again the other way round; again
+takes it out. Many columns sort at once, Free first: then each sorted column to its right, to the end, then from the
+left (Name, AI policy, ...) up to Free; with none, it is the list's order. Every sorted header is blue with an arrow.
 
 Each row opens in place to its issues, newest first, with tabs Free (a newcomer can start on it now) / Assigned (someone is on it) / All (Free when there are free
-ones). The issues are a table too, sorted the same way by a click on a column's header (one order for every open repo):
-ISSUE_HEADERS. A click on an issue opens it in full in a pop-up, its comments below (IssueDetailsDialog); its # and the
+ones). The issues are a table too, sorted the same way by clicks on its columns' headers (one order for every open
+repo; Free first, then to its right to the end, then # and Title): ISSUE_HEADERS. A click on an issue opens it in full in a pop-up, its comments below (IssueDetailsDialog); its # and the
 arrow button at the row's end open it on GitHub in a new tab. An issue goes into the Issues list with one click (its
 repo into Repos too), or links there when it is in already. The list is short (repos the user picked), so every row is drawn; times re-render every minute.
 Many rows are picked like in a mail app (components/ui/row-selection.tsx): Ctrl-click, Shift-click, dragging a rectangle,
@@ -124,10 +125,11 @@ export default function Tracked() {
   const [retagging, setRetagging] = useState<string[]>([]);
   // The issue open in the pop-up, by repo and number, so it shows the live one (new tags arrive while it is open).
   const [details, setDetails] = useState<{ repo: string; number: number } | null>(null);
-  // The open repos' issues' order: newest first (null), or by one column, like the list's.
-  const [issueSort, setIssueSort] = useState<{ key: IssueKey; best: boolean } | null>(null);
-  // The list's order: as tracked (null), or by one column; best is the way its first click sorts, or not.
-  const [sort, setSort] = useState<{ key: TrackedKey; best: boolean } | null>(null);
+  // The open repos' issues' order: newest first (none), or by these columns, like the list's.
+  const [issueSorts, setIssueSorts] = useState<{ key: IssueKey; best: boolean }[]>([]);
+  // The list's order: as tracked (none), or by these columns, from left to right as the table shows them, Name last;
+  // best is the way a column's first click sorts, or not.
+  const [sorts, setSorts] = useState<{ key: TrackedKey; best: boolean }[]>([]);
   // Selected repos, the last one clicked (where a shift-click range starts), and whether removing them waits for a confirm.
   const [selected, setSelected] = useState<string[]>([]);
   const [anchor, setAnchor] = useState<string | null>(null);
@@ -216,37 +218,51 @@ export default function Tracked() {
   }
 
   const rows = [...tracked.items];
-  if (sort !== null) {
+  if (sorts.length > 0) {
     rows.sort((a, b) => {
-      const first = trackedValue(a, sort.key);
-      const second = trackedValue(b, sort.key);
-      if (first === second) {
-        return 0;
+      // Free first, then each column to its right to the end, then from the left (Name, AI policy, ...) up to Free. The
+      // first sorted one that tells them apart decides; when none does, the list's order stays.
+      const keys = ["name" as TrackedKey, ...TRACKED_COLUMNS.map((column) => column.key)];
+      const freeIndex = keys.indexOf("free");
+      for (const key of [...keys.slice(freeIndex), ...keys.slice(0, freeIndex)]) {
+        const sort = sorts.find((each) => each.key === key);
+        if (sort === undefined) {
+          continue;
+        }
+        const first = trackedValue(a, key);
+        const second = trackedValue(b, key);
+        if (first === second) {
+          continue;
+        }
+        // Missing values go last, whichever way.
+        if (first === null) {
+          return 1;
+        }
+        if (second === null) {
+          return -1;
+        }
+        // The name A to Z; numbers the most first (the least for a lower column). Then turned round for the other way.
+        let order = typeof first === "string" && typeof second === "string" ? first.localeCompare(second) : Number(second) - Number(first);
+        if (TRACKED_COLUMNS.find((column) => column.key === key)?.better === "lower") {
+          order = -order;
+        }
+        if (order !== 0) {
+          return sort.best ? order : -order;
+        }
       }
-      // Missing values go last, whichever way.
-      if (first === null) {
-        return 1;
-      }
-      if (second === null) {
-        return -1;
-      }
-      // The name A to Z; numbers the most first (the least for a lower column). Then turned round for the other way.
-      let order = typeof first === "string" && typeof second === "string" ? first.localeCompare(second) : Number(second) - Number(first);
-      if (TRACKED_COLUMNS.find((column) => column.key === sort.key)?.better === "lower") {
-        order = -order;
-      }
-      return sort.best ? order : -order;
+      return 0;
     });
   }
 
-  // One column at a time: the best first, then the other way round, then back to the list's order.
+  // A click adds a column to the sort (the best first), the next turns it round, the next takes it out.
   function clickSort(key: TrackedKey) {
-    if (sort === null || sort.key !== key) {
-      setSort({ key, best: true });
+    const sort = sorts.find((each) => each.key === key);
+    if (sort === undefined) {
+      setSorts([...sorts, { key, best: true }]);
     } else if (sort.best) {
-      setSort({ key, best: false });
+      setSorts(sorts.map((each) => (each.key === key ? { key, best: false } : each)));
     } else {
-      setSort(null);
+      setSorts(sorts.filter((each) => each.key !== key));
     }
   }
 
@@ -280,14 +296,15 @@ export default function Tracked() {
     return issue.comments;
   }
 
-  // Like clickSort: the best first, then the other way round, then back to newest first.
+  // Like clickSort: added (the best first), turned round, taken out.
   function clickIssueSort(key: IssueKey) {
-    if (issueSort === null || issueSort.key !== key) {
-      setIssueSort({ key, best: true });
-    } else if (issueSort.best) {
-      setIssueSort({ key, best: false });
+    const sort = issueSorts.find((each) => each.key === key);
+    if (sort === undefined) {
+      setIssueSorts([...issueSorts, { key, best: true }]);
+    } else if (sort.best) {
+      setIssueSorts(issueSorts.map((each) => (each.key === key ? { key, best: false } : each)));
     } else {
-      setIssueSort(null);
+      setIssueSorts(issueSorts.filter((each) => each.key !== key));
     }
   }
 
@@ -440,18 +457,21 @@ export default function Tracked() {
             style={{ gridTemplateColumns: `minmax(160px,max-content) repeat(${TRACKED_COLUMNS.length}, max-content) minmax(0,1fr) max-content` }}
           >
             <div className="col-span-full grid h-7 grid-cols-subgrid items-center bg-muted/40 px-3 text-xs font-medium">
-              {[{ key: "name" as TrackedKey, label: "Name", title: "A to Z" }, ...TRACKED_COLUMNS].map((column) => (
-                <button
-                  key={column.key}
-                  type="button"
-                  className={cn("flex items-center gap-0.5 hover:text-primary", sort?.key === column.key && "text-primary")}
-                  title={column.title}
-                  onClick={() => clickSort(column.key)}
-                >
-                  {column.label}
-                  {sort?.key === column.key && (sort.best ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />)}
-                </button>
-              ))}
+              {[{ key: "name" as TrackedKey, label: "Name", title: "A to Z" }, ...TRACKED_COLUMNS].map((column) => {
+                const sort = sorts.find((each) => each.key === column.key);
+                return (
+                  <button
+                    key={column.key}
+                    type="button"
+                    className={cn("flex items-center gap-0.5 hover:text-primary", sort !== undefined && "text-primary")}
+                    title={column.title}
+                    onClick={() => clickSort(column.key)}
+                  >
+                    {column.label}
+                    {sort !== undefined && (sort.best ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />)}
+                  </button>
+                );
+              })}
               <span />
               <span />
             </div>
@@ -476,22 +496,35 @@ export default function Tracked() {
                       }
                       return true;
                     });
-              if (issueSort !== null) {
+              if (issueSorts.length > 0) {
                 shown.sort((a, b) => {
-                  const first = issueValue(a, issueSort.key);
-                  const second = issueValue(b, issueSort.key);
-                  if (first === second) {
-                    return 0;
+                  // Free first, then each column to its right to the end, then # and Title. The first sorted one that
+                  // tells them apart decides.
+                  const keys = ISSUE_HEADERS.map((column) => column.key);
+                  const freeIndex = keys.indexOf("free");
+                  for (const key of [...keys.slice(freeIndex), ...keys.slice(0, freeIndex)]) {
+                    const sort = issueSorts.find((each) => each.key === key);
+                    if (sort === undefined) {
+                      continue;
+                    }
+                    const first = issueValue(a, key);
+                    const second = issueValue(b, key);
+                    if (first === second) {
+                      continue;
+                    }
+                    // Missing values go last, whichever way.
+                    if (first === null) {
+                      return 1;
+                    }
+                    if (second === null) {
+                      return -1;
+                    }
+                    const order = typeof first === "string" && typeof second === "string" ? first.localeCompare(second) : Number(second) - Number(first);
+                    if (order !== 0) {
+                      return sort.best ? order : -order;
+                    }
                   }
-                  // Missing values go last, whichever way.
-                  if (first === null) {
-                    return 1;
-                  }
-                  if (second === null) {
-                    return -1;
-                  }
-                  const order = typeof first === "string" && typeof second === "string" ? first.localeCompare(second) : Number(second) - Number(first);
-                  return issueSort.best ? order : -order;
+                  return 0;
                 });
               }
               return (
@@ -639,18 +672,21 @@ export default function Tracked() {
                           )}
                           {shown.length > 0 && (
                             <div className={cn(ISSUE_COLUMNS, "h-7 text-xs font-medium text-muted-foreground")}>
-                              {ISSUE_HEADERS.map((column) => (
-                                <button
-                                  key={column.key}
-                                  type="button"
-                                  className={cn("flex items-center gap-0.5 hover:text-primary", issueSort?.key === column.key && "text-primary")}
-                                  title={column.title}
-                                  onClick={() => clickIssueSort(column.key)}
-                                >
-                                  {column.key === "comments" ? <MessageSquare className="size-3.5" /> : column.label}
-                                  {issueSort?.key === column.key && (issueSort.best ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />)}
-                                </button>
-                              ))}
+                              {ISSUE_HEADERS.map((column) => {
+                                const sort = issueSorts.find((each) => each.key === column.key);
+                                return (
+                                  <button
+                                    key={column.key}
+                                    type="button"
+                                    className={cn("flex items-center gap-0.5 hover:text-primary", sort !== undefined && "text-primary")}
+                                    title={column.title}
+                                    onClick={() => clickIssueSort(column.key)}
+                                  >
+                                    {column.key === "comments" ? <MessageSquare className="size-3.5" /> : column.label}
+                                    {sort !== undefined && (sort.best ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />)}
+                                  </button>
+                                );
+                              })}
                               <span />
                             </div>
                           )}
