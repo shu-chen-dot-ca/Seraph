@@ -23,12 +23,13 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   "before" or "after" the agent's change, under a topic that pairs them. It is kept on the job
   (jobs.py), and each draft gets a copy. A PR draft needs at least one before and one after.
 - Tests: run_tests runs the project's tests in the VM on the unchanged code (before), then on the
-  change (after), with the same command. Two scopes: focused, the basic checks (the tests that cover
-  the change, the default), and full, the project's official checks (what its rules ask to run before
-  a PR). When the official checks would take over an hour, the agent runs the basic ones and asks the
-  user (draft_question) before the PR. A passing before is needed to go past set_up and an after for
-  a PR draft; an official before of another job on the same repo and VM counts too (job_progress
-  carries it over), so a project already set up isn't set up again.
+  change (after), with the same command, live in a terminal window on the VM's desktop for the user.
+  Two scopes: focused, the basic checks (the tests that cover the change, the default), and full, the
+  project's official checks (what its rules ask to run before a PR). When the official checks would
+  take over an hour, the agent runs the basic ones and asks the user (draft_question) before the PR.
+  A passing before is needed to go past set_up and an after for a PR draft; an official before of
+  another job on the same repo and VM counts too (job_progress carries it over), so a project
+  already set up isn't set up again.
 - Artifacts: the agent's own folder on this computer (github_searcher/artifacts.py), the Artifacts tab of its page.
   It lists it, looks at its pictures and text (artifact_view: a picture comes back as a picture), keeps
   screenshots of its VM there, and copies files between it and the VM it holds; never anywhere else on this
@@ -65,7 +66,7 @@ from claude_agent_sdk import tool
 from github_searcher.artifacts import ArtifactsError
 from github_searcher.jobs import EVIDENCE_DIR
 from github_searcher.search import get_merged_prs, get_repository, get_thread
-from sandbox.agent.computer_use import Computer, ComputerError
+from sandbox.agent.computer_use import WATCH, Computer, ComputerError
 from sandbox.agent.tools import HIDE_MIN_LENGTH
 from sandbox.file_transfer import FileTransferError, to_vm
 from sandbox.images import load_inventory
@@ -127,6 +128,8 @@ PR_EXAMPLES_EACH = 2
 PR_EXAMPLES_OUTSIDE = 3
 PR_EXAMPLE_CHARS = 3000
 OUTSIDE_ROLES = ["CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE"]
+# Where run_tests's output goes for the terminal window on the desktop.
+TESTS_LOG = "~/.cache/sandbox-tests.log"
 # The overview's wording, said once for every tool that takes one.
 PLAIN = (
     "Plain words for someone who has never seen this project or its code: no function or file names, "
@@ -1884,7 +1887,12 @@ class WorkTools:
 
         # Output and errors together, as in a terminal. tail keeps the end (the summary and the failures) and never
         # stops the suite; pipefail makes the exit code the suite's. The newline ends a comment on the command's last line.
-        capped = f"set -o pipefail; cd {folder} && {{ {command}\n}} 2>&1 | tail -c {OUTPUT_LIMIT}"
+        # The user follows the run live in a terminal window on the VM's desktop (WATCH), which shows TESTS_LOG; Python
+        # prints as it goes there instead of in chunks.
+        capped = (
+            f"set -o pipefail; mkdir -p ~/.cache; : > {TESTS_LOG}; {WATCH.format(log=TESTS_LOG)}export PYTHONUNBUFFERED=1; "
+            f"cd {folder} && {{ {command}\n}} 2>&1 | tee {TESTS_LOG} | tail -c {OUTPUT_LIMIT}"
+        )
         started = time.monotonic()
         try:
             result = await asyncio.to_thread(vm_record.vm.exec, capped, TEST_TIMEOUT, None, tag)

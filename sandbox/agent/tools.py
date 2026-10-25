@@ -22,6 +22,9 @@ login shell), and any value that shows up in a command's output is replaced by
 Settings dialog): any agent may list their names and add or remove empty ones
 (for_all_vms), also while it holds no VM, since they belong to no one VM.
 
+bash can show a command live in a terminal window on the desktop (visible), and start programs
+on the desktop (on_desktop), so the user sees long runs and the app being tried, not only the agent.
+
 The agent may lock the human's mouse and keyboard out of the desktop while it
 works there: once per turn. The user can unlock it any time, and then it stays
 unlocked for the rest of the turn. A lock the agent set ends with its turn
@@ -109,8 +112,16 @@ class ComputerTools:
                 "bash",
                 "Run a shell command in the VM as the desktop user, in their home folder. "
                 "The user's environment variables are set in it; their values are replaced by [hidden] in the output. "
-                "Only the last 50000 bytes of stdout and of stderr come back.",
-                {"command": str},
+                "Only the last 50000 bytes of stdout and of stderr come back. visible: true shows the command live in a terminal "
+                "window on the desktop while it runs, so the user can follow it; use it for anything that takes a while (installs, "
+                "builds, test runs). To start a program or a terminal window on the desktop, prefix it with on_desktop and put it "
+                "in the background with its output in a file, e.g. `on_desktop nohup python app.py > /tmp/app.log 2>&1 &` or "
+                "`on_desktop gnome-terminal -- bash -c 'cd ~/proj && python demo.py; exec bash'` (konsole -e on a KDE desktop).",
+                {
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}, "visible": {"type": "boolean"}},
+                    "required": ["command"],
+                },
             )(self.bash),
             tool(
                 "vm_start",
@@ -214,6 +225,8 @@ class ComputerTools:
             return f"Waiting {args.get('seconds')} seconds"
         if name == "bash":
             command = str(args.get("command", "")).replace("\n", " ").replace("`", "'")[:160]
+            if args.get("visible"):
+                return f"Running `{command}` (in a terminal on the desktop)"
             return f"Running `{command}`"
         if name == "env_vars":
             return "Looking at the environment variable names"
@@ -302,7 +315,7 @@ class ComputerTools:
         record = self.held_vm()
         computer = Computer(record.vm, self.tag)
         await asyncio.to_thread(computer.check)
-        output = await asyncio.to_thread(computer.bash, args["command"])
+        output = await asyncio.to_thread(computer.bash, args["command"], 600, bool(args.get("visible")))
         # The VM may have been taken from it while the command ran: then its output is not its to see.
         if record.holder != self.agent_id:
             raise ValueError("You lost the VM while the command ran; it was stopped. " + NOT_HOLDER)
