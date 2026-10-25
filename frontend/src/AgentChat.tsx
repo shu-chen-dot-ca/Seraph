@@ -3,8 +3,7 @@ One agent's page: its name and id in the header (the id is unique and never chan
 warning when it has been quiet too long; the rest of its progress is on the Jobs page); the conversation on the left;
 on the right where it stands in a VM queue, its jobs in two lists that each fold with their header: In queue (still to
 do, being done or waiting on you, in the order it takes them, with their progress; a queued one has an x that takes it
-off: the job is cancelled, and the agent is told) and Finished (done and cancelled, newest first), and its latest todo
-list.
+off: the job is cancelled, and the agent is told) and Finished (done and cancelled, newest first), and the Desktop.
 
 The header has two tabs: Chat (all of the above) and Artifacts (AgentArtifacts.tsx: the agent's own folder of files,
 pictures and screenshots). In the conversation, a picture the agent keeps there shows where it writes
@@ -13,6 +12,12 @@ pictures and screenshots). In the conversation, a picture the agent keeps there 
 The header's ⋯ menu has Archive (or Unarchive) and Delete, both asking first. Archive stops the agent, cancels its open
 jobs and takes it out of every VM queue, but keeps this conversation; an archived agent's page says so, and sending it
 a message brings it back. An agent that made PRs can't be deleted, only archived, so it keeps its context for updates.
+
+The Desktop is the live screen of the VM the agent holds, else of its target VM: only the screen, like the VMs page's
+picture, without noVNC's page and buttons around it (noVNC's own client draws it straight from the VM's VNC
+connection), so it moves as smoothly as the VM page's desktop. View-only: nothing reaches the VM from it. A click opens
+it big in a pop-up on this page (still view-only; the VM's name above it links to the VM page, where you can use it).
+Off, starting, not answering, or a terminal-only image say so instead.
 
 The conversation is the agent's history (HistoryEntry in live.ts; append-only on the server). The page
 loads the last 200 entries, then fetches only the new part (/history?since=<end>) whenever the live
@@ -37,8 +42,6 @@ import {
   Brain,
   Camera,
   ChevronRight,
-  Circle,
-  CircleCheck,
   CircleDot,
   CircleHelp,
   Clock,
@@ -65,6 +68,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
+import RFB from "@novnc/novnc";
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -80,6 +84,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import AgentArtifacts from "@/AgentArtifacts";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { JobProgressBar, JobSteps, currentJob, stuckFor, useNow } from "@/components/ui/job-progress";
 import { IssueRefText, Markdown } from "@/components/ui/markdown";
@@ -89,7 +94,7 @@ import { AGENT_TONE, JOB_LABEL, JOB_TONE, StatusDot, VM_TONE } from "@/component
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { api, useLive, useLiveValue, useLoaded, type HistoryEntry, type Todo, type VMStatus } from "@/live";
+import { api, useLive, useLiveValue, useLoaded, type HistoryEntry, type VMStatus } from "@/live";
 import { cn } from "@/lib/utils";
 
 // Entries loaded at first, and per "Show earlier".
@@ -187,13 +192,56 @@ const ToolRow = memo(function ToolRow(props: { entry: ToolEntry; result: ToolRes
   );
 });
 
+// The VM's screen, live: noVNC's client (RFB) draws only the screen into this box, scaled to fit, none of noVNC's
+// page around it. View-only: nothing reaches the VM. A dropped connection tries again every 2 seconds.
+function LiveDesktop(props: { url: string; className?: string }) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const box = boxRef.current;
+    if (box === null) {
+      return;
+    }
+    let rfb: RFB | null = null;
+    let stopped = false;
+    let timer = 0;
+    // An arrow function, not a declaration: it keeps box narrowed to not null.
+    const connect = () => {
+      rfb = new RFB(box, props.url);
+      rfb.viewOnly = true;
+      rfb.scaleViewport = true;
+      rfb.focusOnClick = false;
+      rfb.background = "black";
+      rfb.addEventListener("disconnect", () => {
+        // A disconnected RFB is done for good: the next try is a new one.
+        rfb = null;
+        if (!stopped) {
+          timer = window.setTimeout(connect, 2000);
+        }
+      });
+    };
+    connect();
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+      if (rfb !== null) {
+        rfb.disconnect();
+      }
+    };
+  }, [props.url]);
+  return <div ref={boxRef} className={props.className} />;
+}
+
 export default function AgentChat(props: { agentId: string }) {
   const agents = useLive("agents");
   const jobs = useLive("jobs");
-  // Only the VMs' names, states and holders, as one string: the whole VM list changes every second while a VM
-  // runs (its usage samples), and this page would re-render with it.
-  const vmsText = useLiveValue((topics) => JSON.stringify(topics.vms.map((vm) => ({ name: vm.name, status: vm.status, holder: vm.holder }))));
-  const vms = JSON.parse(vmsText) as { name: string; status: VMStatus; holder: string | null }[];
+  // Only the VMs' names, states, holders and whether they answer, as one string: the whole VM list changes every
+  // second while a VM runs (its usage samples), and this page would re-render with it.
+  const vmsText = useLiveValue((topics) =>
+    JSON.stringify(
+      topics.vms.map((vm) => ({ name: vm.name, status: vm.status, holder: vm.holder, responding: vm.usage === null || !vm.usage.on || vm.usage.responding })),
+    ),
+  );
+  const vms = JSON.parse(vmsText) as { name: string; status: VMStatus; holder: string | null; responding: boolean }[];
   const agentsLoaded = useLoaded("agents");
 
   // entries[0] is history[start] on the server.
@@ -240,6 +288,50 @@ export default function AgentChat(props: { agentId: string }) {
 
   const summary = agents.find((agent) => agent.id === props.agentId);
   const historyLength = summary?.history_length ?? 0;
+
+  // The Desktop on the right: the VM the agent holds, else its target VM. Its address is asked once it runs and
+  // answers (again every 3 s until it has one), and forgotten when it stops or stops answering, so the view
+  // connects afresh when it is back.
+  let deskVM: string | null = null;
+  if (summary !== undefined) {
+    deskVM = summary.place === 0 && summary.vm !== null ? summary.vm : summary.target_vm;
+  }
+  const deskInfo = vms.find((vm) => vm.name === deskVM);
+  const deskReady = deskInfo !== undefined && deskInfo.status === "running" && deskInfo.responding;
+  const [deskUrl, setDeskUrl] = useState<string | null>(null);
+  // The VM has no desktop (a terminal-only image).
+  const [deskTerminal, setDeskTerminal] = useState(false);
+  const [deskBig, setDeskBig] = useState(false);
+  useEffect(() => {
+    setDeskUrl(null);
+    if (deskVM === null || !deskReady) {
+      return;
+    }
+    const name = deskVM;
+    let stopped = false;
+    let timer = 0;
+    async function load() {
+      try {
+        const answer = await api<{ desktop: string | null; terminal: string | null }>(`/api/vms/${encodeURIComponent(name)}/viewer`);
+        if (stopped) {
+          return;
+        }
+        // answer.desktop is noVNC's page (http://<VM>:<port>/vnc.html?...); LiveDesktop takes the websocket that page
+        // itself uses, on the same address.
+        setDeskUrl(answer.desktop === null ? null : `ws://${new URL(answer.desktop).host}/websockify`);
+        setDeskTerminal(answer.desktop === null);
+      } catch {
+        if (!stopped) {
+          timer = window.setTimeout(load, 3000);
+        }
+      }
+    }
+    load();
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+    };
+  }, [deskVM, deskReady]);
   const end = start + entries.length;
 
   // Once the agent was there, its disappearing means it was deleted (not that the list is still loading).
@@ -415,12 +507,11 @@ export default function AgentChat(props: { agentId: string }) {
     return <div className="p-4 text-muted-foreground">Loading…</div>;
   }
 
-  // Pair tool calls with their results, find where the last turn ended (a call after it with no result
-  // yet is still running) and the latest todo list.
+  // Pair tool calls with their results, and find where the last turn ended (a call after it with no result
+  // yet is still running).
   const results: Record<string, ToolResult> = {};
   const toolIds = new Set<string>();
   let lastTurnEnd = -1;
-  let todos: Todo[] = [];
   entries.forEach((entry, index) => {
     if (entry.type === "tool_result") {
       results[entry.id] = entry;
@@ -430,9 +521,6 @@ export default function AgentChat(props: { agentId: string }) {
     }
     if (entry.type === "turn_end") {
       lastTurnEnd = index;
-    }
-    if (entry.type === "tool" && entry.name === "TodoWrite" && Array.isArray(entry.input.todos)) {
-      todos = entry.input.todos as Todo[];
     }
   });
 
@@ -945,20 +1033,60 @@ export default function AgentChat(props: { agentId: string }) {
               );
             })}
 
-            <div className="flex h-7 items-center border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground">Todo</div>
-            <div className="space-y-0.5 px-3 py-2">
-              {todos.length === 0 && <div className="text-muted-foreground">No todo list yet.</div>}
-              {todos.map((todo, index) => (
-                <div key={index} className="flex items-start gap-2">
-                  {todo.status === "completed" && <CircleCheck className="mt-0.5 size-3.5 shrink-0 text-ok" />}
-                  {todo.status === "in_progress" && <CircleDot className="mt-0.5 size-3.5 shrink-0 text-primary" />}
-                  {todo.status !== "completed" && todo.status !== "in_progress" && <Circle className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />}
-                  <span className={cn(todo.status === "completed" && "text-muted-foreground line-through", todo.status === "in_progress" && "font-medium")}>
-                    {todo.status === "in_progress" && todo.activeForm ? todo.activeForm : todo.content}
-                  </span>
-                </div>
-              ))}
+            <div className="flex h-7 items-center gap-1.5 border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground">
+              Desktop
+              {deskVM !== null && (
+                <a href={`#/vms/${deskVM}`} className="font-normal text-primary hover:underline">
+                  {deskVM}
+                </a>
+              )}
             </div>
+            <div className="p-2">
+              <div className="relative aspect-video overflow-hidden rounded-md border bg-muted/30">
+                {deskReady && deskUrl !== null && (
+                  <>
+                    <LiveDesktop url={deskUrl} className="pointer-events-none absolute inset-0 bg-black" />
+                    {/* Over the picture: a click opens it big, here on the page. */}
+                    <button
+                      type="button"
+                      className="absolute inset-0 cursor-zoom-in"
+                      aria-label={`Show the desktop of ${deskVM} big`}
+                      title="Show it big"
+                      onClick={() => setDeskBig(true)}
+                    />
+                  </>
+                )}
+                {deskVM === null && <span className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">No VM yet.</span>}
+                {deskInfo !== undefined && deskInfo.status !== "running" && (
+                  <span className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">{deskInfo.status === "stopped" ? "Off" : deskInfo.status}</span>
+                )}
+                {deskInfo !== undefined && deskInfo.status === "running" && deskUrl === null && !deskTerminal && (
+                  <span className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">Waiting for the desktop…</span>
+                )}
+                {deskReady && deskTerminal && (
+                  <span className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-xs text-muted-foreground">
+                    <Terminal className="size-5" />
+                    Terminal only
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <Dialog open={deskBig && deskReady && deskUrl !== null} onOpenChange={setDeskBig}>
+              <DialogContent className="flex h-[90vh] flex-col gap-2 sm:max-w-[95vw]">
+                <DialogHeader>
+                  <DialogTitle>Desktop of {deskVM}</DialogTitle>
+                  <DialogDescription>
+                    Only to watch: nothing you do here reaches the VM. To use it, open{" "}
+                    <a href={`#/vms/${deskVM}`} className="text-primary hover:underline" onClick={() => setDeskBig(false)}>
+                      its page
+                    </a>
+                    .
+                  </DialogDescription>
+                </DialogHeader>
+                {deskUrl !== null && <LiveDesktop url={deskUrl} className="min-h-0 flex-1 overflow-hidden rounded-md bg-black" />}
+              </DialogContent>
+            </Dialog>
           </div>
         </ResizablePanel>
       </ResizablePanelGroup>
