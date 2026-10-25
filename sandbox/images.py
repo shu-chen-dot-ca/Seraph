@@ -3,40 +3,47 @@
 An image is an Incus image with a name (an Incus alias). Incus also keeps unnamed images, like the
 downloads builds start from; those aren't ours and aren't listed.
 
-New images come two ways. Both run in the background, as a task shown above the list:
-- New image: the image's agent (image_agent.py) makes it. It starts a builder VM from an official system image
-  (SYSTEMS, from Incus's image server: downloaded, not built), installs the desktop (or none: terminal only)
-  and everything in the image's description, checks what the app needs, and publishes it. Rebuild does it again from the description;
-  the new build replaces the image, and VMs made from the old one keep their own disk.
-- save a VM: `incus publish` of a stopped VM (a few minutes): everything on its disk comes along.
-(sandbox/image/build.sh, the hour-long Ubuntu build from provision.sh, is still there for the command line.)
-An image can only be deleted once no VM was made from it (stopped ones count too).
+Each image we make is defined by one file, image.yaml: the system, the desktop, package lists, and steps for
+anything else (see image_build.py). A build turns it into the image, mechanically, from official sources only;
+what the app itself needs in every image comes from sandbox/image/base_layer.sh, never from image.yaml.
+DATA_DIR/images/definitions/<name>/ holds:
 
-Each image has a description: what it should have (system, desktop, its dependencies, comments), in markdown. New image writes it from the dialog; the image's agent changes it when the user asks in its chat;
-nothing changes in the image until it is rebuilt. DATA_DIR/images/specs/<image name>/ holds:
+    image.yaml   the definition: what the next build makes
+    chat.json    the image agent's conversation
 
-    spec.md     the description: what the next build makes
-    built.md    the description the image was last built from
-    chat.json   the agent's conversation
+and DATA_DIR/images/built/<fingerprint>.yaml (image_build.BUILT_DIR) the image.yaml each build was made from, so
+what a VM was made from (its image_fingerprint) is known for good, also after its image is rebuilt.
 
-spec_changed (in the live feed) says spec.md differs from built.md: the image is behind its description.
-Images made before descriptions get a short one the first time it's needed, which counts as built.
+How images come and change. Each runs in the background, as a task shown above the list:
+- New image: the image's agent (image_agent.py) writes image.yaml from what the user picked and builds it ("agent"
+  task while it works; each of its builds is a "build" task).
+- Rebuild: image.yaml is built again, with no agent (image_build.py, "build" task). Only what changed since the
+  last build runs again: its builder VM keeps snapshots between builds. The new build replaces the image; VMs made
+  from the old one keep their own disk.
+- The user changes image.yaml in Details > Definition, or asks the image's agent to. Every change is checked first
+  (image_build.parse_definition). Nothing changes in the image until it is rebuilt: definition_changed (in the live
+  feed) says image.yaml differs from what the image was built from, and the Images tab shows a dot.
+- save a VM: `incus publish` of a stopped VM (a few minutes): everything on its disk comes along. It has no
+  image.yaml until its agent writes one, so it can't be rebuilt until then.
+An image can only be deleted once no VM was made from it (stopped ones count too). Its builder VM goes with it.
 
 What an image has (system, languages, tools, packages, models) is listed once, by sandbox/image/inspect.sh:
 a throwaway VM from the image runs inventory.py, and the list goes to DATA_DIR/images/inventory/<fingerprint>.json.
-Images never change, so that list stays true. New image and save inspect the new image at the end; an older
+Images never change, so that list stays true. Builds and saves inspect the new image at the end; an older
 image is inspected with an inspect task (about two minutes). Lists of images that are gone (deleted, or
 replaced by a rebuild) are kept, since VMs made from them still have what they listed.
 
-A task (save, inspect) is a process of its own (its own session) that writes DATA_DIR/images/<task id>.log and
-prints "==> Done" last when it worked. Its record in DATA_DIR/images/tasks.json keeps the pid, so a
+A task (build, save, inspect) is a process of its own (its own session) that writes DATA_DIR/images/<task id>.log
+and prints "==> Done" last when it worked. Its record in DATA_DIR/images/tasks.json keeps the pid, so a
 backend restart (it reloads on code changes) doesn't stop it: the task is followed again from there.
-An agent's build ("agent" task) has no process: the agent writes its log and ends it, and a backend restart
-ends it as failed (the conversation went with the backend). Tasks that worked are dropped once the image
-shows up; failed ones stay until the user dismisses them (which deletes a failed build's builder VM).
+The agent's work on a new image ("agent" task) has no process: the agent writes its log and ends it, and a backend
+restart ends it as failed (the conversation went with the backend). One build at a time, and none while the agent
+makes another image. Tasks that worked are dropped once the image shows up; failed ones stay until the user
+dismisses them.
 
-The default image (what New VM picks first) and the list that goes in every new image are saved in
-DATA_DIR/images/settings.json. Until one is picked the default is SANDBOX_IMAGE from .env.
+The default image (what New VM picks first) and the dependencies New image starts with are saved in
+DATA_DIR/images/settings.json. Until one is picked the default is SANDBOX_IMAGE from .env. Deleting the default
+leaves no default ("") until the user makes another one the default.
 
 Images.version goes up on every change, so the live feed (backend /api/live) sends the list again.
 """
@@ -49,6 +56,7 @@ import secrets
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 from datetime import UTC, datetime
@@ -56,6 +64,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from sandbox import image_build
 from sandbox.vm import VM
 from sandbox.vms import VMs, VMsError
 
@@ -67,20 +76,9 @@ IMAGES_DIR = PROJECT_ROOT / os.environ["DATA_DIR"] / "images"
 DEFAULT_IMAGE = os.environ["SANDBOX_IMAGE"]
 INSPECT_SCRIPT = PROJECT_ROOT / "sandbox" / "image" / "inspect.sh"
 INVENTORY_DIR = IMAGES_DIR / "inventory"
-SPECS_DIR = IMAGES_DIR / "specs"
-# What New image offers. A system's sources are the official images (Incus's images: server) a build may start
-# from: Ubuntu has a desktop variant (GNOME) and a plain one, where the agent puts another desktop.
-SYSTEMS = [
-    {"id": "ubuntu-24.04", "label": "Ubuntu 24.04 LTS", "sources": ["ubuntu/noble", "ubuntu/noble/desktop"]},
-    {"id": "ubuntu-26.04", "label": "Ubuntu 26.04 LTS", "sources": ["ubuntu/26.04", "ubuntu/26.04/desktop"]},
-    {"id": "ubuntu-22.04", "label": "Ubuntu 22.04 LTS", "sources": ["ubuntu/jammy", "ubuntu/jammy/desktop"]},
-    {"id": "fedora-44", "label": "Fedora 44", "sources": ["fedora/44"]},
-    {"id": "fedora-43", "label": "Fedora 43", "sources": ["fedora/43"]},
-    {"id": "debian-13", "label": "Debian 13", "sources": ["debian/13"]},
-    {"id": "debian-12", "label": "Debian 12", "sources": ["debian/12"]},
-]
-# GNOME first: the default. None is a terminal-only image (no desktop, no browser).
-DESKTOPS = ["GNOME", "KDE Plasma", "None (terminal only)"]
+DEFINITIONS_DIR = IMAGES_DIR / "definitions"
+# What New image offers. GNOME first: the default. None is a terminal-only image (no desktop, no browser).
+DESKTOPS = list(image_build.DESKTOPS.values())
 # What goes in every new image until the user changes the list in New image (its Dependencies).
 DEFAULT_PACKAGES = [
     "Git and Git LFS",
@@ -130,22 +128,23 @@ class Images:
         settings_path = IMAGES_DIR / "settings.json"
         if settings_path.exists():
             settings = json.loads(settings_path.read_text())
-            self.default = settings.get("default") or DEFAULT_IMAGE
+            # "" stays "": the default was deleted and none is picked yet.
+            self.default = settings.get("default", DEFAULT_IMAGE)
             self.packages = settings.get("packages") or list(DEFAULT_PACKAGES)
         # The short version of each inspected image's list (see highlights()), by fingerprint; lists never change.
         self.highlights_by_fingerprint: dict[str, dict] = {}
-        # {"id", "kind": "agent" | "save" | "inspect", "name", "vm" (saved VM), "builder" (agent's VM), "pid",
+        # {"id", "kind": "agent" | "build" | "save" | "inspect", "name", "vm" (saved VM), "pid" (None for "agent"),
         #  "status": "running" | "failed", "error", "started_at"}
         self.tasks: list[dict] = []
         tasks_path = IMAGES_DIR / "tasks.json"
         if tasks_path.exists():
             self.tasks = json.loads(tasks_path.read_text())
-        # An agent's build can't go on after a restart: its conversation ended with the backend.
+        # The agent's work can't go on after a restart: its conversation ended with the backend. A build it
+        # started is a process of its own and goes on.
         for task in self.tasks:
             if task["kind"] == "agent" and task["status"] == "running":
                 task["status"] = "failed"
-                task["error"] = "The backend restarted during the build. Dismiss this and make the image again."
-                threading.Thread(target=VM(task["builder"]).delete, daemon=True).start()
+                task["error"] = "The backend restarted while the agent worked. Dismiss this and make the image again."
         self.refresh()
         threading.Thread(target=self.watch, daemon=True).start()
 
@@ -285,7 +284,8 @@ class Images:
         for image in images:
             image["inventory"] = self.highlights(image["fingerprint"])
             image["inspecting"] = image["name"] in inspecting
-            image["spec_changed"] = self.spec_changed(image["name"])
+            image["definition_changed"] = self.definition_changed(image)
+            image["definition_updated_at"] = self.definition_updated_at(image["name"])
         return {"images": images, "default": default, "tasks": tasks}
 
     def highlights(self, fingerprint: str) -> dict | None:
@@ -336,10 +336,17 @@ class Images:
         result = subprocess.run(["incus", "image", "alias", "rename", name, new_name], capture_output=True, stdin=subprocess.DEVNULL, text=True)
         if result.returncode != 0:
             raise ImagesError(f"Could not rename {name}: {result.stderr.strip()}")
-        if (SPECS_DIR / name).exists():
-            # A description left by an image deleted outside the app would be in the way.
-            shutil.rmtree(SPECS_DIR / new_name, ignore_errors=True)
-            (SPECS_DIR / name).rename(SPECS_DIR / new_name)
+        if (DEFINITIONS_DIR / name).exists():
+            # A folder left by an image deleted outside the app would be in the way.
+            shutil.rmtree(DEFINITIONS_DIR / new_name, ignore_errors=True)
+            (DEFINITIONS_DIR / name).rename(DEFINITIONS_DIR / new_name)
+        # Its builder VM (with the snapshots the next build starts from) goes along, if it has one.
+        VM(image_build.BUILDER_PREFIX + new_name).delete()
+        subprocess.run(
+            ["incus", "rename", image_build.BUILDER_PREFIX + name, image_build.BUILDER_PREFIX + new_name],
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+        )
         with self.lock:
             if self.default == name:
                 self.default = new_name
@@ -347,10 +354,8 @@ class Images:
         self.refresh()
 
     def delete(self, name: str) -> None:
-        """Delete an image no VM was made from (running or not)."""
+        """Delete an image no VM was made from (running or not). Deleting the default leaves no default."""
         image = self.find(name)
-        if image["name"] == self.get_default():
-            raise ImagesError(f"{name} is the default image. Make another one the default first.")
         made = [record.name for record in self.vms.list() if record.image_fingerprint == image["fingerprint"]]
         if made:
             raise ImagesError(f"VMs were made from {name} ({', '.join(made)}). Delete them first.")
@@ -361,17 +366,23 @@ class Images:
         result = subprocess.run(["incus", "image", "delete", image["fingerprint"]], capture_output=True, stdin=subprocess.DEVNULL, text=True)
         if result.returncode != 0:
             raise ImagesError(f"Could not delete {name}: {result.stderr.strip()}")
-        shutil.rmtree(SPECS_DIR / image["name"], ignore_errors=True)
+        shutil.rmtree(DEFINITIONS_DIR / image["name"], ignore_errors=True)
+        VM(image_build.BUILDER_PREFIX + image["name"]).delete()
+        with self.lock:
+            if self.default == image["name"]:
+                self.default = ""
+                self.save_settings()
+                self.version += 1
         self.refresh()
 
-    # --- Descriptions -------------------------------------------------------------
+    # --- The image's definition -----------------------------------------------------
 
     def new_options(self) -> dict:
-        """What New image offers, the list that goes in every new image, and what it picks first."""
+        """What New image offers, the dependencies it starts with, and the system it picks first."""
         with self.lock:
             packages = list(self.packages)
-        systems = [{"id": system["id"], "label": system["label"]} for system in SYSTEMS]
-        return {"systems": systems, "desktops": DESKTOPS, "packages": packages, "system": SYSTEMS[0]["id"]}
+        systems = [{"id": system["id"], "label": system["label"]} for system in image_build.SYSTEMS]
+        return {"systems": systems, "desktops": DESKTOPS, "packages": packages, "system": image_build.SYSTEMS[0]["id"]}
 
     def set_packages(self, packages: list[str]) -> None:
         """The list that goes in every new image from now on."""
@@ -379,94 +390,155 @@ class Images:
             self.packages = [item.strip() for item in packages if item.strip()]
             self.save_settings()
 
-    def new_spec(self, name: str, system: str, desktop: str, packages: list[str], comments: str) -> None:
-        """Write the description of an image to make (New image). The agent builds it next."""
+    def new_request(self, name: str, system: str, desktop: str, packages: list[str], comments: str) -> str:
+        """What the user asked for in New image, for the agent that writes the new image's image.yaml.
+        Makes the image's folder (without image.yaml yet)."""
         if not re.fullmatch(NAME_PATTERN, name):
             raise ImagesError("The name must start with a letter and have only a-z, 0-9 and -, at most 41 characters")
         if name in self.names():
             raise ImagesError(f"There is already an image named {name}")
-        labels = [each["label"] for each in SYSTEMS if each["id"] == system]
+        labels = [each["label"] for each in image_build.SYSTEMS if each["id"] == system]
         if not labels:
             raise ImagesError(f"Unknown system {system}")
         if desktop not in DESKTOPS:
             raise ImagesError(f"Unknown desktop {desktop}")
-        lines = [f"# {name}", "", f"System: {labels[0]}", f"Desktop: {desktop}"]
+        lines = [f"New image {name}", f"System: {labels[0]} ({system})", f"Desktop: {desktop}"]
         # Firefox on every desktop; a terminal-only image has no browser.
         if desktop != DESKTOPS[-1]:
             lines.append("Browser: Firefox")
-        lines += ["", "## Dependencies", ""]
+        lines.append("Dependencies:")
         for item in packages:
             if item.strip():
                 lines.append(f"- {item.strip()}")
         if comments.strip():
-            lines += ["", "## Comments", "", comments.strip()]
-        # A description left by an image of this name that is gone would be in the way. Not built yet: no built.md.
-        shutil.rmtree(SPECS_DIR / name, ignore_errors=True)
-        (SPECS_DIR / name).mkdir(parents=True)
-        (SPECS_DIR / name / "spec.md").write_text("\n".join(lines) + "\n")
+            lines += ["Comments:", comments.strip()]
+        # A folder left by an image of this name that is gone would be in the way.
+        shutil.rmtree(DEFINITIONS_DIR / name, ignore_errors=True)
+        (DEFINITIONS_DIR / name).mkdir(parents=True)
+        return "\n".join(lines)
 
-    def spec_dir(self, name: str) -> Path:
-        """The image's description folder. An image from before descriptions gets a short one, which counts as built."""
-        # The name comes from the URL too: nothing outside SPECS_DIR.
+    def image_dir(self, name: str) -> Path:
+        """The image's folder (made when missing: an image saved from a VM has none until its agent writes to it)."""
+        # The name comes from the URL too: nothing outside DEFINITIONS_DIR.
         if not re.fullmatch(NAME_PATTERN, name):
-            raise ImagesError(f"{name} can't have a description: the name must have only a-z, 0-9 and -")
-        folder = SPECS_DIR / name
-        if (folder / "spec.md").exists():
-            return folder
-        text = (
-            f"# {name}\n\n"
-            "Made before images had a description, so this only says roughly what it is. What it has is in its\n"
-            "Overview and Packages (find_installed). If it was built by sandbox/image/provision.sh, that script\n"
-            "(reference) says how: Ubuntu 24.04's desktop image (GNOME on X11) with everything the script installs.\n"
-        )
+            raise ImagesError(f"{name} can't have a definition: the name must have only a-z, 0-9 and -")
+        folder = DEFINITIONS_DIR / name
         folder.mkdir(parents=True, exist_ok=True)
-        (folder / "built.md").write_text(text)
-        (folder / "spec.md").write_text(text)
         return folder
 
-    def spec_changed(self, name: str) -> bool:
-        """Whether the description differs from what the image was built from. False while it has none."""
-        folder = SPECS_DIR / name
-        if not (folder / "spec.md").exists():
+    def built_definition(self, fingerprint: str) -> str | None:
+        """The image.yaml the image with this fingerprint was built from, or None (saved from a VM, or older)."""
+        if not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+            return None
+        path = image_build.BUILT_DIR / f"{fingerprint}.yaml"
+        return path.read_text() if path.exists() else None
+
+    def definition_changed(self, image: dict) -> bool:
+        """Whether image.yaml differs from what the image was built from (or it was never built from one)."""
+        path = DEFINITIONS_DIR / image["name"] / "image.yaml"
+        if not path.exists():
             return False
-        built = (folder / "built.md").read_text() if (folder / "built.md").exists() else ""
-        return (folder / "spec.md").read_text() != built
+        return path.read_text() != self.built_definition(image["fingerprint"])
 
-    def read_spec(self, name: str) -> str:
-        return (self.spec_dir(name) / "spec.md").read_text()
+    def definition_updated_at(self, name: str) -> float:
+        """When image.yaml last changed (0 without one), so the browser knows to fetch it again."""
+        path = DEFINITIONS_DIR / name / "image.yaml"
+        return path.stat().st_mtime if path.exists() else 0.0
 
-    def write_spec(self, name: str, text: str) -> None:
-        """Change the description. The image itself only changes when it is rebuilt."""
-        folder = self.spec_dir(name)
+    def read_definition(self, name: str) -> str:
+        """image.yaml as it is now ("" before it is written)."""
+        path = self.image_dir(name) / "image.yaml"
+        return path.read_text() if path.exists() else ""
+
+    def write_definition(self, name: str, text: str) -> None:
+        """Change image.yaml, only to one that is right (image_build.parse_definition says what isn't). The image
+        itself only changes when it is rebuilt."""
+        try:
+            image_build.parse_definition(text)
+        except image_build.DefinitionError as error:
+            raise ImagesError(str(error))
+        folder = self.image_dir(name)
         # Write, then rename: a crash never leaves half a file.
-        (folder / "spec.md.tmp").write_text(text)
-        (folder / "spec.md.tmp").replace(folder / "spec.md")
+        (folder / "image.yaml.tmp").write_text(text)
+        (folder / "image.yaml.tmp").replace(folder / "image.yaml")
         with self.lock:
             self.version += 1
 
-    def spec_diff(self, name: str) -> str:
-        """A unified diff from the description the image was built from to the one now, or "" when they are the same."""
-        folder = self.spec_dir(name)
-        built = (folder / "built.md").read_text() if (folder / "built.md").exists() else ""
-        now = (folder / "spec.md").read_text()
-        lines = difflib.unified_diff(built.splitlines(keepends=True), now.splitlines(keepends=True), "built", "now")
-        return "".join(lines)
+    def definition(self, name: str) -> dict:
+        """image.yaml now, and a diff from what the image was built from ("" when the same or never built).
+        Also for an image still being made (it has a folder but isn't listed yet)."""
+        if not (DEFINITIONS_DIR / name).exists():
+            name = self.find(name)["name"]
+        now = self.read_definition(name)
+        built = None
+        if name in self.names():
+            built = self.built_definition(self.find(name)["fingerprint"])
+        diff = ""
+        if built is not None:
+            diff = "".join(difflib.unified_diff(built.splitlines(keepends=True), now.splitlines(keepends=True), "built", "image.yaml"))
+        return {"definition": now, "diff": diff}
 
-    def discard_spec(self, name: str) -> None:
-        """Put the description back to what the image was built from."""
-        name = self.find(name)["name"]
-        folder = self.spec_dir(name)
-        if (folder / "built.md").exists():
-            shutil.copy(folder / "built.md", folder / "spec.md")
+    def discard_changes(self, name: str) -> None:
+        """Put image.yaml back to what the image was built from."""
+        image = self.find(name)
+        built = self.built_definition(image["fingerprint"])
+        if built is None:
+            raise ImagesError(f"{name} wasn't built from an image.yaml, so there is nothing to go back to.")
+        (self.image_dir(image["name"]) / "image.yaml").write_text(built)
         with self.lock:
             self.version += 1
 
-    # --- Builds by the agent ---------------------------------------------------------
+    def last_failed_build(self, name: str) -> dict | None:
+        """The image's latest failed build or agent work that is still listed: its error and its log."""
+        with self.lock:
+            failed = [dict(task) for task in self.tasks if task["name"] == name and task["status"] == "failed" and task["kind"] in ["agent", "build"]]
+        if not failed:
+            return None
+        return {"error": failed[-1]["error"], "log": self.read_log(failed[-1]["id"])}
+
+    # --- Builds ------------------------------------------------------------------------
+
+    def build(self, name: str) -> dict:
+        """Build the image from its image.yaml (image_build.py), as a task, replacing the image of that name. Also for
+        an image the agent is still making (it has a folder but isn't listed yet). Minutes: only what changed since
+        the last build runs again."""
+        if not (DEFINITIONS_DIR / name).exists():
+            name = self.find(name)["name"]
+        text = self.read_definition(name)
+        if not text:
+            raise ImagesError(f"{name} has no image.yaml, so it can't be built. Ask its agent to write one.")
+        try:
+            image_build.parse_definition(text)
+        except image_build.DefinitionError as error:
+            raise ImagesError(f"{name}'s image.yaml isn't right: {error}")
+        with self.lock:
+            building = [task for task in self.tasks if task["status"] == "running" and task["kind"] == "build"]
+            agents = [task for task in self.tasks if task["status"] == "running" and task["kind"] == "agent" and task["name"] != name]
+            busy = [task for task in self.tasks if task["status"] == "running" and task["name"] == name and task["kind"] != "agent"]
+        if building or agents:
+            raise ImagesError(f"{(building + agents)[0]['name']} is being made; one image at a time.")
+        if busy:
+            raise ImagesError(f"{name} is busy ({busy[0]['kind']} is running); wait until that is done.")
+        script = f"set -e\n{sys.executable} -m sandbox.image_build {name} {self.image_dir(name)}\nbash {INSPECT_SCRIPT} {name} {INVENTORY_DIR}\necho '==> Done'\n"
+        task, process = self.start_task("build", name, None, script)
+        # Reap it when it ends, so it doesn't stay a zombie; check_tasks reads the outcome from the log.
+        threading.Thread(target=process.wait, daemon=True).start()
+        return task
+
+    def task_state(self, task_id: str) -> tuple[str, str | None]:
+        """"running", "failed" (and why) or "done": a task that worked is dropped, so one that isn't listed is done."""
+        with self.lock:
+            for task in self.tasks:
+                if task["id"] == task_id:
+                    return task["status"], task["error"]
+        return "done", None
+
+    # --- The agent making a new image ------------------------------------------------------
 
     def start_agent_build(self, name: str) -> dict:
-        """A task for a build the image's agent does. Its builder VM is image-build-<task id>; one build at a time."""
+        """A task for the agent's work on a new image, until it ends its turn; one at a time, and not during a build."""
         with self.lock:
-            building = [task for task in self.tasks if task["status"] == "running" and task["kind"] == "agent"]
+            building = [task for task in self.tasks if task["status"] == "running" and task["kind"] in ["agent", "build"]]
             busy = [task for task in self.tasks if task["status"] == "running" and task["name"] == name]
         if building:
             raise ImagesError(f"{building[0]['name']} is being made; one image at a time.")
@@ -479,8 +551,6 @@ class Images:
             "kind": "agent",
             "name": name,
             "vm": None,
-            # Not named like the app's VMs (SANDBOX_VM_PREFIX), so the VM list never picks it up.
-            "builder": f"image-build-{task_id.removeprefix('task_')}",
             "pid": None,
             "status": "running",
             "error": None,
@@ -493,54 +563,25 @@ class Images:
         return dict(task)
 
     def log_task(self, task_id: str, text: str) -> None:
-        """Add a line to an agent build's log (what the task row and its Log show)."""
+        """Add a line to the agent's task log (what the task row and its Log show)."""
         with open(IMAGES_DIR / f"{task_id}.log", "a") as log:
             log.write(" ".join(text.split())[:500] + "\n")
         with self.lock:
             self.version += 1
 
     def end_agent_build(self, task_id: str, error: str | None) -> None:
-        """The agent's build ended. Worked (error None): the task goes. Failed: it stays, and its builder VM goes."""
-        builder = None
+        """The agent's work on a new image ended. Worked (error None): the task goes. Failed: it stays until dismissed."""
         with self.lock:
             for task in self.tasks:
                 if task["id"] != task_id:
                     continue
                 task["status"] = "failed" if error else "done"
                 task["error"] = error
-                builder = task["builder"]
             self.tasks = [task for task in self.tasks if task["status"] != "done"]
             self.save_tasks()
             self.version += 1
         if error is None:
             (IMAGES_DIR / f"{task_id}.log").unlink(missing_ok=True)
-            return
-        if builder is not None:
-            VM(builder).delete()
-
-    def publish_build(self, task_id: str, name: str, builder: str, spec: str) -> None:
-        """Make the agent's builder VM the image name (replacing an image of that name), then list what it has."""
-        vm = VM(builder)
-        vm.stop()
-        # Uncompressed: bigger on disk, but new VMs unpack it faster.
-        result = subprocess.run(
-            ["incus", "publish", builder, "--alias", name, "--reuse", "--compression", "none"],
-            capture_output=True,
-            stdin=subprocess.DEVNULL,
-            text=True,
-        )
-        if result.returncode != 0:
-            raise ImagesError(f"Could not publish {builder} as {name}: {result.stderr.strip()}")
-        vm.delete()
-        folder = self.spec_dir(name)
-        (folder / "built.md").write_text(spec)
-        self.end_agent_build(task_id, None)
-        self.refresh()
-        try:
-            self.inspect(name)
-        except ImagesError:
-            # The image is made either way; Inspect in its row lists it later.
-            pass
 
     def get_task(self, task_id: str) -> dict:
         with self.lock:
@@ -550,7 +591,7 @@ class Images:
         raise ImagesError(f"There is no task {task_id}")
 
     def dismiss(self, task_id: str) -> None:
-        """Forget a failed task and its log."""
+        """Forget a failed task and its log. A failed build's builder VM stays: its snapshots are the next build's start."""
         with self.lock:
             matches = [task for task in self.tasks if task["id"] == task_id]
             if not matches:
@@ -561,11 +602,13 @@ class Images:
             self.save_tasks()
             self.version += 1
         (IMAGES_DIR / f"{task_id}.log").unlink(missing_ok=True)
-        if matches[0].get("builder"):
-            VM(matches[0]["builder"]).delete()
+        # A new image that was never made: its builder VM would only take up disk.
+        if matches[0]["kind"] == "agent" and matches[0]["name"] not in self.names():
+            VM(image_build.BUILDER_PREFIX + matches[0]["name"]).delete()
 
     def stop(self, task_id: str) -> None:
-        """Stop a running save or inspect: its whole process group. (An agent's build is stopped through the agent.)"""
+        """Stop a running build, save or inspect: its whole process group. A build's process stops its builder VM
+        on the way out. (The agent's work is stopped through the agent.)"""
         with self.lock:
             matches = [task for task in self.tasks if task["id"] == task_id and task["status"] == "running" and task["pid"] is not None]
         if not matches:
@@ -596,7 +639,7 @@ class Images:
         if record.secrets_in_vm:
             raise ImagesError(
                 f"{vm_name}'s files still hold environment variable values ({', '.join(record.secrets_in_vm)}), and they would "
-                "go into the image. Remove them in its Settings while it runs, then stop it and save again."
+                "go into the image. Remove them in its Settings (or in Settings, for all VMs) while it runs, then stop it and save again."
             )
         with self.lock:
             saving = [task for task in self.tasks if task["status"] == "running" and (task["name"] == name or task["vm"] == vm_name)]

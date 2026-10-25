@@ -1,11 +1,11 @@
-"""The Images tab on the VMs page: the default image, rename, delete, New image and Rebuild (the image's agent
-builds it), save a VM as an image, what each image has (its inventory: system, languages, tools, packages),
-and its description and agent.
+"""The Images tab on the VMs page: the default image, rename, delete, New image (the image's agent writes its
+image.yaml and builds it), Rebuild (image.yaml is built again, no agent), save a VM as an image, what each image has
+(its inventory: system, languages, tools, packages), its image.yaml and its agent.
 
 The list itself reaches the browser through /api/live (topic "images"). Builds and saves run in the
 background and answer at once; the task shows in the list until it is done. Most of this makes Incus
 calls that block, so those endpoints are plain `def` (FastAPI runs them in a thread pool). The agent's
-endpoints (chat, New image, Rebuild, stopping a build) are `async def`: its turns run on the event loop.
+endpoints (chat, New image, stopping its build) are `async def`: its turns run on the event loop.
 """
 
 import asyncio
@@ -36,6 +36,10 @@ class PackagesRequest(BaseModel):
     packages: list[str]
 
 
+class DefinitionRequest(BaseModel):
+    text: str
+
+
 class SaveRequest(BaseModel):
     vm: str
     name: str
@@ -57,7 +61,7 @@ def set_default_image(name: str) -> dict:
 
 @router.put("/images/{name}")
 def rename_image(name: str, body: RenameRequest) -> dict:
-    """Give it another name. VMs made from it keep pointing at it. Its description and agent chat move along."""
+    """Give it another name. VMs made from it keep pointing at it. Its image.yaml, agent chat and builder VM move along."""
     if image_agents.busy(name):
         raise HTTPException(status_code=409, detail=f"{name}'s agent is working. Wait, or stop it.")
     try:
@@ -70,7 +74,7 @@ def rename_image(name: str, body: RenameRequest) -> dict:
 
 @router.delete("/images/{name}")
 def delete_image(name: str) -> dict:
-    """Only an image no VM was made from (stopped ones count too). Its description and agent chat go too."""
+    """Only an image no VM was made from (stopped ones count too). Its image.yaml, agent chat and builder VM go too."""
     if image_agents.busy(name):
         raise HTTPException(status_code=409, detail=f"{name}'s agent is working. Wait, or stop it.")
     try:
@@ -82,37 +86,38 @@ def delete_image(name: str) -> dict:
 
 @router.get("/images/new/options")
 def new_image_options() -> dict:
-    """What New image offers: systems, desktops, and the list that goes in every new image."""
+    """What New image offers: systems, desktops, and the dependencies it starts with."""
     return images.new_options()
 
 
 @router.put("/images/new/packages")
 def set_new_image_packages(body: PackagesRequest) -> dict:
-    """The list that goes in every new image from now on."""
+    """The dependencies New image starts with from now on."""
     images.set_packages(body.packages)
     return {}
 
 
 @router.post("/images/new")
 async def new_image(body: NewImageRequest) -> dict:
-    """Writes the new image's description and starts its agent building it; answers at once."""
+    """Starts the new image's agent with what the user picked: it writes image.yaml and builds it. Answers at once."""
     name = body.name.strip()
     try:
-        images.new_spec(name, body.system, body.desktop, body.packages, body.comments)
-        image_agents.build(name)
+        request = images.new_request(name, body.system, body.desktop, body.packages, body.comments)
+        image_agents.build(name, request)
     except ImagesError as error:
         raise HTTPException(status_code=409, detail=str(error))
     return {}
 
 
 @router.post("/images/{name}/rebuild")
-async def rebuild_image(name: str) -> dict:
-    """The image's agent builds it again from its description; the new build replaces it. Answers at once."""
+def rebuild_image(name: str) -> dict:
+    """Builds the image from its image.yaml again (no agent), as a task; the new build replaces it. Answers at once."""
+    if image_agents.busy(name):
+        raise HTTPException(status_code=409, detail=f"{name}'s agent is working. Wait, or stop it.")
     try:
-        image_agents.build(images.find(name)["name"])
+        return images.build(name)
     except ImagesError as error:
         raise HTTPException(status_code=409, detail=str(error))
-    return {}
 
 
 @router.post("/images/save")
@@ -142,23 +147,34 @@ def image_inventory(fingerprint: str) -> dict:
     return inventory
 
 
-@router.get("/images/{name}/spec")
-def image_spec(name: str) -> dict:
-    """The image's description now, and a diff from the one it was built from ("" when the same)."""
+@router.get("/images/{name}/definition")
+def image_definition(name: str) -> dict:
+    """The image's image.yaml now, and a diff from what it was built from. Also for an image still being made."""
     try:
-        name = images.find(name)["name"]
-        return {"spec": images.read_spec(name), "diff": images.spec_diff(name)}
+        return images.definition(name)
     except ImagesError as error:
         raise HTTPException(status_code=400, detail=str(error))
 
 
-@router.post("/images/{name}/spec/discard")
-def discard_spec(name: str) -> dict:
-    """Put the description back to what the image was built from."""
+@router.put("/images/{name}/definition")
+def change_image_definition(name: str, body: DefinitionRequest) -> dict:
+    """The user changes the image's image.yaml (refused, with the reason, when it isn't right). A Rebuild applies it."""
+    if image_agents.busy(name):
+        raise HTTPException(status_code=409, detail=f"{name}'s agent is working on its image.yaml. Wait, or stop it.")
+    try:
+        images.write_definition(images.find(name)["name"], body.text)
+    except ImagesError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    return {}
+
+
+@router.post("/images/{name}/definition/discard")
+def discard_definition_changes(name: str) -> dict:
+    """Put image.yaml back to what the image was built from."""
     if image_agents.busy(name):
         raise HTTPException(status_code=409, detail=f"{name}'s agent is working. Wait, or stop it.")
     try:
-        images.discard_spec(name)
+        images.discard_changes(name)
     except ImagesError as error:
         raise HTTPException(status_code=400, detail=str(error))
     return {}
@@ -194,7 +210,7 @@ async def stop_image_agent(name: str) -> dict:
 
 @router.delete("/images/{name}/agent")
 async def clear_image_agent(name: str) -> dict:
-    """A new conversation. The description stays as it is."""
+    """A new conversation. The image's image.yaml stays as it is."""
     try:
         image_agents.clear(name)
     except ImagesError as error:
@@ -210,7 +226,7 @@ def task_log(task_id: str) -> str:
 
 @router.post("/images/tasks/{task_id}/stop")
 async def stop_task(task_id: str) -> dict:
-    """An agent's build stops by interrupting the agent (the build then fails and its VM goes); others are killed."""
+    """The agent's work stops by interrupting the agent (a build it waits for stops too); others are killed."""
     try:
         task = images.get_task(task_id)
         if task["kind"] == "agent":
@@ -224,7 +240,7 @@ async def stop_task(task_id: str) -> dict:
 
 @router.delete("/images/tasks/{task_id}")
 def dismiss_task(task_id: str) -> dict:
-    """Forget a failed build, save or inspect, and its log (and a failed build's VM)."""
+    """Forget a failed build, save or inspect, and its log."""
     try:
         images.dismiss(task_id)
     except ImagesError as error:

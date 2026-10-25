@@ -4,20 +4,22 @@ The Images tab of the VMs page: the images new VMs start from.
 One row per image (an Incus image with a name): its system version, size, when it was made, and how many VMs
 were made from that exact image (stopped ones too). The default image is what New VM picks first. Each row's
 menu: make it the default, rename it, rebuild it, delete it (only once no VM was made from it).
-Details opens what the image has (ImageInventory) in a dialog, with Inspect again and the image's agent, which
-keeps its description; an image that wasn't listed yet has Inspect instead (about two minutes, in a throwaway VM).
-An amber dot after the name: its description changed since it was built, so a rebuild would give a different image.
+Details opens what the image has (ImageInventory) in a dialog, with Inspect again, its image.yaml (what defines it)
+and its agent; an image that wasn't listed yet has Inspect instead (about two minutes, in a throwaway VM).
+An amber dot after the name: its image.yaml changed since it was built, so a Rebuild would give a different image.
 
-New images come from New image (NewImageDialog: the image's agent makes it from an official system image) or
-Save a VM (that VM's disk as it is, a few minutes). Rebuild has the agent make it again from its description.
-They run in the background as tasks, shown above the list with their last log lines until the image is listed;
-the whole log opens in a dialog. Everything comes from the live "images" topic.
+New images come from New image (NewImageDialog: the image's agent writes its image.yaml and builds it) or Save a VM
+(that VM's disk as it is, a few minutes). Rebuild builds image.yaml again, mechanically, with no agent; only what
+changed since the last build runs again. They run in the background as tasks, shown above the list with their last
+log lines until the image is listed; the whole log opens in a dialog, and the agent's work and builds also show
+image.yaml (as the agent writes it). Everything comes from the live "images" topic.
 */
 
-import { Hammer, Loader2, MoreHorizontal, Pencil, Plus, Save, ScanSearch, ScrollText, Square, Star, Trash2, X } from "lucide-react";
+import { FileText, Hammer, Loader2, MoreHorizontal, Pencil, Plus, Save, ScanSearch, ScrollText, Square, Star, Trash2, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
+import ImageDefinition from "@/ImageDefinition";
 import ImageInventory from "@/ImageInventory";
 import NewImageDialog from "@/NewImageDialog";
 import SaveImageDialog from "@/SaveImageDialog";
@@ -42,7 +44,7 @@ import { cn } from "@/lib/utils";
 
 const COLUMNS = "grid grid-cols-[minmax(0,220px)_minmax(0,1fr)_80px_150px_56px_96px_32px] items-center gap-3";
 
-const TASK_TITLE: Record<string, string> = { agent: "Making", save: "Saving", inspect: "Listing what it has:" };
+const TASK_TITLE: Record<string, string> = { agent: "Making", build: "Building", save: "Saving", inspect: "Listing what it has:" };
 
 // tabs: the VMs page's tabs, which share the header row with the buttons here.
 export default function Images(props: { tabs: ReactNode }) {
@@ -55,12 +57,14 @@ export default function Images(props: { tabs: ReactNode }) {
   const [renaming, setRenaming] = useState<Image | null>(null);
   const [deleting, setDeleting] = useState<Image | null>(null);
   const [logOf, setLogOf] = useState<ImageTask | null>(null);
+  // The image whose image.yaml is open next to its build ("" when none).
+  const [definitionOf, setDefinitionOf] = useState("");
   // The fingerprint of the image whose Details are open. Read from the live list, so Inspect again shows up in it.
   const [showing, setShowing] = useState("");
   const shown = data.images.find((image) => image.fingerprint === showing);
 
-  // The agent makes one image at a time.
-  const buildRunning = data.tasks.some((task) => task.kind === "agent" && task.status === "running");
+  // One build (or the agent making an image) at a time.
+  const buildRunning = data.tasks.some((task) => (task.kind === "agent" || task.kind === "build") && task.status === "running");
 
   async function makeDefault(image: Image) {
     try {
@@ -83,7 +87,7 @@ export default function Images(props: { tabs: ReactNode }) {
   async function rebuild(image: Image) {
     try {
       await api(`/api/images/${encodeURIComponent(image.name)}/rebuild`, { method: "POST" });
-      toast.success(`The agent is making ${image.name} again. Follow it above the image list.`);
+      toast.success(`Building ${image.name}. Follow it above the image list.`);
     } catch (err) {
       toast.error(`Could not rebuild ${image.name}: ${err instanceof Error ? err.message : err}`);
     }
@@ -125,7 +129,7 @@ export default function Images(props: { tabs: ReactNode }) {
           <Button
             size="sm"
             disabled={buildRunning}
-            title={buildRunning ? "The agent makes one image at a time" : undefined}
+            title={buildRunning ? "One image is made at a time" : undefined}
             onClick={() => setCreating(true)}
           >
             <Plus /> New image
@@ -152,7 +156,9 @@ export default function Images(props: { tabs: ReactNode }) {
                     started {new Date(task.started_at).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
                   </span>
                   {task.status === "running" && (
-                    <span className="text-xs text-muted-foreground">{task.kind === "agent" ? "the agent is on it" : "a few minutes"}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {task.kind === "agent" ? "the agent is on it" : task.kind === "build" ? "minutes; only what changed runs again" : "a few minutes"}
+                    </span>
                   )}
                 </div>
                 <div className={cn("truncate font-mono text-xs", task.status === "failed" ? "text-destructive" : "text-muted-foreground")}>
@@ -162,6 +168,11 @@ export default function Images(props: { tabs: ReactNode }) {
               <Button size="xs" variant="ghost" onClick={() => setLogOf(task)}>
                 <ScrollText /> Log
               </Button>
+              {(task.kind === "agent" || task.kind === "build") && (
+                <Button size="xs" variant="ghost" onClick={() => setDefinitionOf(task.name)}>
+                  <FileText /> image.yaml
+                </Button>
+              )}
               {task.status === "running" && (
                 <Button size="xs" variant="ghost" onClick={() => stopTask(task)}>
                   <Square /> Stop
@@ -199,8 +210,8 @@ export default function Images(props: { tabs: ReactNode }) {
           <div key={image.fingerprint} className={cn(COLUMNS, "min-h-8 border-b px-3 py-0.5 hover:bg-accent/50")}>
             <span className="flex min-w-0 flex-wrap items-center gap-1.5">
               <span className="truncate font-medium">{image.name}</span>
-              {image.spec_changed && (
-                <span title="Its description changed since this build. Rebuild to apply it.">
+              {image.definition_changed && (
+                <span title="Its image.yaml changed since this build. Rebuild to apply it.">
                   <StatusDot tone="amber" />
                 </span>
               )}
@@ -243,7 +254,7 @@ export default function Images(props: { tabs: ReactNode }) {
                   <Hammer /> Rebuild
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem variant="destructive" disabled={image.default || image.used_by.length > 0} onSelect={() => setDeleting(image)}>
+                <DropdownMenuItem variant="destructive" disabled={image.used_by.length > 0} onSelect={() => setDeleting(image)}>
                   <Trash2 /> Delete
                   {image.used_by.length > 0 && <span className="ml-auto text-xs">VMs use it</span>}
                 </DropdownMenuItem>
@@ -257,6 +268,23 @@ export default function Images(props: { tabs: ReactNode }) {
       {saving && <SaveImageDialog vm={null} onClose={() => setSaving(false)} />}
       {renaming !== null && <RenameDialog key={renaming.fingerprint} image={renaming} onClose={() => setRenaming(null)} />}
       {logOf !== null && <LogDialog task={logOf} onClose={() => setLogOf(null)} />}
+
+      <Dialog
+        open={definitionOf !== ""}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDefinitionOf("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>image.yaml of {definitionOf}</DialogTitle>
+            <DialogDescription>What defines the image. Once it is made, change it in its Details.</DialogDescription>
+          </DialogHeader>
+          {definitionOf !== "" && <ImageDefinition name={definitionOf} updatedAt={0} editable={false} follow />}
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={shown !== undefined}
@@ -330,8 +358,8 @@ export default function Images(props: { tabs: ReactNode }) {
           <AlertDialogHeader>
             <AlertDialogTitle>Rebuild {rebuilding?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Its agent makes it again from its description, starting from a fresh download of the system. The new build replaces it
-              when it is done; VMs made from it keep their own disk.
+              It is built again from its image.yaml, with no agent; only what changed since the last build runs again.
+              The new build replaces it when it is done; VMs made from it keep their own disk.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

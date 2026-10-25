@@ -1,7 +1,8 @@
 /*
-New image: the image's agent makes it (sandbox/image_agent.py). It downloads the official system image, puts in
-the desktop (GNOME by default, KDE Plasma, or none: terminal only) with Firefox, the dependencies and what the
-comments ask for, makes what the app needs work, checks it and publishes it.
+New image: the image's agent makes it (sandbox/image_agent.py). It writes the image's image.yaml: the system, the
+desktop (GNOME by default, KDE Plasma, or none: terminal only; Firefox and what the app needs come with every
+desktop), the dependencies and what the comments ask for, and builds it from official sources. What you pick here
+goes to the agent (its chat starts with it); the image itself is only image.yaml.
 
 The dialog only says what the image should have; the agent picks sensible defaults for the rest. The name starts
 as the system and the first free number (ubuntu-1), like vm1 and agent-1, until you type one. The dependencies
@@ -108,8 +109,8 @@ export default function NewImageDialog(props: { onClose: () => void }) {
         <DialogHeader>
           <DialogTitle>New image</DialogTitle>
           <DialogDescription>
-            An agent downloads the official system, sets it up with what you pick here, checks it and publishes it. It picks
-            sensible defaults for the rest.
+            An agent writes image.yaml, what defines the image, from what you pick here, and builds it from official sources. It
+            picks sensible defaults for the rest. Rebuild later builds the same image.yaml.
           </DialogDescription>
         </DialogHeader>
 

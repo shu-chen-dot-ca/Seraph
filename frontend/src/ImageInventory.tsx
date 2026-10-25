@@ -1,11 +1,12 @@
 /*
-What an image has, shown in the Details dialog of the Images tab. Three tabs:
+What an image has and what makes it, shown in the Details dialog of the Images tab. Four tabs:
 - Overview: the system, languages, tools, ready-made Docker images, models, caches and package counts
   (all from the live feed's summary, so it opens at once).
 - Packages: every package, searchable and filtered by kind (apt, pip, npm, cargo, snap, flatpak, VS Code,
   Docker, Playwright). The full list comes from GET /api/images/inventory/<fingerprint>.
-- Agent: a chat with the image's agent, which keeps its description and builds it (ImageAgent). Overview and
-  Packages are what the build has; once the description differs from it, the tab has an amber dot until a rebuild.
+- Definition: the image's image.yaml, the one place it is defined (ImageDefinition). Overview and Packages are what
+  the build has; once image.yaml differs from what it was built from, the tab has an amber dot until a Rebuild.
+- Agent: a chat with the image's agent, which writes image.yaml and changes it when asked (ImageAgent).
 
 A list never changes once made, so each one is fetched once and kept: for the session (inventories below)
 and in localStorage, so it opens at once after a reload too. Kept by fingerprint and when it was listed, since
@@ -18,6 +19,7 @@ import { Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import ImageAgent from "@/ImageAgent";
+import ImageDefinition from "@/ImageDefinition";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -63,9 +65,12 @@ export default function ImageInventory(props: { image: Image; onRebuild: () => v
             Packages
             <span className="text-xs text-muted-foreground tabular-nums">{total.toLocaleString()}</span>
           </TabsTrigger>
+          <TabsTrigger value="definition" className="px-2.5">
+            Definition
+            {props.image.definition_changed && <StatusDot tone="amber" />}
+          </TabsTrigger>
           <TabsTrigger value="agent" className="px-2.5">
             Agent
-            {props.image.spec_changed && <StatusDot tone="amber" />}
           </TabsTrigger>
         </TabsList>
       </Tabs>
@@ -131,7 +136,10 @@ export default function ImageInventory(props: { image: Image; onRebuild: () => v
         </div>
       )}
 
-      {tab === "agent" && <ImageAgent image={props.image} onRebuild={props.onRebuild} />}
+      {tab === "definition" && (
+        <ImageDefinition name={props.image.name} updatedAt={props.image.definition_updated_at} editable follow={false} onRebuild={props.onRebuild} />
+      )}
+      {tab === "agent" && <ImageAgent image={props.image} />}
       {tab === "packages" && <PackagesTab fingerprint={props.image.fingerprint} inspectedAt={highlights.inspected_at} counts={highlights.counts} />}
     </div>
   );

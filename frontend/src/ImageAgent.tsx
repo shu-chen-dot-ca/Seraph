@@ -1,49 +1,54 @@
 /*
-The Agent tab of an image's Details: a chat with the image's agent (sandbox/image_agent.py). It keeps the image's
-description (system, desktop, browser, what is in it) and changes it when asked, and it builds the image from it
-(New image, Rebuild: its build steps show here too). Nothing changes in the image until you rebuild it. So the top
-says whether the description differs from what the image was built from, with the same amber dot as the Images
-row, and offers the description (or the diff, when it changed), Discard (back to what it was built from) and Rebuild.
+The Agent tab of an image's Details: a chat with the image's agent (sandbox/image_agent.py). It wrote the image's
+image.yaml (the Definition tab) when the image was made, and its steps from then show here; it changes image.yaml
+when asked. Nothing changes in the image until it is rebuilt (by Rebuild, or by the agent when you ask it to).
 
-The chat comes from GET /api/images/<name>/agent, asked again every second while the agent works.
-The description and diff come from GET /api/images/<name>/spec while shown, again whenever the agent did something.
+The chat comes from GET /api/images/<name>/agent, asked again every second while the agent works. What you type
+and don't send is kept in this browser per image (localStorage), so it is still there when you come back, after a
+reload, and after a backend restart.
 */
 
-import { ArrowUp, Hammer, Loader2, MessageSquarePlus, Square, Undo2, Wrench } from "lucide-react";
+import { ArrowUp, Loader2, MessageSquarePlus, Square, Wrench } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/ui/markdown";
-import { StatusDot } from "@/components/ui/status-dot";
 import { Textarea } from "@/components/ui/textarea";
 import { api, type Image, type ImageAgentChat } from "@/live";
 import { cn } from "@/lib/utils";
 
-export default function ImageAgent(props: { image: Image; onRebuild: () => void }) {
+export default function ImageAgent(props: { image: Image }) {
   const [chat, setChat] = useState<ImageAgentChat | null>(null);
   const [error, setError] = useState("");
-  const [text, setText] = useState("");
+  // The unsent message: from localStorage at first, and saved there as you type.
+  const draftKey = `draft:image-agent:${props.image.name}`;
+  const [text, setText] = useState(() => {
+    try {
+      return localStorage.getItem(draftKey) ?? "";
+    } catch {
+      // Storage blocked (private window): start empty.
+      return "";
+    }
+  });
   const [sending, setSending] = useState(false);
   // Bumped after sending, so the chat is followed again until the turn ends.
   const [follow, setFollow] = useState(0);
-  const [showDiff, setShowDiff] = useState(false);
-  const [spec, setSpec] = useState<{ spec: string; diff: string } | null>(null);
-  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    try {
+      if (text === "") {
+        localStorage.removeItem(draftKey);
+      } else {
+        localStorage.setItem(draftKey, text);
+      }
+    } catch {
+      // Storage blocked (private window): the draft just isn't kept.
+    }
+  }, [draftKey, text]);
+
   const name = props.image.name;
-  const changed = props.image.spec_changed;
   const busy = chat !== null && chat.busy;
   const historyLength = chat === null ? 0 : chat.history.length;
 
@@ -73,28 +78,6 @@ export default function ImageAgent(props: { image: Image; onRebuild: () => void 
       window.clearTimeout(timer);
     };
   }, [name, follow]);
-
-  // The description and diff, while shown: again when it changes (the dot) or the agent did something.
-  useEffect(() => {
-    if (!showDiff) {
-      return;
-    }
-    let stopped = false;
-    api<{ spec: string; diff: string }>(`/api/images/${encodeURIComponent(name)}/spec`)
-      .then((answer) => {
-        if (!stopped) {
-          setSpec(answer);
-        }
-      })
-      .catch((err) => {
-        if (!stopped) {
-          setError(err instanceof Error ? err.message : String(err));
-        }
-      });
-    return () => {
-      stopped = true;
-    };
-  }, [name, showDiff, changed, historyLength]);
 
   // New messages scroll the chat to the bottom.
   useEffect(() => {
@@ -136,73 +119,8 @@ export default function ImageAgent(props: { image: Image; onRebuild: () => void 
     }
   }
 
-  async function discard() {
-    try {
-      await api(`/api/images/${encodeURIComponent(name)}/spec/discard`, { method: "POST" });
-      setShowDiff(false);
-      toast.success(`${name}'s description is back to what it was built from.`);
-    } catch (err) {
-      toast.error(`Could not discard the changes: ${err instanceof Error ? err.message : err}`);
-    }
-  }
-
   return (
     <div className="space-y-2">
-      <div className="flex min-h-9 items-center gap-2 border px-2.5 py-1">
-        {!changed && (
-          <>
-            <span className="min-w-0 flex-1 text-muted-foreground">
-              The image matches its description. Ask the agent for changes; a rebuild applies them.
-            </span>
-            <Button size="xs" variant="ghost" onClick={() => setShowDiff(!showDiff)}>
-              {showDiff ? "Hide description" : "Show description"}
-            </Button>
-          </>
-        )}
-        {changed && (
-          <>
-            <StatusDot tone="amber" />
-            <span className="min-w-0 flex-1">The description changed since this build. The image has none of it until you rebuild.</span>
-            <Button size="xs" variant="ghost" onClick={() => setShowDiff(!showDiff)}>
-              {showDiff ? "Hide changes" : "Show changes"}
-            </Button>
-            <Button size="xs" variant="ghost" disabled={busy} onClick={() => setConfirmDiscard(true)}>
-              <Undo2 /> Discard
-            </Button>
-            <Button size="xs" variant="outline" disabled={busy} onClick={props.onRebuild}>
-              <Hammer /> Rebuild
-            </Button>
-          </>
-        )}
-      </div>
-
-      {showDiff && !changed && (
-        <pre className="max-h-60 overflow-auto border bg-muted/40 p-2 font-mono text-xs whitespace-pre-wrap">
-          {spec === null ? "Loading…" : spec.spec}
-        </pre>
-      )}
-
-      {showDiff && changed && (
-        <pre className="max-h-60 overflow-auto border bg-muted/40 p-2 font-mono text-xs">
-          {spec === null && "Loading…"}
-          {spec !== null &&
-            spec.diff
-              .split("\n")
-              .map((line, index) => (
-                <div
-                  key={index}
-                  className={cn(
-                    line.startsWith("+") && !line.startsWith("+++") && "text-ok",
-                    line.startsWith("-") && !line.startsWith("---") && "text-destructive",
-                    (line.startsWith("@@") || line.startsWith("+++") || line.startsWith("---")) && "text-muted-foreground",
-                  )}
-                >
-                  {line || " "}
-                </div>
-              ))}
-        </pre>
-      )}
-
       <div ref={scrollRef} className="h-72 space-y-2 overflow-auto border bg-background p-2.5">
         {chat === null && error === "" && (
           <div className="flex items-center gap-2 text-muted-foreground">
@@ -211,7 +129,7 @@ export default function ImageAgent(props: { image: Image; onRebuild: () => void 
         )}
         {chat !== null && chat.history.length === 0 && (
           <div className="text-muted-foreground">
-            For example: "use KDE instead", "add Rust and Go", "which Python does it have?"
+            For example: "add Rust and Go", "use KDE instead", "why did the last Rebuild fail?"
           </div>
         )}
         {chat !== null &&
@@ -295,21 +213,6 @@ export default function ImageAgent(props: { image: Image; onRebuild: () => void 
           <MessageSquarePlus /> New chat
         </Button>
       </div>
-
-      <AlertDialog open={confirmDiscard} onOpenChange={setConfirmDiscard}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Discard the changes to {name}'s description?</AlertDialogTitle>
-            <AlertDialogDescription>The description goes back to what the image was built from. The chat stays.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={discard}>
-              Discard
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }
