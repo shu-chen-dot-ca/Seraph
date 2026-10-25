@@ -21,7 +21,8 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   the change, the default), and full, the project's official checks (what its rules ask to run before
   a PR). When the official checks would take over an hour, the agent runs the basic ones and asks the
   user (draft_question) before the PR. A passing before is needed to go past set_up and an after for
-  a PR draft.
+  a PR draft; an official before of another job on the same repo and VM counts too (job_progress
+  carries it over), so a project already set up isn't set up again.
 - VMs: the agent sees every VM with what its image has (sandbox/images.py lists each image once) and
   picks the one that suits its jobs as its target VM (the user can set it too). It can't make VMs.
   It joins its target VM's queue (sandbox/vm_queue.py) and releases the VM when its jobs there are done.
@@ -962,8 +963,25 @@ class WorkTools:
         step = (args.get("step") or "").strip().lower().replace(" ", "_") or None
         if step is not None and step not in job["steps"]:
             return {"content": [{"type": "text", "text": f"step must be one of: {', '.join(job['steps'])}."}], "is_error": True}
-        # The full suite has to work on the unchanged code before any change is made.
+        # The tests have to work on the unchanged code before any change is made. When another job on the same repo
+        # already got the official checks passing on this VM, the project is set up there: that run counts for this job too.
         before = job["tests"]["before"]
+        reused = None
+        if job["kind"] == "fix_issue" and step in STEPS_AFTER_SETUP and before is None:
+            for other in self.agents.jobs.list():
+                run = other["tests"]["before"]
+                if other["id"] == job["id"] or other["repo"] != job["repo"] or other["vm"] != self.record["target_vm"]:
+                    continue
+                if run is None or not run["passed"] or run.get("scope", "full") != "full":
+                    continue
+                if reused is None or run["at"] > reused["tests"]["before"]["at"]:
+                    reused = other
+        if reused is not None:
+            before = reused["tests"]["before"]
+            self.agents.jobs.update(job["id"], tests={"before": before, "after": None})
+            for item in reused["evidence"]:
+                if item["id"] == before["evidence"]:
+                    self.agents.jobs.add_evidence(job["id"], item)
         if job["kind"] == "fix_issue" and step in STEPS_AFTER_SETUP and (before is None or not before["passed"]):
             text = (
                 "You are still in set_up: get the project's tests passing on the unchanged code first "
@@ -984,6 +1002,11 @@ class WorkTools:
             fields["about"] = args["about"].strip()
         job = self.agents.jobs.update(job["id"], **fields)
         text = f"{job['id']}: {(job['step'] or 'no step yet').replace('_', ' ')}, \"{job['headline']}\"."
+        if reused is not None:
+            text += (
+                f" The project is already set up on {reused['vm']}: its official checks passed there on the unchanged code for "
+                f"{reused['id']}, so that run counts for this job too. Run when: after with exactly that command: `{before['command']}`."
+            )
         return {"content": [{"type": "text", "text": text}]}
 
     async def draft_comment(self, args: dict) -> dict:
@@ -1442,7 +1465,10 @@ class WorkTools:
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         before = job["tests"]["before"]
         if when == "after" and (before is None or not before["passed"]):
-            text = "First get the tests passing on the unchanged code (when: before)."
+            text = (
+                "First get the tests passing on the unchanged code (when: before). If another job on this repo already got the "
+                "official checks passing on this VM, job_progress with the next step carries that run over instead."
+            )
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         if when == "after" and scope != before.get("scope", "full"):
             text = f"Run it with the same scope as on the unchanged code: {before.get('scope', 'full')}."

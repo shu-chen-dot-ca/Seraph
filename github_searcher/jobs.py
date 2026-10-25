@@ -29,7 +29,8 @@ The project's tests, run by the agent with run_tests: first on the unchanged cod
 before the agent changes anything), then on the finished change (they must pass again, with the
 same command, before a PR can be drafted). The scope is focused, the basic checks (the tests that cover
 the change: the default), or full, the project's official checks (what its rules ask to run before a PR;
-when those would take over an hour the agent asks the user first):
+when those would take over an hour the agent asks the user first). A job on a repo another job already
+got the official checks passing for, on the same VM, takes over that before run instead of setting up again:
 
     "tests": {"before": Run | null, "after": Run | null}
     Run: {"command", "scope": "full" | "focused" (missing on old runs: full), "base", "exit_code",
