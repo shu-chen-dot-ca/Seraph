@@ -6,7 +6,7 @@ App owns the theme and accent: it applies them to <html> (class "dark" and data-
 so a pick shows on the whole app at once, behind the dialog. index.html applies the saved ones before the first paint.
 
 Each theme card has a tiny drawing of the app in that theme; System's is split corner to corner, light and dark.
-The accent colors live in index.css. A swatch carries data-accent itself, so it shows that color as it looks in
+The accent colors live in index.css (Coral is OpenClaw's own red). A swatch carries data-accent itself, so it shows that color as it looks in
 the current theme (orange, green and teal get dark text in dark mode, which the check mark follows).
 
 GitHub account: the account Approve in the Inbox sends PRs and comments as (github_searcher/github_account.py).
@@ -50,6 +50,7 @@ const ACCENTS = [
   { id: "orange", name: "Orange" },
   { id: "green", name: "Green" },
   { id: "teal", name: "Teal" },
+  { id: "coral", name: "Coral" },
   { id: "graphite", name: "Graphite" },
 ];
 

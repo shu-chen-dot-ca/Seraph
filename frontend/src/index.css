@@ -2,7 +2,7 @@
    a warm paper light mode, soft borders, rounded corners and quick eased motion. Still dense: 13px text, 28-32px rows.
    Dark is the default: <html class="dark"> (set in index.html, changed in the sidebar's Settings).
    Text is 13px Instrument Sans (OpenClaw's font); code, diffs and terminal text use JetBrains Mono.
-   One accent (--primary), blue unless another is picked in Settings (the data-accent rules below).
+   One accent (--primary), blue unless another is picked in Settings (the data-accent rules below; Coral is OpenClaw's own).
    Status colors: --ok green, --warn amber, --idle gray, --destructive red.
 
    Motion (the base layer below): anything clickable eases its colors out over 150ms, but turns on at once on hover,
@@ -202,6 +202,22 @@
   --primary-foreground: oklch(0.141 0.005 285.823);
   --ring: oklch(0.72 0.11 186);
   --selected: oklch(0.72 0.11 186 / 12%);
+}
+
+/* Coral: OpenClaw's own accent (its light #bd4531, and between its dark #ff5c5c and #d13c3c buttons). */
+[data-accent="coral"] {
+  --primary: oklch(0.556 0.163 35);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.556 0.163 35);
+  --selected: oklch(0.556 0.163 35 / 12%);
+}
+
+.dark[data-accent="coral"],
+.dark [data-accent="coral"] {
+  --primary: oklch(0.65 0.19 25);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.65 0.19 25);
+  --selected: oklch(0.65 0.19 25 / 12%);
 }
 
 /* Graphite: no color at all, like shadcn's neutral. Buttons are near-black in light mode, near-white in dark. */
