@@ -6,7 +6,10 @@ An issue's status comes from its latest job: no job = New, else queued / working
 the repo chip filters by repo (it lives in the URL: #/issues?repo=owner/name, which the Repos page links to).
 
 Each row shows what helps decide whether an issue is worth fixing, from its facts (github_searcher/issue_facts.py,
-kept fresh by the backend; Refresh fetches them all now): repo stars, when it was opened, its last activity, comments,
+kept fresh by the backend; Refresh on top fetches them all now, then has Claude read every open issue and its comments
+again, to see if it is still free or anything changed; it spins until both are done, minutes for many, then says
+which ones were free and aren't anymore): repo stars,
+when it was opened, its last activity, comments,
 and amber words when someone is assigned or a PR is open for it. The list is a table like the Repos and Explore
 pages': #, Title (taking the room left over), then ISSUE_COLUMNS, every column as wide as its widest cell over the
 rows shown (a hidden copy of them, the sizer at the bottom, measures them: lib/column-widths.ts), the text in the
@@ -452,7 +455,10 @@ export default function Issues(props: { repo: string | null; open: string | null
     setRetagging((current) => current.filter((each) => each !== id));
   }
 
-  async function refreshFacts() {
+  // Refresh: every issue's facts from GitHub (seconds), then Claude reads every open one and its comments again (still
+  // free? claimed? changed?), a few minutes for many; each open row's Tag again spins meanwhile.
+  async function refreshAll() {
+    const ids = issues.items.filter((issue) => (issue.facts?.state ?? issue.state) !== "CLOSED").map((issue) => issue.id);
     setRefreshing(true);
     try {
       const result = await api<{ refreshed: number; failed: string[] }>("/api/issues/refresh", { method: "POST" });
@@ -462,6 +468,22 @@ export default function Issues(props: { repo: string | null; open: string | null
     } catch (err) {
       toast.error(`Refresh failed: ${err instanceof Error ? err.message : err}`);
     }
+    setRetagging((current) => [...current, ...ids]);
+    try {
+      const result = await api<{ tagged: number; failed: string[]; taken: string[] }>("/api/tags/refresh", { method: "POST", body: { ids } });
+      if (result.failed.length > 0) {
+        toast.error(`Could not read ${result.failed.length} of them again; the backend tries again later.`);
+      }
+      // The rows show it too: Free turns to Assigned or –, the reason on hover.
+      if (result.taken.length > 0) {
+        toast.warning(`No longer free: ${result.taken.join(", ")}`);
+      } else {
+        toast.success(`Read ${result.tagged} issues again; none that was free got taken.`);
+      }
+    } catch (err) {
+      toast.error(`Could not read the issues again: ${err instanceof Error ? err.message : err}`);
+    }
+    setRetagging((current) => current.filter((each) => !ids.includes(each)));
     setRefreshing(false);
   }
 
@@ -636,11 +658,11 @@ export default function Issues(props: { repo: string | null; open: string | null
         <Input className="w-52" placeholder="Filter issues" value={filter} onChange={(event) => setFilter(event.target.value)} />
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button variant="ghost" size="icon" disabled={refreshing} onClick={refreshFacts} aria-label="Refresh from GitHub">
-              <RefreshCw className={cn(refreshing && "animate-spin")} />
+            <Button variant="ghost" size="sm" disabled={refreshing} onClick={refreshAll}>
+              <RefreshCw className={cn(refreshing && "animate-spin")} /> Refresh
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Refresh every issue from GitHub (also happens by itself every 30 minutes)</TooltipContent>
+          <TooltipContent>Get every issue from GitHub again and have Claude read every open one and its comments again: still free, or did anything change? A few minutes for many.</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>

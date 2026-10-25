@@ -16,7 +16,9 @@ github_searcher/issue_tags.py) are made by keep_tags(), also in the background,
 for the Issues list and the tracked repos' issues alike: new issues get theirs
 within TAGS_CHECK_SECONDS, an issue that changed on GitHub gets them again, and
 a free one every TAGS_FREE_SECONDS anyway (someone may have taken it). The Tag
-again buttons (refresh_tags) do it at once.
+again buttons and the pages' Refresh (Issues: every open issue in the list, after
+its facts; Tracked: every free issue, after the checks) do it at once
+(refresh_tags), and say which ones that were free aren't anymore.
 """
 
 import asyncio
@@ -141,10 +143,18 @@ async def assign_issue(body: AssignRequest) -> dict:
 
 @router.post("/tags/refresh")
 async def refresh_tags(body: IdsRequest) -> dict:
-    """Tag these issues again now (owner/name#n, any repos): the Tag again buttons. Many issues take a few minutes."""
+    """Tag these issues again now (owner/name#n, any repos): the Tag again buttons and the pages' Refresh. Many issues
+    take a few minutes. taken: the ones that were free before and aren't now (claimed, a PR came, ...), for the page to say so.
+    """
+    before = issue_tags.all()
     tagged = await issue_tags.tag(body.ids)
+    after = issue_tags.all()
     failed = [issue_id for issue_id in body.ids if issue_id not in tagged]
-    return {"tagged": len(tagged), "failed": failed}
+    taken = []
+    for issue_id in tagged:
+        if issue_id in before and before[issue_id]["status"] == "free" and after[issue_id]["status"] != "free":
+            taken.append(issue_id)
+    return {"tagged": len(tagged), "failed": failed, "taken": taken}
 
 
 @router.post("/issues/refresh")
