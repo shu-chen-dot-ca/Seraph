@@ -13,11 +13,17 @@ send(draft_id) sends a PR or comment draft once, as it was shown in the Inbox. A
 1. Your fork of the project, made the first time (GitHub keeps it). Your own repo is its own fork.
 2. The pictures the body shows (evidence:ev_...) go on your fork's pr-pictures branch, one folder per
    draft, and the body links to them there: GitHub's API has no way to attach a picture to a PR.
-3. One commit: the draft's diff on top of the commit the agent started from (base_sha). The diff is
-   applied here, with git apply in a temporary folder, to that commit's copies of the files it touches,
-   read from GitHub. Nothing comes from the VM, so what goes out is exactly the diff you reviewed. The
-   commit is yours: your GitHub name, your private noreply address, the PR's title as its message.
-4. That commit on a new branch in your fork: the agent's branch name (fix-<issue> when it worked on
+3. The commits, on top of the commit the agent started from (base_sha). The draft's diff is applied
+   here, with git apply in a temporary folder, to that commit's copies of the files it touches, read
+   from GitHub (tree()). Nothing comes from the VM, so what goes out is exactly the diff you reviewed.
+   The branch's own commits (the draft's "commits", kept by draft_pr) are replayed the same way, one by
+   one, with their messages. Every one is the agent's and goes out as yours: your GitHub name and
+   private noreply address (the VM's git address, also in a message's Signed-off-by, becomes that).
+   Nobody else's commit goes out and nothing credits a co-author: draft_pr refuses such a branch, and
+   a draft from before that rule with someone else's commit in it isn't sent. If they don't end at
+   exactly the reviewed diff, one more commit does, with the PR's title as its message. If they can't
+   be replayed (a binary file in one), it is that one commit alone.
+4. The last commit on a new branch in your fork: the agent's branch name (fix-<issue> when it worked on
    the main branch), with -2, -3, ... when the name is taken.
 5. The PR, from that branch into the branch the agent started from (base "origin/main" is main; else
    the project's default branch), with the draft's title and body. If GitHub refuses it, the new
@@ -343,6 +349,13 @@ class GithubAccount:
                 "This draft is from before sending was added, and doesn't say which commit it starts from. "
                 "Reply to the agent to draft it again, or download the .patch and send it yourself."
             )
+        # Only the agent's own commits go out (the user's rule): a draft from before draft_pr refused others' isn't sent.
+        for each in draft["commits"]:
+            if not each["own"]:
+                raise SendError(
+                    f"The commit {each['sha'][:10]} is by {each['author']['name']}, not the agent, and nobody else's work goes out "
+                    "with your name. Reply to the agent to redo the fix on its own and draft it again."
+                )
         fork = self.fork(client, account, repo)
         base_branch = ""
         if draft["base"].startswith("origin/"):
@@ -363,13 +376,38 @@ class GithubAccount:
         base_tree = response.json()["tree"]["sha"]
 
         body = self.pictures(client, account, fork, draft)
+        # Exactly the diff you reviewed: where the commits must end.
         tree = self.tree(client, fork, base_tree, draft["diff"])
+        you = {"name": account["name"], "email": f"{account['id']}+{account['login']}@users.noreply.github.com"}
 
-        self.step = "making the commit"
-        author = {"name": account["name"], "email": f"{account['id']}+{account['login']}@users.noreply.github.com"}
-        response = client.post(f"/repos/{fork}/git/commits", json={"message": draft["title"], "tree": tree, "parents": [base_sha], "author": author})
-        response.raise_for_status()
-        commit = response.json()["sha"]
+        # The branch's commits as the agent made them, each on the last.
+        commit = base_sha
+        commit_tree = base_tree
+        try:
+            for each in draft["commits"]:
+                self.step = f"replaying the commit {each['sha'][:10]}"
+                each_tree = commit_tree
+                if each["diff"].strip() != "":
+                    each_tree = self.tree(client, fork, commit_tree, each["diff"])
+                message = each["message"]
+                if each["vm_email"] != "":
+                    message = message.replace(each["vm_email"], you["email"])
+                payload = {"message": message, "tree": each_tree, "parents": [commit], "author": you, "committer": you}
+                response = client.post(f"/repos/{fork}/git/commits", json=payload)
+                response.raise_for_status()
+                commit = response.json()["sha"]
+                commit_tree = each_tree
+        except SendError:
+            # They don't replay (a binary file in one, say): one commit then.
+            commit = base_sha
+            commit_tree = base_tree
+        # What the commits don't have (changes never committed, or no commits kept): one more commit.
+        if commit_tree != tree:
+            self.step = "making the commit"
+            message = draft["title"]
+            response = client.post(f"/repos/{fork}/git/commits", json={"message": message, "tree": tree, "parents": [commit], "author": you})
+            response.raise_for_status()
+            commit = response.json()["sha"]
 
         # The agent's branch name, unless it worked on the main branch (or no branch at all).
         self.step = "making the branch in your fork"

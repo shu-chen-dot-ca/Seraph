@@ -8,7 +8,10 @@ Bottom: the open item (#/inbox/<id>), in tabs. The first two are for you, the la
 - Overview (Overview.tsx): what it is about in plain words (problem, cause, fix, what could go wrong) and the
   agent's before and after, side by side. A question is only this tab.
 - Diff (PRs): the unified diff split into files, each folding open with +/- counts and colored lines.
-- PR message / Comment: the title and text exactly as they go to GitHub, with Copy for sending by hand. A PR's
+- PR message / Comment: the title and text exactly as they go to GitHub, with Copy for sending by hand. Above a PR's,
+  the commits it goes out as: the branch's commits from the VM, all the agent's own and all with your name (it may
+  not use anyone else's commits, and nothing credits a co-author). What it didn't commit goes in one more commit,
+  titled like the PR. A PR's
   before and after pictures are in its text as ![...](evidence:ev_...): shown here in place, and listed above it with
   Copy picture and Download, since GitHub needs its own copy (sending uploads them to your fork; by hand, paste
   each over its line in GitHub's PR box).
@@ -25,7 +28,7 @@ J / K (or the arrow keys) move through the list when you are not typing.
 */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Check, ChevronRight, CircleHelp, Copy, Download, ExternalLink, FileCheck, GitPullRequest, Images, Loader2, MessageSquare, Reply, Send, Square, UserX, X } from "lucide-react";
+import { Check, ChevronRight, CircleHelp, Copy, Download, ExternalLink, FileCheck, GitCommitHorizontal, GitPullRequest, Images, Loader2, MessageSquare, Reply, Send, Square, UserX, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -673,6 +676,19 @@ export default function Inbox(props: { selected: string | null }) {
                           </div>
                         ))}
                       </div>
+                    </div>
+                  )}
+                  {draft.kind === "pr" && (
+                    <div className="space-y-0.5 text-xs text-muted-foreground">
+                      {draft.commits.length === 0 && <div>Goes out as one commit, with the title as its message.</div>}
+                      {draft.commits.length > 0 && <div>Goes out as these commits from the agent's branch, with your name:</div>}
+                      {draft.commits.map((commit) => (
+                        <div key={commit.sha} className="flex min-w-0 items-center gap-1.5">
+                          <GitCommitHorizontal className="size-3.5 shrink-0" />
+                          <span className="truncate text-foreground">{commit.message.split("\n")[0]}</span>
+                          {!commit.own && <span className="shrink-0 text-destructive">by {commit.author.name}: can't be sent</span>}
+                        </div>
+                      ))}
                     </div>
                   )}
                   {draft.kind === "pr" && <div className="text-[15px] font-semibold">{draft.title}</div>}

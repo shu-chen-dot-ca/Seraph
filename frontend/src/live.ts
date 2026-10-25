@@ -406,7 +406,19 @@ export type Draft = {
   created_at: string;
   decided_at: string | null;
   base_sha: string; // the commit the diff starts from; "" on drafts from before sending
+  commits: DraftCommit[]; // PRs: the branch's commits since base, replayed when it is sent ([]: one commit)
   sent: DraftSent | null; // what went to GitHub as you (github_searcher/github_account.py); null until then
+};
+
+// One of a PR branch's commits, sent with your name. own: the agent's (the VM's git address); every commit of a new
+// draft is (draft_pr refuses anyone else's), and a draft with someone else's commit isn't sent.
+export type DraftCommit = {
+  sha: string;
+  message: string;
+  author: { name: string; email: string; date: string };
+  own: boolean;
+  vm_email: string;
+  diff: string;
 };
 
 // A PR or comment Approve sent to GitHub from your account. PRs keep what following them up will need.

@@ -11,6 +11,8 @@ Approve on a PR or comment also sends it to GitHub as them, first; "sent" then s
      "title", "body": "markdown",
      "diff": "unified diff (pr only)", "branch": "branch in the VM (pr only)", "base": "origin/main (pr only)",
      "base_sha": "the commit base was when drafted, where the diff starts (pr only; empty on older drafts)",
+     "commits": [{"sha", "message", "author": {"name", "email", "date"}, "own": the agent's (by vm_email),
+                  "vm_email", "diff"}, ...] (pr only: the branch's commits since base, replayed when it is sent),
      "vm": "vm1" | null, "path": "repo folder in the VM (pr only)" | null,
      "evidence": [Evidence, ...] (a copy of the job's, see jobs.py),
      "overview": {...} (for the user, see below), "template": ".github/pull_request_template.md" | null,
@@ -69,6 +71,7 @@ class Inbox:
             draft.setdefault("template", None)
             # And from before sending.
             draft.setdefault("base_sha", "")
+            draft.setdefault("commits", [])
             draft.setdefault("sent", None)
             self.drafts[draft["id"]] = draft
 
@@ -105,7 +108,7 @@ class Inbox:
 
     def create(self, kind: str, agent: str, title: str, body: str, job: str | None = None,
                repo: str | None = None, target: str | None = None, diff: str = "", branch: str = "",
-               base: str = "", base_sha: str = "", vm: str | None = None, path: str | None = None, evidence: list | None = None,
+               base: str = "", base_sha: str = "", commits: list | None = None, vm: str | None = None, path: str | None = None, evidence: list | None = None,
                overview: dict | None = None, template: str | None = None) -> dict:
         with self.lock:
             draft_id = "draft_" + secrets.token_hex(3)
@@ -124,6 +127,7 @@ class Inbox:
                 "branch": branch,
                 "base": base,
                 "base_sha": base_sha,
+                "commits": copy.deepcopy(commits or []),
                 "vm": vm,
                 "path": path,
                 "evidence": copy.deepcopy(evidence or []),

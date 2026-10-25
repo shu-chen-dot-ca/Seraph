@@ -12,8 +12,10 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
 - Drafts: nothing goes to GitHub from here. A PR, an issue comment or a question becomes a draft
   in the user's Inbox and its job waits on the user. A PR draft's diff is read from the repo
   folder in the VM, so only the agent holding the VM can make one, with the commit it starts from
-  (base_sha: Approve sends exactly that diff on that commit, github_account.py). No draft has emoji
-  in it (EMOJI, the user's rule; a template's emoji are written as words). A PR is
+  (base_sha: Approve sends exactly that diff on that commit, github_account.py) and the branch's commits since
+  (commits: replayed when it is sent, all with the user's name). Every commit must be the agent's own:
+  draft_pr refuses a branch with anyone else's commits (a cherry-pick), and nothing credits a co-author.
+  No draft has emoji in it (EMOJI, the user's rule; a template's emoji are written as words). A PR is
   written from the project's contribution rules and its recently merged PRs: contributing_guide
   gathers the rules wherever they are (CONTRIBUTING in any folder, developer guides in the docs, the
   PR template, AGENTS.md, and the guides the README and CONTRIBUTING link to, on GitHub or on the
@@ -450,7 +452,9 @@ class WorkTools:
                 "Draft a pull request for the user's Inbox from your work in the VM (only while you hold it). Only when you are certain the "
                 "fix is right and complete, and your evidence shows it. path is the repo folder in the VM (e.g. ~/click), base what to "
                 "compare against (e.g. origin/main): the PR goes into that branch. The diff is everything that differs from base, committed or "
-                "not, new files included; it is sent as one commit with the title as its message, your own commits stay in the VM. "
+                "not, new files included. It is sent with your branch's commits as they are (their messages), all with the user's "
+                "name: every commit must be your own, never cherry-picked from someone else, and nothing credits a co-author. What "
+                "you didn't commit goes in one more commit, with the title as its message. "
                 "title and body are the PR exactly as it would be sent, written from the project's contribution rules "
                 "(contributing_guide, its PR template: every heading of it must be in the body) and the way its recently merged "
                 "PRs are written (pr_examples: their title style, length, sections, tone). Read both first. No emoji anywhere. Your before and after pictures "
@@ -1792,6 +1796,82 @@ class WorkTools:
         if result.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", base_sha) is None:
             return {"content": [{"type": "text", "text": f"{args['base']} is not a commit in {args['path']}."}], "is_error": True}
 
+        # Every commit must be the agent's own, by the VM's git address: never someone else's fix cherry-picked in, and no
+        # co-authors (the user's rule). The first line printed is that address, possibly empty; the second how many
+        # Co-authored-by lines the commit messages have; then each commit.
+        command = (
+            f"cd {folder} && echo \"$(git config user.email)\" && echo \"$(git log --format=%B {base}..HEAD | grep -ci '^co-authored-by:')\" && "
+            f"git log --format=%ae%x1f%an%x1f%h%x1f%s {base}..HEAD"
+        )
+        try:
+            result = await asyncio.to_thread(vm_record.vm.exec, command, 60)
+        except Exception as error:
+            return {"content": [{"type": "text", "text": f"Could not reach the VM: {error}"}], "is_error": True}
+        if result.returncode != 0:
+            return {"content": [{"type": "text", "text": f"Could not read your branch's commits: {result.stderr.strip()}"}], "is_error": True}
+        vm_email = result.stdout.split("\n")[0].strip()
+        if result.stdout.split("\n")[1:2] != ["0"]:
+            text = "A commit message on your branch has a Co-authored-by line. Credit no co-author: reword it (git commit --amend or a rebase), then draft again."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        others = []
+        for line in result.stdout.strip().split("\n")[2:]:
+            fields = line.split("\x1f", 3)
+            if len(fields) == 4 and fields[0] != vm_email:
+                others.append(f"{fields[2]} by {fields[1]} <{fields[0]}>: {fields[3]}")
+        if others:
+            text = (
+                f"Your branch has commits that aren't yours (your git address in the VM is {vm_email or 'not set'}): "
+                + "; ".join(others)
+                + ". Every commit must be your own work: never cherry-pick or copy someone else's fix, and credit no co-author. "
+                f"Take them out (e.g. `git reset --soft {args['base']}`, set `git config user.email` if it isn't, then commit your "
+                "own change), run the tests again if the code changed, and draft again."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        # The branch's commits on top of base, as they are: sending replays them (their messages), so the history goes
+        # out too. %x1e starts each commit, %x1f splits its fields, its patch comes last; the VM's git address comes
+        # first. None kept when the branch has a merge, doesn't start right at base, or is too big: sending then makes one
+        # commit (github_account.py).
+        command = (
+            f"set -o pipefail; cd {folder} && git config user.email && test -z \"$(git rev-list --merges {base}..HEAD)\" && "
+            f"git log --reverse -p --format=%x1e%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%B%x1f {base}..HEAD | head -c {DIFF_LIMIT + 1}"
+        )
+        try:
+            result = await asyncio.to_thread(vm_record.vm.exec, command, 120)
+        except Exception as error:
+            return {"content": [{"type": "text", "text": f"Could not reach the VM: {error}"}], "is_error": True}
+        commits = []
+        if result.returncode == 0 and len(result.stdout.encode()) <= DIFF_LIMIT:
+            parent = base_sha
+            vm_email = result.stdout.split("\x1e")[0].strip()
+            for record in result.stdout.split("\x1e")[1:]:
+                fields = record.split("\x1f", 6)
+                if len(fields) != 7 or fields[1] != parent:
+                    commits = []
+                    break
+                commits.append({
+                    "sha": fields[0],
+                    "message": fields[5].strip() + "\n",
+                    "author": {"name": fields[2], "email": fields[3], "date": fields[4]},
+                    # The agent's own (by the VM's git address), as every one is now: they go out with the user's name.
+                    "own": fields[3] == vm_email,
+                    "vm_email": vm_email,
+                    "diff": fields[6].lstrip("\n"),
+                })
+                parent = fields[0]
+        # A secret in a commit goes out with the history, even when a later commit took it out again.
+        for env_name, value in list(vm_record.global_env.items()) + list(vm_record.env.items()):
+            if len(value) < HIDE_MIN_LENGTH:
+                continue
+            for commit in commits:
+                if value in commit["message"] or value in commit["diff"]:
+                    text = (
+                        f"Commit {commit['sha'][:10]} on your branch contains the value of the environment variable {env_name}, and it "
+                        f"would go out with the PR. Take it out of the branch's history (e.g. `git reset --soft {args['base']}` and "
+                        "commit again), then try again."
+                    )
+                    return {"content": [{"type": "text", "text": text}], "is_error": True}
+
         # The user may have cancelled the job while the commands ran.
         job = self.agents.jobs.get(job["id"])
         if job["status"] in CLOSED_STATUSES:
@@ -1810,6 +1890,7 @@ class WorkTools:
             branch=branch,
             base=args["base"].strip(),
             base_sha=base_sha,
+            commits=commits,
             vm=vm_name,
             path=path,
             evidence=job["evidence"],
