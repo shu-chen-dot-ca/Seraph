@@ -12,9 +12,11 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
 - Drafts: nothing goes to GitHub from here. A PR, an issue comment or a question becomes a draft
   in the user's Inbox and its job waits on the user. A PR draft's diff is read from the repo
   folder in the VM, so only the agent holding the VM can make one, with the commit it starts from
-  (base_sha: Approve sends exactly that diff on that commit, github_account.py). The job's before and
-  after pictures go in the PR body as ![before](evidence:ev_...): the Inbox shows them in place,
-  and sending uploads them to the user's fork (or the user does, sending by hand).
+  (base_sha: Approve sends exactly that diff on that commit, github_account.py). A PR is written the
+  way the project's own people write theirs: pr_examples shows its main contributors' latest merged
+  PRs and some outside ones, and draft_pr refuses until the agent read them for that repo. The job's
+  before and after pictures go in the PR body as ![before](evidence:ev_...): the Inbox shows them in
+  place, and sending uploads them to the user's fork (or the user does, sending by hand).
 - Evidence: what the user looks at to decide on a draft. Screenshots of the VM's desktop, image
   files from the VM (a plot, a render) and command runs (a test failing, then passing), each
   "before" or "after" the agent's change, under a topic that pairs them. It is kept on the job
@@ -61,7 +63,7 @@ from claude_agent_sdk import tool
 
 from github_searcher.artifacts import ArtifactsError
 from github_searcher.jobs import EVIDENCE_DIR
-from github_searcher.search import get_repository, get_thread
+from github_searcher.search import get_merged_prs, get_repository, get_thread
 from sandbox.agent.computer_use import Computer, ComputerError
 from sandbox.agent.tools import HIDE_MIN_LENGTH
 from sandbox.file_transfer import FileTransferError, to_vm
@@ -113,6 +115,13 @@ OVERVIEW_PART_CHARS = 400
 OVERVIEW_RISK_CHARS = 250
 OVERVIEW_RISKS_MAX = 3
 CONTEXT_CHARS = 500
+# pr_examples: the main contributors (most PRs merged lately) and how many of each one's newest merged PRs it shows,
+# how many merged PRs of outside contributors, and how much of each description.
+PR_EXAMPLES_MAIN = 3
+PR_EXAMPLES_EACH = 2
+PR_EXAMPLES_OUTSIDE = 3
+PR_EXAMPLE_CHARS = 3000
+OUTSIDE_ROLES = ["CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE"]
 # The overview's wording, said once for every tool that takes one.
 PLAIN = (
     "Plain words for someone who has never seen this project or its code: no function or file names, "
@@ -127,6 +136,8 @@ class WorkTools:
         # The agent's record (the same dict), so the target VM is always the current one.
         self.record = record
         self.agent_id = record["id"]
+        # The repos (owner/name, lower case) whose PRs it looked at with pr_examples since the backend started.
+        self.pr_examples_read = set()
 
     def list(self) -> list:
         names = {"type": "array", "items": {"type": "string"}}
@@ -384,13 +395,22 @@ class WorkTools:
                 {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
             )(self.name_yourself),
             tool(
+                "pr_examples",
+                "How the project's own people write their pull requests, so you write yours the same way: its main contributors "
+                "(who got the most PRs merged lately) with their newest merged PRs, and some merged PRs of outside contributors, "
+                "each with its title, labels and full description. name: owner/name. draft_pr refuses until you read it for the "
+                "job's repo.",
+                {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
+            )(self.pr_examples),
+            tool(
                 "draft_pr",
                 "Draft a pull request for the user's Inbox from your work in the VM (only while you hold it). Only when you are certain the "
                 "fix is right and complete, and your evidence shows it. path is the repo folder in the VM (e.g. ~/click), base what to "
                 "compare against (e.g. origin/main): the PR goes into that branch. The diff is everything that differs from base, committed or "
                 "not, new files included; it is sent as one commit with the title as its message, your own commits stay in the VM. "
-                "title and body are the PR exactly as it would be sent, in the project's own form: its PR template (checked: every "
-                "heading of the repo's template must be in the body), CONTRIBUTING and title style. Your before and after pictures "
+                "title and body are the PR exactly as it would be sent, in the project's own form: its rules (CONTRIBUTING, its PR "
+                "template: every heading of it must be in the body) and the way its main contributors write their PRs (read "
+                "pr_examples first: their title style, length, sections, tone). Your before and after pictures "
                 "go in the body as ![before](evidence:ev_...) (a Before / After table); they are uploaded with the PR. You push and send "
                 "nothing: the user reviews it, approving sends it from their account, and you get a message with their decision. project, problem, cause, fix and "
                 "risks are only for the user, who reads them first to understand and judge the PR. " + PLAIN,
@@ -565,6 +585,8 @@ class WorkTools:
             return f"Copying {args.get('path')} from its artifacts into the VM"
         if name == "name_yourself":
             return f"Naming itself {args.get('name')}"
+        if name == "pr_examples":
+            return f"Reading how {args.get('name')}'s people write their PRs"
         if name == "evidence_add":
             return f"Evidence, {args.get('stage')}: {args.get('topic')} ({args.get('kind')})"
         if name == "evidence_remove":
@@ -1312,6 +1334,51 @@ class WorkTools:
             return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
         return {"content": [{"type": "text", "text": f"You are {name} now."}]}
 
+    async def pr_examples(self, args: dict) -> dict:
+        name = (args.get("name") or "").strip()
+        if name.count("/") != 1:
+            return {"content": [{"type": "text", "text": "name must be owner/name."}], "is_error": True}
+        try:
+            pulls = await asyncio.to_thread(get_merged_prs, name.split("/")[0], name.split("/")[1])
+        except (httpx.HTTPError, ValueError) as error:
+            return {"content": [{"type": "text", "text": f"Could not read {name}'s merged PRs: {error}"}], "is_error": True}
+        # Bots' PRs (dependency bumps, releases) say nothing about how people write theirs.
+        people = []
+        for pull in pulls:
+            if pull["author"] is not None and pull["author"]["__typename"] != "Bot" and not pull["author"]["login"].endswith("[bot]"):
+                people.append(pull)
+        counts = {}
+        for pull in people:
+            login = pull["author"]["login"]
+            counts[login] = counts.get(login, 0) + 1
+        main = sorted(counts, key=lambda login: counts[login], reverse=True)[:PR_EXAMPLES_MAIN]
+        outside = [pull for pull in people if pull["authorAssociation"] in OUTSIDE_ROLES and pull["author"]["login"] not in main]
+        # Newest first, as GitHub gave them.
+        chosen = []
+        for login in main:
+            theirs = [pull for pull in people if pull["author"]["login"] == login]
+            chosen.extend(theirs[:PR_EXAMPLES_EACH])
+        chosen.extend(outside[:PR_EXAMPLES_OUTSIDE])
+        self.pr_examples_read.add(name.lower())
+
+        lines = [f"Of the last {len(pulls)} merged PRs, {len(people)} are by people (not bots), {len(outside)} of those by outside contributors."]
+        if main:
+            lines.append("Main contributors: " + ", ".join(f"{login} ({counts[login]} merged)" for login in main) + ".")
+        for pull in chosen:
+            login = pull["author"]["login"]
+            who = "main contributor" if login in main else "outside contributor"
+            labels = ", ".join(label["name"] for label in pull["labels"]["nodes"]) or "none"
+            body = (pull["body"] or "").strip()
+            lines.append("")
+            lines.append(f"=== #{pull['number']} by {login} ({pull['authorAssociation']}, {who}), merged {pull['mergedAt'][:10]} ===")
+            lines.append(f"Title: {pull['title']}")
+            lines.append(f"Labels: {labels}")
+            lines.append(f"Description ({len(body)} characters):")
+            if len(body) > PR_EXAMPLE_CHARS:
+                body = body[:PR_EXAMPLE_CHARS] + "\n[cut]"
+            lines.append(body or "(none)")
+        return {"content": [{"type": "text", "text": "\n".join(lines)}]}
+
     async def draft_pr(self, args: dict) -> dict:
         try:
             job = self.agents.jobs.get(args["job_id"])
@@ -1347,6 +1414,10 @@ class WorkTools:
                 text = f"A risk is {len(risk)} characters; keep each under {OVERVIEW_RISK_CHARS}."
                 return {"content": [{"type": "text", "text": text}], "is_error": True}
         overview["risks"] = risks
+        # Written the way the project's own people write their PRs: the agent has to have looked.
+        if job["repo"] is not None and job["repo"].lower() not in self.pr_examples_read:
+            text = f"First read how {job['repo']}'s own people write their PRs (pr_examples), then write yours the same way."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
         # The job's pictures go in the body, as ![what](evidence:ev_...): the Inbox shows them there, and sending
         # uploads them to the user's fork (github_account.py).
         pictures = [item["id"] for item in job["evidence"] if item["kind"] in ["screenshot", "image"]]

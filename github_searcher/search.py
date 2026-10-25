@@ -1,4 +1,4 @@
-"""Reads from GitHub: repos, files, READMEs, PR and issue activity, threads, issue facts, issue and code search.
+"""Reads from GitHub: repos, files, READMEs, PR and issue activity, threads, merged PRs, issue facts, issue and code search.
 
 Every request goes through token_balancer.py, which spreads them over the team's tokens, paces
 them and waits out rate limits. Errors come back as httpx.HTTPStatusError, as before.
@@ -523,6 +523,48 @@ def get_review_feedback(owner: str, repo: str) -> dict:
                 continue
             raise ValueError(message)
         return data["data"]["repository"]
+
+
+# The latest merged PRs with their text, for pr_examples: how the project's people write their PRs.
+MERGED_PRS_QUERY = """
+query($owner: String!, $name: String!, $size: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: [MERGED], first: $size, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      nodes { number title body mergedAt authorAssociation author { login __typename } labels(first: 10) { nodes { name } } }
+    }
+  }
+}
+"""
+MERGED_SIZES = [60, 30, 15]
+
+
+def get_merged_prs(owner: str, repo: str) -> list[dict]:
+    # Cached for the turn like a thread: they don't change while the agent writes its PR. Newest first.
+    key = ("merged_prs", owner, repo)
+    if key in CACHE:
+        return CACHE[key]
+    for size in MERGED_SIZES:
+        variables = {"owner": owner, "name": repo, "size": size}
+        last = size == MERGED_SIZES[-1]
+        response = BALANCER.request("POST", "https://api.github.com/graphql", json={"query": MERGED_PRS_QUERY, "variables": variables}, timeout=90)
+        if response.status_code in TIMEOUT_STATUSES and not last:
+            continue
+        response.raise_for_status()
+        try:
+            data = response.json()
+        except ValueError:
+            if not last:
+                continue
+            raise
+        if data.get("errors"):
+            message = data["errors"][0]["message"]
+            if not last and any(words in message.lower() for words in TOO_HEAVY):
+                continue
+            raise ValueError(message)
+        if data["data"]["repository"] is None:
+            raise ValueError(f"GitHub has no repo {owner}/{repo}")
+        CACHE[key] = data["data"]["repository"]["pullRequests"]["nodes"]
+        return CACHE[key]
 
 
 # A tracked repo's open issues in one call: the newest ones, and every open issue under a label whose name
