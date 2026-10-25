@@ -11,6 +11,9 @@ and answer with the page as it is after. The browser refuses a click inside a co
 user confirms those themselves.
 look_page reads the page again, and screenshot shows it: the browser draws the app's own page to an image (nothing
 outside the app, no other window), with each element's number on it when asked.
+What it reads on GitHub: the agents' GitHub tools (agent/github_tools.py, through the app's tokens), read-only: READMEs,
+a repo's files and their text (default branch), issues and PRs with their comments, code and issue search, and a repo's
+numbers (check_activity, the same as the Repos page). It never writes anything on GitHub.
 
 How an action reaches the browser: the tool puts it in `pending`, the browser (which asks GET /api/sherpa every half
 second while a turn runs) does it and posts what happened (POST /api/sherpa/result), which the tool waits for, up to
@@ -53,6 +56,8 @@ from pathlib import Path
 from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, SystemMessage, TextBlock, ToolResultBlock, ToolUseBlock, UserMessage, create_sdk_mcp_server, tool
 from dotenv import load_dotenv
 
+from github_searcher.agent.github_tools import GithubTools
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # override: the backend reloads itself on code changes, and .env changes should apply then too.
 load_dotenv(PROJECT_ROOT / ".env", override=True)
@@ -94,6 +99,11 @@ You know the whole app. Below is every page's own description (the comment at th
 For details, read_source reads a file of the app (in frontend/src, backend, github_searcher or sandbox) and
 search_source finds where something is. Look things up rather than guess; never make up a button or a page.
 
+You can read GitHub too, read-only: read_readme, list_files and read_files (a repo's default branch), read_thread
+(an issue or PR with its comments), search_code, search_issues, and check_activity (how a repo treats outside
+contributors: the numbers the Repos page shows). Use them when the user asks about a repo, an issue or a PR, or when
+helping them needs it (what an issue asks for, before writing a job for it). You never post anything on GitHub.
+
 You see the user's page: each message comes with it. The address, the sidebar, the text on the page, and every
 button, link and field, each with a number. When a pop-up is open you only get the pop-up: the rest can't be used then.
 You can use the page, in the user's browser, while they watch:
@@ -126,7 +136,9 @@ The pages:
 
 
 class Sherpa:
-    def __init__(self):
+    def __init__(self, repo_signals):
+        # For check_activity (the Repos page's numbers).
+        self.repo_signals = repo_signals
         # The open chat's id: the one used last, or None for a new chat.
         self.current = None
         chats = self.chats()
@@ -362,6 +374,8 @@ class Sherpa:
                 self.search_source
             ),
         ]
+        # Reading GitHub: the agents' tools. Their own activity lines go to a list nobody reads: the chat has its own.
+        tools += GithubTools([], self.repo_signals).list()
         client = ClaudeSDKClient(
             ClaudeAgentOptions(
                 model=os.environ["CLAUDE_MODEL"],
@@ -450,6 +464,20 @@ class Sherpa:
                             summary = f"Read {block.input.get('path', '')}"
                         if tool_name == "search_source":
                             summary = f"Looked for {block.input.get('text', '')} in the app's code"
+                        if tool_name == "read_readme":
+                            summary = f"Read the README of {', '.join(block.input.get('names', []))}"
+                        if tool_name == "check_activity":
+                            summary = f"Checked {', '.join(block.input.get('names', []))} on GitHub"
+                        if tool_name == "read_thread":
+                            summary = f"Read {', '.join(block.input.get('threads', []))}"
+                        if tool_name == "list_files":
+                            summary = f"Listed the files of {block.input.get('name', '')} {block.input.get('path', '')}".strip()
+                        if tool_name == "read_files":
+                            summary = f"Read {', '.join(block.input.get('paths', []))} in {block.input.get('name', '')}"
+                        if tool_name == "search_code":
+                            summary = f"Searched GitHub's code for {block.input.get('q', '')}"
+                        if tool_name == "search_issues":
+                            summary = f"Searched GitHub's issues for {block.input.get('q', '')}"
                         history.append({"type": "tool", "id": block.id, "name": tool_name, "summary": summary})
                     if isinstance(block, ToolResultBlock):
                         parts = block.content if isinstance(block.content, list) else [{"type": "text", "text": block.content or ""}]
