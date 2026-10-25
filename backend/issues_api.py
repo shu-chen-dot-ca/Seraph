@@ -11,19 +11,23 @@ runs in the background: new issues get theirs within FACTS_CHECK_SECONDS, and
 all of them are fetched again every FACTS_REFRESH_SECONDS. Opening a row and
 the Refresh button fetch them at once.
 
-Each issue's difficulty (easy / medium / hard, github_searcher/issue_difficulty.py)
-is judged once by keep_difficulty(), also in the background: new issues get
-theirs within DIFFICULTY_CHECK_SECONDS, DIFFICULTY_AT_ONCE at a time.
+Each issue's tags (free / assigned / waiting, easy / medium / hard, its kind:
+github_searcher/issue_tags.py) are made by keep_tags(), also in the background,
+for the Issues list and the tracked repos' issues alike: new issues get theirs
+within TAGS_CHECK_SECONDS, an issue that changed on GitHub gets them again, and
+a free one every TAGS_FREE_SECONDS anyway (someone may have taken it). The Tag
+again buttons (refresh_tags) do it at once.
 """
 
 import asyncio
 import re
 import time
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.shared import agents, issue_difficulty, issue_facts, issues
+from backend.shared import agents, issue_facts, issue_tags, issues, tracked, tracked_issues
 from github_searcher.search import CACHE, get_thread
 from sandbox.vms import VMsError
 
@@ -31,10 +35,10 @@ router = APIRouter(prefix="/api")
 
 FACTS_CHECK_SECONDS = 10
 FACTS_REFRESH_SECONDS = 30 * 60
-DIFFICULTY_CHECK_SECONDS = 10
-DIFFICULTY_AT_ONCE = 3
-# An issue that could not be judged (Claude or GitHub down) is tried again after this long.
-DIFFICULTY_RETRY_SECONDS = 30 * 60
+TAGS_CHECK_SECONDS = 10
+TAGS_FREE_SECONDS = 60 * 60
+# An issue that could not be tagged (Claude or GitHub down, the issue gone) is tried again after this long.
+TAGS_RETRY_SECONDS = 30 * 60
 
 
 class AssignRequest(BaseModel):
@@ -83,11 +87,13 @@ def issue_thread(id: str) -> dict:
         raise HTTPException(status_code=404, detail=str(error))
     if thread is None:
         raise HTTPException(status_code=404, detail=f"{id} was not found.")
-    # The user is looking at it: its facts (last activity, linked PRs, ...) get fresh too.
-    try:
-        issue_facts.refresh(f"{owner}/{repo}#{number}")
-    except Exception:
-        pass  # Only the facts stay older; the thread itself came through.
+    # The user is looking at it: its facts (last activity, linked PRs, ...) get fresh too, when it is in the Issues
+    # list (the Tracked page's pop-up shows issues that aren't).
+    if f"{owner}/{repo}#{number}" in [item["id"] for item in issues.items()]:
+        try:
+            issue_facts.refresh(f"{owner}/{repo}#{number}")
+        except Exception:
+            pass  # Only the facts stay older; the thread itself came through.
 
     # Deleted GitHub accounts come back as author null; GitHub shows them as "ghost".
     author = "ghost"
@@ -133,6 +139,14 @@ async def assign_issue(body: AssignRequest) -> dict:
         raise HTTPException(status_code=409, detail=str(error))
 
 
+@router.post("/tags/refresh")
+async def refresh_tags(body: IdsRequest) -> dict:
+    """Tag these issues again now (owner/name#n, any repos): the Tag again buttons. Many issues take a few minutes."""
+    tagged = await issue_tags.tag(body.ids)
+    failed = [issue_id for issue_id in body.ids if issue_id not in tagged]
+    return {"tagged": len(tagged), "failed": failed}
+
+
 @router.post("/issues/refresh")
 async def refresh_facts() -> dict:
     """Fetch the facts of every issue in the list from GitHub now. Takes a few seconds."""
@@ -170,20 +184,54 @@ async def keep_facts() -> None:
         await asyncio.sleep(FACTS_CHECK_SECONDS)
 
 
-async def keep_difficulty() -> None:
-    """Runs as long as the backend: judges the difficulty of every issue that has none yet."""
+async def keep_tags() -> None:
+    """Runs as long as the backend: tags every issue that has no tags yet, changed on GitHub since, or was free an hour ago.
+
+    Those are the Issues list's issues, then the tracked repos' open issues nobody is assigned to (the page
+    shows an assigned one as assigned without asking), newest first. issue_tags.tag batches them.
+    """
     failed = []
     failed_since = time.monotonic()
     while True:
-        if time.monotonic() - failed_since > DIFFICULTY_RETRY_SECONDS:
+        if time.monotonic() - failed_since > TAGS_RETRY_SECONDS:
             failed = []
             failed_since = time.monotonic()
-        known = issue_difficulty.all()
-        todo = [item["id"] for item in issues.items() if item["id"] not in known and item["id"] not in failed]
-        for start in range(0, len(todo), DIFFICULTY_AT_ONCE):
-            batch = todo[start:start + DIFFICULTY_AT_ONCE]
-            results = await asyncio.gather(*[issue_difficulty.judge(issue_id) for issue_id in batch], return_exceptions=True)
-            for issue_id, result in zip(batch, results):
-                if isinstance(result, Exception):
+        known = issue_tags.all()
+        facts = issue_facts.all()
+        checks = tracked_issues.all()
+        # Each issue and its last change on GitHub (None when not known yet).
+        candidates = []
+        for item in issues.items():
+            updated_at = None
+            if item["id"] in facts:
+                updated_at = facts[item["id"]]["updated_at"]
+            candidates.append((item["id"], updated_at))
+        for item in tracked.items():
+            check = checks.get(item["full_name"])
+            if check is None:
+                continue
+            for issue in check["issues"]:
+                if issue["assignees"] == 0:
+                    candidates.append((f"{item['full_name']}#{issue['number']}", issue.get("updated_at")))
+
+        # A free one is looked at again after TAGS_FREE_SECONDS: someone may have claimed it without GitHub showing a change.
+        free_before = datetime.now(UTC) - timedelta(seconds=TAGS_FREE_SECONDS)
+        todo = []
+        for issue_id, updated_at in candidates:
+            tags = known.get(issue_id)
+            if issue_id in failed or issue_id in todo:
+                continue
+            if tags is None:
+                todo.append(issue_id)
+            elif updated_at is not None and tags["updated_at"] != updated_at:
+                todo.append(issue_id)
+            elif tags["status"] == "free" and datetime.fromisoformat(tags["judged_at"]) < free_before:
+                todo.append(issue_id)
+
+        if todo:
+            tagged = await issue_tags.tag(todo)
+            # What didn't get tagged (GitHub or Claude failed, Claude left it out, it is gone) waits for TAGS_RETRY_SECONDS.
+            for issue_id in todo:
+                if issue_id not in tagged:
                     failed.append(issue_id)
-        await asyncio.sleep(DIFFICULTY_CHECK_SECONDS)
+        await asyncio.sleep(TAGS_CHECK_SECONDS)

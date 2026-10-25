@@ -13,8 +13,8 @@ import { cn } from "@/lib/utils"
 //   Ctrl+A           picks every row shown
 //   Escape           unpicks all, and so does a click on the list's empty space
 //
-// Picked rows are tinted, and a bar floats at the bottom of the page: how many, the page's bulk actions, Select all
-// and an x to clear. A page may also have a Select button (select mode, like a chat app's): then every row shows a
+// Picked rows are tinted, and a bar floats at the bottom of the page: how many, Select all, the page's bulk actions
+// (if it passes them; a page may keep them in its own top bar instead) and an x to clear. A page may also have a Select button (select mode, like a chat app's): then every row shows a
 // SelectBox and a plain click picks the row. The page keeps the selection (a list of ids), its row clicks and its
 // select mode; this adds the rest:
 //
@@ -59,7 +59,7 @@ export function RowSelection(props: {
   ids: string[]
   selected: string[]
   onSelect: (ids: string[]) => void
-  children: React.ReactNode
+  children?: React.ReactNode
 }) {
   const [box, setBox] = useState<Box | null>(null)
   const { listRef, ids, selected, onSelect } = props
@@ -225,8 +225,12 @@ export function RowSelection(props: {
                 Select all {ids.length}
               </Button>
             )}
-            <span className="mx-1 h-4 w-px bg-border" />
-            {props.children}
+            {props.children !== undefined && (
+              <>
+                <span className="mx-1 h-4 w-px bg-border" />
+                {props.children}
+              </>
+            )}
             <span className="mx-1 h-4 w-px bg-border" />
             <Button size="icon-xs" variant="ghost" aria-label="Clear the selection" title="Clear the selection (Esc)" onClick={() => onSelect([])}>
               <X />

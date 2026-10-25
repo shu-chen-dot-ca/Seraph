@@ -4,7 +4,7 @@ import type { AIPolicyTag, NewcomerTag, Tone } from "@/live"
 // A repo's status as small tags: how well it fits, what its contribution files say about AI, how newcomers fare, how its
 // reviews feel, how busy it is, and how many contributors, maintainers and unanswered PRs it has; and the labels behind
 // them. The Repos and Explore tables show the same things as plain text columns, with these labels; the tags themselves
-// are for places that show one repo, like an open Repos row.
+// are for places that show one repo, like an open Repos row (and the Tracked table's AI policy, newcomers and reviews).
 //
 // What Claude judges is always one of a fixed set (the same keys as the backend), so repos rank the same way every
 // time: the AI policy (POLICY_LABEL), the review tone (TONE_LABEL), what reviewers ask for (ASK_LABEL, from

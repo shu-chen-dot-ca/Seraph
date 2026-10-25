@@ -1,29 +1,41 @@
 /*
 The Tracked list: repos the user wants to keep an eye on for new issues. The user tracks them from the Repos page (its
 Track column); agents can add and remove them too (their tracked_* tools), and undo / redo (Ctrl+Z / Ctrl+Y) works on
-both, like Repos. The bar on top is kept empty, so the page lines up with the others.
+both, like Repos. The bar on top has Expand all (Collapse all when every row is open) and Refresh all (Check now for
+every repo).
 
 The backend checks each repo's open issues every few minutes (github_searcher/tracked_issues.py): the newest
-ones and every one with a good-first-issue or help-wanted kind of label. An issue is new for three days after it
-was opened, assigned or not; the row shows how many are new, the sidebar the total. Check now asks GitHub at once.
+ones and every good first or help wanted one. An issue is new for three days after it was opened, assigned or not;
+the row shows how many are new, the sidebar the total. Check now asks GitHub at once.
 
-The list is a table like the Explore page's: Name (taking the room left over) and its description under it, then
-TRACKED_COLUMNS, every column as wide as its widest cell (one CSS grid, each row a subgrid), the text in the page's own
-color (blue for new issues, green for free ones, red for a failed check). A click on a header sorts by that
-column, one at a time: the most first (A to Z for the name, the latest check first), again the other way round, again
-back to the list's order; the sorted header is blue with an arrow.
+GitHub's labels aren't shown: each issue carries the app's own tags instead, the same as on the Issues page
+(github_searcher/issue_tags.py, made by Claude in the background): Free or Assigned, Easy / Medium / Hard, and its
+kind, each in its own column, the reason on hover. Assigned on GitHub counts as Assigned at once, without waiting
+for the tags. Tag again (on the repo's row) has Claude read all its unassigned issues again now.
 
-Each row opens in place to its issues, newest first, with tabs Free (nobody assigned, and a good-first-issue or
-help-wanted kind of label) / Assigned (someone is on it) / All (Free when there are free ones). An issue goes into the Issues list with one click (its repo into Repos too), or links there when it is
+The list is a table like the Explore page's: Name and its description under it, then TRACKED_COLUMNS: first the
+repo's tags (its signals, the same as the Repos page's columns: AI policy, newcomers, reply speed, review tone,
+activity, contributors, maintainers, unanswered PRs; hover a tag for what it means), then its issues' numbers. Every
+column is as wide as its widest cell (one CSS grid, each row a subgrid) and all of them sit on the left, the room left
+over going before the row's buttons. The text is in the page's own color (blue for new issues, green for free ones,
+red for a failed check; the tags' own colors). A click on a header sorts by that column, one at a time: the best
+first (the most, the latest check, the fastest reply, the friendliest tag; A to Z for the name), again the other way
+round, again back to the list's order; the sorted header is blue with an arrow.
+
+Each row opens in place to its issues, newest first, with tabs Free (a newcomer can start on it now) / Assigned (someone is on it) / All (Free when there are free
+ones). The issues are a table too, sorted the same way by a click on a column's header (one order for every open repo):
+ISSUE_HEADERS. A click on an issue opens it in full in a pop-up, its comments below (IssueDetailsDialog); its # opens
+it on GitHub. An issue goes into the Issues list with one click (its repo into Repos too), or links there when it is
 in already. The list is short (repos the user picked), so every row is drawn; times re-render every minute.
 Many rows are picked like in a mail app (components/ui/row-selection.tsx): Ctrl-click, Shift-click, dragging a rectangle,
 Ctrl+A; a bar at the bottom then stops tracking them at once, as one undo step (it asks first; Enter confirms).
 */
 
-import { ArrowDown, ArrowUp, Loader2, MessageSquare, Plus, RefreshCw, Star, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronsDownUp, ChevronsUpDown, Loader2, MessageSquare, Plus, RefreshCw, Star, Tags, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import IssueDetailsDialog from "@/IssueDetailsDialog";
 import { Badge } from "@/components/ui/badge";
 import {
   AlertDialog,
@@ -36,24 +48,68 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { NewcomersTag, PolicyTag, ToneTag } from "@/components/ui/repo-tags";
 import { RowSelection } from "@/components/ui/row-selection";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api, useLive, useLoaded, type TrackedRepo } from "@/live";
+import { api, useLive, useLoaded, type TrackedIssue, type TrackedRepo } from "@/live";
 import { cn, timeAgo } from "@/lib/utils";
 
-const STARS = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
-// The columns after Name, each sorted by a click on its header (the most, or the latest, first).
-type TrackedKey = "name" | "stars" | "new" | "free" | "open" | "checked";
-const TRACKED_COLUMNS: { key: TrackedKey; label: string; title: string }[] = [
+const COMPACT = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
+// The columns after Name, each sorted by a click on its header: the best first (the most, the latest; the least for
+// lower: the fastest reply). First the repo's tags, from its signals (the same as the Repos page's columns).
+type TrackedKey =
+  | "name"
+  | "ai_policy"
+  | "newcomers"
+  | "reply"
+  | "reviews"
+  | "activity"
+  | "contributors"
+  | "maintainers"
+  | "unanswered"
+  | "stars"
+  | "new"
+  | "free"
+  | "easy"
+  | "open"
+  | "checked";
+const TRACKED_COLUMNS: { key: TrackedKey; label: string; title: string; better?: "lower" }[] = [
+  { key: "ai_policy", label: "AI policy", title: "What its contribution files say about AI: the most open first" },
+  { key: "newcomers", label: "Newcomers", title: "How newcomers' first PRs fare: the most welcoming first" },
+  { key: "reply", label: "Reply", title: "Median days until outside contributors' PRs get a first reply: the fastest first", better: "lower" },
+  { key: "reviews", label: "Reviews", title: "How maintainers' feedback on outside PRs feels: the warmest first" },
+  { key: "activity", label: "Activity", title: "PRs, issues and commits a month (90-day average); sorts by commits a month" },
+  { key: "contributors", label: "Contributors", title: "People who opened a PR lately (the newest 100 PRs, at most 90 days; bots not counted)" },
+  { key: "maintainers", label: "Maintainers", title: "People who merged a PR in the last 30 days" },
+  { key: "unanswered", label: "Unanswered", title: "Outside contributors' PRs open over 30 days that nobody answered" },
   { key: "stars", label: "Stars", title: "Stars on GitHub" },
   { key: "new", label: "New", title: "Open issues opened in the last 3 days, assigned or not" },
-  { key: "free", label: "Free", title: "Open issues nobody is assigned to, with a good-first-issue or help-wanted kind of label" },
+  { key: "free", label: "Free", title: "Open issues a newcomer can start on now: nobody is on it and the maintainers want it done" },
+  { key: "easy", label: "Easy", title: "Free issues Claude rates easy" },
   { key: "open", label: "Open", title: "Open issues its last check found" },
   { key: "checked", label: "Checked", title: "When the backend last asked GitHub" },
 ];
-const ISSUE_COLUMNS = "grid grid-cols-[56px_minmax(0,1fr)_150px_36px_92px] items-center gap-2";
-// Same as the backend's GOOD_FIRST (tracked_issues.py), to color those labels.
-const GOOD_FIRST = /good.?first|first.?timer|beginner|easy|help.?wanted|up.?for.?grabs/i;
+// The tags' order for sorting, the friendliest highest (the same as the Repos page's).
+const POLICY_RANK: Record<string, number> = { welcome: 5, disclose: 4, none: 3, unclear: 2, no_ai: 1 };
+const NEWCOMER_RANK: Record<string, number> = { welcomes: 4, ok: 3, few: 2, wait: 1 };
+const TONE_RANK: Record<string, number> = { warm: 4, neutral: 3, strict: 2, curt: 1 };
+// An open repo's issues: #, Title (the room left over), the tags (Free, Level, Kind), Opened, Updated, comments, then Add.
+const ISSUE_COLUMNS = "grid grid-cols-[56px_minmax(0,1fr)_72px_64px_72px_150px_80px_36px_92px] items-center gap-2";
+type IssueKey = "number" | "title" | "free" | "level" | "kind" | "opened" | "updated" | "comments";
+const ISSUE_HEADERS: { key: IssueKey; label: string; title: string }[] = [
+  { key: "number", label: "#", title: "Its number on GitHub, newest first" },
+  { key: "title", label: "Title", title: "A to Z" },
+  { key: "free", label: "Free", title: "Free first (a newcomer can start now), then not ready yet, then assigned" },
+  { key: "level", label: "Level", title: "How hard: easy, medium or hard, like LeetCode's levels; the hardest first" },
+  { key: "kind", label: "Kind", title: "Bug, docs, feature or question: A to Z" },
+  { key: "opened", label: "Opened", title: "When it was opened on GitHub, newest first" },
+  { key: "updated", label: "Updated", title: "Its last change on GitHub: a comment, a label, an edit…; the latest first" },
+  { key: "comments", label: "", title: "Comments, the most first" },
+];
+// The tags' order for sorting and their colors (the same as on the Issues page): levels like LeetCode's green / amber / red.
+const FREE_RANK: Record<string, number> = { free: 3, waiting: 2, assigned: 1 };
+const LEVEL_RANK: Record<string, number> = { easy: 1, medium: 2, hard: 3 };
+const LEVEL_COLOR: Record<string, string> = { easy: "text-ok", medium: "text-warn", hard: "text-destructive" };
 
 type IssueTab = "free" | "assigned" | "all";
 
@@ -64,6 +120,11 @@ export default function Tracked() {
   const [open, setOpen] = useState<string[]>([]);
   const [tabs, setTabs] = useState<Record<string, IssueTab>>({});
   const [checking, setChecking] = useState<string[]>([]);
+  const [retagging, setRetagging] = useState<string[]>([]);
+  // The issue open in the pop-up, by repo and number, so it shows the live one (new tags arrive while it is open).
+  const [details, setDetails] = useState<{ repo: string; number: number } | null>(null);
+  // The open repos' issues' order: newest first (null), or by one column, like the list's.
+  const [issueSort, setIssueSort] = useState<{ key: IssueKey; best: boolean } | null>(null);
   // The list's order: as tracked (null), or by one column; best is the way its first click sorts, or not.
   const [sort, setSort] = useState<{ key: TrackedKey; best: boolean } | null>(null);
   // Selected repos, the last one clicked (where a shift-click range starts), and whether removing them waits for a confirm.
@@ -106,6 +167,31 @@ export default function Tracked() {
     if (key === "stars") {
       return check !== null && check.stars !== null ? check.stars : repo.stars;
     }
+    const signals = repo.signals;
+    if (key === "ai_policy") {
+      return signals !== null ? (POLICY_RANK[signals.ai_policy.tag] ?? null) : null;
+    }
+    if (key === "newcomers") {
+      return signals !== null && signals.newcomers !== undefined ? (NEWCOMER_RANK[signals.newcomers.tag] ?? null) : null;
+    }
+    if (key === "reply") {
+      return signals !== null ? signals.median_days_to_first_reply : null;
+    }
+    if (key === "reviews") {
+      return signals !== null && signals.atmosphere ? (TONE_RANK[signals.atmosphere.tone] ?? null) : null;
+    }
+    if (key === "activity") {
+      return signals !== null && signals.activity !== undefined ? signals.activity.commits_month : null;
+    }
+    if (key === "contributors") {
+      return signals !== null ? (signals.active_contributors ?? null) : null;
+    }
+    if (key === "maintainers") {
+      return signals !== null ? signals.active_mergers_30d : null;
+    }
+    if (key === "unanswered") {
+      return signals !== null ? signals.stale_outside_prs : null;
+    }
     if (check === null) {
       return null;
     }
@@ -113,7 +199,10 @@ export default function Tracked() {
       return newCounts[repo.full_name];
     }
     if (key === "free") {
-      return check.issues.filter((issue) => issue.good_first && issue.assignees === 0).length;
+      return check.issues.filter((issue) => issue.assignees === 0 && issue.tags?.status === "free").length;
+    }
+    if (key === "easy") {
+      return check.issues.filter((issue) => issue.assignees === 0 && issue.tags?.status === "free" && issue.tags.level === "easy").length;
     }
     if (key === "open") {
       return check.issues.length;
@@ -136,8 +225,11 @@ export default function Tracked() {
       if (second === null) {
         return -1;
       }
-      // The name A to Z; numbers the most first. Then turned round for the other way.
-      const order = typeof first === "string" && typeof second === "string" ? first.localeCompare(second) : Number(second) - Number(first);
+      // The name A to Z; numbers the most first (the least for a lower column). Then turned round for the other way.
+      let order = typeof first === "string" && typeof second === "string" ? first.localeCompare(second) : Number(second) - Number(first);
+      if (TRACKED_COLUMNS.find((column) => column.key === sort.key)?.better === "lower") {
+        order = -order;
+      }
       return sort.best ? order : -order;
     });
   }
@@ -150,6 +242,47 @@ export default function Tracked() {
       setSort({ key, best: false });
     } else {
       setSort(null);
+    }
+  }
+
+  // An issue's value in a column: a number, or text. null when it hasn't one (it goes last).
+  function issueValue(issue: TrackedIssue, key: IssueKey): number | string | null {
+    const tags = issue.tags ?? null;
+    if (key === "number") {
+      return issue.number;
+    }
+    if (key === "title") {
+      return issue.title.toLowerCase();
+    }
+    if (key === "free") {
+      if (issue.assignees > 0) {
+        return FREE_RANK.assigned;
+      }
+      return tags !== null ? FREE_RANK[tags.status] : null;
+    }
+    if (key === "level") {
+      return tags !== null && tags.level !== null ? LEVEL_RANK[tags.level] : null;
+    }
+    if (key === "kind") {
+      return tags !== null ? tags.kind : null;
+    }
+    if (key === "opened") {
+      return new Date(issue.created_at).getTime();
+    }
+    if (key === "updated") {
+      return issue.updated_at !== undefined ? new Date(issue.updated_at).getTime() : null;
+    }
+    return issue.comments;
+  }
+
+  // Like clickSort: the best first, then the other way round, then back to newest first.
+  function clickIssueSort(key: IssueKey) {
+    if (issueSort === null || issueSort.key !== key) {
+      setIssueSort({ key, best: true });
+    } else if (issueSort.best) {
+      setIssueSort({ key, best: false });
+    } else {
+      setIssueSort(null);
     }
   }
 
@@ -178,6 +311,29 @@ export default function Tracked() {
       toast.error(`Could not check ${full_name}: ${err instanceof Error ? err.message : err}`);
     }
     setChecking((current) => current.filter((n) => n !== full_name));
+  }
+
+  // Check now for every tracked repo, all at once; each row's own button spins meanwhile.
+  async function checkAll() {
+    await Promise.all(names.map((name) => checkNow(name)));
+  }
+
+  // Claude reads the repo's unassigned issues again now (the assigned ones need no reading). A few minutes for many.
+  async function tagAgain(repo: TrackedRepo) {
+    if (repo.check === null) {
+      return;
+    }
+    const ids = repo.check.issues.filter((issue) => issue.assignees === 0).map((issue) => `${repo.full_name}#${issue.number}`);
+    setRetagging((current) => [...current, repo.full_name]);
+    try {
+      const result = await api<{ tagged: number; failed: string[] }>("/api/tags/refresh", { method: "POST", body: { ids } });
+      if (result.failed.length > 0) {
+        toast.error(`Could not tag ${result.failed.length} of its issues again; the backend tries again later.`);
+      }
+    } catch (err) {
+      toast.error(`Could not tag ${repo.full_name}'s issues again: ${err instanceof Error ? err.message : err}`);
+    }
+    setRetagging((current) => current.filter((n) => n !== repo.full_name));
   }
 
   async function addIssue(repo: string, number: number) {
@@ -233,8 +389,25 @@ export default function Tracked() {
 
   return (
     <div className="relative flex h-full flex-col">
-      {/* Kept empty: the same bar as on the other pages, with nothing in it. */}
-      <div className="h-9 shrink-0 border-b" />
+      {/* The same bar as on the other pages: Expand all / Collapse all and Refresh all on the left. */}
+      <div className="flex h-9 shrink-0 items-center border-b px-3">
+        {names.length > 0 && (
+          <span className="flex items-center gap-1">
+            {names.every((name) => open.includes(name)) ? (
+              <Button variant="ghost" size="xs" onClick={() => setOpen([])}>
+                <ChevronsDownUp /> Collapse all
+              </Button>
+            ) : (
+              <Button variant="ghost" size="xs" onClick={() => setOpen(names)}>
+                <ChevronsUpDown /> Expand all
+              </Button>
+            )}
+            <Button variant="ghost" size="xs" disabled={checking.length > 0} title="Check every tracked repo on GitHub now" onClick={() => checkAll()}>
+              <RefreshCw className={cn(checking.length > 0 && "animate-spin")} /> Refresh all
+            </Button>
+          </span>
+        )}
+      </div>
 
       <div ref={listRef} className="min-h-0 flex-1 overflow-auto">
         {!loaded && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
@@ -244,11 +417,11 @@ export default function Tracked() {
 
         {/* One grid for the whole table, its columns as wide as their widest cell; the header and each row are subgrids
             of it, so they line up. w-max lets it grow past the page (it scrolls sideways); min-w-full fills the page
-            otherwise, Name taking the room left over. The description and the open repo span the row without widening it. */}
+            otherwise, the room left over going before the buttons. The description and the open repo span the row without widening it. */}
         {rows.length > 0 && (
           <div
             className="grid w-max min-w-full gap-x-4 border-b"
-            style={{ gridTemplateColumns: `minmax(160px,1fr) repeat(${TRACKED_COLUMNS.length}, max-content) max-content` }}
+            style={{ gridTemplateColumns: `minmax(160px,max-content) repeat(${TRACKED_COLUMNS.length}, max-content) minmax(0,1fr) max-content` }}
           >
             <div className="col-span-full grid h-7 grid-cols-subgrid items-center bg-muted/40 px-3 text-xs font-medium">
               {[{ key: "name" as TrackedKey, label: "Name", title: "A to Z" }, ...TRACKED_COLUMNS].map((column) => (
@@ -264,26 +437,47 @@ export default function Tracked() {
                 </button>
               ))}
               <span />
+              <span />
             </div>
             {rows.map((repo) => {
               const isOpen = open.includes(repo.full_name);
               const check = repo.check;
               const fresh = newCounts[repo.full_name];
-              const free = check !== null ? check.issues.filter((issue) => issue.good_first && issue.assignees === 0).length : 0;
-              const assigned = check !== null ? check.issues.filter((issue) => issue.assignees > 0).length : 0;
+              const signals = repo.signals;
+              const free = check !== null ? check.issues.filter((issue) => issue.assignees === 0 && issue.tags?.status === "free").length : 0;
+              const assigned = check !== null ? check.issues.filter((issue) => issue.assignees > 0 || issue.tags?.status === "assigned").length : 0;
+              const easy = check !== null ? check.issues.filter((issue) => issue.assignees === 0 && issue.tags?.status === "free" && issue.tags.level === "easy").length : 0;
               const tab = tabs[repo.full_name] ?? (free > 0 ? "free" : "all");
               const shown =
                 check === null
                   ? []
                   : check.issues.filter((issue) => {
                       if (tab === "free") {
-                        return issue.good_first && issue.assignees === 0;
+                        return issue.assignees === 0 && issue.tags?.status === "free";
                       }
                       if (tab === "assigned") {
-                        return issue.assignees > 0;
+                        return issue.assignees > 0 || issue.tags?.status === "assigned";
                       }
                       return true;
                     });
+              if (issueSort !== null) {
+                shown.sort((a, b) => {
+                  const first = issueValue(a, issueSort.key);
+                  const second = issueValue(b, issueSort.key);
+                  if (first === second) {
+                    return 0;
+                  }
+                  // Missing values go last, whichever way.
+                  if (first === null) {
+                    return 1;
+                  }
+                  if (second === null) {
+                    return -1;
+                  }
+                  const order = typeof first === "string" && typeof second === "string" ? first.localeCompare(second) : Number(second) - Number(first);
+                  return issueSort.best ? order : -order;
+                });
+              }
               return (
                 <div key={repo.full_name} className="col-span-full grid grid-cols-subgrid border-t">
                   <div
@@ -304,12 +498,51 @@ export default function Tracked() {
                     <span className="flex h-7 min-w-0 items-center">
                       <span className="truncate font-medium">{repo.full_name}</span>
                     </span>
+                    {/* The repo's tags, from its signals; – until they are fetched (seconds after it is tracked). */}
+                    <span className="flex h-7 items-center">
+                      {signals !== null ? <PolicyTag tag={signals.ai_policy.tag} quote={signals.ai_policy.quote} file={signals.ai_policy.file} /> : "–"}
+                    </span>
+                    <span className="flex h-7 items-center">
+                      {signals !== null && signals.newcomers !== undefined ? (
+                        <NewcomersTag
+                          tag={signals.newcomers.tag}
+                          detail={`${signals.newcomers.prs} first PRs: ${signals.newcomers.merged} merged, ${signals.newcomers.closed} closed unmerged`}
+                        />
+                      ) : (
+                        "–"
+                      )}
+                    </span>
+                    <span
+                      className={cn(
+                        "flex h-7 items-center tabular-nums",
+                        signals !== null && signals.median_days_to_first_reply !== null && signals.median_days_to_first_reply <= 2 && "text-ok",
+                        signals !== null && signals.median_days_to_first_reply !== null && signals.median_days_to_first_reply > 7 && "text-warn",
+                      )}
+                    >
+                      {signals !== null && signals.median_days_to_first_reply !== null ? `${signals.median_days_to_first_reply}d` : "–"}
+                    </span>
+                    <span className="flex h-7 items-center">
+                      {signals !== null && signals.atmosphere ? <ToneTag tone={signals.atmosphere.tone} summary={signals.atmosphere.summary} /> : "–"}
+                    </span>
+                    <span className="flex h-7 items-center whitespace-nowrap tabular-nums" title="A month on average over 90 days; the arrow: the last 30 days were busier or quieter">
+                      {signals !== null && signals.activity !== undefined
+                        ? `${COMPACT.format(signals.activity.prs_opened_month)} PRs · ${COMPACT.format(signals.activity.issues_opened_month)} issues · ${COMPACT.format(signals.activity.commits_month)} commits /mo${signals.activity.trend === "up" ? " ↑" : signals.activity.trend === "down" ? " ↓" : ""}`
+                        : "–"}
+                    </span>
+                    <span className="flex h-7 items-center tabular-nums">{signals !== null ? (signals.active_contributors ?? "–") : "–"}</span>
+                    <span className={cn("flex h-7 items-center tabular-nums", signals !== null && signals.active_mergers_30d <= 1 && "text-warn")}>
+                      {signals !== null ? signals.active_mergers_30d : "–"}
+                    </span>
+                    <span className={cn("flex h-7 items-center tabular-nums", signals !== null && signals.stale_outside_prs >= 5 && "text-warn")}>
+                      {signals !== null ? signals.stale_outside_prs : "–"}
+                    </span>
                     <span className="flex h-7 items-center gap-1 tabular-nums">
                       <Star className="size-3.5" />
-                      {STARS.format(check !== null && check.stars !== null ? check.stars : repo.stars)}
+                      {COMPACT.format(check !== null && check.stars !== null ? check.stars : repo.stars)}
                     </span>
                     <span className={cn("flex h-7 items-center tabular-nums", fresh > 0 && "font-medium text-primary")}>{check !== null ? fresh : "–"}</span>
                     <span className={cn("flex h-7 items-center tabular-nums", free > 0 && "text-ok")}>{check !== null ? free : "–"}</span>
+                    <span className={cn("flex h-7 items-center tabular-nums", easy > 0 && "text-ok")}>{check !== null ? easy : "–"}</span>
                     <span className="flex h-7 items-center tabular-nums">{check !== null ? check.issues.length : "–"}</span>
                     <span className="flex h-7 items-center gap-1 whitespace-nowrap tabular-nums">
                       {check === null && (
@@ -324,6 +557,7 @@ export default function Tracked() {
                       )}
                       {check !== null && check.error === null && <span title={new Date(check.checked_at).toLocaleString()}>{timeAgo(check.checked_at)}</span>}
                     </span>
+                    <span />
                     <span className="flex h-7 items-center justify-end gap-0.5" onClick={(event) => event.stopPropagation()}>
                       <Button
                         variant="ghost"
@@ -334,6 +568,16 @@ export default function Tracked() {
                         onClick={() => checkNow(repo.full_name)}
                       >
                         <RefreshCw className={cn(checking.includes(repo.full_name) && "animate-spin")} />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={`Tag ${repo.full_name}'s issues again`}
+                        title="Tag again: Claude reads its unassigned issues and their comments again now"
+                        disabled={check === null || retagging.includes(repo.full_name)}
+                        onClick={() => tagAgain(repo)}
+                      >
+                        {retagging.includes(repo.full_name) ? <Loader2 className="animate-spin" /> : <Tags />}
                       </Button>
                       <Button variant="ghost" size="icon-xs" aria-label={`Stop tracking ${repo.full_name}`} title="Stop tracking" onClick={() => remove([repo.full_name])}>
                         <X />
@@ -347,7 +591,8 @@ export default function Tracked() {
                   </div>
 
                   {isOpen && (
-                    <div className="col-span-full w-0 min-w-full border-t bg-muted/30 px-3 py-1.5">
+                    <div className="col-span-full w-0 min-w-full border-t border-l-4 border-l-primary/50 bg-background px-3 py-1.5">
+                      {/* Set apart from its repo's (gray) row: the page's own background with a blue bar on the left. */}
                       {check === null && (
                         <div className="flex items-center gap-2 py-1 text-muted-foreground">
                           <Loader2 className="size-3.5 animate-spin" /> Getting its issues from GitHub…
@@ -371,49 +616,80 @@ export default function Tracked() {
                           </Tabs>
                           {shown.length === 0 && (
                             <div className="py-1 text-muted-foreground">
-                              {tab === "free" && "No unassigned issue with a good-first-issue or help-wanted kind of label."}
+                              {tab === "free" && "No issue a newcomer can start on now."}
                               {tab === "assigned" && "Nobody is assigned to any of its open issues."}
                               {tab === "all" && "No open issues."}
+                            </div>
+                          )}
+                          {shown.length > 0 && (
+                            <div className={cn(ISSUE_COLUMNS, "h-7 text-xs font-medium text-muted-foreground")}>
+                              {ISSUE_HEADERS.map((column) => (
+                                <button
+                                  key={column.key}
+                                  type="button"
+                                  className={cn("flex items-center gap-0.5 hover:text-primary", issueSort?.key === column.key && "text-primary")}
+                                  title={column.title}
+                                  onClick={() => clickIssueSort(column.key)}
+                                >
+                                  {column.key === "comments" ? <MessageSquare className="size-3.5" /> : column.label}
+                                  {issueSort?.key === column.key && (issueSort.best ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />)}
+                                </button>
+                              ))}
+                              <span />
                             </div>
                           )}
                           {shown.map((issue) => {
                             const id = `${repo.full_name}#${issue.number}`;
                             const isNew = new Date(issue.created_at).getTime() > newSince;
+                            const tags = issue.tags ?? null;
+                            const isAssigned = issue.assignees > 0 || tags?.status === "assigned";
                             return (
-                              <div key={issue.number} className={cn(ISSUE_COLUMNS, "min-h-7 border-t border-border/50 py-0.5")}>
+                              <div
+                                key={issue.number}
+                                className={cn(ISSUE_COLUMNS, "min-h-7 cursor-pointer border-t border-border/50 py-0.5 hover:bg-accent/50")}
+                                onClick={() => setDetails({ repo: repo.full_name, number: issue.number })}
+                              >
                                 <a
                                   href={issue.url}
                                   target="_blank"
                                   rel="noreferrer"
                                   className="text-muted-foreground tabular-nums hover:text-foreground hover:underline"
                                   title="Open on GitHub"
+                                  onClick={(event) => event.stopPropagation()}
                                 >
                                   #{issue.number}
                                 </a>
-                                <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-                                  <a href={issue.url} target="_blank" rel="noreferrer" className="truncate hover:underline" title={issue.title}>
+                                <span className="flex min-w-0 items-center gap-1.5">
+                                  <span className="truncate" title={issue.title}>
                                     {issue.title}
-                                  </a>
+                                  </span>
                                   {isNew && <Badge>new</Badge>}
-                                  {issue.assignees > 0 && (
-                                    <Badge variant="warn">
-                                      assigned
-                                    </Badge>
-                                  )}
-                                  {issue.labels.map((label) => (
-                                    <Badge key={label} variant={GOOD_FIRST.test(label) ? "ok" : "secondary"}>
-                                      {label}
-                                    </Badge>
-                                  ))}
+                                </span>
+                                {/* The app's tags, each in its column, the reason on hover; GitHub's own labels aren't shown.
+                                    – is not ready yet (Free) or none (assigned on GitHub isn't read); … is not tagged yet. */}
+                                <span
+                                  className={cn("truncate", isAssigned && "text-warn", !isAssigned && tags?.status === "free" && "text-ok")}
+                                  title={tags?.reason ?? (isAssigned ? "Assigned on GitHub" : "Claude hasn't tagged it yet")}
+                                >
+                                  {isAssigned ? "Assigned" : tags === null ? "…" : tags.status === "free" ? "Free" : "–"}
+                                </span>
+                                <span className={cn("truncate capitalize", tags !== null && tags.level !== null && LEVEL_COLOR[tags.level])} title={tags?.reason}>
+                                  {tags !== null ? (tags.level ?? "–") : isAssigned ? "–" : "…"}
+                                </span>
+                                <span className="truncate capitalize" title={tags?.reason}>
+                                  {tags !== null ? (tags.kind ?? "–") : isAssigned ? "–" : "…"}
                                 </span>
                                 <span className="truncate text-muted-foreground" title={new Date(issue.created_at).toLocaleString()}>
                                   {timeAgo(issue.created_at)} by {issue.author}
+                                </span>
+                                <span className="truncate text-muted-foreground" title={issue.updated_at !== undefined ? new Date(issue.updated_at).toLocaleString() : "Known after the next check"}>
+                                  {issue.updated_at !== undefined ? timeAgo(issue.updated_at) : "–"}
                                 </span>
                                 <span className="flex items-center gap-1 text-muted-foreground tabular-nums" title="Comments">
                                   <MessageSquare className="size-3.5" />
                                   {issue.comments}
                                 </span>
-                                <span className="flex justify-end">
+                                <span className="flex justify-end" onClick={(event) => event.stopPropagation()}>
                                   {inIssues.has(id) ? (
                                     <a href={`#/issues?open=${encodeURIComponent(id)}`} className="text-xs text-muted-foreground hover:text-foreground hover:underline">
                                       In Issues
@@ -442,6 +718,12 @@ export default function Tracked() {
           <X /> Stop tracking
         </Button>
       </RowSelection>
+
+      <IssueDetailsDialog
+        repo={details !== null ? details.repo : ""}
+        issue={details !== null ? (tracked.items.find((each) => each.full_name === details.repo)?.check?.issues.find((each) => each.number === details.number) ?? null) : null}
+        onClose={() => setDetails(null)}
+      />
 
       <AlertDialog open={confirmRemove} onOpenChange={setConfirmRemove}>
         <AlertDialogContent>

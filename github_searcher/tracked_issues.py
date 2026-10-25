@@ -6,14 +6,15 @@ an eye on. This store keeps what GitHub says about their issues, in DATA_DIR/tra
     {"owner/name": Check, ...}
 
     Check = {"checked_at", "error": str | None, "stars", "description",
-             "issues": [{"number", "title", "url", "created_at", "author", "labels",
-                         "comments", "assignees", "good_first"}, ...]}
+             "issues": [{"number", "title", "url", "created_at", "updated_at", "author", "labels",
+                         "comments", "assignees"}, ...]}
 
 issues are the repo's 100 newest open issues, plus every open issue under a good-first-issue or
-help-wanted kind of label (GOOD_FIRST matches the label's name), newest first. good_first says whether an
-issue has such a label; the page calls it free when nobody is assigned to it too. An issue is new for three
-days after it was opened (the page and the agent tools work that out). Times are in GitHub's format
-(2026-10-23T03:39:11Z), so they compare as text. error is why the last check failed (the issues of the check before stay).
+help-wanted kind of label (GOOD_FIRST matches the label's name), newest first. Whether an issue is free
+to take, how hard it is and what kind are its tags (issue_tags.py), made from these and the issue's text;
+updated_at tells when it needs them again. An issue is new for three days after it was opened (the page
+and the agent tools work that out). Times are in GitHub's format (2026-10-23T03:39:11Z), so they compare
+as text. error is why the last check failed (the issues of the check before stay).
 
 Kept apart from the list on purpose, like issue_facts.py: the list's undo/redo should only undo what
 agents and the user did, not bring back old checks. The backend checks every tracked repo now and then
@@ -101,18 +102,17 @@ class TrackedIssues:
         issues = []
         for node in nodes.values():
             labels = [label["name"] for label in node["labels"]["nodes"]]
-            good_first = any(GOOD_FIRST.search(label) for label in labels)
             issues.append(
                 {
                     "number": node["number"],
                     "title": node["title"],
                     "url": node["url"],
                     "created_at": node["createdAt"],
+                    "updated_at": node["updatedAt"],
                     "author": node["author"]["login"] if node["author"] else "ghost",
                     "labels": labels,
                     "comments": node["comments"]["totalCount"],
                     "assignees": node["assignees"]["totalCount"],
-                    "good_first": good_first,
                 }
             )
         issues.sort(key=lambda issue: issue["created_at"], reverse=True)

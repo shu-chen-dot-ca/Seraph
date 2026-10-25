@@ -15,12 +15,14 @@ at a time: the best first (most, newest, hardest, in progress; A to Z for text),
 to the list's order; the sorted header is blue with an arrow. A table wider than the page scrolls sideways, the header
 with it. Times re-render every minute.
 
-Each issue has a difficulty, judged by Claude in the background like LeetCode's levels (github_searcher/issue_difficulty.py):
-easy (small, well defined, a general programming problem), medium (needs some project or domain knowledge, still easy to
-observe and check with the test suite) or hard (needs real understanding, changes can ripple, hard to validate). The Level
-column sorts by it and the level picker shows one level only.
+GitHub's labels aren't shown: each issue carries the app's own tags instead, the same as on the Tracked page
+(github_searcher/issue_tags.py, made by Claude in the background), each in its own column and sorted like the others:
+Free (a newcomer can start now) or Assigned (someone is on it: an assignee, a claim, the author doing it), its Kind, and
+a Level like LeetCode's: easy (small, well defined, a general programming problem), medium (needs some project or domain
+knowledge, still easy to observe and check with the test suite) or hard (needs real understanding, changes can ripple,
+hard to validate). The level picker shows one level only. Tag again (in the open row) has Claude read it again now.
 
-Rows open in place: the difficulty and why, the facts in full (author and role, last comment and who wrote it, assignees, linked PRs,
+Rows open in place: the tags and why, the facts in full (author and role, last comment and who wrote it, assignees, linked PRs,
 the repo's last push), the agent's note, the issue body (fetched from GitHub on every open, so new comments show;
 the last one fetched shows meanwhile), and every job for the issue with its progress (steps and the agent's headline) and links to its agent, VM and drafts.
 A job in progress shows in the row as a small progress bar with its step.
@@ -31,7 +33,7 @@ rectangle, Ctrl+A; a bar at the bottom then removes them at once, as one undo st
 */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ArrowUp, ExternalLink, Loader2, RefreshCw, Redo2, Undo2, UserPlus, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ExternalLink, Loader2, RefreshCw, Redo2, Tags, Undo2, UserPlus, X } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -76,7 +78,7 @@ const ROLE: Record<string, string> = {
 };
 const MAINTAINERS = ["OWNER", "MEMBER", "COLLABORATOR"];
 
-type SortKey = "number" | "title" | "repo" | "level" | "stars" | "opened" | "active" | "comments" | "status" | "agent";
+type SortKey = "number" | "title" | "repo" | "free" | "level" | "kind" | "stars" | "opened" | "active" | "comments" | "status" | "agent";
 
 // The table's columns: # and Title (which takes the room left over), then the rest. All but Title are measured by the
 // sizer. better says which way the first click on a header sorts: higher first, or A to Z.
@@ -85,10 +87,12 @@ const NUMBER_COLUMN: IssueColumn = { key: "number", label: "#", title: "Its numb
 const TITLE_COLUMN: IssueColumn = { key: "title", label: "Title", title: "A to Z", better: "text" };
 const ISSUE_COLUMNS: IssueColumn[] = [
   { key: "repo", label: "Repo", title: "The repo it is in", better: "text" },
+  { key: "free", label: "Free", title: "Free first (a newcomer can start now), then not ready yet, then assigned", better: "higher" },
   { key: "level", label: "Level", title: "How hard the issue is: easy, medium or hard, judged by Claude like LeetCode's levels", better: "higher" },
+  { key: "kind", label: "Kind", title: "Bug, docs, feature or question: A to Z", better: "text" },
   { key: "stars", label: "Stars", title: "The repo's stars", better: "higher" },
   { key: "opened", label: "Opened", title: "When the issue was opened on GitHub", better: "higher" },
-  { key: "active", label: "Active", title: "The last activity on the issue: a comment, a label, an edit…", better: "higher" },
+  { key: "active", label: "Updated", title: "Its last change on GitHub: a comment, a label, an edit…", better: "higher" },
   { key: "comments", label: "Comments", title: "Comments", better: "higher" },
   { key: "status", label: "Status", title: "What is being done about it (its latest job): in progress first", better: "higher" },
   { key: "agent", label: "Agent", title: "The agent on its latest job", better: "text" },
@@ -100,6 +104,8 @@ const ACTIONS_WIDTH = 104;
 // The order of a latest job's status, in progress first being the highest. No job (or a cancelled one) is New.
 const STATUS_RANK: Record<string, number> = { waiting_on_user: 5, working: 4, queued: 3, new: 2, done: 1 };
 
+// Free first when sorted (the same as on the Tracked page).
+const FREE_RANK: Record<string, number> = { free: 3, waiting: 2, assigned: 1 };
 // Difficulty levels: their order for sorting, and their color (a soft Badge variant, like LeetCode's green / amber / red).
 const LEVEL_RANK: Record<string, number> = { easy: 1, medium: 2, hard: 3 };
 const LEVEL_COLOR: Record<string, string> = { easy: "text-ok", medium: "text-warn", hard: "text-destructive" };
@@ -143,6 +149,8 @@ export default function Issues(props: { repo: string | null; open: string | null
   // The list's order: as listed (null), or by one column; best is the way its first click sorts, or not.
   const [sort, setSort] = useState<{ key: SortKey; best: boolean } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  // Issues Claude is reading again (Tag again).
+  const [retagging, setRetagging] = useState<string[]>([]);
   const [, setTick] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   // The hidden copy of every shown row's cells (but the title's), and the widths it gives each column.
@@ -196,7 +204,7 @@ export default function Issues(props: { repo: string | null; open: string | null
   const needle = filter.trim().toLowerCase();
   const rows = inRepo.filter((issue) => {
     const job = latestJob[issue.id];
-    if (level !== ALL_LEVELS && issue.difficulty?.level !== level) {
+    if (level !== ALL_LEVELS && issue.tags?.level !== level) {
       return false;
     }
     if (tab !== "all" && job === undefined && tab !== "new") {
@@ -208,7 +216,7 @@ export default function Issues(props: { repo: string | null; open: string | null
     if (needle === "") {
       return true;
     }
-    const text = `${issue.id} ${issue.title} ${issue.note} ${issue.labels.join(" ")}`.toLowerCase();
+    const text = `${issue.id} ${issue.title} ${issue.note} ${issue.tags?.status ?? ""} ${issue.tags?.kind ?? ""}`.toLowerCase();
     return text.includes(needle);
   });
 
@@ -225,8 +233,17 @@ export default function Issues(props: { repo: string | null; open: string | null
     if (key === "repo") {
       return issue.repo.toLowerCase();
     }
+    if (key === "free") {
+      if (facts && facts.assignees.length > 0) {
+        return FREE_RANK.assigned;
+      }
+      return issue.tags ? FREE_RANK[issue.tags.status] : null;
+    }
     if (key === "level") {
-      return issue.difficulty ? (LEVEL_RANK[issue.difficulty.level] ?? null) : null;
+      return issue.tags?.level ? (LEVEL_RANK[issue.tags.level] ?? null) : null;
+    }
+    if (key === "kind") {
+      return issue.tags?.kind ?? null;
     }
     if (key === "stars") {
       return facts?.repo_stars ?? repoStars[issue.repo] ?? null;
@@ -311,13 +328,45 @@ export default function Issues(props: { repo: string | null; open: string | null
     if (key === "repo") {
       return issue.repo;
     }
-    if (key === "level") {
-      if (!issue.difficulty) {
-        return <span title="Being judged">–</span>;
+    if (key === "free") {
+      // – is not ready yet; … is not tagged yet.
+      const isAssigned = (facts !== null && facts.assignees.length > 0) || issue.tags?.status === "assigned";
+      if (isAssigned) {
+        return (
+          <span className="text-warn" title={facts !== null && facts.assignees.length > 0 ? `Assigned to ${facts.assignees.join(", ")}` : issue.tags?.reason}>
+            Assigned
+          </span>
+        );
+      }
+      if (!issue.tags) {
+        return <span title="Being tagged">…</span>;
+      }
+      if (issue.tags.status === "free") {
+        return (
+          <span className="text-ok" title={issue.tags.reason}>
+            Free
+          </span>
+        );
+      }
+      return <span title={issue.tags.reason}>–</span>;
+    }
+    if (key === "kind") {
+      if (!issue.tags?.kind) {
+        return <span title={issue.tags ? issue.tags.reason : "Being tagged"}>{issue.tags ? "–" : "…"}</span>;
       }
       return (
-        <span className={cn("capitalize", LEVEL_COLOR[issue.difficulty.level])} title={issue.difficulty.reason}>
-          {issue.difficulty.level}
+        <span className="capitalize" title={issue.tags.reason}>
+          {issue.tags.kind}
+        </span>
+      );
+    }
+    if (key === "level") {
+      if (!issue.tags?.level) {
+        return <span title={issue.tags ? issue.tags.reason : "Being tagged"}>{issue.tags ? "–" : "…"}</span>;
+      }
+      return (
+        <span className={cn("capitalize", LEVEL_COLOR[issue.tags.level])} title={issue.tags.reason}>
+          {issue.tags.level}
         </span>
       );
     }
@@ -365,6 +414,20 @@ export default function Issues(props: { repo: string | null; open: string | null
     tableWidth += measured ? sizes[index] : 0;
   }
   const template = `${tracks[0]} minmax(${TITLE_MIN}px,1fr) ${tracks.slice(1).join(" ")} ${ACTIONS_WIDTH}px`;
+
+  // Claude reads one issue again now, a few seconds to a minute; the new tags arrive through the live feed.
+  async function tagAgain(id: string) {
+    setRetagging((current) => [...current, id]);
+    try {
+      const result = await api<{ tagged: number; failed: string[] }>("/api/tags/refresh", { method: "POST", body: { ids: [id] } });
+      if (result.failed.length > 0) {
+        toast.error(`Could not tag ${id} again; the backend tries again later.`);
+      }
+    } catch (err) {
+      toast.error(`Could not tag ${id} again: ${err instanceof Error ? err.message : err}`);
+    }
+    setRetagging((current) => current.filter((each) => each !== id));
+  }
 
   async function refreshFacts() {
     setRefreshing(true);
@@ -601,6 +664,8 @@ export default function Issues(props: { repo: string | null; open: string | null
               const state = facts !== null ? facts.state : issue.state;
               const openPRs = facts !== null ? facts.linked_prs.filter((pull) => pull.state === "OPEN") : [];
               const mergedPRs = facts !== null ? facts.linked_prs.filter((pull) => pull.state === "MERGED") : [];
+              const tags = issue.tags ?? null;
+              const isAssigned = (facts !== null && facts.assignees.length > 0) || tags?.status === "assigned";
               const history = [...(issueJobs[issue.id] ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at));
               return (
                 <div key={item.key} data-index={item.index} ref={virtualizer.measureElement} className="absolute left-0 w-full border-b" style={{ top: item.start }}>
@@ -617,15 +682,10 @@ export default function Issues(props: { repo: string | null; open: string | null
                     }}
                   >
                     <span className="whitespace-nowrap tabular-nums">{issueCell(issue, "number")}</span>
-                    {/* The title, then what to know before taking it: closed, assigned, PRs open or merged for it. */}
+                    {/* The title, then what to know before taking it: closed, PRs open or merged for it (the tags have their columns). */}
                     <span className="flex min-w-0 flex-wrap items-center gap-1.5">
                       <span className={cn("truncate", state === "CLOSED" && "line-through")}>{facts !== null ? facts.title : issue.title}</span>
                       {state === "CLOSED" && <Badge variant="secondary">closed</Badge>}
-                      {facts !== null && facts.assignees.length > 0 && (
-                        <Badge variant="warn" title={`Assigned to ${facts.assignees.join(", ")}`}>
-                          assigned
-                        </Badge>
-                      )}
                       {/* Each PR linked to it on GitHub; the open ones first, at most three. */}
                       {[...openPRs, ...mergedPRs].slice(0, 3).map((pull) => (
                         <Badge key={pull.url} asChild variant={pull.state === "OPEN" ? "warn" : "secondary"}>
@@ -674,26 +734,29 @@ export default function Issues(props: { repo: string | null; open: string | null
                         <span>
                           {commentCount} {commentCount === 1 ? "comment" : "comments"}
                         </span>
-                        {(facts !== null ? facts.labels : issue.labels).map((label) => (
-                          <Badge key={label} variant="secondary">
-                            {label}
-                          </Badge>
-                        ))}
                         <a href={issue.html_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 hover:text-foreground">
                           GitHub <ExternalLink className="size-3" />
                         </a>
                       </div>
 
-                      {issue.difficulty ? (
+                      {tags !== null ? (
                         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                          <Badge variant={LEVEL_VARIANT[issue.difficulty.level] ?? "secondary"} className="capitalize">
-                            {issue.difficulty.level}
-                          </Badge>
-                          <span>{issue.difficulty.reason}</span>
+                          {isAssigned && <Badge variant="warn">assigned</Badge>}
+                          {!isAssigned && tags.status === "free" && <Badge variant="ok">free</Badge>}
+                          {tags.level !== null && (
+                            <Badge variant={LEVEL_VARIANT[tags.level] ?? "secondary"} className="capitalize">
+                              {tags.level}
+                            </Badge>
+                          )}
+                          {tags.kind !== null && <Badge variant="secondary">{tags.kind}</Badge>}
+                          <span>{tags.reason}</span>
+                          <Button variant="ghost" size="xs" disabled={retagging.includes(issue.id)} title="Claude reads it and its comments again now" onClick={() => tagAgain(issue.id)}>
+                            {retagging.includes(issue.id) ? <Loader2 className="animate-spin" /> : <Tags />} Tag again
+                          </Button>
                         </div>
                       ) : (
                         <div className="flex items-center gap-2 text-muted-foreground">
-                          <Loader2 className="size-3.5 animate-spin" /> Judging how hard it is…
+                          <Loader2 className="size-3.5 animate-spin" /> Reading it to tag it…
                         </div>
                       )}
 

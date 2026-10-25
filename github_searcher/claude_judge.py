@@ -1,9 +1,9 @@
 """One question to Claude, answered as JSON: the judgments that numbers can't make.
 
 Three places ask: repo_signals.py (what a repo's AI policy says), explore.py (does a repo fit the
-user's profile) and issue_difficulty.py (how hard an issue is). Each call is a fresh, one-shot Claude
-Code run with no tools at all, so it can only read the prompt and answer; the text it reads (READMEs,
-CONTRIBUTING files, issue threads) can't make it do anything. The answer must match the schema
+user's profile) and issue_tags.py (free or assigned, how hard, what kind: many issues at once). Each
+call is a fresh, one-shot Claude Code run with no tools at all, so it can only read the prompt and
+answer; the text it reads (READMEs, CONTRIBUTING files, issue threads) can't make it do anything. The answer must match the schema
 (Claude Code's structured output), so callers get a dict they can use as it is.
 
 Like the agents (github_searcher/agent/agent.py), it runs in DATA_DIR/agent_home without this repo's

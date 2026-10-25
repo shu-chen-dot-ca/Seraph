@@ -193,6 +193,61 @@ def get_issue_facts(owner: str, repo: str, number: int) -> dict:
     return data["data"]["repository"]
 
 
+# What issue_tags.py shows Claude about the issues of one batch: many issues of one repo in one call, each under
+# its own alias (i123: issue(number: 123)). The comments: the last 30 (claims like "can I take this?" and the answers
+# to them), and the first 5 too (a maintainer's first answer), which matter when there are more than 30. Every pull
+# request tied to it, open, closed or merged: the ones that say they close it, and the ones that only mention it
+# ("#123" in the PR, a cross reference) or were linked by hand, each with its last comment (why it was closed).
+TAG_ISSUE_FRAGMENT = """
+fragment TagIssue on Issue {
+  number title body state createdAt updatedAt authorAssociation author { login }
+  labels(first: 20) { nodes { name } }
+  assignees(first: 5) { nodes { login } }
+  earliest: comments(first: 5) { nodes { ...TagComment } }
+  latest: comments(last: 30) { totalCount nodes { ...TagComment } }
+  closedByPullRequestsReferences(first: 5, includeClosedPrs: true) { nodes { ...TagPull } }
+  timelineItems(itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT], last: 10) {
+    nodes {
+      __typename
+      ... on CrossReferencedEvent { source { __typename ... on PullRequest { ...TagPull } } }
+      ... on ConnectedEvent { subject { __typename ... on PullRequest { ...TagPull } } }
+    }
+  }
+}
+fragment TagComment on IssueComment { body createdAt authorAssociation author { login __typename } }
+fragment TagPull on PullRequest {
+  number state createdAt updatedAt closedAt author { login } repository { nameWithOwner }
+  comments(last: 1) { nodes { body createdAt authorAssociation author { login __typename } } }
+}
+"""
+
+
+def get_issues_for_tags(owner: str, repo: str, numbers: list[int]) -> dict:
+    # Never cached: an issue is tagged again because it changed. Returns the repository node: its description,
+    # stars and language, and each issue as i<number>, None when it is gone or a pull request.
+    aliases = ""
+    for number in numbers:
+        aliases += f" i{number}: issue(number: {number}) {{ ...TagIssue }}"
+    query = (
+        "query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { "
+        "nameWithOwner description stargazerCount primaryLanguage { name }" + aliases + " } }" + TAG_ISSUE_FRAGMENT
+    )
+    response = BALANCER.request(
+        "POST",
+        "https://api.github.com/graphql",
+        json={"query": query, "variables": {"owner": owner, "name": repo}},
+        timeout=60,
+    )
+    response.raise_for_status()
+    data = response.json()
+    # An issue that is gone comes back as None with an error about it; the others still count.
+    if not data.get("data") or data["data"]["repository"] is None:
+        if data.get("errors"):
+            raise ValueError(data["errors"][0]["message"])
+        raise ValueError(f"GitHub sent nothing for {owner}/{repo}")
+    return data["data"]["repository"]
+
+
 # What repo_signals.py works its numbers out from, in two calls that run at the same time (one would take
 # GitHub over its 10 seconds for a big repo). $prs is 100, less for huge repos (see SIGNALS_SIZES).
 # SIGNALS_QUERY:
@@ -486,7 +541,7 @@ query($owner: String!, $name: String!) {
   }
 }
 fragment TrackedIssue on Issue {
-  number title url createdAt author { login }
+  number title url createdAt updatedAt author { login }
   labels(first: 10) { nodes { name } }
   comments { totalCount }
   assignees { totalCount }

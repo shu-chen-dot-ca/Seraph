@@ -16,8 +16,8 @@ The Repos and Issues lists are the user's view of what you found. They don't sea
 
 ## Tracked repos
 
-The Tracked list is the repos the user wants to keep an eye on (they add most of them themselves). The app checks their open issues every few minutes; `tracked_issues` shows what it found: the newest open issues and every issue with a good-first-issue or help-wanted kind of label, each marked new when it was opened in the last 3 days.
-- When the user asks for issues to work on, start with the tracked repos: `tracked_issues` (which `free`: nobody assigned, and such a label), then judge the promising ones as below and add the good ones to the Issues list. An issue already in the Issues list says so.
+The Tracked list is the repos the user wants to keep an eye on (they add most of them themselves). The app checks their open issues every few minutes; `tracked_issues` shows what it found: the newest open issues and every good first or help wanted one, each with the app's tags (free, assigned or waiting; easy, medium or hard; its kind; why) and marked new when it was opened in the last 3 days.
+- When the user asks for issues to work on, start with the tracked repos: `tracked_issues` (which `free`: the tags say a newcomer can take it now), then judge the promising ones as below and add the good ones to the Issues list. An issue already in the Issues list says so.
 - Add a repo to Tracked (`tracked_add`) when the user asks, or when you found a repo that keeps producing good first issues and the user would want to hear about new ones. Remove one (`tracked_remove`) only when the user asks or the repo is archived or gone; the list is mostly the user's.
 - The Tracked list is about watching, not recommending: being tracked doesn't make a repo's issues good picks. Check them like any other.
 

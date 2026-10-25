@@ -137,8 +137,9 @@ class WorkTools:
             tool(
                 "issues_list",
                 "See the Issues list the user sees: each issue with its title, labels, state, your note, its job status "
-                "(new when nobody was assigned yet) and its difficulty (easy, medium or hard, with the reason; judged by the app "
-                "shortly after an issue is added). repo limits it to one repo (owner/name).",
+                "(new when nobody was assigned yet) and the app's tags: free / assigned / waiting (whether someone new can take it), "
+                "level (easy, medium or hard), kind and the reason, made shortly after an issue is added. repo limits it to one "
+                "repo (owner/name).",
                 {"type": "object", "properties": {"repo": {"type": "string"}}},
             )(self.issues_list),
             tool(
@@ -161,8 +162,8 @@ class WorkTools:
             tool(
                 "tracked_list",
                 "See the Tracked list: the repos the user wants to keep an eye on for new issues. Each with its stars, note, who "
-                "added it, when its issues were last checked, and how many open issues it has: all, free (nobody assigned, and a "
-                "good-first-issue or help-wanted kind of label), assigned (someone is on it) and new (opened in the last 3 days).",
+                "added it, when its issues were last checked, and how many open issues it has: all, free (the app's tags say a "
+                "newcomer can take it now), assigned (someone is on it) and new (opened in the last 3 days).",
                 {},
             )(self.tracked_list),
             tool(
@@ -179,10 +180,10 @@ class WorkTools:
             tool(
                 "tracked_issues",
                 "See the open issues the last check found in tracked repos, newest first, each with its labels, comments, "
-                "assignees, whether it has a good-first-issue or help-wanted kind of label, whether it is new (opened in the last "
-                "3 days) and whether it is in the Issues list already. name limits it to one repo (owner/name). which: free "
-                "(nobody assigned, and such a label; the default), assigned (someone is on it), or all (the 100 newest open "
-                "issues plus every issue with such a label).",
+                "assignees, the app's tags (free / assigned / waiting, level easy / medium / hard, kind, and the reason; None "
+                "while not made yet), whether it is new (opened in the last 3 days) and whether it is in the Issues list "
+                "already. name limits it to one repo (owner/name). which: free (a newcomer can take it now; the default), "
+                "assigned (someone is on it), or all (the 100 newest open issues plus every good first or help wanted one).",
                 {
                     "type": "object",
                     "properties": {"name": {"type": "string"}, "which": {"type": "string", "enum": ["free", "assigned", "all"]}},
@@ -610,13 +611,12 @@ class WorkTools:
         for job in reversed(self.agents.jobs.list()):
             latest[job["issue"]] = job
 
-        levels = await asyncio.to_thread(self.agents.issue_difficulty.all)
+        tags = await asyncio.to_thread(self.agents.issue_tags.all)
         issues = []
         for item in await asyncio.to_thread(self.agents.issues.items):
             if repo and item["repo"].lower() != repo.lower():
                 continue
             job = latest.get(item["id"])
-            level = levels.get(item["id"])
             issues.append(
                 {
                     "id": item["id"],
@@ -628,9 +628,8 @@ class WorkTools:
                     "added_by": item["added_by"],
                     "status": job["status"] if job else "new",
                     "agent": job["agent"] if job else None,
-                    # Judged in the background after an issue is added; None until then.
-                    "difficulty": level["level"] if level else None,
-                    "difficulty_reason": level["reason"] if level else None,
+                    # Made in the background after an issue is added; None until then.
+                    "tags": tags.get(item["id"]),
                 }
             )
         return {"content": [{"type": "text", "text": json.dumps({"issues": issues})}]}
@@ -730,6 +729,7 @@ class WorkTools:
 
     async def tracked_list(self, args: dict) -> dict:
         checks = await asyncio.to_thread(self.agents.tracked_issues.all)
+        tags = await asyncio.to_thread(self.agents.issue_tags.all)
         repos = []
         for item in await asyncio.to_thread(self.agents.tracked.items):
             check = checks.get(item["full_name"])
@@ -749,8 +749,16 @@ class WorkTools:
             summary["open_issues"] = len(check["issues"])
             # New for three days after it was opened. GitHub's time format, so it compares as text.
             new_since = (datetime.now(UTC) - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            summary["free"] = len([issue for issue in check["issues"] if issue["good_first"] and issue["assignees"] == 0])
-            summary["assigned"] = len([issue for issue in check["issues"] if issue["assignees"] > 0])
+            free = 0
+            assigned = 0
+            for issue in check["issues"]:
+                status = tags.get(f"{item['full_name']}#{issue['number']}", {}).get("status")
+                if issue["assignees"] > 0 or status == "assigned":
+                    assigned += 1
+                elif status == "free":
+                    free += 1
+            summary["free"] = free
+            summary["assigned"] = assigned
             summary["new"] = len([issue for issue in check["issues"] if issue["created_at"] > new_since])
             repos.append(summary)
         return {"content": [{"type": "text", "text": json.dumps({"tracked": repos})}]}
@@ -807,6 +815,7 @@ class WorkTools:
         if name and name.lower() not in [tracked.lower() for tracked in names]:
             return {"content": [{"type": "text", "text": f"{name} is not tracked; tracked_list shows what is."}], "is_error": True}
         checks = await asyncio.to_thread(self.agents.tracked_issues.all)
+        tags = await asyncio.to_thread(self.agents.issue_tags.all)
         in_issues = [item["id"] for item in await asyncio.to_thread(self.agents.issues.items)]
         # New for three days after it was opened. GitHub's time format, so it compares as text.
         new_since = (datetime.now(UTC) - timedelta(days=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -821,12 +830,16 @@ class WorkTools:
                 continue
             issues = []
             for issue in check["issues"]:
+                issue_id = f"{full_name}#{issue['number']}"
                 new = issue["created_at"] > new_since
-                if which == "free" and (not issue["good_first"] or issue["assignees"] > 0):
+                tag = tags.get(issue_id)
+                status = tag["status"] if tag else None
+                assigned = issue["assignees"] > 0 or status == "assigned"
+                if which == "free" and (assigned or status != "free"):
                     continue
-                if which == "assigned" and issue["assignees"] == 0:
+                if which == "assigned" and not assigned:
                     continue
-                issues.append({**issue, "id": f"{full_name}#{issue['number']}", "new": new, "in_issues_list": f"{full_name}#{issue['number']}" in in_issues})
+                issues.append({**issue, "id": issue_id, "tags": tag, "new": new, "in_issues_list": issue_id in in_issues})
             result[full_name] = {"checked_at": check["checked_at"], "check_error": check["error"], "issues": issues}
         return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
@@ -1085,7 +1098,7 @@ class WorkTools:
         if result.returncode != 0:
             # Hidden as in the bash tool: error text can hold the user's secrets too.
             text = f"Not a git repo folder: {result.stderr.strip()}"
-            for value in sorted(vm_record.env.values(), key=len, reverse=True):
+            for value in sorted(list(vm_record.global_env.values()) + list(vm_record.env.values()), key=len, reverse=True):
                 if len(value) >= HIDE_MIN_LENGTH:
                     text = text.replace(value, "[hidden]")
             return {"content": [{"type": "text", "text": text}], "is_error": True}
@@ -1137,7 +1150,7 @@ class WorkTools:
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         if result.returncode != 0:
             text = f"git diff failed: {result.stderr.strip()}"
-            for value in sorted(vm_record.env.values(), key=len, reverse=True):
+            for value in sorted(list(vm_record.global_env.values()) + list(vm_record.env.values()), key=len, reverse=True):
                 if len(value) >= HIDE_MIN_LENGTH:
                     text = text.replace(value, "[hidden]")
             return {"content": [{"type": "text", "text": text}], "is_error": True}
@@ -1147,7 +1160,7 @@ class WorkTools:
 
         # The diff is shown in the Inbox, sent to the browser and downloaded as it is: a secret (a VM env
         # value, e.g. written into a .env file) must never be in it. Named by its variable, never its value.
-        for env_name, value in vm_record.env.items():
+        for env_name, value in list(vm_record.global_env.items()) + list(vm_record.env.items()):
             if len(value) < HIDE_MIN_LENGTH or value not in diff:
                 continue
             # One chunk per file; each starts with "a/<path> b/<path>" (the first with "diff --git ").
@@ -1262,7 +1275,7 @@ class WorkTools:
         # The same tag as the agent's VM tools (ComputerTools), so losing the VM stops these commands too.
         tag = f"sandbox-agent-{self.agent_id}"
         # The user's secrets, longest first, so a value that contains another one is hidden whole.
-        hidden = [value for value in sorted(vm_record.env.values(), key=len, reverse=True) if len(value) >= HIDE_MIN_LENGTH]
+        hidden = [value for value in sorted(list(vm_record.global_env.values()) + list(vm_record.env.values()), key=len, reverse=True) if len(value) >= HIDE_MIN_LENGTH]
         evidence_id = "ev_" + secrets.token_hex(3)
         item = {
             "id": evidence_id,
@@ -1427,7 +1440,7 @@ class WorkTools:
 
         # The same tag as the agent's VM tools (ComputerTools), so losing the VM stops the run too.
         tag = f"sandbox-agent-{self.agent_id}"
-        hidden = [value for value in sorted(vm_record.env.values(), key=len, reverse=True) if len(value) >= HIDE_MIN_LENGTH]
+        hidden = [value for value in sorted(list(vm_record.global_env.values()) + list(vm_record.env.values()), key=len, reverse=True) if len(value) >= HIDE_MIN_LENGTH]
         # Commands run in the user's home, so ~/click and click are the same folder.
         folder = shlex.quote(args["path"].strip().removeprefix("~/"))
         base = shlex.quote(args["base"].strip())
