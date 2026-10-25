@@ -10,9 +10,11 @@ kept fresh by the backend; Refresh fetches them all now): repo stars, when it wa
 and amber words when someone is assigned or a PR is open for it. The list is a table like the Repos and Explore
 pages': #, Title (taking the room left over), then ISSUE_COLUMNS, every column as wide as its widest cell over the
 rows shown (a hidden copy of them, the sizer at the bottom, measures them: lib/column-widths.ts), the text in the
-page's own color (green / amber / red only where it means something). A click on a header sorts by that column, one
-at a time: the best first (most, newest, hardest, in progress; A to Z for text), again the other way round, again back
-to the list's order; the sorted header is blue with an arrow. A table wider than the page scrolls sideways, the header
+page's own color (green / amber / red only where it means something). A click on a header adds that column to the
+sort, the best first (most, newest, hardest, in progress; A to Z for text); again the other way round; again takes it
+out. Many columns sort at once, Free first: then each sorted column to its right, to the end, then from the left (#,
+Title, Repo) up to Free; with none, it is the list's order. Every sorted header is
+blue with an arrow. A table wider than the page scrolls sideways, the header
 with it. Times re-render every minute.
 
 GitHub's labels aren't shown: each issue carries the app's own tags instead, the same as on the Tracked page
@@ -147,8 +149,9 @@ export default function Issues(props: { repo: string | null; open: string | null
   const [selected, setSelected] = useState<string[]>([]);
   const [anchor, setAnchor] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
-  // The list's order: as listed (null), or by one column; best is the way its first click sorts, or not.
-  const [sort, setSort] = useState<{ key: SortKey; best: boolean } | null>(null);
+  // The list's order: as listed (none), or by these columns, from left to right as the table shows them, Title and #
+  // last; best is the way a column's first click sorts, or not.
+  const [sorts, setSorts] = useState<{ key: SortKey; best: boolean }[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   // Issues Claude is reading again (Tag again).
   const [retagging, setRetagging] = useState<string[]>([]);
@@ -263,53 +266,69 @@ export default function Issues(props: { repo: string | null; open: string | null
     }
     return new Date(key === "opened" ? facts.created_at : facts.updated_at).getTime();
   }
-  if (sort !== null) {
-    const better = [NUMBER_COLUMN, TITLE_COLUMN, ...ISSUE_COLUMNS].find((column) => column.key === sort.key)?.better ?? "higher";
+  // The sort's order of columns: Free first, then each column to its right to the end, then from the left (#, Title,
+  // Repo) up to Free.
+  const allColumns = [NUMBER_COLUMN, TITLE_COLUMN, ...ISSUE_COLUMNS];
+  const freeIndex = allColumns.findIndex((column) => column.key === "free");
+  const sortOrder = [...allColumns.slice(freeIndex), ...allColumns.slice(0, freeIndex)];
+  if (sorts.length > 0) {
     rows.sort((a, b) => {
-      const first = sortValue(a, sort.key);
-      const second = sortValue(b, sort.key);
-      if (first === second) {
-        return 0;
+      // The first sorted column in that order that tells them apart decides; when none does, the list's order stays.
+      for (const column of sortOrder) {
+        const sort = sorts.find((each) => each.key === column.key);
+        if (sort === undefined) {
+          continue;
+        }
+        const first = sortValue(a, column.key);
+        const second = sortValue(b, column.key);
+        if (first === second) {
+          continue;
+        }
+        // Missing values go last, whichever way.
+        if (first === null) {
+          return 1;
+        }
+        if (second === null) {
+          return -1;
+        }
+        // Low to high (A to Z for text), turned round when the best is the highest, and again for the other way.
+        let order = typeof first === "string" && typeof second === "string" ? first.localeCompare(second) : Number(first) - Number(second);
+        if (column.better === "higher") {
+          order = -order;
+        }
+        if (order !== 0) {
+          return sort.best ? order : -order;
+        }
       }
-      // Missing values go last, whichever way.
-      if (first === null) {
-        return 1;
-      }
-      if (second === null) {
-        return -1;
-      }
-      // Low to high (A to Z for text), turned round when the best is the highest, and again for the other way.
-      let order = typeof first === "string" && typeof second === "string" ? first.localeCompare(second) : Number(first) - Number(second);
-      if (better === "higher") {
-        order = -order;
-      }
-      return sort.best ? order : -order;
+      return 0;
     });
   }
 
-  // One column at a time: the best first, then the other way round, then back to the list's order.
+  // A click adds a column to the sort (the best first), the next turns it round, the next takes it out.
   function clickSort(key: SortKey) {
-    if (sort === null || sort.key !== key) {
-      setSort({ key, best: true });
+    const sort = sorts.find((each) => each.key === key);
+    if (sort === undefined) {
+      setSorts([...sorts, { key, best: true }]);
     } else if (sort.best) {
-      setSort({ key, best: false });
+      setSorts(sorts.map((each) => (each.key === key ? { key, best: false } : each)));
     } else {
-      setSort(null);
+      setSorts(sorts.filter((each) => each.key !== key));
     }
   }
 
   // A column's header: its label, and an arrow the way it sorts when it does.
   function sortHeader(column: IssueColumn) {
+    const sort = sorts.find((each) => each.key === column.key);
     return (
       <button
         key={column.key}
         type="button"
-        className={cn("flex min-w-0 items-center gap-0.5 hover:text-primary", sort?.key === column.key && "text-primary")}
+        className={cn("flex min-w-0 items-center gap-0.5 hover:text-primary", sort !== undefined && "text-primary")}
         title={column.title}
         onClick={() => clickSort(column.key)}
       >
         <span className="truncate">{column.label}</span>
-        {sort?.key === column.key && (sort.best ? <ArrowDown className="size-3 shrink-0" /> : <ArrowUp className="size-3 shrink-0" />)}
+        {sort !== undefined && (sort.best ? <ArrowDown className="size-3 shrink-0" /> : <ArrowUp className="size-3 shrink-0" />)}
       </button>
     );
   }
