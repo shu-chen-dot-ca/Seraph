@@ -29,6 +29,8 @@ VNC_PORT = int(os.environ["SANDBOX_VM_VNC_PORT"])
 TERMINAL_PORT = int(os.environ["SANDBOX_VM_TERMINAL_PORT"])
 # In an image without a desktop (terminal only): no noVNC or VNC server, its terminals (ttyd) are the way in.
 NO_DESKTOP_FILE = "/etc/sandbox-no-desktop"
+# A VM whose agent doesn't answer this long after it was started hung while booting (wait_agent).
+HUNG_BOOT_SECONDS = 180
 
 
 class VMError(Exception):
@@ -207,22 +209,37 @@ class VM:
         result = subprocess.run(["incus", "exec", self.name, "--", "test", "-f", NO_DESKTOP_FILE], capture_output=True, stdin=subprocess.DEVNULL)
         return result.returncode != 0
 
+    def wait_agent(self, timeout: float = 300) -> bool:
+        """Wait until commands work in the VM (its Incus agent answers). Whether it had to be started again.
+
+        Now and then a VM hangs in its firmware at boot, on this host: in shim, before the kernel, at full CPU,
+        never getting further. One that doesn't answer within HUNG_BOOT_SECONDS is forced off and on, once,
+        and then gets HUNG_BOOT_SECONDS more. Raises VMError when it still doesn't answer.
+        """
+        started = time.monotonic()
+        deadline = started + timeout
+        restarted = False
+        while not self.responds():
+            if not restarted and time.monotonic() - started > HUNG_BOOT_SECONDS:
+                subprocess.run(["incus", "restart", "--force", self.name], capture_output=True, stdin=subprocess.DEVNULL)
+                restarted = True
+                deadline = max(deadline, time.monotonic() + HUNG_BOOT_SECONDS)
+            if time.monotonic() > deadline:
+                raise VMError(f"{self.name}: the VM agent did not come up (also not after a forced restart)")
+            time.sleep(2)
+        return restarted
+
     def wait_ready(self, timeout: float = 300) -> None:
-        """Wait until commands work, the VM has an address, noVNC answers and the desktop is up.
+        """Wait until commands work (wait_agent: a VM that hangs at boot is started again, once), the VM has an
+        address, noVNC answers and the desktop is up.
 
         The desktop is up when its VNC server (x11vnc) listens: it starts only once
         the desktop user is logged in, a few seconds after noVNC's web page works.
         A VM without a desktop (terminal only) is ready once its terminals (ttyd) answer.
         """
+        self.wait_agent(timeout)
+        # From here on the VM boots normally: the desktop gets its own time.
         deadline = time.monotonic() + timeout
-
-        while True:
-            result = subprocess.run(["incus", "exec", self.name, "--", "true"], capture_output=True, stdin=subprocess.DEVNULL)
-            if result.returncode == 0:
-                break
-            if time.monotonic() > deadline:
-                raise VMError(f"{self.name}: the VM agent did not come up")
-            time.sleep(2)
 
         if not self.has_desktop():
             while True:
