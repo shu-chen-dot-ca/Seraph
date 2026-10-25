@@ -394,7 +394,7 @@ export default function Sherpa() {
               }}
             >
               {chat === null && error === "" && (
-                <div className="flex items-center gap-2 text-muted-foreground">
+                <div className="flex items-center gap-2">
                   <Loader2 className="size-3.5 animate-spin" /> Loading…
                 </div>
               )}
@@ -414,12 +414,13 @@ export default function Sherpa() {
                     );
                   }
                   if (entry.type === "text") {
-                    return <Markdown key={index} text={entry.text} />;
+                    // In the page's own text color: prose's gray is too faint in the small panel.
+                    return <Markdown key={index} className="text-foreground!" text={entry.text} />;
                   }
                   if (entry.type === "tool") {
                     return (
-                      <div key={index} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                        <Wrench className="size-3 shrink-0" /> <span className="truncate">{entry.summary}</span>
+                      <div key={index} className="flex items-center gap-1.5 text-xs">
+                        <Wrench className="size-3 shrink-0 text-primary" /> <span className="truncate">{entry.summary}</span>
                       </div>
                     );
                   }
@@ -432,14 +433,14 @@ export default function Sherpa() {
                   }
                   if (entry.type === "system") {
                     return (
-                      <div key={index} className={cn("text-xs", entry.text.startsWith("Error") ? "text-destructive" : "text-muted-foreground")}>
+                      <div key={index} className={cn("text-xs", entry.text.startsWith("Error") && "text-destructive")}>
                         {entry.text}
                       </div>
                     );
                   }
                   if (entry.type === "turn_end" && entry.stopped) {
                     return (
-                      <div key={index} className="text-xs text-muted-foreground">
+                      <div key={index} className="text-xs">
                         Stopped
                       </div>
                     );
@@ -447,7 +448,7 @@ export default function Sherpa() {
                   return null;
                 })}
               {busy && (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <div className="flex items-center gap-2 text-xs">
                   <Loader2 className="size-3 animate-spin text-primary" /> Working…
                 </div>
               )}
