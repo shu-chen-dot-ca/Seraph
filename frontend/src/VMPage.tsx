@@ -1,14 +1,15 @@
 /*
-One VM's page: a header with its state and power buttons, and two tabs.
+One VM's page: a header with its state and power buttons, and three tabs.
 
 Overview is three areas with draggable dividers:
   desktop (noVNC in an iframe)  |  queue (who holds the VM, who waits)
   ------------------------------+--------------------------------------
   stats (CPU, memory and internet speed over the last minute, disk, internet used)  and  the jobs on this VM
+Resources is VMResources: copy files and folders between this computer and the VM (only you; agents can't).
 Settings is VMSettings. Fork (only while stopped) makes a new VM that starts as a copy of this one (ForkVMDialog).
 
 App keeps this page mounted (hidden) after you leave it, and the Overview stays mounted while the
-Settings tab is open, so the desktop iframe never reloads: coming back is instant, and always to the
+Resources or Settings tab is open, so the desktop iframe never reloads: coming back is instant, and always to the
 Overview (the tab you were on isn't remembered). The iframe only
 exists while the VM runs; its address comes from GET /api/vms/{name}/viewer, asked again (every 3 s)
 until the VM has one. A VM from a terminal-only image has no desktop: the same area shows its terminal (ttyd).
@@ -32,6 +33,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import ForkVMDialog from "@/ForkVMDialog";
+import VMResources from "@/VMResources";
 import VMSettings from "@/VMSettings";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -342,6 +344,9 @@ export default function VMPage(props: { name: string; active: boolean }) {
           <TabsList>
             <TabsTrigger value="overview" className="px-2.5">
               Overview
+            </TabsTrigger>
+            <TabsTrigger value="resources" className="px-2.5">
+              Resources
             </TabsTrigger>
             <TabsTrigger value="settings" className="px-2.5">
               Settings
@@ -738,6 +743,12 @@ export default function VMPage(props: { name: string; active: boolean }) {
           </ResizablePanel>
         </ResizablePanelGroup>
       </div>
+
+      {tab === "resources" && (
+        <div className="min-h-0 flex-1">
+          <VMResources name={vm.name} />
+        </div>
+      )}
 
       {tab === "settings" && (
         <div className="min-h-0 flex-1">
