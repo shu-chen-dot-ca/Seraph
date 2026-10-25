@@ -7,11 +7,16 @@ words, its todo count, how long it has been on this step, and a warning when it 
 
 Everything comes from the live store (agents and jobs), so the table updates itself while agents work.
 Clicking a row opens that agent's page. New agent makes an agent with the next free name ("agent-N")
-and opens it. Delete asks first: the agent's conversation goes, its open jobs are cancelled and it leaves
-every VM queue (its drafts stay in the Inbox).
+and opens it. Each row's ⋯ menu has Archive and Delete, both asking first. Archive stops the agent, cancels
+its open jobs and takes it out of every VM queue, but keeps its conversation; Delete also deletes the
+conversation (its drafts stay in the Inbox). An agent that made PRs can't be deleted, only archived, so
+it keeps its context for updates on them.
+
+Archived agents are in their own list under the others (it folds), with when they were archived and how
+many PRs they made; Unarchive in their menu brings one back, and so does sending it a message or a job.
 */
 
-import { Plus, X } from "lucide-react";
+import { Archive, ArchiveRestore, ChevronRight, MoreHorizontal, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -26,6 +31,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { JobProgressBar, currentJob, since, stuckFor, useNow } from "@/components/ui/job-progress";
 import { AGENT_TONE, StatusDot } from "@/components/ui/status-dot";
 import { api, useLive, useLoaded, type AgentSummary } from "@/live";
@@ -43,9 +49,13 @@ export default function Agents() {
   const agents = useLive("agents");
   const jobs = useLive("jobs");
   const loaded = useLoaded("agents");
-  // The agent the delete dialog asks about. It stays set while the dialog fades out, so the title doesn't blank.
-  const [deleting, setDeleting] = useState<AgentSummary | null>(null);
+  // The agent the dialog asks about, and whether to archive or delete it. It stays set while the dialog fades out,
+  // so the title doesn't blank.
+  const [confirming, setConfirming] = useState<{ agent: AgentSummary; action: "archive" | "delete" } | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [archivedOpen, setArchivedOpen] = useState(true);
+  const active = agents.filter((agent) => agent.archived_at === null);
+  const archived = agents.filter((agent) => agent.archived_at !== null);
   const now = useNow();
 
   // Open jobs per agent.
@@ -76,6 +86,68 @@ export default function Agents() {
     }
   }
 
+  async function archive(agent: AgentSummary) {
+    try {
+      await api(`/api/agents/${agent.id}/archive`, { method: "POST" });
+      toast.success(`Archived ${agent.name}`);
+    } catch (err) {
+      toast.error(`Could not archive ${agent.name}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  async function unarchive(agent: AgentSummary) {
+    try {
+      await api(`/api/agents/${agent.id}/unarchive`, { method: "POST" });
+      toast.success(`${agent.name} is back`);
+    } catch (err) {
+      toast.error(`Could not unarchive ${agent.name}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  // The ⋯ menu at the end of a row: Archive or Unarchive, then Delete (not for an agent that made PRs).
+  function rowMenu(agent: AgentSummary) {
+    return (
+      <span onClick={(event) => event.stopPropagation()}>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon-xs" aria-label={`Actions for ${agent.name}`}>
+              <MoreHorizontal />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {agent.archived_at === null && (
+              <DropdownMenuItem
+                onSelect={() => {
+                  setConfirming({ agent: agent, action: "archive" });
+                  setConfirmOpen(true);
+                }}
+              >
+                <Archive /> Archive
+              </DropdownMenuItem>
+            )}
+            {agent.archived_at !== null && (
+              <DropdownMenuItem onSelect={() => unarchive(agent)}>
+                <ArchiveRestore /> Unarchive
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              variant="destructive"
+              disabled={agent.prs > 0}
+              onSelect={() => {
+                setConfirming({ agent: agent, action: "delete" });
+                setConfirmOpen(true);
+              }}
+            >
+              <Trash2 /> Delete
+              {agent.prs > 0 && <span className="ml-auto text-xs">made PRs: archive it</span>}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </span>
+    );
+  }
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
@@ -98,13 +170,13 @@ export default function Agents() {
 
       <div className="min-h-0 flex-1 overflow-auto">
         {!loaded && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
-        {loaded && agents.length === 0 && (
+        {loaded && active.length === 0 && (
           <div className="px-3 py-2 text-muted-foreground">
-            No agents yet. Create one, then tell it what to look for, or give it an issue from the Issues page.
+            {archived.length === 0 ? "No agents yet." : "No agents at work."} Create one, then tell it what to look for, or give it an issue from the Issues page.
           </div>
         )}
 
-        {agents.map((agent) => {
+        {active.map((agent) => {
           const cap = agent.context_max > 0 ? Math.min(agent.context_max, CONTEXT_CAP) : CONTEXT_CAP;
           const percent = Math.min(100, (agent.context_used / cap) * 100);
           const job = currentJob(agent.id, jobs);
@@ -165,19 +237,7 @@ export default function Agents() {
               <span className="truncate text-muted-foreground" title={agent.activity}>
                 {agent.activity}
               </span>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                aria-label={`Delete ${agent.name}`}
-                title="Delete this agent"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setDeleting(agent);
-                  setConfirmOpen(true);
-                }}
-              >
-                <X />
-              </Button>
+              {rowMenu(agent)}
             </div>
             {job !== undefined && (job.headline !== "" || stuck !== "" || (agent.busy && agent.todo_total > 0)) && (
               <div className="flex min-w-0 items-center gap-3 pb-1.5 pl-[300px] text-xs text-muted-foreground tabular-nums">
@@ -198,27 +258,73 @@ export default function Agents() {
             </div>
           );
         })}
+
+        {archived.length > 0 && (
+          <button
+            type="button"
+            className="flex h-7 w-full items-center gap-1 border-b bg-muted/40 px-2 text-xs font-medium text-muted-foreground hover:text-foreground"
+            aria-expanded={archivedOpen}
+            onClick={() => setArchivedOpen(!archivedOpen)}
+          >
+            <ChevronRight className={cn("size-3.5 transition-transform", archivedOpen && "rotate-90")} />
+            Archived
+            <span className="ml-0.5 tabular-nums">{archived.length}</span>
+          </button>
+        )}
+        {archivedOpen &&
+          archived.map((agent) => (
+            <div
+              key={agent.id}
+              className={cn(COLUMNS, "h-7 cursor-pointer border-b px-3 text-muted-foreground hover:bg-accent/50")}
+              onClick={() => {
+                window.location.hash = `#/agents/${agent.id}`;
+              }}
+            >
+              <a href={`#/agents/${agent.id}`} className="truncate font-medium text-foreground" onClick={(event) => event.stopPropagation()}>
+                {agent.name}
+              </a>
+              <span className="truncate font-mono text-xs" title="Its id: unique, and it never changes">
+                {agent.id}
+              </span>
+              <span className="truncate">archived {agent.archived_at !== null ? new Date(agent.archived_at).toLocaleDateString() : ""}</span>
+              <span className="truncate">{agent.target_vm ?? "–"}</span>
+              <span className="truncate">{agent.prs > 0 ? `${agent.prs} PR${agent.prs > 1 ? "s" : ""}: it keeps its context for updates` : "–"}</span>
+              <span />
+              <span className="text-xs tabular-nums">{Math.round(agent.context_used / 1000)}k</span>
+              <span className="truncate" title={agent.activity}>
+                {agent.activity}
+              </span>
+              {rowMenu(agent)}
+            </div>
+          ))}
       </div>
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete {deleting?.name}?</AlertDialogTitle>
+            <AlertDialogTitle>
+              {confirming?.action === "archive" ? "Archive" : "Delete"} {confirming?.agent.name}?
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              Its conversation is deleted, its open jobs are cancelled and it leaves every VM queue. Its drafts stay in the Inbox.
+              {confirming?.action === "archive"
+                ? "It stops, its open jobs are cancelled and it leaves every VM queue. Its conversation stays: it is under Archived here, and a message or a job brings it back."
+                : "Its conversation is deleted, its open jobs are cancelled and it leaves every VM queue. Its drafts stay in the Inbox."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              variant="destructive"
+              variant={confirming?.action === "archive" ? "default" : "destructive"}
               onClick={() => {
-                if (deleting !== null) {
-                  remove(deleting);
+                if (confirming !== null && confirming.action === "archive") {
+                  archive(confirming.agent);
+                }
+                if (confirming !== null && confirming.action === "delete") {
+                  remove(confirming.agent);
                 }
               }}
             >
-              Delete
+              {confirming?.action === "archive" ? "Archive" : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

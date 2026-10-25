@@ -12,12 +12,14 @@ Hovering Jobs, Agents or VMs fades its count into a + that makes a new one right
 New job opens NewJobDialog, + on Agents makes an agent with the next free name (agent-N) and opens it, + on VMs
 opens NewVMDialog.
 Each agent and VM line, like a chat in claude.ai's sidebar, fades its status into a ⋯ on hover: its menu has Rename
-(a small dialog) and Delete (asks first). Deleting the one whose page is open goes back to its list.
+(a small dialog) and Delete (asks first), and for an agent Archive (asks first). Deleting the one whose page is open
+goes back to its list. Archived agents aren't listed here (they are on the Agents page); an agent that made PRs
+can only be archived, not deleted.
 Inbox (pending drafts) and Settings stay pinned at the bottom while the tree scrolls; Settings opens SettingsDialog
 (theme and accent color), which App owns.
 */
 
-import { Bot, ChevronRight, CircleDot, Compass, Eye, FolderGit2, Gauge, Inbox, ListTodo, Monitor, MoreHorizontal, Pencil, Plus, Settings, Trash2 } from "lucide-react";
+import { Archive, Bot, ChevronRight, CircleDot, Compass, Eye, FolderGit2, Gauge, Inbox, ListTodo, Monitor, MoreHorizontal, Pencil, Plus, Settings, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -54,12 +56,16 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
   const [renameBusy, setRenameBusy] = useState(false);
   const [renameError, setRenameError] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
+  // What the confirm dialog does to the agent: delete it, or archive it.
+  const [confirmAction, setConfirmAction] = useState<"delete" | "archive">("delete");
   const inbox = useLive("inbox");
   const issues = useLive("issues");
   const jobs = useLive("jobs");
   const repos = useLive("repos");
   const tracked = useLive("tracked");
   const agents = useLive("agents");
+  // Archived agents are on the Agents page only.
+  const activeAgents = agents.filter((agent) => agent.archived_at === null);
   const vms = useLive("vms");
   // Only what the row shows: the explore topic changes many times a second while a run goes.
   const exploreRunning = useLiveValue((topics) => topics.explore.run !== null && topics.explore.run.status === "running");
@@ -112,6 +118,18 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
       setRenameError(err instanceof Error ? err.message : String(err));
     }
     setRenameBusy(false);
+  }
+
+  async function archive() {
+    if (target === null) {
+      return;
+    }
+    try {
+      await api(`/api/agents/${target.id}/archive`, { method: "POST" });
+      toast.success(`Archived ${target.name}. It is under Archived on the Agents page.`);
+    } catch (err) {
+      toast.error(`Could not archive ${target.name}: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   async function remove() {
@@ -219,14 +237,14 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
           <a href="#/agents" className="flex h-7 min-w-0 flex-1 items-center gap-2 pr-2">
             <Bot className="size-4 text-muted-foreground" />
             Agents
-            <span className={count}>{agents.length}</span>
+            <span className={count}>{activeAgents.length}</span>
           </a>
           <button type="button" className={plus} aria-label="New agent" title="New agent" onClick={createAgent}>
             <Plus className="size-3.5" />
           </button>
         </div>
         {agentsOpen &&
-          agents.map((agent) => (
+          activeAgents.map((agent) => (
             <div key={agent.id} className={cn(child, props.page === "agents" && props.id === agent.id && selected)}>
               <a href={`#/agents/${agent.id}`} className="flex h-7 min-w-0 flex-1 items-center gap-2 pr-2 pl-6" title={agent.activity}>
                 <StatusDot tone={AGENT_TONE[agent.status]} />
@@ -250,15 +268,27 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
                   >
                     <Pencil /> Rename
                   </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      setTarget({ kind: "agent", id: agent.id, name: agent.name });
+                      setConfirmAction("archive");
+                      setDeleteOpen(true);
+                    }}
+                  >
+                    <Archive /> Archive
+                  </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     variant="destructive"
+                    disabled={agent.prs > 0}
                     onSelect={() => {
                       setTarget({ kind: "agent", id: agent.id, name: agent.name });
+                      setConfirmAction("delete");
                       setDeleteOpen(true);
                     }}
                   >
                     <Trash2 /> Delete
+                    {agent.prs > 0 && <span className="ml-auto text-xs">made PRs</span>}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -317,6 +347,7 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
                     variant="destructive"
                     onSelect={() => {
                       setTarget({ kind: "vm", id: vm.name, name: vm.name });
+                      setConfirmAction("delete");
                       setDeleteOpen(true);
                     }}
                   >
@@ -391,17 +422,22 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete {target?.name}?</AlertDialogTitle>
+            <AlertDialogTitle>
+              {confirmAction === "archive" ? "Archive" : "Delete"} {target?.name}?
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              {target?.kind === "vm"
-                ? "The VM and everything inside it are removed for good. An agent holding it is interrupted, and agents aimed at it lose their target VM."
-                : "Its conversation is deleted, its open jobs are cancelled and it leaves every VM queue. Its drafts stay in the Inbox."}
+              {confirmAction === "archive" &&
+                "It stops, its open jobs are cancelled and it leaves every VM queue. Its conversation stays: it is under Archived on the Agents page, and a message or a job brings it back."}
+              {confirmAction === "delete" &&
+                (target?.kind === "vm"
+                  ? "The VM and everything inside it are removed for good. An agent holding it is interrupted, and agents aimed at it lose their target VM."
+                  : "Its conversation is deleted, its open jobs are cancelled and it leaves every VM queue. Its drafts stay in the Inbox.")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={remove}>
-              Delete
+            <AlertDialogAction variant={confirmAction === "archive" ? "default" : "destructive"} onClick={confirmAction === "archive" ? archive : remove}>
+              {confirmAction === "archive" ? "Archive" : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

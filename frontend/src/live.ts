@@ -456,6 +456,8 @@ export type AgentSummary = {
   todo_done: number; // from its latest todo list
   todo_total: number;
   created_at: string;
+  archived_at: string | null; // archived: stopped, its conversation kept
+  prs: number; // PR drafts that wait for you or were approved: it can only be archived, not deleted
 };
 
 export type Todo = {

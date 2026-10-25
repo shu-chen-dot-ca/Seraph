@@ -187,7 +187,7 @@ export default function NewJobDialog(props: { onClose: () => void }) {
             </SelectTrigger>
             <SelectContent position="popper">
               <SelectItem value={NEW_AGENT}>New agent</SelectItem>
-              {agents.map((each) => (
+              {agents.filter((each) => each.archived_at === null).map((each) => (
                 <SelectItem key={each.id} value={each.id}>
                   <StatusDot tone={AGENT_TONE[each.status]} />
                   {each.name}

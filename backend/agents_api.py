@@ -1,4 +1,5 @@
-"""The Agents and Jobs pages: create, rename and delete agents, chat with one, point it at a VM, and create and cancel jobs.
+"""The Agents and Jobs pages: create, rename, archive, unarchive and delete agents, chat with one, point it at a VM, and
+create and cancel jobs. An agent that made PRs can't be deleted (409), only archived.
 
 Every endpoint is `async def`: Agents lives on the backend's event loop (each
 agent is a Claude conversation driven by an asyncio task). The list of agents
@@ -63,6 +64,27 @@ async def delete_agent(agent_id: str) -> dict:
     """Stops the agent, takes it out of every VM queue and cancels its open jobs."""
     try:
         await agents.delete(agent_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No agent {agent_id}")
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    return {}
+
+
+@router.post("/agents/{agent_id}/archive")
+async def archive_agent(agent_id: str) -> dict:
+    """Stops the agent, takes it out of every VM queue and cancels its open jobs; its conversation stays."""
+    try:
+        await agents.archive(agent_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No agent {agent_id}")
+    return {}
+
+
+@router.post("/agents/{agent_id}/unarchive")
+async def unarchive_agent(agent_id: str) -> dict:
+    try:
+        agents.unarchive(agent_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"No agent {agent_id}")
     return {}

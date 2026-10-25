@@ -5,7 +5,13 @@ DATA_DIR/agents/<id>.json:
 
     {"id": "agent_a1b2c3", "name": "agent-1", "target_vm": "vm1" | null, "claude_session_id",
      "history": [HistoryEntry, ...], "context_used", "context_max", "cost_usd", "created_at",
-     "pending": [message, ...], "awake": bool}
+     "pending": [message, ...], "awake": bool, "archived_at": null | when it was archived}
+
+Any agent can be archived: it stops, its open jobs are cancelled and it leaves every VM queue, but its
+conversation stays, so it can pick up where it left off (an update on its PR). The app's messages to an
+archived agent wait without waking it; a message from the user, a job given to it, or a reply to one of
+its drafts brings it back (unarchive), and those messages go in then. An agent that made PRs (a PR draft
+that waits for the user or was approved: Inbox.pr_owners) can't be deleted, only archived.
 
 Every agent has a worker (an asyncio task) that waits for messages, joins the waiting ones into
 one prompt, each starting with [User] (the user typed it) or [System] (the app: a new job, a VM
@@ -130,7 +136,9 @@ class Agents:
             # wakes for them; the others (e.g. interrupted by the user) keep waiting for a message.
             self.pending[agent.id] = record.get("pending", [])
             self.wake[agent.id] = asyncio.Event()
-            if record.get("awake") and self.pending[agent.id]:
+            # Agents from before archiving.
+            record.setdefault("archived_at", None)
+            if record.get("awake") and self.pending[agent.id] and record["archived_at"] is None:
                 self.wake[agent.id].set()
             self.nudges[agent.id] = {"count": 0, "state": None}
             self.workers[agent.id] = asyncio.create_task(self.work(agent))
@@ -292,6 +300,7 @@ class Agents:
 
     def summaries(self) -> list[dict]:
         summaries = []
+        prs = self.inbox.pr_owners()
         for agent in sorted(self.agents.values(), key=lambda agent: agent.record["created_at"]):
             vm_name, place = self.queue.place(agent.id)
             status = "idle"
@@ -341,6 +350,9 @@ class Agents:
                     "todo_done": todo_done,
                     "todo_total": todo_total,
                     "created_at": agent.record["created_at"],
+                    "archived_at": agent.record["archived_at"],
+                    # PR drafts that wait for the user or were approved: then it can only be archived, not deleted.
+                    "prs": prs.get(agent.id, 0),
                 }
             )
         return summaries
@@ -370,6 +382,7 @@ class Agents:
             "context_max": 0,
             "cost_usd": 0.0,
             "created_at": datetime.now(UTC).isoformat(),
+            "archived_at": None,
         }
         computer_tools = ComputerTools(self.vms, agent_id, functools.partial(record.get, "target_vm"), record["history"])
         agent = Agent(record, computer_tools, WorkTools(self, record), self.changed)
@@ -402,8 +415,12 @@ class Agents:
         self.version += 1
 
     async def delete(self, agent_id: str) -> None:
-        """Stop the agent and delete it. Its open jobs become cancelled; its drafts stay in the Inbox."""
+        """Stop the agent and delete it. Its open jobs become cancelled; its drafts stay in the Inbox.
+        Not an agent that made PRs: it keeps its conversation for updates on them (archive it instead)."""
         agent = self.agents[agent_id]
+        prs = self.inbox.pr_owners().get(agent_id, 0)
+        if prs > 0:
+            raise ValueError(f"{agent.name} made {prs} PR{'s' if prs > 1 else ''}. Archive it instead, so it keeps its conversation for updates on them.")
         await agent.interrupt()
         # The VM it holds or waits for, read before it leaves the queue.
         vm_name, place = self.queue.place(agent_id)
@@ -423,6 +440,39 @@ class Agents:
             await asyncio.to_thread(agent.computer_tools.cancel, vm_name)
         (self.folder / f"{agent_id}.json").unlink(missing_ok=True)
 
+    async def archive(self, agent_id: str) -> None:
+        """Put the agent away: it stops, its open jobs become cancelled and it leaves every VM queue (what it still
+        ran in the VM is killed). Its conversation stays; unarchive() brings it back."""
+        agent = self.agents[agent_id]
+        if agent.record["archived_at"] is not None:
+            return
+        await agent.interrupt()
+        vm_name, place = self.queue.place(agent_id)
+        self.queue.leave_all(agent_id)
+        self.jobs.delete_for_agent(agent_id)
+        # The user's messages that still waited are dropped; the app's wait for when it is back.
+        self.pending[agent_id] = [message for message in self.pending[agent_id] if message["from"] != "User"]
+        self.wake[agent_id].clear()
+        agent.record["archived_at"] = datetime.now(UTC).isoformat()
+        agent.history.append({"type": "system", "text": "Archived: its open jobs were cancelled", "time": agent.record["archived_at"]})
+        agent.computer_tools.end_turn()
+        if vm_name is not None:
+            await asyncio.to_thread(agent.computer_tools.cancel, vm_name)
+        self.save(agent)
+        self.version += 1
+
+    def unarchive(self, agent_id: str) -> None:
+        """Bring an archived agent back. Messages that waited for it go in now."""
+        agent = self.agents[agent_id]
+        if agent.record["archived_at"] is None:
+            return
+        agent.record["archived_at"] = None
+        agent.history.append({"type": "system", "text": "Back from the archive", "time": datetime.now(UTC).isoformat()})
+        if self.pending[agent_id]:
+            self.wake[agent_id].set()
+        self.save(agent)
+        self.version += 1
+
     def history(self, agent_id: str, since: int) -> list[dict]:
         return self.agents[agent_id].history[since:]
 
@@ -432,6 +482,8 @@ class Agents:
             raise KeyError(f"No agent {agent_id}")
         if not text.strip():
             raise ValueError("The message is empty")
+        # Talking to an archived agent brings it back.
+        self.unarchive(agent_id)
         waiting = [message for message in self.pending[agent_id] if message["from"] == "User"]
         if len(waiting) >= MAX_QUEUED:
             raise ValueError(f"{MAX_QUEUED} messages already wait; send more when one has gone in")
@@ -466,7 +518,9 @@ class Agents:
         if agent_id not in self.agents:
             return
         self.pending[agent_id].append({"from": "System", "text": text, "shown": False})
-        self.wake[agent_id].set()
+        # An archived agent hears it once it is back.
+        if self.agents[agent_id].record["archived_at"] is None:
+            self.wake[agent_id].set()
         self.version += 1
 
     async def interrupt(self, agent_id: str) -> None:
@@ -539,6 +593,7 @@ class Agents:
         # Raises ValueError while the agent waits for or holds another VM.
         if vm_name is not None:
             self.set_target_vm(agent_id, vm_name)
+        self.unarchive(agent_id)
 
         title = f"Fix {issue_id}: {issue['title']}"
         vm_name = agent.record["target_vm"]
@@ -571,6 +626,7 @@ class Agents:
         # Raises ValueError while the agent waits for or holds another VM.
         if vm_name is not None:
             self.set_target_vm(agent_id, vm_name)
+        self.unarchive(agent_id)
 
         vm_name = agent.record["target_vm"]
         job = self.jobs.create("task", title, agent_id, "user", vm=vm_name, instructions=instructions)
@@ -664,6 +720,9 @@ class Agents:
             text += f" Don't draft it again as it is: change course, or cancel {job_name} with job_update if it no longer makes sense. Ask with draft_question if unsure."
         else:
             text = f"The user replied to {about}:\n{reply}\nDo what they say and keep working on {job_name}; draft again when it's ready."
+            # The user wants work done: an archived agent comes back for it.
+            if draft["agent"] in self.agents:
+                self.unarchive(draft["agent"])
         if job is not None and job["status"] == "queued" and job["vm"] is not None:
             text += f"\n{job['id']} is queued again; use queue_for_vm if you need {job['vm']} for it."
         self.notify(draft["agent"], text)

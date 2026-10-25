@@ -22,7 +22,8 @@ const NEW_AGENT = "__new__";
 const NO_VM = "__none__";
 
 export default function AssignDialog(props: { issue: IssueItem; onClose: () => void }) {
-  const agents = useLive("agents");
+  // Archived agents aren't offered (the Agents page brings them back).
+  const agents = useLive("agents").filter((agent) => agent.archived_at === null);
   const vms = useLive("vms");
 
   // Start with an idle agent if there is one (it can start right away), else the first agent, else a new one.

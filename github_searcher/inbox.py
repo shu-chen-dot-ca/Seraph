@@ -93,6 +93,16 @@ class Inbox:
                 raise KeyError(f"No draft {draft_id}")
             return copy.deepcopy(self.drafts[draft_id])
 
+    def pr_owners(self) -> dict:
+        """How many PR drafts each agent has that wait for the user or were approved: PRs that are, or may soon be,
+        on GitHub. Such an agent can't be deleted, only archived (agents.py). Cheap: no copies, it runs on every change."""
+        with self.lock:
+            counts = {}
+            for draft in self.drafts.values():
+                if draft["kind"] == "pr" and draft["status"] in ["pending", "approved"]:
+                    counts[draft["agent"]] = counts.get(draft["agent"], 0) + 1
+            return counts
+
     def create(self, kind: str, agent: str, title: str, body: str, job: str | None = None,
                repo: str | None = None, target: str | None = None, diff: str = "", branch: str = "",
                base: str = "", base_sha: str = "", vm: str | None = None, path: str | None = None, evidence: list | None = None,

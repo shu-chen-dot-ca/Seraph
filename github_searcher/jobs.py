@@ -250,7 +250,7 @@ class Jobs:
             return removed
 
     def delete_for_agent(self, agent_id: str) -> None:
-        """The agent is being deleted: its open jobs become "cancelled". The jobs stay."""
+        """The agent is being deleted or archived: its open jobs become "cancelled". The jobs stay."""
         now = datetime.now(UTC).isoformat()
         with self.lock:
             for job in self.jobs.values():

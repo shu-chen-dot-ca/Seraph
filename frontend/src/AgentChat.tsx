@@ -7,6 +7,10 @@ left; on the right where it stands in a VM queue, its jobs in two lists that eac
 takes it off: the job is cancelled, and the agent is told) and Finished (done and cancelled, newest first), and its
 latest todo list.
 
+The header's ⋯ menu has Archive (or Unarchive) and Delete, both asking first. Archive stops the agent, cancels its open
+jobs and takes it out of every VM queue, but keeps this conversation; an archived agent's page says so, and sending it
+a message brings it back. An agent that made PRs can't be deleted, only archived, so it keeps its context for updates.
+
 The conversation is the agent's history (HistoryEntry in live.ts; append-only on the server). The page
 loads the last 200 entries, then fetches only the new part (/history?since=<end>) whenever the live
 agent summary's history_length grows. "Show earlier" loads up to 200 more in front. A tool call and its
@@ -51,6 +55,9 @@ import {
   Square,
   Terminal,
   Trash2,
+  Archive,
+  ArchiveRestore,
+  MoreHorizontal,
   Wrench,
   X,
   type LucideIcon,
@@ -67,9 +74,9 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { JobProgressBar, JobSteps, JobTests, currentJob, since, stuckFor, useNow } from "@/components/ui/job-progress";
 import { IssueRefText, Markdown } from "@/components/ui/markdown";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
@@ -201,6 +208,8 @@ export default function AgentChat(props: { agentId: string }) {
     }
   });
   const [seen, setSeen] = useState(false);
+  // The header's confirm dialog: archive or delete this agent; null while closed.
+  const [confirmAction, setConfirmAction] = useState<"archive" | "delete" | null>(null);
   // The job lists (In queue, Finished) folded on the right, by key.
   const [foldedLists, setFoldedLists] = useState<string[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -366,6 +375,15 @@ export default function AgentChat(props: { agentId: string }) {
     }
   }
 
+  async function archive(action: "archive" | "unarchive") {
+    try {
+      await api(`/api/agents/${props.agentId}/${action}`, { method: "POST" });
+      toast.success(action === "archive" ? `Archived ${summary?.name ?? props.agentId}` : `${summary?.name ?? props.agentId} is back`);
+    } catch (err) {
+      toast.error(`Could not ${action}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
   async function remove() {
     try {
       await api(`/api/agents/${props.agentId}`, { method: "DELETE" });
@@ -516,29 +534,65 @@ export default function AgentChat(props: { agentId: string }) {
           <Button variant="outline" size="sm" onClick={compact} disabled={summary.history_length === 0} title="Summarize the conversation to free context">
             <Minimize2 /> Compact
           </Button>
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
-              <Button variant="ghost" size="icon" aria-label={`Delete ${summary.name}`} title="Delete this agent">
-                <Trash2 />
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" aria-label={`Actions for ${summary.name}`}>
+                <MoreHorizontal />
               </Button>
-            </AlertDialogTrigger>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {summary.archived_at === null && (
+                <DropdownMenuItem onSelect={() => setConfirmAction("archive")}>
+                  <Archive /> Archive
+                </DropdownMenuItem>
+              )}
+              {summary.archived_at !== null && (
+                <DropdownMenuItem onSelect={() => archive("unarchive")}>
+                  <ArchiveRestore /> Unarchive
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem variant="destructive" disabled={summary.prs > 0} onSelect={() => setConfirmAction("delete")}>
+                <Trash2 /> Delete
+                {summary.prs > 0 && <span className="ml-auto text-xs">made PRs: archive it</span>}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <AlertDialog open={confirmAction !== null} onOpenChange={(open) => !open && setConfirmAction(null)}>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>Delete {summary.name}?</AlertDialogTitle>
+                <AlertDialogTitle>
+                  {confirmAction === "archive" ? "Archive" : "Delete"} {summary.name}?
+                </AlertDialogTitle>
                 <AlertDialogDescription>
-                  Its conversation is deleted, its open jobs are cancelled and it leaves every VM queue. Its drafts stay in the Inbox.
+                  {confirmAction === "archive"
+                    ? "It stops, its open jobs are cancelled and it leaves every VM queue. Its conversation stays: it is under Archived on the Agents page, and a message or a job brings it back."
+                    : "Its conversation is deleted, its open jobs are cancelled and it leaves every VM queue. Its drafts stay in the Inbox."}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction variant="destructive" onClick={remove}>
-                  Delete
+                <AlertDialogAction
+                  variant={confirmAction === "archive" ? "default" : "destructive"}
+                  onClick={() => (confirmAction === "archive" ? archive("archive") : remove())}
+                >
+                  {confirmAction === "archive" ? "Archive" : "Delete"}
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
         </div>
       </div>
+
+      {summary.archived_at !== null && (
+        <div className="flex shrink-0 items-center gap-2 border-b bg-muted/40 px-3 py-1.5 text-muted-foreground">
+          <Archive className="size-3.5" />
+          Archived {new Date(summary.archived_at).toLocaleString()}. Its conversation is kept; a message brings it back.
+          <Button variant="outline" size="xs" className="ml-auto" onClick={() => archive("unarchive")}>
+            <ArchiveRestore /> Unarchive
+          </Button>
+        </div>
+      )}
 
       {job !== undefined && (
         <div className="shrink-0 space-y-1.5 border-b bg-muted/20 px-3 py-2">
@@ -744,7 +798,9 @@ export default function AgentChat(props: { agentId: string }) {
                   placeholder={
                     pending >= MAX_QUEUED
                       ? `${MAX_QUEUED} messages wait; send more when one has gone in`
-                      : summary.busy
+                      : summary.archived_at !== null
+                        ? `Message ${summary.name} (it comes back from the archive)`
+                        : summary.busy
                         ? `Message ${summary.name} (sent when this turn ends)`
                         : `Message ${summary.name}`
                   }
