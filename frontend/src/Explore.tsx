@@ -12,13 +12,15 @@ each of the user's types of repo (ExploreProfileDialog; a "lane" in the code), k
 finds, and skips what is already in Repos, Tracked or the found list, and what was rejected in the last 14 days.
 
 Every repo that qualifies joins the found list right away, newest first: a table with a column for each thing known
-about it (FOUND_COLUMNS): its type (the one Claude classified it under), stars, fit, AI policy, how newcomers fare, its
-review tone, PRs, issues and commits a month and the trend, how many contributors and maintainers it has, how many
+about it (FOUND_COLUMNS): its AI policy, fit, how newcomers fare, its review tone, stars, its type (the one Claude
+classified it under), PRs, issues and commits a month and the trend, how many contributors and maintainers it has, how many
 outside PRs nobody answered, and when it was found; its note under the name. Every column is as wide as its widest
 cell (one CSS grid for the whole table, each row a subgrid), and the text is in the page's own color, not gray: green,
-amber or red only where a value means something (the color rules in index.css). A click on a header sorts by that
-column, one at a time: the best first (A to Z for text), again the other way round, again back to newest first; the
-sorted header is blue with an arrow. A click on a row opens it in place: its README, then its files folded at the
+amber or red only where a value means something (the color rules in index.css). A click on a header adds that column
+to the sort, best first (A to Z for text); again the other way round; again takes it out. Many columns sort at once,
+from left to right: the leftmost sorted column first, then the next among the same (say AI policy, then Fit), and
+newest first among what is still the same; Repo (the name) last of all. Each sorted header is blue with an arrow. With none, it is back to newest
+first. A click on a row opens it in place: its README, then its files folded at the
 bottom (RepoTree), like on the Repos page.
 The user decides on each: Approve puts it in Repos, Reject keeps it out for 14 days (the two buttons at the end of its
 row). For many at once, Select (top right) turns on select mode, like on the Repos page: it becomes Select all and
@@ -105,12 +107,12 @@ type FoundKey =
   | "found";
 
 const FOUND_COLUMNS: { key: FoundKey; label: string; title: string; better: "higher" | "lower" | "text" }[] = [
-  { key: "type", label: "Type", title: "The type of repo Claude put it under, from your Explore profile", better: "text" },
-  { key: "stars", label: "Stars", title: "Stars on GitHub", better: "higher" },
-  { key: "fit", label: "Fit", title: "How well Claude thinks it fits your Explore profile", better: "higher" },
   { key: "policy", label: "AI policy", title: "What its contribution files say about AI", better: "higher" },
+  { key: "fit", label: "Fit", title: "How well Claude thinks it fits your Explore profile", better: "higher" },
   { key: "newcomers", label: "Newcomers", title: "How newcomers' first PRs fare", better: "higher" },
   { key: "tone", label: "Reviews", title: "How maintainers' feedback on outside PRs feels", better: "higher" },
+  { key: "stars", label: "Stars", title: "Stars on GitHub", better: "higher" },
+  { key: "type", label: "Type", title: "The type of repo Claude put it under, from your Explore profile", better: "text" },
   { key: "prs", label: "PRs/mo", title: "PRs opened a month, on average over 90 days", better: "higher" },
   { key: "issues", label: "Issues/mo", title: "Issues opened a month, on average over 90 days", better: "higher" },
   { key: "commits", label: "Commits/mo", title: "Commits a month, on average over 90 days", better: "higher" },
@@ -142,8 +144,9 @@ export default function Explore() {
   const [pickingFilters, setPickingFilters] = useState(false);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
-  // The found list's order: newest first (null), or by one column; best is the way its first click sorts, or not.
-  const [sort, setSort] = useState<{ key: FoundKey; best: boolean } | null>(null);
+  // The found list's order: by these columns, from left to right as the table shows them, the name last (none: newest
+  // first); best is the way a column's first click sorts, or not.
+  const [sorts, setSorts] = useState<{ key: FoundKey; best: boolean }[]>([]);
   // Rows open in place, and the ones approved or rejected here that the live feed still lists (hidden meanwhile).
   const [open, setOpen] = useState<string[]>([]);
   const [leaving, setLeaving] = useState<string[]>([]);
@@ -370,39 +373,59 @@ export default function Explore() {
   }
 
   const found = explore.found.filter((each) => !leaving.includes(each.name)).reverse();
-  if (sort !== null) {
-    const better = sort.key === "name" ? "text" : FOUND_COLUMNS.find((column) => column.key === sort.key)!.better;
+  if (sorts.length > 0) {
     found.sort((a, b) => {
-      const first = foundValue(a, sort.key);
-      const second = foundValue(b, sort.key);
-      if (first === second) {
-        return 0;
+      // The leftmost sorted column that tells them apart decides; when none does, they stay newest first (a stable sort).
+      for (const key of [...FOUND_COLUMNS.map((column) => column.key), "name"]) {
+        const sort = sorts.find((each) => each.key === key);
+        if (sort === undefined) {
+          continue;
+        }
+        const better = sort.key === "name" ? "text" : FOUND_COLUMNS.find((column) => column.key === sort.key)!.better;
+        const first = foundValue(a, sort.key);
+        const second = foundValue(b, sort.key);
+        if (first === second) {
+          continue;
+        }
+        // Missing values go last, whichever way.
+        if (first === null) {
+          return 1;
+        }
+        if (second === null) {
+          return -1;
+        }
+        // Low to high (A to Z for text), turned round when the best is the highest, and again for the other way.
+        let order = typeof first === "string" && typeof second === "string" ? first.localeCompare(second) : Number(first) - Number(second);
+        if (better === "higher") {
+          order = -order;
+        }
+        if (order !== 0) {
+          return sort.best ? order : -order;
+        }
       }
-      // Missing values go last, whichever way.
-      if (first === null) {
-        return 1;
-      }
-      if (second === null) {
-        return -1;
-      }
-      // Low to high (A to Z for text), turned round when the best is the highest, and again for the other way.
-      let order = typeof first === "string" && typeof second === "string" ? first.localeCompare(second) : Number(first) - Number(second);
-      if (better === "higher") {
-        order = -order;
-      }
-      return sort.best ? order : -order;
+      return 0;
     });
   }
 
-  // One column at a time: the best first, then the other way round, then back to newest first.
+  // A click adds a column to the sort (the best first), the next turns it round, the next takes it out.
   function clickSort(key: FoundKey) {
-    if (sort === null || sort.key !== key) {
-      setSort({ key, best: true });
+    const sort = sorts.find((each) => each.key === key);
+    if (sort === undefined) {
+      setSorts([...sorts, { key, best: true }]);
     } else if (sort.best) {
-      setSort({ key, best: false });
+      setSorts(sorts.map((each) => (each.key === key ? { key, best: false } : each)));
     } else {
-      setSort(null);
+      setSorts(sorts.filter((each) => each.key !== key));
     }
+  }
+
+  // A sorted header's arrow.
+  function sortMark(key: FoundKey) {
+    const sort = sorts.find((each) => each.key === key);
+    if (sort === undefined) {
+      return null;
+    }
+    return sort.best ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />;
   }
 
   // Only what is still in the list counts as selected (a decision elsewhere, or another tab, may have taken some out).
@@ -524,23 +547,23 @@ export default function Explore() {
               {selectMode && <span />}
               <button
                 type="button"
-                className={cn("flex items-center gap-0.5 hover:text-primary", sort?.key === "name" && "text-primary")}
+                className={cn("flex items-center gap-0.5 hover:text-primary", sorts.some((each) => each.key === "name") && "text-primary")}
                 title="A to Z"
                 onClick={() => clickSort("name")}
               >
                 Repo
-                {sort?.key === "name" && (sort.best ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />)}
+                {sortMark("name")}
               </button>
               {FOUND_COLUMNS.map((column) => (
                 <button
                   key={column.key}
                   type="button"
-                  className={cn("flex items-center gap-0.5 hover:text-primary", sort?.key === column.key && "text-primary")}
+                  className={cn("flex items-center gap-0.5 hover:text-primary", sorts.some((each) => each.key === column.key) && "text-primary")}
                   title={column.title}
                   onClick={() => clickSort(column.key)}
                 >
                   {column.label}
-                  {sort?.key === column.key && (sort.best ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />)}
+                  {sortMark(column.key)}
                 </button>
               ))}
               <span />
