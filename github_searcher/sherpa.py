@@ -2,8 +2,11 @@
 knows the whole app and can see and use the page the user is on.
 
 What it knows: every page's own description (the comment at the top of each file in frontend/src), put in its prompt
-at each turn, and the app's source, read-only, for the details (read_source, search_source; SOURCE_FOLDERS only, so
-never .env or anything else on this machine).
+at each turn, and for the details read_source and search_source, read-only and only what it needs to explain the app
+(readable): the screens' code (frontend/src), the docs (README.md, docs/), and what each part behind them does (the
+description at the top of each .py file in backend, github_searcher and sandbox: its docstring, not its code). Never
+data/ (the user's lists, chats, VMs' settings), .env (tokens) or anything else on this machine. It writes no files:
+the app keeps its chats, and Claude Code's own tools (files, shell, web) are off.
 What it sees: each message comes with the page the user is on, read by the browser: the address, the sidebar, the text
 on the page, and every button, link and field, numbered (Sherpa.tsx readPage).
 What it does: go_to, click, fill and point act on the page in the user's browser tab (the one the message came from),
@@ -45,6 +48,7 @@ usage while a turn runs, and Claude Code's own count at its end. Like the agents
     sherpa.send("how do I give an agent more memory?", page, tab)
 """
 
+import ast
 import asyncio
 import json
 import os
@@ -81,9 +85,11 @@ TOOL_SERVER = "sherpa"
 ACTION_TIMEOUT = 20
 # How much of a tool's result the chat keeps. Sherpa gets it in full.
 RESULT_CUT = 4000
-# What read_source and search_source may read: the app's own code, nothing else.
-SOURCE_FOLDERS = ["frontend/src", "backend", "github_searcher", "sandbox"]
-SOURCE_TYPES = [".py", ".ts", ".tsx", ".css", ".md", ".yaml", ".sh"]
+# What read_source and search_source may read, read-only (readable): these in full, and only the description (the
+# docstring) of the .py files in DESCRIBED_FOLDERS. Nothing else: not data/, not .env.
+FULL_FOLDERS = {"frontend/src": [".ts", ".tsx", ".css"], "docs": [".md"]}
+FULL_FILES = ["README.md"]
+DESCRIBED_FOLDERS = ["backend", "github_searcher", "sandbox"]
 SOURCE_LIMIT = 120_000
 # The same cap as the agents: the bar's end, where Claude Code compacts the conversation.
 CONTEXT_CAP = int(os.environ["AGENT_CONTEXT_CAP"])
@@ -96,8 +102,11 @@ waits in the Inbox for the user to approve. You live in the round button at the 
 opens you to ask how something works or where something is, or to get something done.
 
 You know the whole app. Below is every page's own description (the comment at the top of each file in frontend/src).
-For details, read_source reads a file of the app (in frontend/src, backend, github_searcher or sandbox) and
-search_source finds where something is. Look things up rather than guess; never make up a button or a page.
+For details, read_source reads the screens' code (frontend/src), the docs (README.md, docs/*.md), and what each part
+behind the screens does (for a .py file in backend, github_searcher or sandbox you get its description, not its code);
+search_source finds where something is in those. Nothing else on this computer is open to you (not the user's data,
+not their settings or tokens), and you can't change any file. Look things up rather than guess; never make up a button
+or a page.
 
 You can read GitHub too, read-only: read_readme, list_files and read_files (a repo's default branch), read_thread
 (an issue or PR with its comments), search_code, search_issues, and check_activity (how a repo treats outside
@@ -366,11 +375,11 @@ class Sherpa:
             ),
             tool(
                 "read_source",
-                "Read a file of the app's code, by its path from the repo's root, like frontend/src/Explore.tsx or github_searcher/explore.py. "
-                f"Only in {', '.join(SOURCE_FOLDERS)}.",
+                "Read a file of the app by its path from the repo's root: a screen's code (frontend/src/Explore.tsx), the docs (README.md, "
+                "docs/architecture.md), or what a part behind the screens does (github_searcher/explore.py gives its description, not its code).",
                 {"path": str},
             )(self.read_source),
-            tool("search_source", "Find the lines of the app's code that have this text (not case sensitive), with their file and line.", {"text": str})(
+            tool("search_source", "Find the lines with this text (not case sensitive) in what read_source can read, with their file and line.", {"text": str})(
                 self.search_source
             ),
         ]
@@ -552,14 +561,33 @@ class Sherpa:
     async def point(self, args: dict) -> dict:
         return await self.act({"kind": "point", "element": args["element"]})
 
+    def readable(self, path: Path) -> str | None:
+        """What Sherpa may read of a file: all of it, only its description (a .py file's docstring), or None (not allowed,
+        or not there). The path is resolved first, so ".." and links can't reach past these."""
+        path = path.resolve()
+        if not path.is_file() or "node_modules" in path.parts or "__pycache__" in path.parts:
+            return None
+        for name in FULL_FILES:
+            if path == PROJECT_ROOT / name:
+                return path.read_text(errors="replace")
+        for folder, types in FULL_FOLDERS.items():
+            if path.is_relative_to(PROJECT_ROOT / folder) and path.suffix in types:
+                return path.read_text(errors="replace")
+        for folder in DESCRIBED_FOLDERS:
+            if path.is_relative_to(PROJECT_ROOT / folder) and path.suffix == ".py":
+                try:
+                    return ast.get_docstring(ast.parse(path.read_text())) or "(This file has no description.)"
+                except SyntaxError:
+                    return None
+        return None
+
     async def read_source(self, args: dict) -> dict:
-        path = (PROJECT_ROOT / args["path"].strip().lstrip("/")).resolve()
-        allowed = any(path.is_relative_to(PROJECT_ROOT / folder) for folder in SOURCE_FOLDERS)
-        if not allowed or path.suffix not in SOURCE_TYPES:
-            raise ValueError(f"Only the app's code: {', '.join(SOURCE_TYPES)} files in {', '.join(SOURCE_FOLDERS)}.")
-        if not path.is_file():
-            raise ValueError(f"There is no {args['path']}. search_source finds where things are.")
-        text = path.read_text()
+        text = self.readable(PROJECT_ROOT / args["path"].strip().lstrip("/"))
+        if text is None:
+            raise ValueError(
+                f"Can't read {args['path']}: it isn't there, or it isn't open to you (only frontend/src, README.md, docs/, "
+                "and the descriptions of the .py files in backend, github_searcher and sandbox). search_source finds where things are."
+            )
         if len(text) > SOURCE_LIMIT:
             text = text[:SOURCE_LIMIT] + "\n[...cut]"
         return {"content": [{"type": "text", "text": text}]}
@@ -570,19 +598,23 @@ class Sherpa:
             raise ValueError("Say what to look for.")
         lines = await asyncio.to_thread(self.find_lines, needle)
         if not lines:
-            return {"content": [{"type": "text", "text": f"No line of the app's code has {args['text']}."}]}
+            return {"content": [{"type": "text", "text": f"Nothing open to you has {args['text']}."}]}
         text = "\n".join(lines[:SEARCH_LIMIT])
         if len(lines) > SEARCH_LIMIT:
             text += f"\n... and {len(lines) - SEARCH_LIMIT} more. Look for something narrower."
         return {"content": [{"type": "text", "text": text}]}
 
     def find_lines(self, needle: str) -> list[str]:
+        """The lines with needle in what Sherpa may read (readable): a .py file's description only."""
+        paths = [PROJECT_ROOT / name for name in FULL_FILES]
+        for folder in list(FULL_FOLDERS) + DESCRIBED_FOLDERS:
+            paths += sorted((PROJECT_ROOT / folder).rglob("*"))
         lines = []
-        for folder in SOURCE_FOLDERS:
-            for path in sorted((PROJECT_ROOT / folder).rglob("*")):
-                if not path.is_file() or path.suffix not in SOURCE_TYPES or "__pycache__" in path.parts or "node_modules" in path.parts:
-                    continue
-                for number, line in enumerate(path.read_text(errors="replace").split("\n"), start=1):
-                    if needle in line.lower():
-                        lines.append(f"{path.relative_to(PROJECT_ROOT)}:{number}: {line.strip()[:200]}")
+        for path in paths:
+            text = self.readable(path)
+            if text is None:
+                continue
+            for number, line in enumerate(text.split("\n"), start=1):
+                if needle in line.lower():
+                    lines.append(f"{path.relative_to(PROJECT_ROOT)}:{number}: {line.strip()[:200]}")
         return lines
