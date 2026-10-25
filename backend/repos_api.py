@@ -9,7 +9,8 @@ Remove only takes repos off the list: Explore may find them again. Reject also b
 (github_searcher/rejections.py). Both take many repos at once (the page's multi-select), as one undo step.
 
 The signals (github_searcher/repo_signals.py) are kept fresh by keep_signals(), which the app runs in
-the background: a new repo gets them within SIGNALS_CHECK_SECONDS, and each is fetched again once it is
+the background, for the Repos list and the Tracked list alike (the Tracked page shows them as tags under an
+open repo): a new repo gets them within SIGNALS_CHECK_SECONDS, and each is fetched again once it is
 SIGNALS_REFRESH_SECONDS old (they change slowly).
 """
 
@@ -23,7 +24,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.shared import rejections, repo_signals, repos
+from backend.shared import rejections, repo_signals, repos, tracked
 from github_searcher.search import get_contents, get_readme, get_repository, get_tree
 
 router = APIRouter(prefix="/api")
@@ -143,7 +144,7 @@ async def keep_signals() -> None:
 
     By age, not by when the backend started, so a restart doesn't fetch them all again. A repo that
     fails (GitHub down, the repo gone or renamed) is tried again after SIGNALS_RETRY_SECONDS.
-    Signals of repos that left the list are dropped (an undo that brings one back fetches them again).
+    Signals of repos that left both lists are dropped (an undo that brings one back fetches them again).
     """
     failed = []
     failed_since = time.monotonic()
@@ -151,7 +152,11 @@ async def keep_signals() -> None:
         if time.monotonic() - failed_since > SIGNALS_RETRY_SECONDS:
             failed = []
             failed_since = time.monotonic()
+        # The Repos list's repos, then the tracked ones not in it.
         names = [item["full_name"] for item in repos.items()]
+        for item in tracked.items():
+            if item["full_name"] not in names:
+                names.append(item["full_name"])
         repo_signals.forget(names)
         known = repo_signals.all()
         old = (datetime.now(UTC) - timedelta(seconds=SIGNALS_REFRESH_SECONDS)).isoformat()

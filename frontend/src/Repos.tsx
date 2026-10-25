@@ -24,11 +24,13 @@ The header the list sorts by turns blue with its arrow, and a chip at the top sa
 its x ends it. Repos without a value for the field go last either way. What Claude judges (AI policy, review tone, what reviewers ask for,
 fit) is always one of a fixed set, so it ranks in a fixed order (*_RANK below). The sort is remembered in this browser.
 
-Rows have no buttons of their own. Select (top right) turns on select mode: it becomes Select all and Cancel, every
-row shows a box, and a click picks the row instead of opening it. Rows are also picked like in a mail app
-(components/ui/row-selection.tsx): Ctrl-click, Shift-click, dragging a rectangle, Ctrl+A. A bar at the bottom then
-deletes the picked repos at once, as one undo step (it asks first; Enter confirms). Delete only takes a repo off the
-list; Explore may find it again. Clearing the selection (Escape, the bar's x) ends select mode too.
+Rows have no buttons of their own. Select (top right) turns on select mode: Delete, Track and Untrack show on the
+left of the bar, Select becomes Select all and Cancel, every row shows a box, and a click picks the row instead of
+opening it. Rows are also picked like in a mail app (components/ui/row-selection.tsx): Ctrl-click, Shift-click,
+dragging a rectangle, Ctrl+A, which turns on select mode too; a bar at the bottom says how many. Track tracks the
+picked repos not tracked yet, Untrack stops tracking the tracked ones (each one undo step on the Tracked page); Delete
+deletes them at once, as one undo step (it asks first; Enter confirms). Delete only takes a repo off the list; Explore
+may find it again. Clearing the selection (Escape, the bar's x) ends select mode too.
 
 The last column, always there, tracks the repo (the Tracked page then keeps an eye on its new issues) or stops tracking
 it: Track or Untrack, with a spinner while the backend looks the repo up on GitHub.
@@ -58,7 +60,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ColumnsDialog } from "@/components/ui/columns-dialog";
-import { ASK_LABEL, FIT_LEVELS, NEWCOMER_LABEL, NewcomersTag, POLICY_LABEL, PolicyTag, TONE_LABEL, ToneTag } from "@/components/ui/repo-tags";
+import { ASK_LABEL, FIT_LEVELS, FitTag, NEWCOMER_LABEL, NewcomersTag, POLICY_LABEL, PolicyTag, TONE_LABEL, ToneTag } from "@/components/ui/repo-tags";
 import { RowSelection, SelectBox } from "@/components/ui/row-selection";
 import { api, useLive, useLiveValue, useLoaded, type ListedRepo } from "@/live";
 import { useColumnWidths } from "@/lib/column-widths";
@@ -233,11 +235,11 @@ const DEFAULT_COLUMNS: ColumnKey[] = [
 ];
 // "-2": saved before the tags under each row became columns; starting from the new defaults once shows them.
 const COLUMNS_STORAGE = "repos-columns-2";
-// The only colors a value gets: green for good news, amber for "have a look", red for bad (the Explore page's too).
-const POLICY_COLOR: Record<string, string> = { welcome: "text-ok", no_ai: "text-destructive" };
-const NEWCOMER_COLOR: Record<string, string> = { welcomes: "text-ok", wait: "text-warn" };
-const TONE_COLOR: Record<string, string> = { warm: "text-ok", strict: "text-warn", curt: "text-destructive" };
-const FIT_COLOR: Record<string, string> = { ok: "text-ok", warn: "text-warn", bad: "text-destructive", muted: "" };
+// The AI policy, newcomers and tone columns are tags (the Explore page's too): green for good news, amber for "have a
+// look", red for bad, gray for the rest. Other values are plain text, colored only when it means something.
+const POLICY_VARIANT: Record<string, "ok" | "warn" | "bad"> = { welcome: "ok", no_ai: "bad" };
+const NEWCOMER_VARIANT: Record<string, "ok" | "warn" | "bad"> = { welcomes: "ok", wait: "warn" };
+const TONE_VARIANT: Record<string, "ok" | "warn" | "bad"> = { warm: "ok", strict: "warn", curt: "bad" };
 const NAME_MIN = 160;
 // The Track / Untrack column at the end, wide enough for its button.
 const TRACK_WIDTH = 88;
@@ -562,6 +564,24 @@ export default function Repos() {
     setTracking((current) => current.filter((each) => each !== name));
   }
 
+  // Track many picked repos at once, as one undo step on the Tracked page: no GitHub call, the Repos list knows them.
+  async function trackMany(names: string[]) {
+    try {
+      await api("/api/tracked/from_repos", { method: "POST", body: { names } });
+    } catch (err) {
+      toast.error(`Could not track: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  // Stop tracking many picked repos at once, as one undo step on the Tracked page.
+  async function untrackMany(names: string[]) {
+    try {
+      await api("/api/tracked/remove", { method: "POST", body: { names } });
+    } catch (err) {
+      toast.error(`Could not stop tracking: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
   async function remove(names: string[]) {
     try {
       await api("/api/repos/remove", { method: "POST", body: { names } });
@@ -576,6 +596,11 @@ export default function Repos() {
   const rowNames = rows.map((repo) => repo.full_name);
   const listed = repos.items.map((repo) => repo.full_name);
   const chosen = selected.filter((name) => listed.includes(name));
+  // The picked repos the bar's Track would add (the ones not tracked yet), and the ones Untrack would take off the
+  // Tracked page, spelled as it has them.
+  const untrackedChosen = chosen.filter((name) => !trackedNames.includes(name.toLowerCase()));
+  const chosenLower = chosen.map((name) => name.toLowerCase());
+  const trackedChosen = tracked.items.filter((each) => chosenLower.includes(each.full_name.toLowerCase())).map((each) => each.full_name);
 
   // A ctrl-click picks or unpicks one row; a shift-click does the same to every row shown from the last one clicked.
   function select(name: string, shift: boolean) {
@@ -692,7 +717,7 @@ export default function Repos() {
       }
       const fit = repo.fit;
       const level = FIT_LEVELS.find((each) => fit >= each.from) ?? FIT_LEVELS[FIT_LEVELS.length - 1];
-      return <span className={FIT_COLOR[level.variant]}>{level.label}</span>;
+      return <Badge variant={level.variant}>{level.label}</Badge>;
     }
     if (key === "rejected") {
       return repo.rejected_before > 0 ? `${repo.rejected_before}x` : "–";
@@ -746,9 +771,9 @@ export default function Repos() {
       }
       const policy = signals.ai_policy;
       return (
-        <span className={POLICY_COLOR[policy.tag]} title={policy.quote !== "" ? `"${policy.quote}" (${policy.file})` : undefined}>
+        <Badge variant={POLICY_VARIANT[policy.tag] ?? "secondary"} title={policy.quote !== "" ? `"${policy.quote}" (${policy.file})` : undefined}>
           {POLICY_LABEL[policy.tag] ?? policy.tag}
-        </span>
+        </Badge>
       );
     }
     const newcomers = signals.newcomers;
@@ -757,9 +782,9 @@ export default function Repos() {
         return "–";
       }
       return (
-        <span className={NEWCOMER_COLOR[newcomers.tag]} title={`${newcomers.prs} newcomers' first PRs: ${newcomers.merged} merged, ${newcomers.closed} closed unmerged`}>
+        <Badge variant={NEWCOMER_VARIANT[newcomers.tag] ?? "secondary"} title={`${newcomers.prs} newcomers' first PRs: ${newcomers.merged} merged, ${newcomers.closed} closed unmerged`}>
           {NEWCOMER_LABEL[newcomers.tag] ?? newcomers.tag}
-        </span>
+        </Badge>
       );
     }
     if (key === "newcomers") {
@@ -830,9 +855,9 @@ export default function Repos() {
         return "–";
       }
       return (
-        <span className={TONE_COLOR[atmosphere.tone]} title={atmosphere.summary}>
+        <Badge variant={TONE_VARIANT[atmosphere.tone] ?? "secondary"} title={atmosphere.summary}>
           {TONE_LABEL[atmosphere.tone] ?? atmosphere.tone}
-        </span>
+        </Badge>
       );
     }
     if (key === "asks") {
@@ -872,6 +897,32 @@ export default function Repos() {
   return (
     <div className="relative flex h-full flex-col">
       <div className="flex min-h-8 shrink-0 flex-wrap items-center gap-1.5 border-b px-3 py-1">
+        {/* What to do with the picked repos, on the left while in select mode. */}
+        {selectMode && (
+          <>
+            <Button variant="ghost" size="xs" disabled={chosen.length === 0} title="Delete the picked repos" onClick={() => setConfirmDelete(true)}>
+              <Trash2 /> Delete
+            </Button>
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={untrackedChosen.length === 0}
+              title={untrackedChosen.length === 0 ? "Pick repos not tracked yet" : `Track the ${untrackedChosen.length} picked repos not tracked yet`}
+              onClick={() => trackMany(untrackedChosen)}
+            >
+              <Eye /> Track
+            </Button>
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={trackedChosen.length === 0}
+              title={trackedChosen.length === 0 ? "Pick repos that are tracked" : `Stop tracking the ${trackedChosen.length} picked repos that are tracked`}
+              onClick={() => untrackMany(trackedChosen)}
+            >
+              <EyeOff /> Untrack
+            </Button>
+          </>
+        )}
         {sort !== null && sortField !== undefined && (
           <span className="flex h-6 items-center gap-1 rounded-md border border-primary/40 pr-0.5 pl-1.5 text-primary" title={sort.dir === "down" ? sortField.down : sortField.up}>
             {sortField.label}
@@ -1181,9 +1232,12 @@ export default function Repos() {
                           {repo.fit !== undefined && (
                             <>
                               <span className="text-muted-foreground">Fit</span>
-                              <span>
-                                {(FIT_LEVELS.find((each) => (repo.fit ?? 0) >= each.from) ?? FIT_LEVELS[FIT_LEVELS.length - 1]).label} for your profile
-                                {repo.lane !== undefined && <span className="text-muted-foreground"> · found for {laneLabels[repo.lane] ?? repo.lane}</span>}
+                              <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                                <FitTag fit={repo.fit} />
+                                <span>
+                                  for your profile
+                                  {repo.lane !== undefined && <span className="text-muted-foreground"> · found for {laneLabels[repo.lane] ?? repo.lane}</span>}
+                                </span>
                               </span>
                             </>
                           )}
@@ -1259,11 +1313,8 @@ export default function Repos() {
         ))}
       </div>
 
-      <RowSelection listRef={scrollRef} ids={rowNames} selected={chosen} onSelect={onSelect}>
-        <Button size="xs" variant="ghost" onClick={() => setConfirmDelete(true)}>
-          <Trash2 /> Delete
-        </Button>
-      </RowSelection>
+      {/* Only the count and Select all: Track and Delete are in the bar on top. */}
+      <RowSelection listRef={scrollRef} ids={rowNames} selected={chosen} onSelect={onSelect} />
 
       <ColumnsDialog
         open={choosing}

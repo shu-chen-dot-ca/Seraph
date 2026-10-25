@@ -1,8 +1,8 @@
 """The Tracked page: repos the user (or an agent) wants to keep an eye on, and their new issues.
 
-The user adds a repo by name or GitHub link, removes it, and steps through the undo history; agents
-change the list with their own tools (github_searcher/agent/work_tools.py). The list and each repo's
-latest check reach the browser through /api/live.
+The user adds a repo by name or GitHub link (or many picked on the Repos page), removes it, and steps
+through the undo history; agents change the list with their own tools (github_searcher/agent/work_tools.py).
+The list and each repo's latest check reach the browser through /api/live.
 
 A repo's check is its open issues on GitHub (github_searcher/tracked_issues.py). keep_tracked(), which
 the app runs in the background, checks a newly added repo within TRACKED_CHECK_SECONDS and every repo
@@ -86,6 +86,31 @@ def remove_tracked(body: NamesRequest) -> dict:
     if not removed:
         raise HTTPException(status_code=404, detail="None of them is tracked.")
     return {"removed": removed}
+
+
+@router.post("/tracked/from_repos")
+def track_from_repos(body: NamesRequest) -> dict:
+    """Track repos of the Repos list (the Repos page's multi-select) as one undo step. Repos already tracked are skipped.
+
+    What the Repos list knows about each is enough, so it takes no GitHub call.
+    """
+    items = []
+    for repo in repos.items():
+        if repo["full_name"] not in body.names:
+            continue
+        items.append(
+            {
+                "full_name": repo["full_name"],
+                "description": repo["description"] or "",
+                "stars": repo["stars"],
+                "default_branch": repo["default_branch"],
+                "html_url": repo["html_url"],
+                "note": "",
+                "added_by": "user",
+                "added_at": datetime.now(UTC).isoformat(),
+            }
+        )
+    return {"added": tracked.add(items)}
 
 
 @router.post("/tracked/undo")
