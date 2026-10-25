@@ -12,11 +12,12 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
 - Drafts: nothing goes to GitHub from here. A PR, an issue comment or a question becomes a draft
   in the user's Inbox and its job waits on the user. A PR draft's diff is read from the repo
   folder in the VM, so only the agent holding the VM can make one, with the commit it starts from
-  (base_sha: Approve sends exactly that diff on that commit, github_account.py). A PR is written the
-  way the project's own people write theirs: pr_examples shows its main contributors' latest merged
-  PRs and some outside ones, and draft_pr refuses until the agent read them for that repo. The job's
-  before and after pictures go in the PR body as ![before](evidence:ev_...): the Inbox shows them in
-  place, and sending uploads them to the user's fork (or the user does, sending by hand).
+  (base_sha: Approve sends exactly that diff on that commit, github_account.py). No draft has emoji in it (EMOJI,
+  the user's rule; a template's emoji are written as words). A PR is written the way the project's
+  own people write theirs: pr_examples shows its main contributors' latest merged PRs and some
+  outside ones, and draft_pr refuses until the agent read them for that repo. The job's before and
+  after pictures go in the PR body as ![before](evidence:ev_...): the Inbox shows them in place,
+  and sending uploads them to the user's fork (or the user does, sending by hand).
 - Evidence: what the user looks at to decide on a draft. Screenshots of the VM's desktop, image
   files from the VM (a plot, a render) and command runs (a test failing, then passing), each
   "before" or "after" the agent's change, under a topic that pairs them. It is kept on the job
@@ -115,6 +116,10 @@ OVERVIEW_PART_CHARS = 400
 OVERVIEW_RISK_CHARS = 250
 OVERVIEW_RISKS_MAX = 3
 CONTEXT_CHARS = 500
+# Agents never use emoji, in drafts or anywhere (the user's rule): pictographs, dingbats and symbols drawn as emoji,
+# flags, and the joiners and selectors that make emoji. Plain arrows and math signs are fine.
+EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u231A\u231B\u23E9-\u23FA\u203C\u2049\u2139\u3030\u303D\u3297\u3299\uFE0F\u200D\u20E3]")
+NO_EMOJI = "No emoji anywhere, also where the project's template has them: write its words without them. Found: "
 # pr_examples: the main contributors (most PRs merged lately) and how many of each one's newest merged PRs it shows,
 # how many merged PRs of outside contributors, and how much of each description.
 PR_EXAMPLES_MAIN = 3
@@ -410,7 +415,7 @@ class WorkTools:
                 "not, new files included; it is sent as one commit with the title as its message, your own commits stay in the VM. "
                 "title and body are the PR exactly as it would be sent, in the project's own form: its rules (CONTRIBUTING, its PR "
                 "template: every heading of it must be in the body) and the way its main contributors write their PRs (read "
-                "pr_examples first: their title style, length, sections, tone). Your before and after pictures "
+                "pr_examples first: their title style, length, sections, tone). No emoji anywhere. Your before and after pictures "
                 "go in the body as ![before](evidence:ev_...) (a Before / After table); they are uploaded with the PR. You push and send "
                 "nothing: the user reviews it, approving sends it from their account, and you get a message with their decision. project, problem, cause, fix and "
                 "risks are only for the user, who reads them first to understand and judge the PR. " + PLAIN,
@@ -1130,6 +1135,9 @@ class WorkTools:
             if len(text) > limit:
                 text = f"{part} is {len(text)} characters; keep it under {limit}. Short and plain: the user reads it at a glance."
                 return {"content": [{"type": "text", "text": text}], "is_error": True}
+        found = EMOJI.findall(" ".join([args["body"]] + list(overview.values())))
+        if found:
+            return {"content": [{"type": "text", "text": NO_EMOJI + " ".join(sorted(set(found)))}], "is_error": True}
         try:
             job = self.agents.jobs.get(args["job_id"])
         except KeyError:
@@ -1154,6 +1162,9 @@ class WorkTools:
         question = args["question"].strip()
         if not question:
             return {"content": [{"type": "text", "text": "The question is empty."}], "is_error": True}
+        found = EMOJI.findall(question)
+        if found:
+            return {"content": [{"type": "text", "text": NO_EMOJI + " ".join(sorted(set(found)))}], "is_error": True}
         job = None
         if args.get("job_id"):
             try:
@@ -1414,6 +1425,9 @@ class WorkTools:
                 text = f"A risk is {len(risk)} characters; keep each under {OVERVIEW_RISK_CHARS}."
                 return {"content": [{"type": "text", "text": text}], "is_error": True}
         overview["risks"] = risks
+        found = EMOJI.findall(" ".join([args["title"], args["body"], overview["project"], overview["problem"], overview["cause"], overview["fix"]] + risks))
+        if found:
+            return {"content": [{"type": "text", "text": NO_EMOJI + " ".join(sorted(set(found)))}], "is_error": True}
         # Written the way the project's own people write their PRs: the agent has to have looked.
         if job["repo"] is not None and job["repo"].lower() not in self.pr_examples_read:
             text = f"First read how {job['repo']}'s own people write their PRs (pr_examples), then write yours the same way."
@@ -1485,11 +1499,11 @@ class WorkTools:
         if result.stdout.strip():
             template = result.stdout.split("\n")[0].removeprefix("./")
             template_text = "\n".join(result.stdout.split("\n")[1:])
-            # Headings compared without case and extra spaces, the way they read.
+            # Headings compared without case, extra spaces and emoji (the body has none), the way they read.
             body_lines = [" ".join(line.split()).lower() for line in args["body"].split("\n")]
             missing = []
             for line in template_text.split("\n"):
-                heading = " ".join(line.split())
+                heading = " ".join(EMOJI.sub("", line).split())
                 if heading.startswith("#") and heading.lower() not in body_lines:
                     missing.append(heading)
             if missing:
