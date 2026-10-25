@@ -36,7 +36,7 @@ connects to Claude Code, resumes the open chat's conversation by its session id,
 Code's own tools are off: only the tools here. While a turn runs, the open chat stays open.
 A message sent while Sherpa works waits for its turn to end, like an agent's (MAX_QUEUED at most, each gets a turn of
 its own; its page isn't read, as that would number the page again under the turn using it, so Sherpa reads it then);
-stopping a turn lets the next one in. The queue is kept in the
+stopping a turn lets the next one in. A queued message can be taken out before it goes in (cancel_queued). The queue is kept in the
 chat's file, so a restart doesn't lose it. "/compact" goes to Claude Code as it is: it summarizes the chat to free
 context. tab is the browser tab of the last message, for a turn that goes on by itself.
 A restart of the backend (also whenever the app's code changes, while it runs with reload) cuts off a turn in the
@@ -236,6 +236,21 @@ class Sherpa:
             self.save(self.running["chat"])
             return
         self.start(text.strip(), page, tab)
+
+    def cancel_queued(self, index: int, text: str) -> None:
+        """Take a queued message out before it goes in: the one at index, when it still has that text (one may have gone
+        in meanwhile, moving the others up), or else the first with that text."""
+        chat = self.running["chat"] if self.running is not None else self.load(self.current)
+        queue = chat.get("queue", [])
+        if index < 0 or index >= len(queue) or queue[index]["text"] != text:
+            index = -1
+            for number, each in enumerate(queue):
+                if index == -1 and each["text"] == text:
+                    index = number
+        if index == -1:
+            raise ValueError("That message isn't waiting anymore: it went in, or was taken out already.")
+        queue.pop(index)
+        self.save(chat)
 
     def resume(self) -> None:
         """At start, on the event loop: go on by itself with a turn a restart cut off, then with the queued messages."""

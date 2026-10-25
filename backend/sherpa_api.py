@@ -20,6 +20,11 @@ class MessageRequest(BaseModel):
     tab: str  # the browser tab it came from, where the page actions happen
 
 
+class QueuedRequest(BaseModel):
+    index: int  # where it waits, oldest first
+    text: str  # its text, to make sure it is that one
+
+
 class ResultRequest(BaseModel):
     id: int  # the page action's id
     ok: bool
@@ -52,6 +57,16 @@ async def sherpa_result(body: ResultRequest) -> dict:
 @router.post("/sherpa/stop")
 async def stop_sherpa() -> dict:
     await sherpa.interrupt()
+    return {}
+
+
+@router.post("/sherpa/queue/cancel")
+async def cancel_queued_message(body: QueuedRequest) -> dict:
+    """Takes a queued message out before it goes in."""
+    try:
+        sherpa.cancel_queued(body.index, body.text)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error))
     return {}
 
 

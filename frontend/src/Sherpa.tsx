@@ -24,7 +24,7 @@ Chats are kept. New chat opens an empty one; History (the clock) lists them all,
 first message: a click opens one to go on with it, the bin on hover deletes it. The open one is highlighted.
 
 The chat works like an agent's (AgentChat.tsx): a message sent while Sherpa works waits for its turn to end, shown
-over the text box as queued (MAX_QUEUED at most, each gets a turn of its own); Esc while Sherpa has focus stops the
+over the text box as queued (MAX_QUEUED at most, each gets a turn of its own; its x takes it out before it goes in); Esc while Sherpa has focus stops the
 turn, and the next queued message goes in. New messages scroll the chat down only while it is at the bottom, so
 reading further up is never interrupted. What you type and don't send is kept in this browser (localStorage), also
 after a reload. Compact (the arrows in the header) summarizes the chat to free context, when it nears the cap.
@@ -492,6 +492,16 @@ export default function Sherpa() {
     setSending(false);
   }
 
+  // Take a queued message out before it goes in.
+  async function cancelQueued(index: number, message: string) {
+    try {
+      await api("/api/sherpa/queue/cancel", { method: "POST", body: { index, text: message } });
+      setFollow(follow + 1);
+    } catch (err) {
+      toast.error(`Could not take it out: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
   async function compact() {
     fromBottom.current = 0;
     try {
@@ -741,8 +751,18 @@ export default function Sherpa() {
                     {queued.length} of {MAX_QUEUED} queued, each gets its own turn · Esc stops this turn and sends the next
                   </div>
                   {queued.map((message, index) => (
-                    <div key={index} className="truncate rounded-sm border border-dashed px-2 py-1" title={message}>
-                      {message}
+                    <div key={index} className="flex items-center gap-1 rounded-sm border border-dashed py-0.5 pr-0.5 pl-2" title={message}>
+                      <span className="min-w-0 flex-1 truncate">{message}</span>
+                      <Button
+                        size="icon-xs"
+                        variant="ghost"
+                        className="shrink-0"
+                        title="Take it out: it won't be sent"
+                        aria-label="Cancel this queued message"
+                        onClick={() => cancelQueued(index, message)}
+                      >
+                        <X />
+                      </Button>
                     </div>
                   ))}
                 </div>
