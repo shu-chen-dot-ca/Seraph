@@ -12,7 +12,7 @@ event loop.
 from github_searcher.agents import Agents
 from github_searcher.explore import Explore
 from github_searcher.inbox import Inbox
-from github_searcher.issue_difficulty import IssueDifficulty
+from github_searcher.issue_tags import IssueTags
 from github_searcher.issue_facts import IssueFacts
 from github_searcher.issue_list import IssueList
 from github_searcher.jobs import Jobs
@@ -28,7 +28,7 @@ from sandbox.vms import VMs
 repos = RepoList()
 issues = IssueList()
 issue_facts = IssueFacts()
-issue_difficulty = IssueDifficulty()
+issue_tags = IssueTags()
 repo_signals = RepoSignals()
 rejections = Rejections()
 tracked = RepoList("tracked.json")
@@ -40,4 +40,4 @@ vms = VMs()
 images = Images(vms)
 image_agents = ImageAgents(images)
 queue = VMQueue(vms)
-agents = Agents(repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, rejections, repo_signals, issue_difficulty, explore)
+agents = Agents(repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, rejections, repo_signals, issue_tags, explore)

@@ -148,13 +148,18 @@ export type IssueItem = {
   added_by: string;
   added_at: string;
   facts?: IssueFacts | null; // Merged in by the live feed; null until fetched from GitHub.
-  difficulty?: IssueDifficulty | null; // Merged in by the live feed; null until Claude judged it.
+  tags?: IssueTags | null; // Merged in by the live feed; null until made.
 };
 
-// How hard an issue is, like LeetCode's levels (github_searcher/issue_difficulty.py).
-export type IssueDifficulty = {
-  level: "easy" | "medium" | "hard";
+// The tags the app puts on an issue, the same on the Tracked and Issues pages (github_searcher/issue_tags.py), in
+// place of GitHub's labels. status: free (a newcomer can start now), assigned (someone is on it) or waiting (nobody
+// is, but it isn't ready). level is like LeetCode's. level and kind are null when it is assigned on GitHub (not asked).
+export type IssueTags = {
+  status: "free" | "assigned" | "waiting";
+  level: "easy" | "medium" | "hard" | null;
+  kind: "bug" | "feature" | "docs" | "question" | null;
   reason: string;
+  updated_at: string;
   judged_at: string;
 };
 
@@ -187,11 +192,12 @@ export type TrackedIssue = {
   title: string;
   url: string;
   created_at: string;
+  updated_at?: string; // its last change on GitHub, a new comment too; missing in checks made before it was asked for
   author: string;
   labels: string[];
   comments: number;
   assignees: number;
-  good_first: boolean; // has a good-first-issue or help-wanted kind of label
+  tags?: IssueTags | null; // Merged in by the live feed; null until made.
 };
 
 // A tracked repo's latest check. An issue is new for three days after it was opened.
@@ -204,7 +210,8 @@ export type TrackedCheck = {
 };
 
 // A repo in the Tracked list, with its latest check merged in by the live feed (null until the first one).
-export type TrackedRepo = RepoItem & { check: TrackedCheck | null };
+// signals: the same as a Repos row's, null until fetched (within seconds of being tracked).
+export type TrackedRepo = RepoItem & { check: TrackedCheck | null; signals: RepoSignals | null };
 
 // Explore (github_searcher/explore.py): the profile it searches with, the current or last run, and rejected repos.
 export type ExploreLane = {
@@ -258,6 +265,7 @@ export type ExploreRun = {
   count: number | null;
   minutes: number | null;
   workers: number;
+  filters: string[]; // the tags it keeps to or keeps out (explore.py FILTERS)
   found: number;
   looked_at: number;
   lanes: Record<string, { label: string; share: number; found: number; in_flight: number; exhausted: boolean }>;
@@ -503,8 +511,13 @@ export type Image = {
   used_by: string[]; // names of the VMs made from this exact image, stopped ones too
   inventory: InventoryHighlights | null; // null until it is inspected
   inspecting: boolean; // a build, save or inspect of it is running
-  spec_changed: boolean; // its description changed since it was built (by its agent): a rebuild applies it
+  definition_changed: boolean; // its image.yaml changed since it was built: a Rebuild applies it
+  definition_updated_at: number; // when its image.yaml last changed (seconds), so a view of it knows to fetch again
 };
+
+// An image's image.yaml, what defines it (GET /api/images/<name>/definition), and a diff from what it was built
+// from ("" when the same, or never built).
+export type ImageDefinition = { definition: string; diff: string };
 
 // What New image offers (GET /api/images/new/options): system ids and labels, desktops (the first is the default,
 // the last is "None (terminal only)"), the dependencies that go in every new image, and the system picked first.
@@ -526,14 +539,13 @@ export type ImageAgentEntry =
 
 export type ImageAgentChat = { history: ImageAgentEntry[]; busy: boolean; cost_usd: number };
 
-// An image the agent makes (New image, Rebuild), a VM being saved as an image (minutes), or an inspect.
+// The agent making a new image (New image), a build (by Rebuild or the agent), a VM being saved as an image, or an inspect.
 // Tasks that worked disappear once their image is listed; failed ones stay until dismissed.
 export type ImageTask = {
   id: string;
-  kind: "agent" | "save" | "inspect";
+  kind: "agent" | "build" | "save" | "inspect";
   name: string;
   vm: string | null; // the VM being saved
-  builder?: string; // the agent's builder VM
   status: "running" | "failed";
   error: string | null;
   started_at: string;

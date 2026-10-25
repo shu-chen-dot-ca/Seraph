@@ -7,20 +7,37 @@ The left tree, like Proxmox's resource tree. Every line is a link to a page, in 
 Counts and status dots come straight from the live store, so the tree updates itself.
 The chevrons only fold Agents / VMs; clicking a name opens that page.
 Hovering Jobs, Agents or VMs fades its count into a + that makes a new one right there:
-New job opens NewJobDialog, + on Agents opens NewAgentDialog, + on VMs opens NewVMDialog.
+New job opens NewJobDialog, + on Agents makes an agent with the next free name (agent-N) and opens it, + on VMs
+opens NewVMDialog.
+Each agent and VM line, like a chat in claude.ai's sidebar, fades its status into a ⋯ on hover: its menu has Rename
+(a small dialog) and Delete (asks first). Deleting the one whose page is open goes back to its list.
 Inbox (pending drafts) and Settings stay pinned at the bottom while the tree scrolls; Settings opens SettingsDialog
 (theme and accent color), which App owns.
 */
 
-import { Bot, ChevronRight, CircleDot, Compass, Eye, FolderGit2, Inbox, ListTodo, Monitor, Plus, Settings } from "lucide-react";
+import { Bot, ChevronRight, CircleDot, Compass, Eye, FolderGit2, Inbox, ListTodo, Monitor, MoreHorizontal, Pencil, Plus, Settings, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 
-import NewAgentDialog from "@/NewAgentDialog";
 import NewJobDialog from "@/NewJobDialog";
 import NewVMDialog from "@/NewVMDialog";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
 import { AGENT_TONE, StatusDot, VM_TONE } from "@/components/ui/status-dot";
-import { useLive, useLiveValue } from "@/live";
+import { api, useLive, useLiveValue } from "@/live";
 import { cn } from "@/lib/utils";
 
 export default function Sidebar(props: { page: string; id: string | null; onOpenSettings: () => void }) {
@@ -28,7 +45,13 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
   const [vmsOpen, setVMsOpen] = useState(true);
   const [newJob, setNewJob] = useState(false);
   const [newVM, setNewVM] = useState(false);
-  const [newAgent, setNewAgent] = useState(false);
+  // The agent or VM its ⋯ menu acts on (a VM's id is its name). It stays set while a dialog fades out, so the title doesn't blank.
+  const [target, setTarget] = useState<{ kind: "agent" | "vm"; id: string; name: string } | null>(null);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [renameBusy, setRenameBusy] = useState(false);
+  const [renameError, setRenameError] = useState("");
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const inbox = useLive("inbox");
   const issues = useLive("issues");
   const jobs = useLive("jobs");
@@ -53,12 +76,72 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
   }
   const openJobs = jobs.filter((job) => job.status === "queued" || job.status === "working" || job.status === "waiting_on_user").length;
 
+  // No name: the backend gives it the next free "agent-N".
+  async function createAgent() {
+    try {
+      const agent = await api<{ id: string }>("/api/agents", { method: "POST", body: { name: "" } });
+      window.location.hash = `#/agents/${agent.id}`;
+    } catch (err) {
+      toast.error(`Could not make an agent: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  async function rename() {
+    if (target === null || renameBusy) {
+      return;
+    }
+    const name = newName.trim();
+    if (name === target.name) {
+      setRenameOpen(false);
+      return;
+    }
+    const path = target.kind === "agent" ? `/api/agents/${target.id}/rename` : `/api/vms/${encodeURIComponent(target.id)}/rename`;
+    setRenameBusy(true);
+    setRenameError("");
+    try {
+      await api(path, { method: "POST", body: { name: name } });
+      setRenameOpen(false);
+      // The open VM's page moves to the new name. An agent's page is by id, so it stays.
+      if (target.kind === "vm" && props.page === "vms" && props.id === target.id) {
+        window.location.hash = `#/vms/${encodeURIComponent(name)}`;
+      }
+    } catch (err) {
+      setRenameError(err instanceof Error ? err.message : String(err));
+    }
+    setRenameBusy(false);
+  }
+
+  async function remove() {
+    if (target === null) {
+      return;
+    }
+    const path = target.kind === "agent" ? `/api/agents/${target.id}` : `/api/vms/${encodeURIComponent(target.id)}`;
+    const list = target.kind === "agent" ? "agents" : "vms";
+    // A VM takes a few seconds to delete.
+    const toastId = toast.loading(`Deleting ${target.name}…`);
+    try {
+      await api(path, { method: "DELETE" });
+      toast.success(`Deleted ${target.name}`, { id: toastId });
+      // Its page is gone: back to the list.
+      if (props.page === list && props.id === target.id) {
+        window.location.hash = `#/${list}`;
+      }
+    } catch (err) {
+      toast.error(`Could not delete ${target.name}: ${err instanceof Error ? err.message : err}`, { id: toastId });
+    }
+  }
+
   // No color transition: picking a page should show at once, not fade in.
   const row = "flex h-7 items-center gap-2 rounded-sm px-2 hover:bg-sidebar-accent";
   // The count fades out and the + fades in, in the same spot, while the row is hovered or the + has focus.
   const count = "ml-auto text-muted-foreground tabular-nums transition-opacity group-hover:opacity-0 group-focus-within:opacity-0";
   const plus =
     "absolute right-1 flex size-5 items-center justify-center rounded-sm text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-accent hover:text-foreground focus-visible:opacity-100";
+  // An agent or VM line the same way: its status fades into the ⋯, which stays (and the line stays lit) while its menu is open.
+  const status =
+    "ml-auto text-muted-foreground tabular-nums transition-opacity group-hover:opacity-0 group-focus-within:opacity-0 group-has-[[data-state=open]]:opacity-0";
+  const more = cn(plus, "data-[state=open]:bg-accent data-[state=open]:text-foreground data-[state=open]:opacity-100");
+  const child = cn(row, "group relative p-0 has-[[data-state=open]]:bg-sidebar-accent");
 
   // The open page: an accent wash, and its icon in the accent (the icon is the row's first svg, or its link's).
   const selected = "bg-selected text-foreground hover:bg-selected [&>a>svg]:text-primary [&>svg]:text-primary";
@@ -135,22 +218,48 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
             Agents
             <span className={count}>{agents.length}</span>
           </a>
-          <button type="button" className={plus} aria-label="New agent" title="New agent" onClick={() => setNewAgent(true)}>
+          <button type="button" className={plus} aria-label="New agent" title="New agent" onClick={createAgent}>
             <Plus className="size-3.5" />
           </button>
         </div>
         {agentsOpen &&
           agents.map((agent) => (
-            <a
-              key={agent.id}
-              href={`#/agents/${agent.id}`}
-              className={cn(row, "pl-12", props.page === "agents" && props.id === agent.id && selected)}
-              title={agent.activity}
-            >
-              <StatusDot tone={AGENT_TONE[agent.status]} />
-              <span className="truncate">{agent.name}</span>
-              {agent.status === "in_queue" && <span className="ml-auto text-muted-foreground tabular-nums">#{agent.place}</span>}
-            </a>
+            <div key={agent.id} className={cn(child, props.page === "agents" && props.id === agent.id && selected)}>
+              <a href={`#/agents/${agent.id}`} className="flex h-7 min-w-0 flex-1 items-center gap-2 pr-2 pl-6" title={agent.activity}>
+                <StatusDot tone={AGENT_TONE[agent.status]} />
+                <span className="truncate">{agent.name}</span>
+                {agent.status === "in_queue" && <span className={status}>#{agent.place}</span>}
+              </a>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button type="button" className={more} aria-label={`Actions for ${agent.name}`}>
+                    <MoreHorizontal className="size-3.5" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      setTarget({ kind: "agent", id: agent.id, name: agent.name });
+                      setNewName(agent.name);
+                      setRenameError("");
+                      setRenameOpen(true);
+                    }}
+                  >
+                    <Pencil /> Rename
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onSelect={() => {
+                      setTarget({ kind: "agent", id: agent.id, name: agent.name });
+                      setDeleteOpen(true);
+                    }}
+                  >
+                    <Trash2 /> Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           ))}
 
         <div className="-mx-1.5 my-1.5 border-t" />
@@ -177,11 +286,42 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
         </div>
         {vmsOpen &&
           vms.map((vm) => (
-            <a key={vm.name} href={`#/vms/${vm.name}`} className={cn(row, "pl-12", props.page === "vms" && props.id === vm.name && selected)}>
-              <StatusDot tone={VM_TONE[vm.status]} />
-              <span className="truncate">{vm.name}</span>
-              <span className="ml-auto text-muted-foreground">{vm.status !== "running" ? "off" : vm.holder !== null ? "busy" : "free"}</span>
-            </a>
+            <div key={vm.name} className={cn(child, props.page === "vms" && props.id === vm.name && selected)}>
+              <a href={`#/vms/${vm.name}`} className="flex h-7 min-w-0 flex-1 items-center gap-2 pr-2 pl-6">
+                <StatusDot tone={VM_TONE[vm.status]} />
+                <span className="truncate">{vm.name}</span>
+                <span className={status}>{vm.status !== "running" ? "off" : vm.holder !== null ? "busy" : "free"}</span>
+              </a>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button type="button" className={more} aria-label={`Actions for ${vm.name}`}>
+                    <MoreHorizontal className="size-3.5" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      setTarget({ kind: "vm", id: vm.name, name: vm.name });
+                      setNewName(vm.name);
+                      setRenameError("");
+                      setRenameOpen(true);
+                    }}
+                  >
+                    <Pencil /> Rename
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onSelect={() => {
+                      setTarget({ kind: "vm", id: vm.name, name: vm.name });
+                      setDeleteOpen(true);
+                    }}
+                  >
+                    <Trash2 /> Delete
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           ))}
       </div>
 
@@ -206,8 +346,56 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
       </div>
 
       {newJob && <NewJobDialog onClose={() => setNewJob(false)} />}
-      {newAgent && <NewAgentDialog onClose={() => setNewAgent(false)} />}
       <NewVMDialog open={newVM} onOpenChange={setNewVM} />
+
+      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Rename {target?.name}</DialogTitle>
+            <DialogDescription>
+              {target?.kind === "vm"
+                ? "Works while it runs. Agents aimed at it and its jobs follow. a-z, 0-9 and -, starting with a letter."
+                : "Its conversation, jobs and drafts stay with it."}
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              rename();
+            }}
+          >
+            <Input autoFocus spellCheck={false} value={newName} onChange={(event) => setNewName(event.target.value)} />
+          </form>
+          {renameError !== "" && <p className="text-destructive">{renameError}</p>}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenameOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={rename} disabled={newName.trim() === "" || renameBusy}>
+              Rename
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {target?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {target?.kind === "vm"
+                ? "The VM and everything inside it are removed for good. An agent holding it is interrupted, and agents aimed at it lose their target VM."
+                : "Its conversation is deleted, its open jobs are cancelled and it leaves every VM queue. Its drafts stay in the Inbox."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={remove}>
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </nav>
   );
 }

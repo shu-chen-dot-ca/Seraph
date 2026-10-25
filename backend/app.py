@@ -29,7 +29,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
 from backend import agents_api, explore_api, images_api, inbox_api, issues_api, repos_api, tracked_api, vms_api
-from backend.shared import agents, explore, images, inbox, issue_difficulty, issue_facts, issues, jobs, rejections, repo_signals, repos, tracked, tracked_issues, vms
+from backend.shared import agents, explore, images, inbox, issue_facts, issue_tags, issues, jobs, rejections, repo_signals, repos, tracked, tracked_issues, vms
 from github_searcher.token_balancer import BALANCER
 
 # override: the backend reloads itself on code changes, and .env changes should apply then too.
@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI):
         # What is left of every GitHub quota, for the Explore page's bars from the start.
         asyncio.create_task(asyncio.to_thread(BALANCER.prime)),
         asyncio.create_task(issues_api.keep_facts()),
-        asyncio.create_task(issues_api.keep_difficulty()),
+        asyncio.create_task(issues_api.keep_tags()),
         asyncio.create_task(repos_api.keep_signals()),
         asyncio.create_task(tracked_api.keep_tracked()),
     ]
@@ -114,24 +114,32 @@ async def live(websocket: WebSocket) -> None:
                 item["rejected_before"] = len(rejected.get(item["full_name"], {}).get("history", []))
             data = {"items": items, "can_undo": repos.can_undo(), "can_redo": repos.can_redo()}
             messages.append({"topic": "repos", "data": data})
-        # Issues carry their facts (issue_facts.py) and difficulty (issue_difficulty.py), so the topic changes when any does.
-        if sent["issues"] != (issues.version, issue_facts.version, issue_difficulty.version):
-            sent["issues"] = (issues.version, issue_facts.version, issue_difficulty.version)
+        # Issues carry their facts (issue_facts.py) and tags (issue_tags.py), so the topic changes when any does.
+        if sent["issues"] != (issues.version, issue_facts.version, issue_tags.version):
+            sent["issues"] = (issues.version, issue_facts.version, issue_tags.version)
             facts = issue_facts.all()
-            levels = issue_difficulty.all()
+            tags = issue_tags.all()
             items = issues.items()
             for item in items:
                 item["facts"] = facts.get(item["id"])
-                item["difficulty"] = levels.get(item["id"])
+                item["tags"] = tags.get(item["id"])
             data = {"items": items, "can_undo": issues.can_undo(), "can_redo": issues.can_redo()}
             messages.append({"topic": "issues", "data": data})
-        # Each tracked repo carries its latest check (tracked_issues.py), like issues carry their facts.
-        if sent["tracked"] != (tracked.version, tracked_issues.version):
-            sent["tracked"] = (tracked.version, tracked_issues.version)
+        # Each tracked repo carries its latest check (tracked_issues.py), like issues carry their facts, each issue
+        # in it its tags (issue_tags.py), and the repo its signals (repo_signals.py), like on the Repos page.
+        if sent["tracked"] != (tracked.version, tracked_issues.version, issue_tags.version, repo_signals.version):
+            sent["tracked"] = (tracked.version, tracked_issues.version, issue_tags.version, repo_signals.version)
             checks = tracked_issues.all()
+            tags = issue_tags.all()
+            signals = repo_signals.all()
             items = tracked.items()
             for item in items:
+                item["signals"] = signals.get(item["full_name"])
                 item["check"] = checks.get(item["full_name"])
+                if item["check"] is None:
+                    continue
+                for issue in item["check"]["issues"]:
+                    issue["tags"] = tags.get(f"{item['full_name']}#{issue['number']}")
             data = {"items": items, "can_undo": tracked.can_undo(), "can_redo": tracked.can_redo()}
             messages.append({"topic": "tracked", "data": data})
         # The run in progress (or the last one), the profile, and the rejected repos.

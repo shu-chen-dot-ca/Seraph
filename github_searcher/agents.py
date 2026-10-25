@@ -10,7 +10,9 @@ DATA_DIR/agents/<id>.json:
 Every agent has a worker (an asyncio task) that waits for messages, joins the waiting ones into
 one prompt, each starting with [User] (the user typed it) or [System] (the app: a new job, a VM
 that is its turn now, the user's decision on a draft, a reminder), and runs one turn with them.
-A message sent while the agent works waits for the turn to end (the chat shows it as pending).
+A message sent while the agent works waits in a queue (the chat shows it as pending; MAX_QUEUED of
+the user's at most). Each of the user's messages gets a turn of its own, in order, together with the
+app's messages that came before it; interrupting a turn (Esc in the chat) starts the next one.
 Waiting messages are saved with the record, so a backend restart (it reloads on every code
 change) doesn't lose them. An agent that was in a turn or about to start one (awake) is woken
 with them after the restart; one cut off in the middle of a turn gets one more saying so.
@@ -61,23 +63,25 @@ load_dotenv(PROJECT_ROOT / ".env", override=True)
 DATA_DIR = PROJECT_ROOT / os.environ["DATA_DIR"]
 # Reminders in a row, with no change to the agent's jobs or queue place, before the app stops reminding.
 MAX_NUDGES = 2
+# The user's messages that may wait for their turn at once.
+MAX_QUEUED = 10
 # While an agent works, its record is saved this often (and after every turn).
 SAVE_SECONDS = 5
 OPEN_STATUSES = ["queued", "working"]
 
 
 class Agents:
-    def __init__(self, repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, rejections, repo_signals, issue_difficulty, explore):
+    def __init__(self, repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, rejections, repo_signals, issue_tags, explore):
         self.repos = repos
         self.issues = issues
         # The Tracked list (a RepoList) and what each tracked repo's last check found on GitHub.
         self.tracked = tracked
         self.tracked_issues = tracked_issues
         # Repos the user rejected (agents can't add them back while blocked), each repo's signals
-        # (check_activity works them out the same way) and each issue's difficulty.
+        # (check_activity works them out the same way) and each issue's tags: free or assigned, level, kind.
         self.rejections = rejections
         self.repo_signals = repo_signals
-        self.issue_difficulty = issue_difficulty
+        self.issue_tags = issue_tags
         # Explore, for its profile's types of repo: the tags agents give the repos they add.
         self.explore = explore
         self.jobs = jobs
@@ -193,6 +197,9 @@ class Agents:
                     if message["text"].startswith("/compact"):
                         break
                     batch.append(message)
+                    # One of the user's messages per turn: the ones after it wait for the next turns.
+                    if message["from"] == "User":
+                        break
                 prompt = "\n\n".join(f"[{message['from']}] {message['text']}" for message in batch)
             self.pending[agent.id] = messages[len(batch):]
             if self.pending[agent.id]:
@@ -370,6 +377,21 @@ class Agents:
         del created["awake"]
         return created
 
+    def rename(self, agent_id: str, new_name: str) -> None:
+        """The user renamed the agent. Jobs, drafts and the VM queue know it by its id, so nothing else changes."""
+        agent = self.agents[agent_id]
+        new_name = new_name.strip()
+        if not new_name:
+            raise ValueError("The name is empty")
+        if new_name == agent.name:
+            return
+        if new_name in [other.name for other in self.agents.values()]:
+            raise ValueError(f"There is already an agent named {new_name}")
+        agent.name = new_name
+        agent.record["name"] = new_name
+        self.save(agent)
+        self.version += 1
+
     async def delete(self, agent_id: str) -> None:
         """Stop the agent and delete it. Its open jobs become cancelled; its drafts stay in the Inbox."""
         agent = self.agents[agent_id]
@@ -401,6 +423,9 @@ class Agents:
             raise KeyError(f"No agent {agent_id}")
         if not text.strip():
             raise ValueError("The message is empty")
+        waiting = [message for message in self.pending[agent_id] if message["from"] == "User"]
+        if len(waiting) >= MAX_QUEUED:
+            raise ValueError(f"{MAX_QUEUED} messages already wait; send more when one has gone in")
         self.pending[agent_id].append({"from": "User", "text": text.strip(), "shown": False})
         self.wake[agent_id].set()
         self.version += 1

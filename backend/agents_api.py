@@ -1,4 +1,4 @@
-"""The Agents and Jobs pages: create and delete agents, chat with one, point it at a VM, and create and cancel jobs.
+"""The Agents and Jobs pages: create, rename and delete agents, chat with one, point it at a VM, and create and cancel jobs.
 
 Every endpoint is `async def`: Agents lives on the backend's event loop (each
 agent is a Claude conversation driven by an asyncio task). The list of agents
@@ -38,6 +38,21 @@ async def create_agent(body: CreateRequest | None = None) -> dict:
         raise HTTPException(status_code=409, detail=str(error))
 
 
+class RenameRequest(BaseModel):
+    name: str
+
+
+@router.post("/agents/{agent_id}/rename")
+async def rename_agent(agent_id: str, body: RenameRequest) -> dict:
+    try:
+        agents.rename(agent_id, body.name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No agent {agent_id}")
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    return {}
+
+
 @router.delete("/agents/{agent_id}")
 async def delete_agent(agent_id: str) -> dict:
     """Stops the agent, takes it out of every VM queue and cancels its open jobs."""
@@ -60,13 +75,15 @@ async def agent_history(agent_id: str, since: int = 0) -> dict:
 
 @router.post("/agents/{agent_id}/message")
 async def send_message(agent_id: str, body: MessageRequest) -> dict:
-    """A chat message from the user. While the agent works, it waits as a pending message."""
+    """A chat message from the user. While the agent works, it waits as a pending message (10 at most)."""
     if not body.text.strip():
         raise HTTPException(status_code=400, detail="The message is empty.")
     try:
         agents.send(agent_id, body.text)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"No agent {agent_id}")
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
     return {}
 
 

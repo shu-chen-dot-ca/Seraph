@@ -5,8 +5,8 @@ its context is and what it did last. Under an agent with a job: the agent's head
 words, its todo count, how long it has been on this step, and a warning when it has been quiet too long.
 
 Everything comes from the live store (agents and jobs), so the table updates itself while agents work.
-Clicking a row opens that agent's page. New agent opens NewAgentDialog (a name, or the next free
-"agent-N"), which makes the agent and opens it. Delete asks first: the agent's conversation goes, its open jobs are cancelled and it leaves
+Clicking a row opens that agent's page. New agent makes an agent with the next free name ("agent-N")
+and opens it. Delete asks first: the agent's conversation goes, its open jobs are cancelled and it leaves
 every VM queue (its drafts stay in the Inbox).
 */
 
@@ -29,7 +29,6 @@ import { JobProgressBar, currentJob, since, stuckFor, useNow } from "@/component
 import { AGENT_TONE, StatusDot } from "@/components/ui/status-dot";
 import { api, useLive, useLoaded, type AgentSummary } from "@/live";
 import { cn } from "@/lib/utils";
-import NewAgentDialog from "@/NewAgentDialog";
 
 const COLUMNS = "grid grid-cols-[minmax(120px,180px)_190px_100px_minmax(200px,320px)_80px_150px_minmax(0,1fr)_32px] items-center gap-3";
 
@@ -43,7 +42,6 @@ export default function Agents() {
   const agents = useLive("agents");
   const jobs = useLive("jobs");
   const loaded = useLoaded("agents");
-  const [creating, setCreating] = useState(false);
   // The agent the delete dialog asks about. It stays set while the dialog fades out, so the title doesn't blank.
   const [deleting, setDeleting] = useState<AgentSummary | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -58,6 +56,16 @@ export default function Agents() {
     openJobs[job.agent] = (openJobs[job.agent] ?? 0) + 1;
   }
 
+  // No name: the backend gives it the next free "agent-N".
+  async function createAgent() {
+    try {
+      const agent = await api<{ id: string }>("/api/agents", { method: "POST", body: { name: "" } });
+      window.location.hash = `#/agents/${agent.id}`;
+    } catch (err) {
+      toast.error(`Could not make an agent: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
   async function remove(agent: AgentSummary) {
     try {
       await api(`/api/agents/${agent.id}`, { method: "DELETE" });
@@ -70,7 +78,7 @@ export default function Agents() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-        <Button className="ml-auto" size="sm" onClick={() => setCreating(true)}>
+        <Button className="ml-auto" size="sm" onClick={createAgent}>
           <Plus /> New agent
         </Button>
       </div>
@@ -211,7 +219,6 @@ export default function Agents() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {creating && <NewAgentDialog onClose={() => setCreating(false)} />}
     </div>
   );
 }

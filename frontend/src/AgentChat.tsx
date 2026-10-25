@@ -2,7 +2,8 @@
 One agent's page: under the header, the job it is on now (every step, the current one marked, the
 agent's headline in everyday words, the project's test suite runs, what it does this moment, its todo count and times, and a warning
 when it has been quiet too long); the conversation on the left; on the right where it stands in a VM
-queue, its jobs with their progress, and its latest todo list.
+queue, its jobs with their progress (a queued one has an x that takes it off: the job is cancelled, and the agent is
+told), and its latest todo list.
 
 The conversation is the agent's history (HistoryEntry in live.ts; append-only on the server). The page
 loads the last 200 entries, then fetches only the new part (/history?since=<end>) whenever the live
@@ -10,7 +11,11 @@ agent summary's history_length grows. "Show earlier" loads up to 200 more in fro
 result are paired by id and shown as one row that opens to the input and the result. New entries scroll
 the view down only while it is at the bottom, so reading further up is never interrupted.
 
-A message sent while the agent works waits for its turn to end; the composer shows those as queued.
+A message sent while the agent works waits for its turn to end; the composer shows those as queued (10 at most,
+each gets a turn of its own). Esc anywhere on the page (not while a dialog or menu is open) interrupts the turn, and
+the next queued message goes in. What you type
+and don't send is kept in this browser per agent (localStorage), so it is still there when you come back, after a
+reload, and after a backend restart.
 Compact sends "/compact", which Claude Code runs on the conversation itself. The target VM can only
 change while the agent is not queued for or holding a VM (the backend refuses it then).
 */
@@ -78,6 +83,8 @@ const PAGE = 200;
 // when the model's window is smaller.
 const CONTEXT_CAP = 500_000;
 const OPEN_STATUSES = ["queued", "working", "waiting_on_user"];
+// The messages that may wait for their turn at once (MAX_QUEUED in agents.py).
+const MAX_QUEUED = 10;
 const NO_VM = "__none__";
 
 // An icon per tool; anything else gets the wrench.
@@ -180,12 +187,33 @@ export default function AgentChat(props: { agentId: string }) {
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [historyError, setHistoryError] = useState("");
   const [loadingEarlier, setLoadingEarlier] = useState(false);
-  const [text, setText] = useState("");
+  // The unsent message: from localStorage at first, and saved there as you type.
+  const draftKey = `draft:agent:${props.agentId}`;
+  const [text, setText] = useState(() => {
+    try {
+      return localStorage.getItem(draftKey) ?? "";
+    } catch {
+      // Storage blocked (private window): start empty.
+      return "";
+    }
+  });
   // Messages this page sent. The last `pending` of them are the ones still waiting for the turn to end.
   const [sent, setSent] = useState<string[]>([]);
   const [seen, setSeen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
+
+  useEffect(() => {
+    try {
+      if (text === "") {
+        localStorage.removeItem(draftKey);
+      } else {
+        localStorage.setItem(draftKey, text);
+      }
+    } catch {
+      // Storage blocked (private window): the draft just isn't kept.
+    }
+  }, [draftKey, text]);
   // Set by "Show earlier": the distance from the bottom to keep, so the view doesn't jump.
   const keepFromBottom = useRef<number | null>(null);
   const fetching = useRef(false);
@@ -248,6 +276,24 @@ export default function AgentChat(props: { agentId: string }) {
     }
   }, [entries, busy, pending, exists]);
 
+  // Esc anywhere on the page interrupts the turn; the next queued message then goes in. An open dialog or
+  // menu takes Esc first (Radix marks it handled), so closing one never interrupts.
+  useEffect(() => {
+    if (!busy) {
+      return;
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape" || event.defaultPrevented) {
+        return;
+      }
+      api(`/api/agents/${props.agentId}/interrupt`, { method: "POST" }).catch((err) => {
+        toast.error(`Could not interrupt: ${err instanceof Error ? err.message : err}`);
+      });
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [busy, props.agentId]);
+
   async function showEarlier() {
     const from = Math.max(0, start - PAGE);
     setLoadingEarlier(true);
@@ -269,7 +315,7 @@ export default function AgentChat(props: { agentId: string }) {
 
   async function send() {
     const message = text.trim();
-    if (message === "") {
+    if (message === "" || pending >= MAX_QUEUED) {
       return;
     }
     setText("");
@@ -375,6 +421,15 @@ export default function AgentChat(props: { agentId: string }) {
   const job = currentJob(summary.id, jobs);
   const stuck = stuckFor(summary, now);
 
+  // Take a queued job off its list: it is cancelled (it stays below as Cancelled), and the agent is told.
+  async function removeJob(id: string) {
+    try {
+      await api(`/api/jobs/${id}/cancel`, { method: "POST" });
+    } catch (err) {
+      toast.error(`Could not remove ${id}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
@@ -427,7 +482,7 @@ export default function AgentChat(props: { agentId: string }) {
             </TooltipContent>
           </Tooltip>
 
-          <Button variant="outline" size="sm" className="ml-2" onClick={interrupt} disabled={!summary.busy} title="Stop the current turn (Esc in the message box)">
+          <Button variant="outline" size="sm" className="ml-2" onClick={interrupt} disabled={!summary.busy} title="Stop the current turn; the next queued message goes in (Esc)">
             <Square /> Interrupt
           </Button>
           <Button variant="outline" size="sm" onClick={compact} disabled={summary.history_length === 0} title="Summarize the conversation to free context">
@@ -636,7 +691,7 @@ export default function AgentChat(props: { agentId: string }) {
               {pending > 0 && (
                 <div className="mx-auto mb-2 max-w-4xl space-y-1">
                   <div className="text-xs text-muted-foreground">
-                    {pending} {pending === 1 ? "message waits" : "messages wait"} for the current turn to end
+                    {pending} of {MAX_QUEUED} queued, each gets its own turn · Esc stops this turn and sends the next
                   </div>
                   {queued.map((message, index) => (
                     <div key={index} className="truncate rounded-sm border border-dashed px-2 py-1 text-muted-foreground" title={message}>
@@ -648,7 +703,13 @@ export default function AgentChat(props: { agentId: string }) {
               <div className="mx-auto flex max-w-4xl items-end gap-2">
                 <Textarea
                   className="max-h-48 min-h-14 resize-none"
-                  placeholder={summary.busy ? `Message ${summary.name} (sent when this turn ends)` : `Message ${summary.name}`}
+                  placeholder={
+                    pending >= MAX_QUEUED
+                      ? `${MAX_QUEUED} messages wait; send more when one has gone in`
+                      : summary.busy
+                        ? `Message ${summary.name} (sent when this turn ends)`
+                        : `Message ${summary.name}`
+                  }
                   value={text}
                   onChange={(event) => setText(event.target.value)}
                   onKeyDown={(event) => {
@@ -656,12 +717,9 @@ export default function AgentChat(props: { agentId: string }) {
                       event.preventDefault();
                       send();
                     }
-                    if (event.key === "Escape" && summary.busy) {
-                      interrupt();
-                    }
                   }}
                 />
-                <Button size="icon" onClick={send} disabled={text.trim() === ""} aria-label="Send" title="Send (Enter)">
+                <Button size="icon" onClick={send} disabled={text.trim() === "" || pending >= MAX_QUEUED} aria-label="Send" title="Send (Enter)">
                   <ArrowUp />
                 </Button>
               </div>
@@ -739,6 +797,18 @@ export default function AgentChat(props: { agentId: string }) {
                     <span className="truncate" title={job.title}>
                       {job.title}
                     </span>
+                  )}
+                  {job.status === "queued" && (
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      className="ml-auto shrink-0"
+                      aria-label={`Remove ${job.id}`}
+                      title="Remove it from the queue: the job is cancelled and the agent is told"
+                      onClick={() => removeJob(job.id)}
+                    >
+                      <X />
+                    </Button>
                   )}
                 </div>
                 <div className="flex flex-wrap items-center gap-x-2 pl-3.5 text-xs text-muted-foreground">
