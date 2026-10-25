@@ -6,7 +6,7 @@ right of every page (Sherpa.tsx).
 
 The page lives in the URL hash, so refresh and back/forward work and switching pages never reloads:
   #/inbox  #/inbox/<draft id>  #/issues  #/issues?repo=owner/name  #/jobs  #/jobs/<job id>  #/explore  #/repos  #/tracked
-  #/agents  #/agents/<agent id>  #/vms  #/vms?tab=images  #/vms?tab=defaults  #/vms/<vm name>
+  #/agents  #/agents/<agent id>  #/vms  #/vms?tab=images  #/vms?tab=defaults  #/vms/<vm name>  #/resource  #/resource/gpu
 Links are plain <a href="#/..."> everywhere; App only reads the hash.
 
 A VM page, once visited, stays mounted (hidden) while you are elsewhere, so its desktop iframe keeps its
@@ -24,6 +24,7 @@ import Inbox from "@/Inbox";
 import Issues from "@/Issues";
 import Jobs from "@/Jobs";
 import Repos from "@/Repos";
+import Resource from "@/Resource";
 import SettingsDialog, { type ThemeMode } from "@/SettingsDialog";
 import Sidebar from "@/Sidebar";
 import Tracked from "@/Tracked";
@@ -36,7 +37,7 @@ import TitleTooltips from "@/components/ui/title-tooltips";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useConnected, useLiveValue, useLoaded } from "@/live";
 
-const PAGES = ["inbox", "issues", "jobs", "explore", "repos", "tracked", "agents", "vms"];
+const PAGES = ["inbox", "issues", "jobs", "explore", "repos", "tracked", "agents", "vms", "resource"];
 const GITHUB_URL = "https://github.com/shu-chen-dot-ca/seraph";
 
 export default function App() {
@@ -180,6 +181,7 @@ export default function App() {
             {page === "vms" && id === null && (
               <VMs tab={query.get("tab") === "images" ? "images" : query.get("tab") === "defaults" ? "defaults" : "vms"} />
             )}
+            {page === "resource" && <Resource selected={id} />}
             {mountedVMs.map((name) => (
               <div key={name} className={name === openVM ? "h-full" : "hidden"}>
                 <VMPage name={name} active={name === openVM} />

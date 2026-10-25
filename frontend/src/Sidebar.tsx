@@ -3,9 +3,10 @@ The left tree, like Proxmox's resource tree. Every line is a link to a page, in 
 - finding work: Explore (the search for new repos; shows how many found repos wait for the user's approve or reject,
   with a green dot while a run goes), Repos, Tracked (new issues in the repos the user keeps an eye on), Issues;
 - doing it, under a line: Jobs (open / all), Agents (one child per agent), then under another line VMs (one child per VM);
+- the computer, under another line: Resource (this computer's use) with its child GPU (Resource.tsx; not built yet);
 - pinned at the bottom: Inbox and Settings (below).
 Counts and status dots come straight from the live store, so the tree updates itself.
-The chevrons only fold Agents / VMs; clicking a name opens that page.
+The chevrons only fold Agents / VMs / Resource; clicking a name opens that page.
 Hovering Jobs, Agents or VMs fades its count into a + that makes a new one right there:
 New job opens NewJobDialog, + on Agents makes an agent with the next free name (agent-N) and opens it, + on VMs
 opens NewVMDialog.
@@ -15,7 +16,7 @@ Inbox (pending drafts) and Settings stay pinned at the bottom while the tree scr
 (theme and accent color), which App owns.
 */
 
-import { Bot, ChevronRight, CircleDot, Compass, Eye, FolderGit2, Inbox, ListTodo, Monitor, MoreHorizontal, Pencil, Plus, Settings, Trash2 } from "lucide-react";
+import { Bot, ChevronRight, CircleDot, Compass, Eye, FolderGit2, Gauge, Gpu, Inbox, ListTodo, Monitor, MoreHorizontal, Pencil, Plus, Settings, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -43,6 +44,7 @@ import { cn } from "@/lib/utils";
 export default function Sidebar(props: { page: string; id: string | null; onOpenSettings: () => void }) {
   const [agentsOpen, setAgentsOpen] = useState(true);
   const [vmsOpen, setVMsOpen] = useState(true);
+  const [resourceOpen, setResourceOpen] = useState(true);
   const [newJob, setNewJob] = useState(false);
   const [newVM, setNewVM] = useState(false);
   // The agent or VM its ⋯ menu acts on (a VM's id is its name). It stays set while a dialog fades out, so the title doesn't blank.
@@ -323,6 +325,29 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
               </DropdownMenu>
             </div>
           ))}
+
+        <div className="-mx-1.5 my-1.5 border-t" />
+
+        <div className={cn(row, "gap-0 px-0", props.page === "resource" && props.id === null && selected)}>
+          <button
+            type="button"
+            className="flex h-7 w-6 shrink-0 items-center justify-center text-muted-foreground"
+            aria-label={resourceOpen ? "Fold resource" : "Unfold resource"}
+            onClick={() => setResourceOpen(!resourceOpen)}
+          >
+            <ChevronRight className={cn("size-3.5 transition-transform", resourceOpen && "rotate-90")} />
+          </button>
+          <a href="#/resource" className="flex h-7 min-w-0 flex-1 items-center gap-2 pr-2">
+            <Gauge className="size-4 text-muted-foreground" />
+            Resource
+          </a>
+        </div>
+        {resourceOpen && (
+          <a href="#/resource/gpu" className={cn(row, "pl-6", props.page === "resource" && props.id === "gpu" && selected)}>
+            <Gpu className="size-4 text-muted-foreground" />
+            GPU
+          </a>
+        )}
       </div>
 
       <div className="border-t p-1.5">
