@@ -1,8 +1,9 @@
 """Sherpa: the round button at the bottom right of every page (github_searcher/sherpa.py, frontend/src/Sherpa.tsx).
 
 The browser sends a message with the page the user is on, follows the chat with GET /api/sherpa while a turn runs, and
-does the page actions Sherpa asks for (pending), posting what happened to /api/sherpa/result. Its turns run on the
-event loop, so the endpoints are `async def`.
+does the page actions Sherpa asks for (pending), posting what happened to /api/sherpa/result. The history lists the
+kept chats; one can be opened again or deleted, and New chat opens an empty one. Its turns run on the event loop, so
+the endpoints are `async def`.
 """
 
 from fastapi import APIRouter, HTTPException
@@ -53,11 +54,35 @@ async def stop_sherpa() -> dict:
     return {}
 
 
-@router.delete("/sherpa")
-async def clear_sherpa() -> dict:
-    """A new conversation."""
+@router.post("/sherpa/new")
+async def new_sherpa_chat() -> dict:
+    """Opens a new, empty chat; the one before stays in the history."""
     try:
-        sherpa.clear()
+        sherpa.new_chat()
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    return {}
+
+
+@router.get("/sherpa/chats")
+async def sherpa_chats() -> dict:
+    """The history: every chat, the newest first."""
+    return {"chats": sherpa.chats()}
+
+
+@router.post("/sherpa/chats/{chat_id}/open")
+async def open_sherpa_chat(chat_id: str) -> dict:
+    try:
+        sherpa.open_chat(chat_id)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    return {}
+
+
+@router.delete("/sherpa/chats/{chat_id}")
+async def delete_sherpa_chat(chat_id: str) -> dict:
+    try:
+        sherpa.delete_chat(chat_id)
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error))
     return {}

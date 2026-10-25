@@ -552,11 +552,15 @@ export type SherpaAction =
   | { kind: "point"; element: number };
 
 export type SherpaChat = {
+  id: string | null; // null: a new chat, kept once its first message is sent
   history: ImageAgentEntry[];
   busy: boolean;
   cost_usd: number;
   pending: { id: number; tab: string; action: SherpaAction } | null;
 };
+
+// A chat in Sherpa's history (GET /api/sherpa/chats), the newest first. Its title is its first message.
+export type SherpaChatSummary = { id: string; title: string; updated_at: string };
 
 // The agent making a new image (New image), a build (by Rebuild or the agent), a VM being saved as an image, or an inspect.
 // Tasks that worked disappear once their image is listed; failed ones stay until dismissed.

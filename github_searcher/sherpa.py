@@ -14,9 +14,15 @@ How an action reaches the browser: the tool puts it in `pending`, the browser (w
 second while a turn runs) does it and posts what happened (POST /api/sherpa/result), which the tool waits for, up to
 ACTION_TIMEOUT seconds.
 
-One conversation, DATA_DIR/sherpa_chat.json: {"session_id", "history": [entry, ...], "cost_usd"}, with entries like
-the image agent's (sandbox/image_agent.py). Each turn connects to Claude Code, resumes the conversation by its
-session id, and disconnects at the end. Claude Code's own tools are off: only the tools here.
+Chats are kept, one file each, for the panel's history (the newest first; open one to go on with it, or delete it):
+
+    DATA_DIR/sherpa_chats/<id>.json   {"id", "title", "created_at", "updated_at", "session_id", "history": [entry, ...],
+                                       "cost_usd"}
+
+with entries like the image agent's (sandbox/image_agent.py). The title is the first message. One chat is open
+(`current`): at start the one used last; New chat opens an empty one, saved once its first message is sent. Each turn
+connects to Claude Code, resumes the open chat's conversation by its session id, and disconnects at the end. Claude
+Code's own tools are off: only the tools here. While a turn runs, the open chat stays open.
 
     sherpa = Sherpa()
     sherpa.send("how do I give an agent more memory?", page, tab)
@@ -25,6 +31,8 @@ session id, and disconnects at the end. Claude Code's own tools are off: only th
 import asyncio
 import json
 import os
+import re
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -38,6 +46,9 @@ load_dotenv(PROJECT_ROOT / ".env", override=True)
 DATA_DIR = PROJECT_ROOT / os.environ["DATA_DIR"]
 # Claude Code runs here. With no file tools this only decides where it keeps the conversation.
 AGENT_HOME = DATA_DIR / "sherpa_home"
+CHATS_DIR = DATA_DIR / "sherpa_chats"
+CHAT_ID = re.compile(r"[0-9a-f]{12}")
+TITLE_CHARS = 80
 TOOL_SERVER = "sherpa"
 # How long a page action may take in the browser.
 ACTION_TIMEOUT = 20
@@ -89,7 +100,11 @@ The pages:
 
 class Sherpa:
     def __init__(self):
-        self.path = DATA_DIR / "sherpa_chat.json"
+        # The open chat's id: the one used last, or None for a new chat.
+        self.current = None
+        chats = self.chats()
+        if chats:
+            self.current = chats[0]["id"]
         # The turn running now, or None: {"client", "chat", "stopped", "task", "tab"}.
         self.running = None
         # The page action the browser should do now, or None: {"id", "tab", "action"}; and what waits for its answer.
@@ -99,33 +114,59 @@ class Sherpa:
         # The page Sherpa saw last, for naming the element in a click, fill or point ("[12] button "Save"").
         self.last_page = ""
 
-    def load(self) -> dict:
-        if not self.path.exists():
-            return {"session_id": None, "history": [], "cost_usd": 0.0}
-        return json.loads(self.path.read_text())
+    def load(self, chat_id: str | None) -> dict:
+        """A chat by its id; a new, empty one for None (or one that was deleted)."""
+        if chat_id is None or not (CHATS_DIR / f"{chat_id}.json").exists():
+            return {"id": None, "title": "", "created_at": None, "updated_at": None, "session_id": None, "history": [], "cost_usd": 0.0}
+        return json.loads((CHATS_DIR / f"{chat_id}.json").read_text())
 
     def save(self, chat: dict) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        CHATS_DIR.mkdir(parents=True, exist_ok=True)
+        chat["updated_at"] = datetime.now(UTC).isoformat()
+        path = CHATS_DIR / f"{chat['id']}.json"
         # Write, then rename: a crash never leaves half a chat.
-        temporary = self.path.with_name(self.path.name + ".tmp")
+        temporary = path.with_name(path.name + ".tmp")
         temporary.write_text(json.dumps(chat))
-        temporary.replace(self.path)
+        temporary.replace(path)
+
+    def chats(self) -> list[dict]:
+        """For the history: every chat, the newest first, with its title and when it was last used."""
+        listed = []
+        if CHATS_DIR.exists():
+            for path in CHATS_DIR.glob("*.json"):
+                chat = json.loads(path.read_text())
+                listed.append({"id": chat["id"], "title": chat["title"], "updated_at": chat["updated_at"]})
+        listed.sort(key=lambda each: each["updated_at"], reverse=True)
+        return listed
 
     def chat(self) -> dict:
-        """For the panel: the conversation, whether a turn runs, what it cost so far, and the page action waiting."""
+        """For the panel: the open chat, whether a turn runs, what it cost so far, and the page action waiting."""
         if self.running is not None:
             chat = self.running["chat"]
         else:
-            chat = self.load()
-        return {"history": chat["history"], "busy": self.running is not None, "cost_usd": chat["cost_usd"], "pending": self.pending}
+            chat = self.load(self.current)
+        return {
+            "id": chat["id"],
+            "history": chat["history"],
+            "busy": self.running is not None,
+            "cost_usd": chat["cost_usd"],
+            "pending": self.pending,
+        }
 
     def send(self, text: str, page: str, tab: str) -> None:
-        """Start a turn with the user's message and their page. Answers at once; call it on the event loop."""
+        """Start a turn on the open chat with the user's message and their page (a new chat is kept from now on).
+        Answers at once; call it on the event loop."""
         if self.running is not None:
             raise ValueError("Sherpa is still working. Wait, or stop it.")
         if not text.strip():
             raise ValueError("The message is empty")
-        chat = self.load()
+        chat = self.load(self.current)
+        if chat["id"] is None:
+            # A new chat: kept from its first message on, named after it.
+            chat["id"] = uuid.uuid4().hex[:12]
+            chat["title"] = " ".join(text.split())[:TITLE_CHARS]
+            chat["created_at"] = datetime.now(UTC).isoformat()
+            self.current = chat["id"]
         chat["history"].append({"type": "user", "text": text.strip(), "time": datetime.now(UTC).isoformat()})
         self.save(chat)
         self.last_page = page
@@ -160,11 +201,29 @@ class Sherpa:
             # Not connected yet, or the turn just ended.
             pass
 
-    def clear(self) -> None:
-        """Start a new conversation: the old one is forgotten."""
+    def new_chat(self) -> None:
+        """Open a new, empty chat. The one before stays in the history."""
         if self.running is not None:
             raise ValueError("Sherpa is still working. Stop it first.")
-        self.path.unlink(missing_ok=True)
+        self.current = None
+
+    def open_chat(self, chat_id: str) -> None:
+        """Open a chat from the history, to go on with it."""
+        if self.running is not None:
+            raise ValueError("Sherpa is still working. Stop it first.")
+        if not CHAT_ID.fullmatch(chat_id) or not (CHATS_DIR / f"{chat_id}.json").exists():
+            raise ValueError("That chat is gone")
+        self.current = chat_id
+
+    def delete_chat(self, chat_id: str) -> None:
+        """Delete a chat from the history. Deleting the open one opens a new chat."""
+        if not CHAT_ID.fullmatch(chat_id):
+            raise ValueError("That chat is gone")
+        if self.running is not None and self.running["chat"]["id"] == chat_id:
+            raise ValueError("Sherpa is working in that chat. Stop it first.")
+        (CHATS_DIR / f"{chat_id}.json").unlink(missing_ok=True)
+        if self.current == chat_id:
+            self.current = None
 
     async def run(self, text: str) -> None:
         """One turn: send the message and add to the chat until Sherpa ends its turn."""

@@ -9,7 +9,10 @@ Each message takes the page along, as readPage reads it: the address, the sideba
 and field, numbered (data-sherpa-id), the values of password and data-secret fields left out. With a pop-up open, only
 the pop-up. While a turn runs, the chat comes from GET /api/sherpa every half second, and a page action Sherpa asks
 for (pending) is done here, in the tab the message came from (TAB, kept over a reload), and its answer posted back.
-That goes on with the chat closed. One conversation for the whole app; New chat starts over.
+That goes on with the chat closed.
+
+Chats are kept. New chat opens an empty one; History (the clock) lists them all, the newest first, named after their
+first message: a click opens one to go on with it, the bin on hover deletes it. The open one is highlighted.
 
 The panel stays at the bottom right; drag its left edge, top edge or top left corner to resize it. The grip reaches
 8px past the border on each side, so it is easy to catch. Its size is remembered in this browser. The chat keeps its
@@ -22,15 +25,15 @@ The chat works while a pop-up (Dialog) is open, to help fill it in: those keep f
 themselves and close on a click outside, so Sherpa's own events never reach them (the listeners on document).
 */
 
-import { ArrowUp, Bot, Loader2, MessageSquarePlus, Square, Wrench, X } from "lucide-react";
+import { ArrowUp, Bot, History, Loader2, MessageSquarePlus, Square, Trash2, Wrench, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/ui/markdown";
 import { Textarea } from "@/components/ui/textarea";
-import { api, type SherpaChat } from "@/live";
-import { cn } from "@/lib/utils";
+import { api, type SherpaChat, type SherpaChatSummary } from "@/live";
+import { cn, timeAgo } from "@/lib/utils";
 
 // What Sherpa can use on a page, each given a number for click, fill and point.
 const USABLE =
@@ -159,6 +162,9 @@ export default function Sherpa() {
   const [error, setError] = useState("");
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  // The history instead of the chat, and its chats (null while loading).
+  const [showHistory, setShowHistory] = useState(false);
+  const [chats, setChats] = useState<SherpaChatSummary[] | null>(null);
   const [size, setSize] = useState(savedSize);
   // The cursor of the edge or corner being dragged; null when not resizing.
   const [resizing, setResizing] = useState<string | null>(null);
@@ -306,12 +312,12 @@ export default function Sherpa() {
     };
   }, [follow]);
 
-  // New messages, and opening the chat, scroll it to the bottom.
+  // New messages, opening the chat, and coming back from the history, scroll it to the bottom.
   useEffect(() => {
     if (scrollRef.current !== null) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [historyLength, open]);
+  }, [historyLength, open, showHistory]);
 
   // A new size keeps the chat as far from its end as it was, before the browser paints.
   useLayoutEffect(() => {
@@ -346,10 +352,54 @@ export default function Sherpa() {
 
   async function newChat() {
     try {
-      await api("/api/sherpa", { method: "DELETE" });
+      await api("/api/sherpa/new", { method: "POST" });
+      setShowHistory(false);
       setFollow(follow + 1);
     } catch (err) {
       toast.error(`Could not start a new chat: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  async function toggleHistory() {
+    if (showHistory) {
+      setShowHistory(false);
+      return;
+    }
+    setShowHistory(true);
+    setChats(null);
+    try {
+      const answer = await api<{ chats: SherpaChatSummary[] }>("/api/sherpa/chats");
+      setChats(answer.chats);
+    } catch (err) {
+      toast.error(`Could not load the history: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  async function openChat(id: string) {
+    // The open one: back to it, nothing to switch.
+    if (chat !== null && chat.id === id) {
+      setShowHistory(false);
+      return;
+    }
+    try {
+      await api(`/api/sherpa/chats/${id}/open`, { method: "POST" });
+      setShowHistory(false);
+      setFollow(follow + 1);
+    } catch (err) {
+      toast.error(`Could not open it: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  async function deleteChat(id: string) {
+    try {
+      await api(`/api/sherpa/chats/${id}`, { method: "DELETE" });
+      setChats((current) => (current === null ? null : current.filter((each) => each.id !== id)));
+      // Deleting the open one opens a new chat.
+      if (chat !== null && chat.id === id) {
+        setFollow(follow + 1);
+      }
+    } catch (err) {
+      toast.error(`Could not delete it: ${err instanceof Error ? err.message : err}`);
     }
   }
 
@@ -378,7 +428,10 @@ export default function Sherpa() {
             <div className="flex h-9 shrink-0 items-center gap-1 border-b pr-1 pl-3">
               <Bot className="size-4 text-primary" />
               <span className="ml-1 font-semibold">Sherpa</span>
-              <Button size="icon-sm" variant="ghost" className="ml-auto" title="New chat" aria-label="New chat" disabled={busy || historyLength === 0} onClick={newChat}>
+              <Button size="icon-sm" variant={showHistory ? "secondary" : "ghost"} className="ml-auto" title="History" aria-label="History" onClick={toggleHistory}>
+                <History />
+              </Button>
+              <Button size="icon-sm" variant="ghost" title="New chat" aria-label="New chat" disabled={busy || historyLength === 0} onClick={newChat}>
                 <MessageSquarePlus />
               </Button>
               <Button size="icon-sm" variant="ghost" title="Close" aria-label="Close Sherpa" onClick={() => setOpen(false)}>
@@ -386,9 +439,47 @@ export default function Sherpa() {
               </Button>
             </div>
 
+            {showHistory && (
+              <div className="min-h-0 flex-1 overflow-auto p-1.5">
+                {chats === null && (
+                  <div className="flex items-center gap-2 p-1.5">
+                    <Loader2 className="size-3.5 animate-spin" /> Loading…
+                  </div>
+                )}
+                {chats !== null && chats.length === 0 && <div className="p-1.5">No chats yet.</div>}
+                {chats !== null &&
+                  chats.map((each) => (
+                    <div
+                      key={each.id}
+                      className={cn(
+                        "group flex h-8 cursor-pointer items-center gap-2 rounded-sm px-2 hover:bg-accent",
+                        chat !== null && chat.id === each.id && "bg-selected hover:bg-selected",
+                      )}
+                      title={each.title}
+                      onClick={() => openChat(each.id)}
+                    >
+                      <span className="min-w-0 flex-1 truncate">{each.title}</span>
+                      <span className="shrink-0 text-xs group-hover:hidden">{timeAgo(each.updated_at)}</span>
+                      <button
+                        type="button"
+                        className="hidden size-6 shrink-0 items-center justify-center rounded-sm group-hover:flex hover:bg-background hover:text-destructive"
+                        title="Delete this chat"
+                        aria-label={`Delete ${each.title}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          deleteChat(each.id);
+                        }}
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </div>
+                  ))}
+              </div>
+            )}
+
             <div
               ref={scrollRef}
-              className="min-h-0 flex-1 space-y-2 overflow-auto p-3"
+              className={cn("min-h-0 flex-1 space-y-2 overflow-auto p-3", showHistory && "hidden")}
               onScroll={(event) => {
                 fromBottom.current = event.currentTarget.scrollHeight - event.currentTarget.scrollTop - event.currentTarget.clientHeight;
               }}
@@ -396,12 +487,6 @@ export default function Sherpa() {
               {chat === null && error === "" && (
                 <div className="flex items-center gap-2">
                   <Loader2 className="size-3.5 animate-spin" /> Loading…
-                </div>
-              )}
-              {chat !== null && chat.history.length === 0 && (
-                <div className="space-y-2 text-muted-foreground">
-                  <p>I know every page of the app and can see the one you are on. Ask how something works, where it is, or to do it for you.</p>
-                  <p>For example: "what does Unclaimed mean?", "make a VM with 16 GB", "write a job for this issue".</p>
                 </div>
               )}
               {chat !== null &&
@@ -455,7 +540,7 @@ export default function Sherpa() {
               {error !== "" && <p className="text-destructive">{error}</p>}
             </div>
 
-            <div className="flex shrink-0 items-end gap-2 border-t p-2">
+            <div className={cn("flex shrink-0 items-end gap-2 border-t p-2", showHistory && "hidden")}>
               <Textarea
                 autoFocus
                 className="max-h-40 min-h-9 flex-1 resize-none"
