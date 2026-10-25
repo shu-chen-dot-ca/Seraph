@@ -90,11 +90,17 @@ if [[ $FAMILY == apt && $DESKTOP != none ]]; then
     printf 'Package: *\nPin: origin packages.mozilla.org\nPin-Priority: 1000\n' > /etc/apt/preferences.d/mozilla
     $APT update
 fi
+# A desktop image installs its snaps on first boot: wait for that before looking.
+if [[ $FAMILY == apt && $DESKTOP != none ]] && command -v snap > /dev/null; then
+    timeout 600 snap wait system seed.loaded || true
+fi
 if [[ $FAMILY == apt && $DESKTOP != none ]] && command -v snap > /dev/null && snap list firefox > /dev/null 2>&1; then
     snap remove --purge firefox
 fi
+# Ubuntu's own firefox package (a stub that installs the snap) has a higher version than Mozilla's, so apt
+# counts Mozilla's as a downgrade.
 if [[ $FAMILY == apt && $DESKTOP != none ]]; then
-    $APT install firefox
+    $APT install --allow-downgrades firefox
 fi
 if [[ $FAMILY == dnf && $DESKTOP != none ]]; then
     dnf -y install firefox
@@ -256,8 +262,10 @@ set -g window-size latest
 EOF
 
 # Input is allowed (ttyd before 1.7 always allows it and has no --writable). --url-arg: ?arg=<n> picks the terminal.
+# The help is read first: in a pipe, ttyd's own exit code (or grep -q closing it early) would decide under pipefail.
+ttyd_help=$(ttyd --help 2>&1 || true)
 writable=""
-if ttyd --help 2>&1 | grep -q -- --writable; then
+if [[ $ttyd_help == *--writable* ]]; then
     writable="--writable"
 fi
 cat > /etc/systemd/system/ttyd.service <<EOF

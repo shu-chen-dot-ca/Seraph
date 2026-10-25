@@ -49,6 +49,7 @@ It prints each step for the task's log, and stops the builder VM at the end, als
 
 What failed builds before, and what keeps it from happening again:
 - A builder VM hung in its firmware at boot: VM.wait_agent forces it off and on, once (every wait for a boot does).
+- Firefox and writable browser terminals are in base_layer.sh, and CHECK_SCRIPT fails an image without them.
 """
 
 import hashlib
@@ -125,7 +126,7 @@ SCRIPT_HEADER = "set -euxo pipefail\nexport DEBIAN_FRONTEND=noninteractive\n"
 
 # What the app needs in every image, tested inside the VM as root. Each line says OK or FAIL.
 CHECK_SCRIPT = f"""
-desktop_tools="xdotool scrot x11vnc websockify"
+desktop_tools="xdotool scrot x11vnc websockify firefox"
 if [ -f {NO_DESKTOP_FILE} ]; then
     echo "OK terminal only ({NO_DESKTOP_FILE}): no desktop checks"
     desktop_tools=""
@@ -138,6 +139,11 @@ for tool in $desktop_tools ttyd tmux python3 iptables curl git ss; do
     if command -v "$tool" > /dev/null; then echo "OK $tool"; else echo "FAIL $tool is missing"; fi
 done
 if [ -x /usr/local/bin/sandbox-terminal ]; then echo "OK /usr/local/bin/sandbox-terminal"; else echo "FAIL no /usr/local/bin/sandbox-terminal"; fi
+if ttyd --help 2>&1 | grep -q -- --writable && ! systemctl cat ttyd.service 2>/dev/null | grep -q -- --writable; then
+    echo "FAIL the browser terminals are read-only: this ttyd needs --writable in ttyd.service"
+else
+    echo "OK the browser terminals take input"
+fi
 if [ -x {DEMO_DIR}/run.sh ] && systemctl cat demo.service > /dev/null 2>&1; then echo "OK demo service"; else echo "FAIL no {DEMO_DIR}/run.sh or no demo.service"; fi
 if [ -n "$desktop_tools" ]; then
     if ss -ltn | grep -q ':{VNC_PORT} '; then echo "OK VNC server on port {VNC_PORT}"; else echo "FAIL nothing listens on port {VNC_PORT} (x11vnc in the desktop session)"; fi
