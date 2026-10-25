@@ -13,15 +13,17 @@ row's cells (the sizer at the bottom) measures them (lib/column-widths.ts). A ta
 sideways, the header with it, and the header stays on top while the rows scroll. The columns are remembered in this
 browser. Rows have no arrow: the first column only shows in select mode, for the boxes.
 
-Sorting is by one field at a time (SORT_FIELDS), and one click does it: a click on a column header (the Activity
-column sorts by commits a month), or on a field's arrow in the All fields panel (every field, shown as a column or
-not). Each click goes one step:
-- down: sorts by that field instead, the best or the most first (fastest replies, most merged, warmest reviews,
-  most open to AI, A to Z for text),
+Sorting is by any number of fields at once (SORT_FIELDS): a click on a column header (the Activity column sorts by
+commits a month), or on a field's arrow in the All fields panel (every field, shown as a column or not). Each click on
+a field goes one step:
+- down: adds it to the sort, the best or the most first (fastest replies, most merged, warmest reviews, most open to
+  AI, A to Z for text),
 - up: turned round,
-- off: back to the list's own order.
-The header the list sorts by turns blue with its arrow, and a chip at the top says the sort: its arrow turns it round,
-its x ends it. Repos without a value for the field go last either way. What Claude judges (AI policy, review tone, what reviewers ask for,
+- off: takes it out of the sort (with none left, back to the list's own order).
+Which field counts first goes from left to right: the shown columns in their order, then Track, then the fields not
+shown as columns (in the All fields panel's order), Name last of all. A field only orders the repos the ones before it
+leave the same. Every header the list sorts by turns blue with its arrow, and a chip at the top says each sort, in
+that order: its arrow turns it round, its x takes it out. Repos without a value for a field go last either way. What Claude judges (AI policy, review tone, what reviewers ask for,
 fit) is always one of a fixed set, so it ranks in a fixed order (*_RANK below). The sort is remembered in this browser.
 
 Rows have no buttons of their own. Select (top right) turns on select mode: Delete, Track and Untrack show on the
@@ -244,19 +246,25 @@ const NAME_MIN = 160;
 // The Track / Untrack column at the end, wide enough for its button.
 const TRACK_WIDTH = 88;
 
-// The sort this browser used last. Storage can be blocked (private window): then it starts unsorted.
-let savedSort: Sort | null = null;
+// The sorts this browser used last, the ones still known. Storage can be blocked (private window): then it starts
+// unsorted.
+const savedSorts: Sort[] = [];
 try {
-  let saved = JSON.parse(localStorage.getItem(SORT_STORAGE) ?? "null");
-  // Saved when several fields could sort at once: a list, whose first one decided.
-  if (Array.isArray(saved)) {
-    saved = saved[0] ?? null;
+  let saved = JSON.parse(localStorage.getItem(SORT_STORAGE) ?? "[]");
+  // Saved when only one field could sort: that one alone.
+  if (saved !== null && !Array.isArray(saved)) {
+    saved = [saved];
   }
-  if (saved !== null && SORT_FIELDS.some((field) => field.key === saved.key) && (saved.dir === "down" || saved.dir === "up")) {
-    savedSort = { key: saved.key, dir: saved.dir };
+  if (Array.isArray(saved)) {
+    for (const each of saved) {
+      const known = each !== null && SORT_FIELDS.some((field) => field.key === each.key) && (each.dir === "down" || each.dir === "up");
+      if (known && !savedSorts.some((other) => other.key === each.key)) {
+        savedSorts.push({ key: each.key, dir: each.dir });
+      }
+    }
   }
 } catch {
-  savedSort = null;
+  // Storage blocked or broken: unsorted.
 }
 
 // The columns this browser showed last. Storage can be blocked: then the defaults.
@@ -282,9 +290,9 @@ export default function Repos() {
   // "prestige=Prestige\nai=AI & harness": a string, so a busy Explore run doesn't redraw this page.
   const lanesText = useLiveValue((topics) => topics.explore.profile.lanes.map((lane) => `${lane.id}=${lane.label}`).join("\n"));
   const [open, setOpen] = useState<string[]>([]);
-  const [sort, setSort] = useState<Sort | null>(savedSort);
+  // The fields the list sorts by, in any order: which counts first comes from the columns (priority below).
+  const [sorts, setSorts] = useState<Sort[]>(savedSorts);
   const [allFields, setAllFields] = useState(false);
-  // The sort chip being dragged, and where it would land (0 is first).
   const [shown, setShown] = useState<ColumnKey[]>(savedColumns);
   const [choosing, setChoosing] = useState(false);
   // The hidden copy of every row's cells, and the widths it gives each column, then each tag slot.
@@ -309,11 +317,11 @@ export default function Repos() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(SORT_STORAGE, JSON.stringify(sort));
+      localStorage.setItem(SORT_STORAGE, JSON.stringify(sorts));
     } catch {
       // Storage blocked: the sort just isn't kept.
     }
-  }, [sort]);
+  }, [sorts]);
 
   useEffect(() => {
     try {
@@ -472,32 +480,55 @@ export default function Repos() {
     return present;
   }
 
+  // Which sorted field counts first, from left to right: the shown columns in their order, then Track (the last
+  // column), then the fields not shown (in the All fields panel's order), the name last.
+  const priority: SortKey[] = [];
+  for (const key of [...shown.map((each) => TABLE_COLUMNS.find((column) => column.key === each)!.sort), "tracked" as SortKey, ...SORT_FIELDS.map((field) => field.key)]) {
+    if (key !== "name" && !priority.includes(key)) {
+      priority.push(key);
+    }
+  }
+  priority.push("name");
+  const orderedSorts: Sort[] = [];
+  for (const key of priority) {
+    const sort = sorts.find((each) => each.key === key);
+    if (sort !== undefined) {
+      orderedSorts.push(sort);
+    }
+  }
+
   // A copy, since sorting changes the list in place.
   const rows = [...repos.items];
-  if (sort !== null) {
-    const field = SORT_FIELDS.find((each) => each.key === sort.key);
+  if (orderedSorts.length > 0) {
     rows.sort((a, b) => {
-      const first = sortValue(a, sort.key);
-      const second = sortValue(b, sort.key);
-      if (first === second) {
-        return 0;
+      // The first sorted field that tells them apart decides; when none does, they keep the list's order.
+      for (const sort of orderedSorts) {
+        const field = SORT_FIELDS.find((each) => each.key === sort.key);
+        const first = sortValue(a, sort.key);
+        const second = sortValue(b, sort.key);
+        if (first === second) {
+          continue;
+        }
+        // Missing values go last, whichever way.
+        if (first === null) {
+          return 1;
+        }
+        if (second === null) {
+          return -1;
+        }
+        // Low to high (A to Z for text), then turned round when down means higher first, and again for up.
+        let order = typeof first === "string" && typeof second === "string" ? first.localeCompare(second) : Number(first) - Number(second);
+        if (field?.better === "higher") {
+          order = -order;
+        }
+        if (sort.dir === "up") {
+          order = -order;
+        }
+        if (order !== 0) {
+          return order;
+        }
       }
-      // Missing values go last, whichever way.
-      if (first === null) {
-        return 1;
-      }
-      if (second === null) {
-        return -1;
-      }
-      // Low to high (A to Z for text), then turned round when down means higher first, and again for up.
-      let order = typeof first === "string" && typeof second === "string" ? first.localeCompare(second) : Number(first) - Number(second);
-      if (field?.better === "higher") {
-        order = -order;
-      }
-      if (sort.dir === "up") {
-        order = -order;
-      }
-      return order;
+      return 0;
     });
   }
 
@@ -521,14 +552,15 @@ export default function Repos() {
     },
   });
 
-  // One click, one step: sort by the field instead (the best first), turn it round, then back to the list's order.
+  // One click, one step: add the field to the sort (the best first), turn it round, then take it out.
   function clickSort(key: SortKey) {
-    if (sort === null || sort.key !== key) {
-      setSort({ key, dir: "down" });
+    const sort = sorts.find((each) => each.key === key);
+    if (sort === undefined) {
+      setSorts([...sorts, { key, dir: "down" }]);
     } else if (sort.dir === "down") {
-      setSort({ key, dir: "up" });
+      setSorts(sorts.map((each) => (each.key === key ? { key, dir: "up" } : each)));
     } else {
-      setSort(null);
+      setSorts(sorts.filter((each) => each.key !== key));
     }
   }
 
@@ -656,7 +688,7 @@ export default function Repos() {
   // one step: down (the best first), up, then off.
   function sortArrow(key: SortKey) {
     const field = SORT_FIELDS.find((each) => each.key === key)!;
-    const dir = sort !== null && sort.key === key ? sort.dir : null;
+    const dir = sorts.find((each) => each.key === key)?.dir ?? null;
     const next = dir === null ? field.down : dir === "down" ? field.up : "stop sorting";
     return (
       <span className="inline-flex shrink-0 items-center">
@@ -892,8 +924,6 @@ export default function Repos() {
   }
   const template = `${selectMode ? "16px " : ""}minmax(${NAME_MIN}px,1fr) ${columnTracks.join(" ")} ${TRACK_WIDTH}px`;
 
-  const sortField = sort !== null ? SORT_FIELDS.find((each) => each.key === sort.key) : undefined;
-
   return (
     <div className="relative flex h-full flex-col">
       <div className="flex min-h-8 shrink-0 flex-wrap items-center gap-1.5 border-b px-3 py-1">
@@ -923,23 +953,36 @@ export default function Repos() {
             </Button>
           </>
         )}
-        {sort !== null && sortField !== undefined && (
-          <span className="flex h-6 items-center gap-1 rounded-md border border-primary/40 pr-0.5 pl-1.5 text-primary" title={sort.dir === "down" ? sortField.down : sortField.up}>
-            {sortField.label}
-            <button
-              type="button"
-              className="rounded-sm p-0.5 hover:bg-accent"
-              aria-label={`Turn ${sortField.label} round`}
-              title={`Turn round: ${sort.dir === "down" ? sortField.up : sortField.down}`}
-              onClick={() => setSort({ key: sort.key, dir: sort.dir === "down" ? "up" : "down" })}
+        {/* A chip for each sort, the one that counts first first. */}
+        {orderedSorts.map((sort) => {
+          const sortField = SORT_FIELDS.find((each) => each.key === sort.key)!;
+          return (
+            <span
+              key={sort.key}
+              className="flex h-6 items-center gap-1 rounded-md border border-primary/40 pr-0.5 pl-1.5 text-primary"
+              title={sort.dir === "down" ? sortField.down : sortField.up}
             >
-              {sort.dir === "down" ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />}
-            </button>
-            <button type="button" className="rounded-sm p-0.5 hover:bg-accent" aria-label={`Stop sorting by ${sortField.label}`} onClick={() => setSort(null)}>
-              <X className="size-3" />
-            </button>
-          </span>
-        )}
+              {sortField.label}
+              <button
+                type="button"
+                className="rounded-sm p-0.5 hover:bg-accent"
+                aria-label={`Turn ${sortField.label} round`}
+                title={`Turn round: ${sort.dir === "down" ? sortField.up : sortField.down}`}
+                onClick={() => setSorts(sorts.map((each) => (each.key === sort.key ? { key: sort.key, dir: sort.dir === "down" ? "up" : "down" } : each)))}
+              >
+                {sort.dir === "down" ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />}
+              </button>
+              <button
+                type="button"
+                className="rounded-sm p-0.5 hover:bg-accent"
+                aria-label={`Stop sorting by ${sortField.label}`}
+                onClick={() => setSorts(sorts.filter((each) => each.key !== sort.key))}
+              >
+                <X className="size-3" />
+              </button>
+            </span>
+          );
+        })}
         <span className="ml-auto flex items-center gap-1">
           {!selectMode && (
             <Button variant="ghost" size="xs" onClick={() => setSelecting(true)}>
@@ -972,7 +1015,7 @@ export default function Repos() {
               <div className="mb-0.5 text-xs font-medium text-muted-foreground">{group}</div>
               {SORT_FIELDS.filter((field) => field.group === group).map((field) => (
                 <div key={field.key} className="flex h-6 items-center justify-between gap-2">
-                  <span className={cn("truncate", sort?.key === field.key && "text-primary")}>{field.label}</span>
+                  <span className={cn("truncate", sorts.some((each) => each.key === field.key) && "text-primary")}>{field.label}</span>
                   {sortArrow(field.key)}
                 </div>
               ))}
@@ -989,12 +1032,13 @@ export default function Repos() {
               <span className="flex min-w-0 items-center">
                 <button
                   type="button"
-                  className={cn("flex min-w-0 items-center gap-0.5 hover:text-primary", sort?.key === "name" && "text-primary")}
+                  className={cn("flex min-w-0 items-center gap-0.5 hover:text-primary", sorts.some((each) => each.key === "name") && "text-primary")}
                   title={NAME_COLUMN.title}
                   onClick={() => clickSort("name")}
                 >
                   <span className="truncate">{NAME_COLUMN.label}</span>
-                  {sort?.key === "name" && (sort.dir === "down" ? <ArrowDown className="size-3 shrink-0" /> : <ArrowUp className="size-3 shrink-0" />)}
+                  {sorts.find((each) => each.key === "name")?.dir === "down" && <ArrowDown className="size-3 shrink-0" />}
+                  {sorts.find((each) => each.key === "name")?.dir === "up" && <ArrowUp className="size-3 shrink-0" />}
                 </button>
               </span>
               {shownColumns.map((column) => (
@@ -1002,24 +1046,26 @@ export default function Repos() {
                   {/* A click sorts by it, one step a click: best first, the other way round, off. */}
                   <button
                     type="button"
-                    className={cn("flex min-w-0 items-center gap-0.5 hover:text-primary", sort?.key === column.sort && "text-primary")}
+                    className={cn("flex min-w-0 items-center gap-0.5 hover:text-primary", sorts.some((each) => each.key === column.sort) && "text-primary")}
                     title={column.title}
                     onClick={() => clickSort(column.sort)}
                   >
                     <span className="truncate">{column.label}</span>
-                    {sort?.key === column.sort && (sort.dir === "down" ? <ArrowDown className="size-3 shrink-0" /> : <ArrowUp className="size-3 shrink-0" />)}
+                    {sorts.find((each) => each.key === column.sort)?.dir === "down" && <ArrowDown className="size-3 shrink-0" />}
+                  {sorts.find((each) => each.key === column.sort)?.dir === "up" && <ArrowUp className="size-3 shrink-0" />}
                   </button>
                 </span>
               ))}
               <span className="flex min-w-0 items-center justify-end">
                 <button
                   type="button"
-                  className={cn("flex min-w-0 items-center gap-0.5 hover:text-primary", sort?.key === "tracked" && "text-primary")}
+                  className={cn("flex min-w-0 items-center gap-0.5 hover:text-primary", sorts.some((each) => each.key === "tracked") && "text-primary")}
                   title="Tracked first, then the other way round, then off"
                   onClick={() => clickSort("tracked")}
                 >
                   <span className="truncate">Track</span>
-                  {sort?.key === "tracked" && (sort.dir === "down" ? <ArrowDown className="size-3 shrink-0" /> : <ArrowUp className="size-3 shrink-0" />)}
+                  {sorts.find((each) => each.key === "tracked")?.dir === "down" && <ArrowDown className="size-3 shrink-0" />}
+                  {sorts.find((each) => each.key === "tracked")?.dir === "up" && <ArrowUp className="size-3 shrink-0" />}
                 </button>
               </span>
             </div>
