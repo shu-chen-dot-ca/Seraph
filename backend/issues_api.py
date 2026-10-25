@@ -8,8 +8,11 @@ that endpoint runs on the event loop (`async def`).
 The facts about each issue (age, last activity, assignees, linked PRs, ... see
 github_searcher/issue_facts.py) are kept fresh by keep_facts(), which the app
 runs in the background: new issues get theirs within FACTS_CHECK_SECONDS, and
-all of them are fetched again every FACTS_REFRESH_SECONDS. Opening a row and
-the Refresh button fetch them at once.
+all of them are fetched again every FACTS_REFRESH_SECONDS. Active issues (an agent
+has a job on it: queued, working or waiting on the user) are fetched again every
+ACTIVE_REFRESH_SECONDS, so a claim or a pull request by someone else shows within
+a minute: a new comment changes the issue on GitHub, so keep_tags has Claude read it
+again. Opening a row and the Refresh button fetch them at once.
 
 Each issue's tags (free / assigned / waiting, easy / medium / hard, its kind:
 github_searcher/issue_tags.py) are made by keep_tags(), also in the background,
@@ -32,7 +35,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.shared import agents, issue_facts, issue_tags, issues, tracked, tracked_issues
+from backend.shared import agents, issue_facts, issue_tags, issues, jobs, tracked, tracked_issues
 from github_searcher.search import CACHE, get_thread
 from sandbox.vms import VMsError
 
@@ -40,6 +43,7 @@ router = APIRouter(prefix="/api")
 
 FACTS_CHECK_SECONDS = 10
 FACTS_REFRESH_SECONDS = 30 * 60
+ACTIVE_REFRESH_SECONDS = 60
 TAGS_CHECK_SECONDS = 10
 TAGS_FREE_SECONDS = 60 * 60
 # An issue that could not be tagged (Claude or GitHub down, the issue gone) is tried again after this long.
@@ -175,11 +179,14 @@ async def refresh_facts() -> dict:
 
 
 async def keep_facts() -> None:
-    """Runs as long as the backend: fetches facts for issues that have none, and for all of them now and then.
+    """Runs as long as the backend: fetches facts for issues that have none, for active ones every minute, and for
+    all of them now and then.
 
-    An issue that fails (GitHub down, the issue deleted or moved) is left alone until the next full round.
+    An issue that fails (GitHub down, the issue deleted or moved) is left alone until the next full round, unless it
+    is active.
     """
     last_full = None
+    last_active = time.monotonic()
     failed = []
     while True:
         ids = [item["id"] for item in issues.items()]
@@ -192,6 +199,14 @@ async def keep_facts() -> None:
             todo = ids
         else:
             todo = [issue_id for issue_id in ids if issue_id not in known and issue_id not in failed]
+            # The issues an agent is on now, every ACTIVE_REFRESH_SECONDS.
+            if time.monotonic() - last_active > ACTIVE_REFRESH_SECONDS:
+                last_active = time.monotonic()
+                for job in jobs.list():
+                    if job["status"] not in ("queued", "working", "waiting_on_user"):
+                        continue
+                    if job["issue"] in ids and job["issue"] not in todo:
+                        todo.append(job["issue"])
         for issue_id in todo:
             try:
                 await asyncio.to_thread(issue_facts.refresh, issue_id)
