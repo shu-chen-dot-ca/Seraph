@@ -11,7 +11,8 @@ the pop-up. While a turn runs, the chat comes from GET /api/sherpa every half se
 for (pending) is done here, in the tab the message came from (TAB, kept over a reload), and its answer posted back.
 You can keep typing to Sherpa while it works: what it does on the page never takes the focus from its text box (a pop-up
 it opens, a select's list), so your typing never lands in the page; and a message sent then doesn't read the page,
-which would number it again under the turn using it. That goes on with the chat closed.
+which would number it again under the turn using it. That goes on with the chat closed, and through a restart of the backend (whenever the app's code changes): the chat is
+asked again every 2 seconds until the backend answers, and Sherpa goes on with a cut-off turn by itself.
 
 Chats are kept. New chat opens an empty one; History (the clock) lists them all, the newest first, named after their
 first message: a click opens one to go on with it, the bin on hover deletes it. The open one is highlighted.
@@ -322,8 +323,10 @@ export default function Sherpa() {
           return;
         }
         setChat(answer);
+        setError("");
         const pending = answer.pending;
-        if (pending !== null && pending.tab === TAB && !doneActions.current.includes(pending.id)) {
+        // This tab's, or any tab's when the turn doesn't know one (it went on by itself after a restart).
+        if (pending !== null && (pending.tab === TAB || pending.tab === "") && !doneActions.current.includes(pending.id)) {
           doneActions.current.push(pending.id);
           const action = pending.action;
           const element = "element" in action ? document.querySelector<HTMLElement>(`[data-sherpa-id="${action.element}"]`) : null;
@@ -374,8 +377,10 @@ export default function Sherpa() {
           timer = window.setTimeout(load, 500);
         }
       } catch (err) {
+        // The backend restarting (it does whenever the app's code changes): ask again shortly, it goes on by itself.
         if (!stopped) {
-          setError(err instanceof Error ? err.message : String(err));
+          setError(`Can't reach the app right now (${err instanceof Error ? err.message : err}); trying again…`);
+          timer = window.setTimeout(load, 2000);
         }
       }
     }

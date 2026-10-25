@@ -29,7 +29,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
 from backend import agents_api, explore_api, images_api, inbox_api, issues_api, repos_api, sherpa_api, tracked_api, vms_api
-from backend.shared import agents, explore, images, inbox, issue_facts, issue_tags, issues, jobs, rejections, repo_signals, repos, tracked, tracked_issues, vms
+from backend.shared import agents, explore, images, inbox, issue_facts, issue_tags, issues, jobs, rejections, repo_signals, repos, sherpa, tracked, tracked_issues, vms
 from github_searcher.token_balancer import BALANCER
 
 # override: the backend reloads itself on code changes, and .env changes should apply then too.
@@ -42,6 +42,8 @@ LOCAL_HOSTS = ["localhost", "127.0.0.1"]
 async def lifespan(app: FastAPI):
     # Agents run on this event loop, so they start here and not at import.
     await agents.start()
+    # Sherpa goes on with a turn the restart cut off.
+    sherpa.resume()
     keepers = [
         # What is left of every GitHub quota, for the Explore page's bars from the start.
         asyncio.create_task(asyncio.to_thread(BALANCER.prime)),

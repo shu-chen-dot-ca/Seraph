@@ -17,7 +17,8 @@ ACTION_TIMEOUT seconds.
 Chats are kept, one file each, for the panel's history (the newest first; open one to go on with it, or delete it):
 
     DATA_DIR/sherpa_chats/<id>.json   {"id", "title", "created_at", "updated_at", "session_id", "history": [entry, ...],
-                                       "cost_usd", "context_used", "queue": [{"text", "page", "tab"}, ...]}
+                                       "cost_usd", "context_used", "queue": [{"text", "page", "tab"}, ...], "tab",
+                                       "resumes"}
 
 with entries like the image agent's (sandbox/image_agent.py). The title is the first message. One chat is open
 (`current`): at start the one used last; New chat opens an empty one, saved once its first message is sent. Each turn
@@ -27,7 +28,11 @@ A message sent while Sherpa works waits for its turn to end, like an agent's (MA
 its own; its page isn't read, as that would number the page again under the turn using it, so Sherpa reads it then);
 stopping a turn lets the next one in. The queue is kept in the
 chat's file, so a restart doesn't lose it. "/compact" goes to Claude Code as it is: it summarizes the chat to free
-context.
+context. tab is the browser tab of the last message, for a turn that goes on by itself.
+A restart of the backend (also whenever the app's code changes, while it runs with reload) cuts off a turn in the
+middle, without its end. load() marks such a chat ("Cut off ...", CUT_OFF), and at start resume() has Sherpa go on
+where it left off by itself (its conversation keeps what it did so far), then with the queued messages. Not after
+MAX_RESUMES cut-offs in a row (resumes counts them): then the user's next message goes on, and tells Sherpa.
 context_used is how much of the context window the chat fills (the panel's bar, up to CONTEXT_CAP): each reply's
 usage while a turn runs, and Claude Code's own count at its end. Like the agents, it is compacted at CONTEXT_CAP.
 
@@ -56,6 +61,12 @@ AGENT_HOME = DATA_DIR / "sherpa_home"
 CHATS_DIR = DATA_DIR / "sherpa_chats"
 CHAT_ID = re.compile(r"[0-9a-f]{12}")
 TITLE_CHARS = 80
+# What a chat says when its last turn never ended: the backend restarted in the middle of it.
+CUT_OFF = "Cut off: the app restarted in the middle of this turn (its code changed, or it was restarted)."
+# How such a note starts, also in chats from when it said more.
+CUT_OFF_START = "Cut off: the app restarted"
+# How many cut-offs in a row Sherpa goes on from by itself.
+MAX_RESUMES = 3
 # Messages that may wait for the turn to end at once, like an agent's (agents.py MAX_QUEUED).
 MAX_QUEUED = 10
 TOOL_SERVER = "sherpa"
@@ -127,10 +138,17 @@ class Sherpa:
         self.last_page = ""
 
     def load(self, chat_id: str | None) -> dict:
-        """A chat by its id; a new, empty one for None (or one that was deleted)."""
+        """A chat by its id; a new, empty one for None (or one that was deleted). Its last turn, when it never ended (and
+        isn't running), is marked as cut off."""
         if chat_id is None or not (CHATS_DIR / f"{chat_id}.json").exists():
             return {"id": None, "title": "", "created_at": None, "updated_at": None, "session_id": None, "history": [], "cost_usd": 0.0, "context_used": 0}
-        return json.loads((CHATS_DIR / f"{chat_id}.json").read_text())
+        chat = json.loads((CHATS_DIR / f"{chat_id}.json").read_text())
+        history = chat["history"]
+        if self.running is None and history and history[-1]["type"] != "turn_end":
+            history.append({"type": "system", "text": CUT_OFF, "time": datetime.now(UTC).isoformat()})
+            history.append({"type": "turn_end", "stopped": True, "cost_usd": 0.0, "time": datetime.now(UTC).isoformat()})
+            self.save(chat)
+        return chat
 
     def save(self, chat: dict) -> None:
         CHATS_DIR.mkdir(parents=True, exist_ok=True)
@@ -183,8 +201,31 @@ class Sherpa:
             return
         self.start(text.strip(), page, tab)
 
-    def start(self, text: str, page: str, tab: str) -> None:
-        """A turn on the open chat with this message (a new chat is kept from now on)."""
+    def resume(self) -> None:
+        """At start, on the event loop: go on by itself with a turn a restart cut off, then with the queued messages."""
+        if self.current is None:
+            return
+        chat = self.load(self.current)
+        history = chat["history"]
+        cut = len(history) >= 2 and history[-2]["type"] == "system" and history[-2]["text"].startswith(CUT_OFF_START)
+        if cut and chat.get("resumes", 0) < MAX_RESUMES:
+            chat["resumes"] = chat.get("resumes", 0) + 1
+            self.save(chat)
+            self.start("", "", chat.get("tab", ""), True)
+            return
+        if cut:
+            note = f"Cut off {MAX_RESUMES} times in a row, so it doesn't go on by itself: send a message to go on."
+            history.append({"type": "system", "text": note, "time": datetime.now(UTC).isoformat()})
+            self.save(chat)
+        queue = chat.get("queue", [])
+        if queue:
+            waiting = queue.pop(0)
+            self.save(chat)
+            self.start(waiting["text"], waiting["page"], waiting["tab"])
+
+    def start(self, text: str, page: str, tab: str, resuming: bool = False) -> None:
+        """A turn on the open chat with this message (a new chat is kept from now on). resuming: no message, Sherpa goes
+        on with the turn a restart cut off."""
         chat = self.load(self.current)
         if chat["id"] is None:
             # A new chat: kept from its first message on, named after it.
@@ -192,19 +233,33 @@ class Sherpa:
             chat["title"] = " ".join(text.split())[:TITLE_CHARS]
             chat["created_at"] = datetime.now(UTC).isoformat()
             self.current = chat["id"]
-        chat["history"].append({"type": "user", "text": text, "time": datetime.now(UTC).isoformat()})
-        message = f"[The page the user is on now]\n{page}\n\n[The user]\n{text}"
-        # Sent while Sherpa worked: the browser didn't read the page then, as that would number it again under the
-        # turn that was using it.
-        if page == "":
-            message = f"[The user, while you were working]\n{text}\n\n[Their page wasn't read with this message: look_page reads it.]"
-        # A slash command goes to Claude Code as it is.
-        if text == "/compact":
-            message = text
+        if tab != "":
+            chat["tab"] = tab
+        if resuming:
+            chat["history"].append({"type": "system", "text": "Going on by itself after the restart.", "time": datetime.now(UTC).isoformat()})
+            message = (
+                "[The app restarted in the middle of your last turn and cut it off. Go on where you left off. The page may "
+                "have changed: look_page first. Anything you were still writing when it was cut off is lost: write it again.]"
+            )
+        else:
+            chat["history"].append({"type": "user", "text": text, "time": datetime.now(UTC).isoformat()})
+            message = f"[The page the user is on now]\n{page}\n\n[The user]\n{text}"
+            # Sent while Sherpa worked: the browser didn't read the page then, as that would number it again under the
+            # turn that was using it.
+            if page == "":
+                message = f"[The user, while you were working]\n{text}\n\n[Their page wasn't read with this message: look_page reads it.]"
+            # The turn before was cut off (load() marked it: its note, its end, then this message): Sherpa is told, as
+            # what it did then may be half done and what it was still writing is lost.
+            before = chat["history"][-3] if len(chat["history"]) >= 3 else {}
+            if before.get("type") == "system" and before.get("text", "").startswith(CUT_OFF_START):
+                message = "[Your last turn was cut off: the app restarted in the middle of it. Anything you were still writing then is lost.]\n\n" + message
+            # A slash command goes to Claude Code as it is.
+            if text == "/compact":
+                message = text
         self.save(chat)
         if page != "":
             self.last_page = page
-        self.running = {"client": None, "chat": chat, "stopped": False, "task": None, "tab": tab}
+        self.running = {"client": None, "chat": chat, "stopped": False, "task": None, "tab": chat.get("tab", "")}
         # Kept, so the task isn't garbage collected while it runs.
         self.running["task"] = asyncio.get_running_loop().create_task(self.run(message))
 
@@ -344,6 +399,8 @@ class Sherpa:
                     # Each turn has its own connection, so the connection's total is this turn's cost.
                     cost = message.total_cost_usd or 0.0
                     chat["cost_usd"] += cost
+                    # A turn that ended: the next cut-off may be gone on from by itself again.
+                    chat["resumes"] = 0
                     stopped = running["stopped"] or message.terminal_reason in ["aborted_streaming", "aborted_tools"]
                     if message.is_error and not stopped:
                         error = "; ".join(message.errors or []) or message.result or message.subtype
@@ -404,10 +461,10 @@ class Sherpa:
                 # A Claude Code that already died has nothing left to close.
                 pass
             # Running until here, so a message sent meanwhile is queued. Then the next message that waited goes in, with a
-            # turn of its own, at once (no await in between).
+            # turn of its own, at once (no await in between). Not when the backend is shutting down: resume() does it.
             self.running = None
             queue = chat.get("queue", [])
-            if queue:
+            if queue and not asyncio.current_task().cancelling():
                 waiting = queue.pop(0)
                 self.save(chat)
                 self.start(waiting["text"], waiting["page"], waiting["tab"])
