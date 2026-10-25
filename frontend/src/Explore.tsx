@@ -3,9 +3,9 @@ The Explore page: the user runs a search for repos they don't have yet, watches 
 
 A run (github_searcher/explore.py) ends by itself after finding "Find" repos (up to 3 digits, numbers only; empty for no
 limit), or when its searches are used up. Workers is how many candidates it checks at the same time. Filters opens a
-pop-up (ExploreFiltersDialog) to pick tags the run keeps to (green) or keeps out (amber, red); the picked ones show in
-the bar as those tags, under Only and Hide, and a click on them opens the pop-up again. They are remembered in this
-browser; while a run goes the bar shows the run's own and can't change them. It searches for
+pop-up (ExploreFiltersDialog) with every tag a repo can get: a click includes one, the next excludes it, the next
+lets it be; the bar doesn't list the picked ones, the pop-up is where to check them. They are remembered in this browser; while a run goes the pop-up
+shows the run's own and can't change them. It searches for
 each of the user's types of repo (ExploreProfileDialog; a "lane" in the code), keeping each near its share of the
 finds, and skips what is already in Repos, Tracked or the found list, and what was rejected in the last 14 days.
 
@@ -38,7 +38,7 @@ import { ArrowDown, ArrowUp, Ban, Check, ExternalLink, ListFilter, Loader2, Play
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
-import ExploreFiltersDialog, { FILTERS } from "@/ExploreFiltersDialog";
+import ExploreFiltersDialog, { FILTERS, type Filters } from "@/ExploreFiltersDialog";
 import ExploreProfileDialog from "@/ExploreProfileDialog";
 import GithubLimits from "@/GithubLimits";
 import RepoTree from "@/RepoTree";
@@ -67,15 +67,20 @@ const WORKERS = [1, 2, 4, 6, 8, 12, 16];
 const STATUS_LABEL: Record<string, string> = { running: "Running", done: "Done", stopped: "Stopped", failed: "Failed" };
 const FILTERS_STORAGE = "explore-filters";
 
-// The filters picked last time in this browser, the ones still known.
-let savedFilters: string[] = [];
+// The filters picked last time in this browser, the ones still known (an old list from before include and exclude is
+// dropped).
+const savedFilters: Filters = {};
 try {
-  const saved = JSON.parse(localStorage.getItem(FILTERS_STORAGE) ?? "[]");
-  if (Array.isArray(saved)) {
-    savedFilters = saved.filter((key) => FILTERS.some((each) => each.key === key));
+  const saved = JSON.parse(localStorage.getItem(FILTERS_STORAGE) ?? "{}");
+  if (saved !== null && typeof saved === "object" && !Array.isArray(saved)) {
+    for (const each of FILTERS) {
+      if (saved[each.key] === "include" || saved[each.key] === "exclude") {
+        savedFilters[each.key] = saved[each.key];
+      }
+    }
   }
 } catch {
-  savedFilters = [];
+  // Storage blocked or broken: no filters.
 }
 
 // The found list's columns after Repo (the name, which takes the room left over), each sorted by a click on its header.
@@ -131,7 +136,7 @@ export default function Explore() {
   const loaded = useLoaded("explore");
   const [count, setCount] = useState("20");
   const [workers, setWorkers] = useState("6");
-  const [filters, setFilters] = useState<string[]>(savedFilters);
+  const [filters, setFilters] = useState<Filters>(savedFilters);
   const [pickingFilters, setPickingFilters] = useState(false);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -178,11 +183,6 @@ export default function Explore() {
   for (const lane of explore.profile.lanes) {
     laneLabels[lane.id] = lane.label;
   }
-
-  // The bar shows the run's own filters while it goes, the ones for the next run otherwise.
-  const shownFilters = running ? run.filters : filters;
-  const onlyTags = FILTERS.filter((each) => each.group === "only" && shownFilters.includes(each.key));
-  const hideTags = FILTERS.filter((each) => each.group === "hide" && shownFilters.includes(each.key));
 
   const countNumber = count.trim() === "" ? null : Number(count);
   // The box takes digits only, at most 3, so only 0 is left to refuse.
@@ -473,31 +473,9 @@ export default function Explore() {
               ))}
             </SelectContent>
           </Select>
-          <Button type="button" variant="ghost" disabled={running} onClick={() => setPickingFilters(true)}>
+          <Button type="button" variant="ghost" onClick={() => setPickingFilters(true)}>
             <ListFilter /> Filters
           </Button>
-          {shownFilters.length > 0 && (
-            <button
-              type="button"
-              className="flex flex-wrap items-center gap-1 text-left disabled:cursor-default"
-              disabled={running}
-              title={running ? "This run's filters" : "Change the filters"}
-              onClick={() => setPickingFilters(true)}
-            >
-              {onlyTags.length > 0 && <span className="text-muted-foreground">Only</span>}
-              {onlyTags.map((each) => (
-                <Badge key={each.key} variant={each.variant}>
-                  {each.label}
-                </Badge>
-              ))}
-              {hideTags.length > 0 && <span className={cn("text-muted-foreground", onlyTags.length > 0 && "ml-1.5")}>Hide</span>}
-              {hideTags.map((each) => (
-                <Badge key={each.key} variant={each.variant}>
-                  {each.label}
-                </Badge>
-              ))}
-            </button>
-          )}
           {running ? (
             <Button type="button" variant="outline" onClick={stop}>
               <Square /> Stop
@@ -744,7 +722,15 @@ export default function Explore() {
       </RowSelection>
 
       {editing && <ExploreProfileDialog profile={explore.profile} onClose={() => setEditing(false)} />}
-      {pickingFilters && <ExploreFiltersDialog filters={filters} onChange={setFilters} onClose={() => setPickingFilters(false)} />}
+      {/* While a run goes the pop-up shows the run's own filters, and they can't be changed. */}
+      {pickingFilters && (
+        <ExploreFiltersDialog
+          filters={running ? run.filters : filters}
+          locked={running}
+          onChange={setFilters}
+          onClose={() => setPickingFilters(false)}
+        />
+      )}
 
       <AlertDialog open={confirmReject} onOpenChange={setConfirmReject}>
         <AlertDialogContent>

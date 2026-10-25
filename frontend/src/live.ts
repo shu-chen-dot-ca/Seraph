@@ -265,7 +265,7 @@ export type ExploreRun = {
   count: number | null;
   minutes: number | null;
   workers: number;
-  filters: string[]; // the tags it keeps to or keeps out (explore.py FILTERS)
+  filters: Record<string, "include" | "exclude">; // the tags it keeps to or keeps out (explore.py FILTERS)
   found: number;
   looked_at: number;
   lanes: Record<string, { label: string; share: number; found: number; in_flight: number; exhausted: boolean }>;

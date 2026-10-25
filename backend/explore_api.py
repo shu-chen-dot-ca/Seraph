@@ -17,7 +17,7 @@ class StartRequest(BaseModel):
     count: int | None = None  # stop after finding this many repos (None: no limit)
     minutes: int | None = None  # stop after this many minutes (None: no limit)
     workers: int = 6  # candidates checked at the same time
-    filters: list[str] = []  # keep out what doesn't match (explore.py FILTERS)
+    filters: dict[str, str] = {}  # tag → "include" or "exclude" (explore.py FILTERS)
 
 
 class RepoType(BaseModel):
