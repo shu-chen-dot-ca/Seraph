@@ -11,12 +11,19 @@ the pop-up. While a turn runs, the chat comes from GET /api/sherpa every half se
 for (pending) is done here, in the tab the message came from (TAB, kept over a reload), and its answer posted back.
 That goes on with the chat closed. One conversation for the whole app; New chat starts over.
 
+The panel stays at the bottom right; drag its left edge, top edge or top left corner to resize it. The grip reaches
+8px past the border on each side, so it is easy to catch. Its size is remembered in this browser. The chat keeps its
+end in view while it is resized (it stays as far from the bottom as it was). The border turns the accent color while
+the panel has focus or is being resized. While dragging, a cover over the whole page keeps the mouse from getting lost
+in a frame (a VM's desktop). The drag listens to mouse events: pointer events in Sherpa never reach React (the
+listeners on document).
+
 The chat works while a pop-up (Dialog) is open, to help fill it in: those keep focus, clicks and scrolling inside
 themselves and close on a click outside, so Sherpa's own events never reach them (the listeners on document).
 */
 
 import { ArrowUp, Bot, Loader2, MessageSquarePlus, Square, Wrench, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -30,6 +37,19 @@ const USABLE =
   "a[href], button, input, textarea, select, [role=tab], [role=option], [role=menuitem], [role=menuitemcheckbox], [role=menuitemradio], [role=switch], [role=checkbox], [role=radio], [role=combobox]";
 const ELEMENTS_KEPT = 300;
 const TEXT_KEPT = 6000;
+
+// The panel's size, as last dragged in this browser, and how small it may get.
+const SIZE_STORAGE = "sherpa-size";
+const MIN_SIZE = 300;
+let savedSize = { width: 380, height: 560 };
+try {
+  const saved = JSON.parse(localStorage.getItem(SIZE_STORAGE) ?? "null");
+  if (saved !== null && typeof saved.width === "number" && typeof saved.height === "number") {
+    savedSize = { width: saved.width, height: saved.height };
+  }
+} catch {
+  // Storage blocked (private window): the default size.
+}
 
 // This browser tab: Sherpa's page actions happen in the tab its message came from.
 let TAB = "";
@@ -139,9 +159,14 @@ export default function Sherpa() {
   const [error, setError] = useState("");
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [size, setSize] = useState(savedSize);
+  // The cursor of the edge or corner being dragged; null when not resizing.
+  const [resizing, setResizing] = useState<string | null>(null);
   // Bumped after sending, so the chat is followed again until the turn ends.
   const [follow, setFollow] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // How far the chat is scrolled up from its end, kept while the panel is resized.
+  const fromBottom = useRef(0);
   // The page actions done here already (the chat is asked again before the backend has the answer), and what the
   // Sherpa points at now.
   const doneActions = useRef<number[]>([]);
@@ -149,6 +174,37 @@ export default function Sherpa() {
 
   const busy = chat !== null && chat.busy;
   const historyLength = chat === null ? 0 : chat.history.length;
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIZE_STORAGE, JSON.stringify(size));
+    } catch {
+      // Storage blocked: the size just isn't kept.
+    }
+  }, [size]);
+
+  // Dragging the left edge (sideways), the top edge (upwards) or the top left corner (both). The panel is pinned at the
+  // bottom right, so moving left or up makes it bigger. It never gets smaller than MIN_SIZE or bigger than the window.
+  function startResize(event: ReactMouseEvent, sideways: boolean, upwards: boolean, cursor: string) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const start = size;
+    setResizing(cursor);
+    function move(moving: MouseEvent) {
+      setSize({
+        width: sideways ? Math.min(Math.max(start.width + startX - moving.clientX, MIN_SIZE), window.innerWidth - 32) : start.width,
+        height: upwards ? Math.min(Math.max(start.height + startY - moving.clientY, MIN_SIZE), window.innerHeight - 88) : start.height,
+      });
+    }
+    function stop() {
+      setResizing(null);
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", stop);
+    }
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", stop);
+  }
 
   // Pop-ups' focus trap, click-outside and scroll lock never see Sherpa's own events; a click outside Sherpa
   // ends its pointing.
@@ -257,6 +313,13 @@ export default function Sherpa() {
     }
   }, [historyLength, open]);
 
+  // A new size keeps the chat as far from its end as it was, before the browser paints.
+  useLayoutEffect(() => {
+    if (scrollRef.current !== null) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight - scrollRef.current.clientHeight - fromBottom.current;
+    }
+  }, [size]);
+
   async function send() {
     if (text.trim() === "" || busy || sending) {
       return;
@@ -295,110 +358,132 @@ export default function Sherpa() {
       {open && (
         <div
           data-sherpa-panel
-          className="fixed right-4 bottom-[72px] z-[60] flex h-[560px] max-h-[calc(100vh-6rem)] w-[380px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-lg border bg-background shadow-xl"
+          className="fixed right-4 bottom-[72px] z-[60] max-h-[calc(100vh-6rem)] max-w-[calc(100vw-2rem)]"
           // A pop-up sets pointer-events: none on everything outside itself; Sherpa still takes clicks.
-          style={{ pointerEvents: "auto" }}
+          style={{ pointerEvents: "auto", width: size.width, height: size.height }}
         >
-          <div className="flex h-9 shrink-0 items-center gap-1 border-b pr-1 pl-3">
-            <Bot className="size-4 text-primary" />
-            <span className="ml-1 font-semibold">Sherpa</span>
-            <Button size="icon-sm" variant="ghost" className="ml-auto" title="New chat" aria-label="New chat" disabled={busy || historyLength === 0} onClick={newChat}>
-              <MessageSquarePlus />
-            </Button>
-            <Button size="icon-sm" variant="ghost" title="Close" aria-label="Close Sherpa" onClick={() => setOpen(false)}>
-              <X />
-            </Button>
-          </div>
+          {/* Drag to resize: the left edge, the top edge, the top left corner, each reaching 8px past the border (the
+              panel inside clips what overflows it, so they sit out here). */}
+          <div className="absolute inset-y-0 -left-2 z-10 w-4 cursor-ew-resize" onMouseDown={(event) => startResize(event, true, false, "ew-resize")} />
+          <div className="absolute inset-x-0 -top-2 z-10 h-4 cursor-ns-resize" onMouseDown={(event) => startResize(event, false, true, "ns-resize")} />
+          <div className="absolute -top-2 -left-2 z-20 size-5 cursor-nwse-resize" onMouseDown={(event) => startResize(event, true, true, "nwse-resize")} />
+          {/* Focusable (tabIndex -1), so a click anywhere in it, not only in the text box, gives it focus and lights its border. */}
+          <div
+            tabIndex={-1}
+            className={cn(
+              "flex h-full w-full flex-col overflow-hidden rounded-lg border bg-background shadow-xl transition-colors outline-none focus-within:border-primary focus-within:ring-1 focus-within:ring-primary",
+              resizing !== null && "border-primary ring-1 ring-primary",
+            )}
+          >
+            <div className="flex h-9 shrink-0 items-center gap-1 border-b pr-1 pl-3">
+              <Bot className="size-4 text-primary" />
+              <span className="ml-1 font-semibold">Sherpa</span>
+              <Button size="icon-sm" variant="ghost" className="ml-auto" title="New chat" aria-label="New chat" disabled={busy || historyLength === 0} onClick={newChat}>
+                <MessageSquarePlus />
+              </Button>
+              <Button size="icon-sm" variant="ghost" title="Close" aria-label="Close Sherpa" onClick={() => setOpen(false)}>
+                <X />
+              </Button>
+            </div>
 
-          <div ref={scrollRef} className="min-h-0 flex-1 space-y-2 overflow-auto p-3">
-            {chat === null && error === "" && (
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <Loader2 className="size-3.5 animate-spin" /> Loading…
-              </div>
-            )}
-            {chat !== null && chat.history.length === 0 && (
-              <div className="space-y-2 text-muted-foreground">
-                <p>I know every page of the app and can see the one you are on. Ask how something works, where it is, or to do it for you.</p>
-                <p>For example: "what does Unclaimed mean?", "make a VM with 16 GB", "write a job for this issue".</p>
-              </div>
-            )}
-            {chat !== null &&
-              chat.history.map((entry, index) => {
-                if (entry.type === "user") {
-                  return (
-                    <div key={index} className="ml-auto w-fit max-w-[85%] rounded-md bg-muted px-2.5 py-1.5 whitespace-pre-wrap">
-                      {entry.text}
-                    </div>
-                  );
-                }
-                if (entry.type === "text") {
-                  return <Markdown key={index} text={entry.text} />;
-                }
-                if (entry.type === "tool") {
-                  return (
-                    <div key={index} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <Wrench className="size-3 shrink-0" /> <span className="truncate">{entry.summary}</span>
-                    </div>
-                  );
-                }
-                if (entry.type === "tool_result" && entry.is_error) {
-                  return (
-                    <div key={index} className="line-clamp-3 text-xs text-destructive">
-                      {entry.text}
-                    </div>
-                  );
-                }
-                if (entry.type === "system") {
-                  return (
-                    <div key={index} className={cn("text-xs", entry.text.startsWith("Error") ? "text-destructive" : "text-muted-foreground")}>
-                      {entry.text}
-                    </div>
-                  );
-                }
-                if (entry.type === "turn_end" && entry.stopped) {
-                  return (
-                    <div key={index} className="text-xs text-muted-foreground">
-                      Stopped
-                    </div>
-                  );
-                }
-                return null;
-              })}
-            {busy && (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Loader2 className="size-3 animate-spin text-primary" /> Working…
-              </div>
-            )}
-            {error !== "" && <p className="text-destructive">{error}</p>}
-          </div>
-
-          <div className="flex shrink-0 items-end gap-2 border-t p-2">
-            <Textarea
-              autoFocus
-              className="max-h-40 min-h-9 flex-1 resize-none"
-              rows={2}
-              placeholder="Ask Sherpa"
-              value={text}
-              onChange={(event) => setText(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                  event.preventDefault();
-                  send();
-                }
+            <div
+              ref={scrollRef}
+              className="min-h-0 flex-1 space-y-2 overflow-auto p-3"
+              onScroll={(event) => {
+                fromBottom.current = event.currentTarget.scrollHeight - event.currentTarget.scrollTop - event.currentTarget.clientHeight;
               }}
-            />
-            {busy ? (
-              <Button size="icon" variant="outline" title="Stop" aria-label="Stop Sherpa" onClick={stop}>
-                <Square />
-              </Button>
-            ) : (
-              <Button size="icon" title="Send" aria-label="Send" disabled={text.trim() === "" || sending} onClick={send}>
-                {sending ? <Loader2 className="animate-spin" /> : <ArrowUp />}
-              </Button>
-            )}
+            >
+              {chat === null && error === "" && (
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <Loader2 className="size-3.5 animate-spin" /> Loading…
+                </div>
+              )}
+              {chat !== null && chat.history.length === 0 && (
+                <div className="space-y-2 text-muted-foreground">
+                  <p>I know every page of the app and can see the one you are on. Ask how something works, where it is, or to do it for you.</p>
+                  <p>For example: "what does Unclaimed mean?", "make a VM with 16 GB", "write a job for this issue".</p>
+                </div>
+              )}
+              {chat !== null &&
+                chat.history.map((entry, index) => {
+                  if (entry.type === "user") {
+                    return (
+                      <div key={index} className="ml-auto w-fit max-w-[85%] rounded-md bg-muted px-2.5 py-1.5 whitespace-pre-wrap">
+                        {entry.text}
+                      </div>
+                    );
+                  }
+                  if (entry.type === "text") {
+                    return <Markdown key={index} text={entry.text} />;
+                  }
+                  if (entry.type === "tool") {
+                    return (
+                      <div key={index} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <Wrench className="size-3 shrink-0" /> <span className="truncate">{entry.summary}</span>
+                      </div>
+                    );
+                  }
+                  if (entry.type === "tool_result" && entry.is_error) {
+                    return (
+                      <div key={index} className="line-clamp-3 text-xs text-destructive">
+                        {entry.text}
+                      </div>
+                    );
+                  }
+                  if (entry.type === "system") {
+                    return (
+                      <div key={index} className={cn("text-xs", entry.text.startsWith("Error") ? "text-destructive" : "text-muted-foreground")}>
+                        {entry.text}
+                      </div>
+                    );
+                  }
+                  if (entry.type === "turn_end" && entry.stopped) {
+                    return (
+                      <div key={index} className="text-xs text-muted-foreground">
+                        Stopped
+                      </div>
+                    );
+                  }
+                  return null;
+                })}
+              {busy && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="size-3 animate-spin text-primary" /> Working…
+                </div>
+              )}
+              {error !== "" && <p className="text-destructive">{error}</p>}
+            </div>
+
+            <div className="flex shrink-0 items-end gap-2 border-t p-2">
+              <Textarea
+                autoFocus
+                className="max-h-40 min-h-9 flex-1 resize-none"
+                rows={2}
+                placeholder="Ask Sherpa"
+                value={text}
+                onChange={(event) => setText(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    send();
+                  }
+                }}
+              />
+              {busy ? (
+                <Button size="icon" variant="outline" title="Stop" aria-label="Stop Sherpa" onClick={stop}>
+                  <Square />
+                </Button>
+              ) : (
+                <Button size="icon" title="Send" aria-label="Send" disabled={text.trim() === "" || sending} onClick={send}>
+                  {sending ? <Loader2 className="animate-spin" /> : <ArrowUp />}
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       )}
+
+      {resizing !== null && <div data-sherpa-panel className="fixed inset-0 z-[70]" style={{ cursor: resizing, pointerEvents: "auto" }} />}
 
       <button
         type="button"
