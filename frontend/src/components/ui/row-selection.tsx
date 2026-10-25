@@ -27,7 +27,7 @@ import { cn } from "@/lib/utils"
 //     </RowSelection>
 //   </div>
 //
-// The rectangle starts on a row (not on its buttons or links) or on the list's empty space, and only once the mouse
+// The rectangle starts on a row (not on its buttons or links; a row that is itself a link is fine) or on the list's empty space, and only once the mouse
 // moved a few pixels, so a plain click stays a click. After a drag, the click it would make is swallowed, so no row
 // opens. Dragged against the list's top or bottom edge, the list scrolls by itself so the rectangle reaches rows off
 // screen; rows a virtualized list stops drawing keep what they had.
@@ -81,8 +81,9 @@ export function RowSelection(props: {
       if (row === null && !onEmpty) {
         return
       }
-      // Buttons, links and fields in a row keep their own press.
-      if (target.closest("button, a, input, textarea, select, label, [contenteditable]") !== null) {
+      // Buttons, links and fields in a row keep their own press. The row itself may be a link (the Inbox's).
+      const control = target.closest("button, a, input, textarea, select, label, [contenteditable]")
+      if (control !== null && control !== row) {
         return
       }
       let listBox = list.getBoundingClientRect()

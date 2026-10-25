@@ -1027,7 +1027,11 @@ class WorkTools:
                 continue
             drafts = []
             for draft_id in job["drafts"]:
-                draft = self.agents.inbox.get(draft_id)
+                # The user may have deleted it from the Inbox.
+                try:
+                    draft = self.agents.inbox.get(draft_id)
+                except KeyError:
+                    continue
                 drafts.append({"id": draft_id, "kind": draft["kind"], "title": draft["title"], "status": draft["status"], "reply": draft["reply"]})
             evidence = []
             for item in job["evidence"]:

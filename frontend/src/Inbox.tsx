@@ -26,10 +26,15 @@ sent; you send it yourself. A sent item's bar links to it on GitHub. One approve
 connected) has Send to GitHub, with the same question. The bar says who Approve sends as.
 After a decision the next pending item opens (the one after it in the list, or else before).
 J / K (or the arrow keys) move through the list when you are not typing.
+Delete: a decided item's bar has Delete, and many are picked like in a mail app (components/ui/row-selection.tsx):
+Ctrl-click, Shift-click, dragging a rectangle, Ctrl+A; the bar at the bottom of the list then deletes them at once. It
+asks first (Enter confirms), and it is for good. Only decided items can be deleted: a pending one waits for your
+decision, since its agent waits for the answer. Their agents aren't told, and what was sent to GitHub stays there. A
+posted comment also leaves the GitHub page's Comments tab, so it can't be deleted from the app anymore (the pop-up says so).
 */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Check, ChevronRight, CircleHelp, Copy, Download, ExternalLink, FileCheck, GitCommitHorizontal, GitPullRequest, Images, Loader2, MessageSquare, Reply, Send, Square, UserX, X } from "lucide-react";
+import { Check, ChevronRight, CircleHelp, Copy, Download, ExternalLink, FileCheck, GitCommitHorizontal, GitPullRequest, Images, Loader2, MessageSquare, Reply, Send, Square, Trash2, UserX, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -47,6 +52,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/ui/markdown";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
+import { RowSelection } from "@/components/ui/row-selection";
 import { DRAFT_TONE, JOB_LABEL, JOB_TONE, StatusDot } from "@/components/ui/status-dot";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -87,6 +93,11 @@ export default function Inbox(props: { selected: string | null }) {
   const [confirming, setConfirming] = useState<"" | "approve" | "send">("");
   const [now, setNow] = useState(Date.now());
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Picked items, the last one clicked (where a shift-click range starts), and the decided ones Delete waits to
+  // delete after its "are you sure?" (pending: how many picked ones stay, since they wait for a decision).
+  const [selected, setSelected] = useState<string[]>([]);
+  const [anchor, setAnchor] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<{ ids: string[]; pending: number } | null>(null);
 
   const draft = inbox.find((each) => each.id === props.selected);
   const draftId = draft === undefined ? "" : draft.id;
@@ -102,6 +113,43 @@ export default function Inbox(props: { selected: string | null }) {
 
   const pendingCount = inbox.filter((each) => each.status === "pending").length;
   const rows = inbox;
+
+  // Only items still in the list shown count as picked (another tab may have deleted some).
+  const rowIds = rows.map((each) => each.id);
+  const chosen = selected.filter((id) => rowIds.includes(id));
+  const chosenDecided = rows.filter((each) => chosen.includes(each.id) && each.status !== "pending").map((each) => each.id);
+
+  // A ctrl-click picks or unpicks one row; a shift-click does the same to every row from the last one clicked.
+  function select(id: string, shift: boolean) {
+    const on = !chosen.includes(id);
+    let range = [id];
+    if (shift && anchor !== null && rowIds.includes(anchor)) {
+      const from = rowIds.indexOf(anchor);
+      const to = rowIds.indexOf(id);
+      range = rowIds.slice(Math.min(from, to), Math.max(from, to) + 1);
+    }
+    setSelected(on ? [...chosen.filter((each) => !range.includes(each)), ...range] : chosen.filter((each) => !range.includes(each)));
+    setAnchor(id);
+  }
+
+  // Deletes the decided ones; when the open item goes, the one after it (or before) opens.
+  async function remove(ids: string[]) {
+    try {
+      const result = await api<{ deleted: string[] }>("/api/inbox/delete", { method: "POST", body: { ids: ids } });
+      const deleted = result.deleted;
+      setSelected((current) => current.filter((id) => !deleted.includes(id)));
+      if (props.selected !== null && deleted.includes(props.selected)) {
+        const index = rowIds.indexOf(props.selected);
+        const after = rows.slice(index + 1).filter((each) => !deleted.includes(each.id));
+        const before = rows.slice(0, Math.max(index, 0)).filter((each) => !deleted.includes(each.id));
+        const next = after[0] ?? before[before.length - 1];
+        window.location.hash = next !== undefined ? `#/inbox/${next.id}` : "#/inbox";
+      }
+      toast.success(deleted.length === 1 ? "Deleted 1 item" : `Deleted ${deleted.length} items`);
+    } catch (err) {
+      toast.error(`Could not delete: ${err instanceof Error ? err.message : err}`);
+    }
+  }
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -416,7 +464,7 @@ export default function Inbox(props: { selected: string | null }) {
   return (
     <ResizablePanelGroup orientation="vertical">
       <ResizablePanel defaultSize="38" minSize={120}>
-        <div className="flex h-full flex-col">
+        <div className="relative flex h-full flex-col">
           <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
             <span className="text-xs text-muted-foreground tabular-nums">{pendingCount} pending</span>
             <span className="ml-auto text-xs text-muted-foreground">
@@ -458,13 +506,21 @@ export default function Inbox(props: { selected: string | null }) {
                   <a
                     key={item.key}
                     href={`#/inbox/${each.id}`}
+                    data-select-id={each.id}
                     className={cn(
                       COLUMNS,
                       "absolute left-0 h-7 w-full border-b px-3 hover:bg-accent/50",
                       each.status !== "pending" && "text-muted-foreground",
-                      each.id === props.selected && "bg-selected hover:bg-selected",
+                      (each.id === props.selected || chosen.includes(each.id)) && "bg-selected hover:bg-selected",
                     )}
                     style={{ top: item.start }}
+                    onClick={(event) => {
+                      // Not a new tab or window: these pick the row.
+                      if (event.ctrlKey || event.metaKey || event.shiftKey) {
+                        event.preventDefault();
+                        select(each.id, event.shiftKey);
+                      }
+                    }}
                   >
                     <StatusDot tone={DRAFT_TONE[each.status]} />
                     <span className="flex items-center gap-1.5 text-muted-foreground">
@@ -491,6 +547,57 @@ export default function Inbox(props: { selected: string | null }) {
               })}
             </div>
           </div>
+
+          <RowSelection listRef={scrollRef} ids={rowIds} selected={chosen} onSelect={setSelected}>
+            <Button
+              size="xs"
+              variant="ghost"
+              disabled={chosenDecided.length === 0}
+              title={chosenDecided.length === 0 ? "Pending items can't be deleted: decide them first." : undefined}
+              onClick={() => setDeleting({ ids: chosenDecided, pending: chosen.length - chosenDecided.length })}
+            >
+              <Trash2 /> Delete
+            </Button>
+          </RowSelection>
+
+          <AlertDialog
+            open={deleting !== null}
+            onOpenChange={(open) => {
+              if (!open) {
+                setDeleting(null);
+              }
+            }}
+          >
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  {deleting !== null && deleting.ids.length === 1 ? "Delete this item?" : `Delete ${deleting !== null ? deleting.ids.length : 0} items?`}
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  {deleting !== null && deleting.ids.length === 1
+                    ? "It is gone from the Inbox for good, with your decision and note. Its agent isn't told, and what was sent to GitHub stays there."
+                    : "They are gone from the Inbox for good, with your decisions and notes. Their agents aren't told, and what was sent to GitHub stays there."}
+                  {deleting !== null &&
+                    inbox.some((each) => deleting.ids.includes(each.id) && each.sent !== null && each.sent.kind === "comment") &&
+                    " A comment the app posted also leaves the GitHub page, so you can't delete it on GitHub from the app anymore."}
+                  {deleting !== null && deleting.pending > 0 && ` ${deleting.pending} pending ${deleting.pending === 1 ? "one stays" : "ones stay"}: decide ${deleting.pending === 1 ? "it" : "them"} first.`}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  variant="destructive"
+                  onClick={() => {
+                    if (deleting !== null) {
+                      remove(deleting.ids);
+                    }
+                  }}
+                >
+                  Delete
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </ResizablePanel>
 
@@ -767,12 +874,17 @@ export default function Inbox(props: { selected: string | null }) {
                       {draft.sent.kind === "pr" ? `PR #${draft.sent.number}` : "Comment"} on GitHub, as @{draft.sent.as} <ExternalLink className="size-3" />
                     </a>
                   )}
-                  {draft.status === "approved" && draft.sent === null && (draft.kind === "pr" || draft.kind === "comment") && account !== null && account.connected && (
-                    <Button size="sm" className="ml-auto" disabled={busy !== ""} onClick={() => setConfirming("send")}>
-                      {busy === "send" ? <Loader2 className="animate-spin" /> : <Send />}
-                      {busy === "send" ? "Sending…" : "Send to GitHub"}
+                  <div className="ml-auto flex items-center gap-1.5">
+                    <Button variant="ghost" size="sm" disabled={busy !== ""} onClick={() => setDeleting({ ids: [draft.id], pending: 0 })}>
+                      <Trash2 /> Delete
                     </Button>
-                  )}
+                    {draft.status === "approved" && draft.sent === null && (draft.kind === "pr" || draft.kind === "comment") && account !== null && account.connected && (
+                      <Button size="sm" disabled={busy !== ""} onClick={() => setConfirming("send")}>
+                        {busy === "send" ? <Loader2 className="animate-spin" /> : <Send />}
+                        {busy === "send" ? "Sending…" : "Send to GitHub"}
+                      </Button>
+                    )}
+                  </div>
                 </div>
                 {draft.reply !== "" && <div className="mt-1 border-l-2 border-muted-foreground/30 pl-3 whitespace-pre-wrap">{draft.reply}</div>}
               </div>

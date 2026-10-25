@@ -10,6 +10,10 @@ Every decision goes through Agents.decide, which also puts the draft's job back 
 wakes the agent, so those endpoints run on the event loop (`async def`). The
 drafts themselves reach the browser through /api/live.
 
+POST /inbox/delete deletes decided drafts for good (pending ones stay: their agents wait for an answer). Their
+agents aren't told, and what was sent to GitHub stays there (a posted comment then leaves the GitHub page's
+Comments tab, which lists drafts, backend/github_api.py).
+
 A draft's evidence (screenshots, images, command output) is files in EVIDENCE_DIR,
 served by name. Names are only ever ones the agent tools made (ev_<hex>.<ext>), so
 a request can't reach any other file.
@@ -35,6 +39,16 @@ class ReplyRequest(BaseModel):
     text: str = ""
     # Approve only: send the PR or comment to GitHub as you first.
     send: bool = False
+
+
+class DeleteRequest(BaseModel):
+    ids: list[str]
+
+
+@router.post("/inbox/delete")
+def delete(body: DeleteRequest) -> dict:
+    """Deletes the decided ones among these; returns the ids deleted."""
+    return {"deleted": inbox.delete(body.ids)}
 
 
 @router.post("/inbox/{draft_id}/approve")

@@ -32,7 +32,8 @@ is written another way, as the project's merged PRs or the user's instructions h
 for went from free to assigned. Its body says who seems to be on it; approved means keep working,
 rejected means stop the agent (its job is cancelled). It takes no reply.
 
-A draft is decided once. Drafts are never deleted, so the Inbox keeps the history.
+A draft is decided once. A decided draft can be deleted (the Inbox's Delete); a pending one can't, its agent waits
+for the answer. Its job keeps the id (jobs.py "drafts"), and whoever reads one skips it once it is gone.
 
 The backend keeps one Inbox that the API and every agent share, so each method takes the
 lock. version goes up by one on every change; the live feed compares it to see what to send.
@@ -160,6 +161,22 @@ class Inbox:
             draft["decided_at"] = datetime.now(UTC).isoformat()
             self.save(draft)
             return copy.deepcopy(draft)
+
+    def delete(self, draft_ids: list[str]) -> list[str]:
+        """Delete these drafts if they are decided. Pending and unknown ones are left as they are. Returns the ids deleted."""
+        with self.lock:
+            deleted = []
+            for draft_id in draft_ids:
+                if draft_id not in self.drafts:
+                    continue
+                if self.drafts[draft_id]["status"] == "pending":
+                    continue
+                del self.drafts[draft_id]
+                (self.folder / f"{draft_id}.json").unlink(missing_ok=True)
+                deleted.append(draft_id)
+            if deleted:
+                self.version += 1
+            return deleted
 
     def mark_sent(self, draft_id: str, sent: dict) -> dict:
         """What went to GitHub for this draft (github_account.py). Returns the draft as it is now."""
