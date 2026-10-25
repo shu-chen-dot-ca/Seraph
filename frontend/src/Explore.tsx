@@ -4,7 +4,9 @@ The Explore page: the user runs a search for repos they don't have yet, watches 
 A run (github_searcher/explore.py) ends by itself after finding "Find" repos (up to 3 digits, numbers only; empty for no
 limit), or when its searches are used up. Workers is how many candidates it checks at the same time. Filters opens a
 pop-up (ExploreFiltersDialog) with every tag a repo can get: a click includes one, the next excludes it, the next
-lets it be; the bar doesn't list the picked ones, the pop-up is where to check them. They are remembered in this browser; while a run goes the pop-up
+lets it be. In a row with included tags, only repos with one of them are kept; a row with none keeps any, and an
+excluded tag always skips a repo. The bar doesn't list the
+picked ones, the pop-up is where to check them. They are remembered in this browser; while a run goes the pop-up
 shows the run's own and can't change them. It searches for
 each of the user's types of repo (ExploreProfileDialog; a "lane" in the code), keeping each near its share of the
 finds, and skips what is already in Repos, Tracked or the found list, and what was rejected in the last 14 days.

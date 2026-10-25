@@ -31,12 +31,13 @@ repos already in the found list, and repos the user rejected in the last 14 days
    policy, newcomers, activity and atmosphere show as tags; they keep a repo out only when the run's filters say so.
 
 Filters (FILTERS, picked on the page for each run) are every tag a repo can get, the same as the Repos and Tracked
-pages: its fit, AI policy, newcomers, review tone, first reply speed, trend, free beginner issues, one maintainer or
-none, and 5 or more unanswered PRs. A key is "kind:value". Each picked one is "include" or "exclude": of one kind, a
-repo needs any one of the included tags (it has only one of each kind), and none of the excluded ones. The numbers'
-kinds are checked in step 2. The AI policy and the reviews need Claude: when one of their tags is picked
-(CLAUDE_KINDS), they are read before the README, and only a repo that passes gets its README judged (most repos don't,
-and the README judgment is the costly part). The fit is known only after the README judgment.
+pages: its fit, AI policy, newcomers, review tone, first reply speed, trend, and the other ones (free beginner issues,
+one maintainer or none, 5 or more unanswered PRs). A key is "section:value", a section being one row of the page's
+Filters pop-up. Each picked one is "include" or "exclude". In a section with included tags, a repo needs one of them
+(the rest of the section is skipped); in a section with none, anything is fine. An excluded tag always skips a repo.
+The numbers' sections are checked in step 2. The AI policy and the reviews need Claude: when one of their tags is
+picked (CLAUDE_SECTIONS), they are read before the README, and only a repo that passes gets its README judged (most
+repos don't, and the README judgment is the costly part). The fit is known only after the README judgment.
 
     found = [{"name", "lane", "description", "stars", "default_branch", "html_url", "fit", "note", "score",
               "ai_policy", "newcomers", "tone", "atmosphere", "prs_month", "issues_month", "commits_month",
@@ -155,7 +156,7 @@ FULL_NAME = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 # Repos page shows the level again: the frontend's FIT_LEVELS has the same steps).
 FIT_LEVELS = {"strong": 1.0, "good": 0.75, "some": 0.5, "weak": 0.25}
 MAX_TYPES = 6
-# The tags a run can filter on, "kind:value", each with its label on the page (also why a repo is skipped on the
+# The tags a run can filter on, "section:value", each with its label on the page (also why a repo is skipped on the
 # page's Skipped line). The same thresholds as the tags' colors on the page: replies in 2 days are green, over a week
 # amber; one maintainer or none is amber, and so are 5 unanswered PRs or more.
 FILTERS = {
@@ -180,15 +181,15 @@ FILTERS = {
     "reply:fast": "Replies in 2 days",
     "reply:week": "Replies in a week",
     "reply:slow": "Replies over a week",
-    "trend:up": "Busier",
+    "trend:up": "↑ Busier",
     "trend:flat": "Steady",
-    "trend:down": "Quieter",
-    "issues:beginner": "Free beginner issues",
-    "maintainers:one": "1 maintainer",
-    "unanswered:many": "5+ unanswered PRs",
+    "trend:down": "↓ Quieter",
+    "other:beginner_issues": "Free beginner issues",
+    "other:one_maintainer": "1 maintainer",
+    "other:unanswered": "5+ unanswered PRs",
 }
-# The kinds that need Claude's reading of the AI policy or the reviews.
-CLAUDE_KINDS = ["policy", "tone"]
+# The sections that need Claude's reading of the AI policy or the reviews.
+CLAUDE_SECTIONS = ["policy", "tone"]
 # What Claude answers when it plans the searches of the profile's types: each type by its name.
 PLAN_SCHEMA = {
     "type": "object",
@@ -630,52 +631,48 @@ class Explore:
             elif signals["outside_merged_90d"] == 0:
                 reason = "No outside PR merged in 90 days"
 
-            # The repo's tags from its numbers, one of each kind (None: it has none of that kind).
-            reply_tag = None
+            # The repo's tags from its numbers.
+            tags = ["newcomers:" + signals["newcomers"]["tag"], "trend:" + signals["activity"]["trend"]]
             if reply is not None and reply <= 2:
-                reply_tag = "reply:fast"
+                tags.append("reply:fast")
             elif reply is not None and reply <= 7:
-                reply_tag = "reply:week"
+                tags.append("reply:week")
             elif reply is not None:
-                reply_tag = "reply:slow"
-            tags = {
-                "newcomers": "newcomers:" + signals["newcomers"]["tag"],
-                "reply": reply_tag,
-                "trend": "trend:" + signals["activity"]["trend"],
-                "issues": "issues:beginner" if signals["unclaimed_beginner_issues"] > 0 else None,
-                "maintainers": "maintainers:one" if signals["active_mergers_30d"] <= 1 else None,
-                "unanswered": "unanswered:many" if signals["stale_outside_prs"] >= 5 else None,
-            }
-            # Of each kind: one of the included tags when there are any, none of the excluded ones.
-            for kind in tags:
-                if reason:
-                    break
-                wanted = [key for key in filters if filters[key] == "include" and key.split(":")[0] == kind]
-                if wanted and tags[kind] not in wanted:
+                tags.append("reply:slow")
+            if signals["unclaimed_beginner_issues"] > 0:
+                tags.append("other:beginner_issues")
+            if signals["active_mergers_30d"] <= 1:
+                tags.append("other:one_maintainer")
+            if signals["stale_outside_prs"] >= 5:
+                tags.append("other:unanswered")
+            # In each section: one of its included tags, when it has any. Never an excluded tag.
+            for section in ["newcomers", "trend", "reply", "other"]:
+                wanted = [key for key in filters if filters[key] == "include" and key.split(":")[0] == section]
+                if not reason and wanted and not any(key in tags for key in wanted):
                     reason = "Not " + " or ".join(FILTERS[key] for key in wanted)
-                elif tags[kind] is not None and filters.get(tags[kind]) == "exclude":
-                    reason = FILTERS[tags[kind]]
+            for key in tags:
+                if not reason and filters.get(key) == "exclude":
+                    reason = FILTERS[key]
             if reason:
                 run["skipped"][reason] = run["skipped"].get(reason, 0) + 1
                 return
 
-            # The AI policy and the reviews first, when a filter needs them, so only a repo that passes gets its README judged.
+            # The AI policy and the reviews first, when one of their tags is picked, so only a repo that passes gets its
+            # README judged.
             judged = False
-            if any(key.split(":")[0] in CLAUDE_KINDS for key in filters):
+            if any(key.split(":")[0] in CLAUDE_SECTIONS for key in filters):
                 signals = await self.repo_signals.complete(name, signals)
                 judged = True
-                tags = {
-                    "policy": "policy:" + signals["ai_policy"]["tag"],
-                    "tone": "tone:" + signals["atmosphere"]["tone"] if signals["atmosphere"] else None,
-                }
-                for kind in tags:
-                    if reason:
-                        break
-                    wanted = [key for key in filters if filters[key] == "include" and key.split(":")[0] == kind]
-                    if wanted and tags[kind] not in wanted:
+                tags = ["policy:" + signals["ai_policy"]["tag"]]
+                if signals["atmosphere"]:
+                    tags.append("tone:" + signals["atmosphere"]["tone"])
+                for section in ["policy", "tone"]:
+                    wanted = [key for key in filters if filters[key] == "include" and key.split(":")[0] == section]
+                    if not reason and wanted and not any(key in tags for key in wanted):
                         reason = "Not " + " or ".join(FILTERS[key] for key in wanted)
-                    elif tags[kind] is not None and filters.get(tags[kind]) == "exclude":
-                        reason = FILTERS[tags[kind]]
+                for key in tags:
+                    if not reason and filters.get(key) == "exclude":
+                        reason = FILTERS[key]
                 if reason:
                     run["skipped"][reason] = run["skipped"].get(reason, 0) + 1
                     return
