@@ -2,7 +2,9 @@
 The Tracked list: repos the user wants to keep an eye on for new issues. The user tracks them from the Repos page (its
 Track column); agents can add and remove them too (their tracked_* tools), and undo / redo (Ctrl+Z / Ctrl+Y) works on
 both, like Repos. The bar on top has Expand all (Collapse all when every row is open), Refresh all (Check now for
-every repo) and Mark all as read (every issue new now isn't anymore; only ones found later are new).
+every repo, then Claude reads every issue tagged Free again and the page says which ones aren't free anymore: claimed in
+the comments, a PR came, ...; minutes for many) and Mark all as read (every issue new now isn't anymore; only ones found
+later are new).
 
 The backend checks each repo's open issues every few minutes (github_searcher/tracked_issues.py): the newest
 ones and every good first or help wanted one. An issue is new for three days after it was opened, assigned or not,
@@ -124,6 +126,7 @@ export default function Tracked() {
   const [tabs, setTabs] = useState<Record<string, IssueTab>>({});
   const [checking, setChecking] = useState<string[]>([]);
   const [retagging, setRetagging] = useState<string[]>([]);
+  const [refreshing, setRefreshing] = useState(false);
   // The issue open in the pop-up, by repo and number, so it shows the live one (new tags arrive while it is open).
   const [details, setDetails] = useState<{ repo: string; number: number } | null>(null);
   // The open repos' issues' order: newest first (none), or by these columns, like the list's.
@@ -336,9 +339,42 @@ export default function Tracked() {
     setChecking((current) => current.filter((n) => n !== full_name));
   }
 
-  // Check now for every tracked repo, all at once; each row's own button spins meanwhile.
+  // Refresh all: Check now for every tracked repo, all at once (each row's own button spins meanwhile), then Claude reads
+  // every issue tagged Free again (each row's Tag again spins meanwhile), so one taken since stops showing as Free.
   async function checkAll() {
+    const free: string[] = [];
+    for (const repo of tracked.items) {
+      if (repo.check === null) {
+        continue;
+      }
+      for (const issue of repo.check.issues) {
+        if (issue.assignees === 0 && issue.tags?.status === "free") {
+          free.push(`${repo.full_name}#${issue.number}`);
+        }
+      }
+    }
+    const freeRepos = names.filter((name) => free.some((id) => id.startsWith(`${name}#`)));
+    setRefreshing(true);
     await Promise.all(names.map((name) => checkNow(name)));
+    if (free.length > 0) {
+      setRetagging((current) => [...current, ...freeRepos]);
+      try {
+        const result = await api<{ tagged: number; failed: string[]; taken: string[] }>("/api/tags/refresh", { method: "POST", body: { ids: free } });
+        if (result.failed.length > 0) {
+          toast.error(`Could not read ${result.failed.length} of them again; the backend tries again later.`);
+        }
+        // The rows show it too: Free turns to Assigned or –, the reason on hover.
+        if (result.taken.length > 0) {
+          toast.warning(`No longer free: ${result.taken.join(", ")}`);
+        } else {
+          toast.success(`Read ${result.tagged} free issues again; all still free.`);
+        }
+      } catch (err) {
+        toast.error(`Could not read the free issues again: ${err instanceof Error ? err.message : err}`);
+      }
+      setRetagging((current) => current.filter((name) => !freeRepos.includes(name)));
+    }
+    setRefreshing(false);
   }
 
   async function markAllRead() {
@@ -433,8 +469,14 @@ export default function Tracked() {
                 <ChevronsUpDown /> Expand all
               </Button>
             )}
-            <Button variant="ghost" size="xs" disabled={checking.length > 0} title="Check every tracked repo on GitHub now" onClick={() => checkAll()}>
-              <RefreshCw className={cn(checking.length > 0 && "animate-spin")} /> Refresh all
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={refreshing || checking.length > 0}
+              title="Check every tracked repo on GitHub now, then have Claude read every Free issue again: one taken since stops showing as Free"
+              onClick={() => checkAll()}
+            >
+              <RefreshCw className={cn((refreshing || checking.length > 0) && "animate-spin")} /> Refresh all
             </Button>
             <Button variant="ghost" size="xs" disabled={newTotal === 0} title="The issues new now aren't new anymore; only ones found later are" onClick={() => markAllRead()}>
               <CheckCheck /> Mark all as read
