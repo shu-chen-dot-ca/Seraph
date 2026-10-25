@@ -2,7 +2,10 @@
 The Explore page: the user runs a search for repos they don't have yet, watches them arrive, and stops it when they like.
 
 A run (github_searcher/explore.py) ends by itself after finding "Find" repos (up to 3 digits, numbers only; empty for no
-limit), or when its searches are used up. Workers is how many candidates it checks at the same time. It searches for
+limit), or when its searches are used up. Workers is how many candidates it checks at the same time. Filters opens a
+pop-up (ExploreFiltersDialog) to pick tags the run keeps to (green) or keeps out (amber, red); the picked ones show in
+the bar as those tags, under Only and Hide, and a click on them opens the pop-up again. They are remembered in this
+browser; while a run goes the bar shows the run's own and can't change them. It searches for
 each of the user's types of repo (ExploreProfileDialog; a "lane" in the code), keeping each near its share of the
 finds, and skips what is already in Repos, Tracked or the found list, and what was rejected in the last 14 days.
 
@@ -31,10 +34,11 @@ The page also shows what is being checked right now, why the others were skipped
 when there are any (Allow again ends a block early; the history stays). The clock ticks every second while a run goes.
 */
 
-import { ArrowDown, ArrowUp, Ban, Check, ExternalLink, Loader2, Play, Settings2, Square, SquareCheck, Star } from "lucide-react";
+import { ArrowDown, ArrowUp, Ban, Check, ExternalLink, ListFilter, Loader2, Play, Settings2, Square, SquareCheck, Star } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import ExploreFiltersDialog, { FILTERS } from "@/ExploreFiltersDialog";
 import ExploreProfileDialog from "@/ExploreProfileDialog";
 import GithubLimits from "@/GithubLimits";
 import RepoTree from "@/RepoTree";
@@ -61,6 +65,18 @@ import { cn, timeAgo } from "@/lib/utils";
 const STARS = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
 const WORKERS = [1, 2, 4, 6, 8, 12, 16];
 const STATUS_LABEL: Record<string, string> = { running: "Running", done: "Done", stopped: "Stopped", failed: "Failed" };
+const FILTERS_STORAGE = "explore-filters";
+
+// The filters picked last time in this browser, the ones still known.
+let savedFilters: string[] = [];
+try {
+  const saved = JSON.parse(localStorage.getItem(FILTERS_STORAGE) ?? "[]");
+  if (Array.isArray(saved)) {
+    savedFilters = saved.filter((key) => FILTERS.some((each) => each.key === key));
+  }
+} catch {
+  savedFilters = [];
+}
 
 // The found list's columns after Repo (the name, which takes the room left over), each sorted by a click on its header.
 // better says which way the first click sorts: higher numbers first, lower numbers first, or A to Z.
@@ -104,16 +120,19 @@ const NEWCOMER_RANK: Record<string, number> = { welcomes: 4, ok: 3, few: 2, wait
 const TONE_RANK: Record<string, number> = { warm: 4, neutral: 3, strict: 2, curt: 1 };
 const TREND_RANK: Record<string, number> = { up: 3, flat: 2, down: 1 };
 
-// The only colors a value gets: green for good news, amber for "have a look", red for bad. The rest is plain text.
-const POLICY_COLOR: Record<string, string> = { welcome: "text-ok", no_ai: "text-destructive" };
-const NEWCOMER_COLOR: Record<string, string> = { welcomes: "text-ok", wait: "text-warn" };
-const TONE_COLOR: Record<string, string> = { warm: "text-ok", strict: "text-warn", curt: "text-destructive" };
+// The AI policy, newcomers and tone columns are tags: green for good news, amber for "have a look", red for bad, gray
+// for the rest.
+const POLICY_VARIANT: Record<string, "ok" | "warn" | "bad"> = { welcome: "ok", no_ai: "bad" };
+const NEWCOMER_VARIANT: Record<string, "ok" | "warn" | "bad"> = { welcomes: "ok", wait: "warn" };
+const TONE_VARIANT: Record<string, "ok" | "warn" | "bad"> = { warm: "ok", strict: "warn", curt: "bad" };
 
 export default function Explore() {
   const explore = useLive("explore");
   const loaded = useLoaded("explore");
   const [count, setCount] = useState("20");
   const [workers, setWorkers] = useState("6");
+  const [filters, setFilters] = useState<string[]>(savedFilters);
+  const [pickingFilters, setPickingFilters] = useState(false);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   // The found list's order: newest first (null), or by one column; best is the way its first click sorts, or not.
@@ -131,6 +150,14 @@ export default function Explore() {
   const [, setTick] = useState(0);
   const run = explore.run;
   const running = run !== null && run.status === "running";
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(FILTERS_STORAGE, JSON.stringify(filters));
+    } catch {
+      // Storage blocked: the filters just aren't kept.
+    }
+  }, [filters]);
 
   // The elapsed time, every second while a run goes.
   useEffect(() => {
@@ -152,6 +179,11 @@ export default function Explore() {
     laneLabels[lane.id] = lane.label;
   }
 
+  // The bar shows the run's own filters while it goes, the ones for the next run otherwise.
+  const shownFilters = running ? run.filters : filters;
+  const onlyTags = FILTERS.filter((each) => each.group === "only" && shownFilters.includes(each.key));
+  const hideTags = FILTERS.filter((each) => each.group === "hide" && shownFilters.includes(each.key));
+
   const countNumber = count.trim() === "" ? null : Number(count);
   // The box takes digits only, at most 3, so only 0 is left to refuse.
   const countValid = countNumber === null || countNumber >= 1;
@@ -169,7 +201,7 @@ export default function Explore() {
     }
     setBusy(true);
     try {
-      await api("/api/explore/start", { method: "POST", body: { count: countNumber, workers: Number(workers) } });
+      await api("/api/explore/start", { method: "POST", body: { count: countNumber, workers: Number(workers), filters } });
     } catch (err) {
       toast.error(`Could not start: ${err instanceof Error ? err.message : err}`);
     }
@@ -281,25 +313,25 @@ export default function Explore() {
     }
     if (key === "fit") {
       const level = FIT_LEVELS.find((one) => each.fit >= one.from) ?? FIT_LEVELS[FIT_LEVELS.length - 1];
-      return <span className={cn(level.variant === "ok" && "text-ok")}>{level.label}</span>;
+      return <Badge variant={level.variant}>{level.label}</Badge>;
     }
     if (key === "policy") {
-      return <span className={POLICY_COLOR[each.ai_policy]}>{POLICY_LABEL[each.ai_policy] ?? each.ai_policy}</span>;
+      return <Badge variant={POLICY_VARIANT[each.ai_policy] ?? "secondary"}>{POLICY_LABEL[each.ai_policy] ?? each.ai_policy}</Badge>;
     }
     if (key === "newcomers") {
       if (each.newcomers === undefined) {
         return "–";
       }
-      return <span className={NEWCOMER_COLOR[each.newcomers]}>{NEWCOMER_LABEL[each.newcomers] ?? each.newcomers}</span>;
+      return <Badge variant={NEWCOMER_VARIANT[each.newcomers] ?? "secondary"}>{NEWCOMER_LABEL[each.newcomers] ?? each.newcomers}</Badge>;
     }
     if (key === "tone") {
       if (each.tone === undefined || each.tone === null) {
         return "–";
       }
       return (
-        <span className={TONE_COLOR[each.tone]} title={each.atmosphere}>
+        <Badge variant={TONE_VARIANT[each.tone] ?? "secondary"} title={each.atmosphere}>
           {TONE_LABEL[each.tone] ?? each.tone}
-        </span>
+        </Badge>
       );
     }
     if (key === "prs") {
@@ -410,7 +442,7 @@ export default function Explore() {
     <div className="relative flex h-full flex-col">
       <div className="flex min-h-9 shrink-0 flex-wrap items-center gap-x-6 gap-y-1.5 border-b px-3 py-1">
         <form
-          className="flex items-center gap-2"
+          className="flex flex-wrap items-center gap-2"
           onSubmit={(event) => {
             event.preventDefault();
             start();
@@ -441,6 +473,31 @@ export default function Explore() {
               ))}
             </SelectContent>
           </Select>
+          <Button type="button" variant="ghost" disabled={running} onClick={() => setPickingFilters(true)}>
+            <ListFilter /> Filters
+          </Button>
+          {shownFilters.length > 0 && (
+            <button
+              type="button"
+              className="flex flex-wrap items-center gap-1 text-left disabled:cursor-default"
+              disabled={running}
+              title={running ? "This run's filters" : "Change the filters"}
+              onClick={() => setPickingFilters(true)}
+            >
+              {onlyTags.length > 0 && <span className="text-muted-foreground">Only</span>}
+              {onlyTags.map((each) => (
+                <Badge key={each.key} variant={each.variant}>
+                  {each.label}
+                </Badge>
+              ))}
+              {hideTags.length > 0 && <span className={cn("text-muted-foreground", onlyTags.length > 0 && "ml-1.5")}>Hide</span>}
+              {hideTags.map((each) => (
+                <Badge key={each.key} variant={each.variant}>
+                  {each.label}
+                </Badge>
+              ))}
+            </button>
+          )}
           {running ? (
             <Button type="button" variant="outline" onClick={stop}>
               <Square /> Stop
@@ -622,7 +679,7 @@ export default function Explore() {
                 <div className="flex flex-wrap gap-x-5 gap-y-1">
                   {skipped.map(([reason, number]) => (
                     <span key={reason}>
-                      <span className="tabular-nums">{number}</span> <span className="text-muted-foreground">{reason.toLowerCase()}</span>
+                      <span className="tabular-nums">{number}</span> <span className="text-muted-foreground">{reason.charAt(0).toLowerCase() + reason.slice(1)}</span>
                     </span>
                   ))}
                 </div>
@@ -687,6 +744,7 @@ export default function Explore() {
       </RowSelection>
 
       {editing && <ExploreProfileDialog profile={explore.profile} onClose={() => setEditing(false)} />}
+      {pickingFilters && <ExploreFiltersDialog filters={filters} onChange={setFilters} onClose={() => setPickingFilters(false)} />}
 
       <AlertDialog open={confirmReject} onOpenChange={setConfirmReject}>
         <AlertDialogContent>

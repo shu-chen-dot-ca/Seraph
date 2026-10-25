@@ -17,6 +17,7 @@ class StartRequest(BaseModel):
     count: int | None = None  # stop after finding this many repos (None: no limit)
     minutes: int | None = None  # stop after this many minutes (None: no limit)
     workers: int = 6  # candidates checked at the same time
+    filters: list[str] = []  # keep out what doesn't match (explore.py FILTERS)
 
 
 class RepoType(BaseModel):
@@ -40,7 +41,7 @@ class NamesRequest(BaseModel):
 @router.post("/explore/start")
 async def start_explore(body: StartRequest) -> dict:
     try:
-        explore.start(body.count, body.minutes, body.workers)
+        explore.start(body.count, body.minutes, body.workers, body.filters)
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error))
     return {}

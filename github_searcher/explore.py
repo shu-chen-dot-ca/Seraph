@@ -28,7 +28,13 @@ repos already in the found list, and repos the user rejected in the last 14 days
    tutorial or course), which of the user's types it is, how well it fits (one of FIT_LEVELS, fixed so repos
    rank the same way every time; kept as its number), one line for its note;
 4. found, with its type (its "lane"), fit, note, tags and score, and its signals kept for when it is approved. Its AI
-   policy, newcomers, activity and atmosphere show as tags; they never keep a repo out.
+   policy, newcomers, activity and atmosphere show as tags; they keep a repo out only when the run's filters say so.
+
+Filters (FILTERS, picked on the page for each run) are about the same tags as the Repos and Tracked pages: "only" ones
+keep to repos with a good (green) tag, "hide" ones keep out repos with a bad (amber or red) one. The numbers' filters
+are checked in step 2. The AI policy and the reviews need Claude: when one of their filters is on (CLAUDE_FILTERS),
+they are read before the README, and only a repo that passes gets its README judged (most repos don't, and the README
+judgment is the costly part). Strong fit is known only after the README judgment.
 
     found = [{"name", "lane", "description", "stars", "default_branch", "html_url", "fit", "note", "score",
               "ai_policy", "newcomers", "tone", "atmosphere", "prs_month", "issues_month", "commits_month",
@@ -127,6 +133,26 @@ FULL_NAME = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 # Repos page shows the level again: the frontend's FIT_LEVELS has the same steps).
 FIT_LEVELS = {"strong": 1.0, "good": 0.75, "some": 0.5, "weak": 0.25}
 MAX_TYPES = 6
+# The filters a run can have, each with why a repo it keeps out is skipped (the page's Skipped line). The same
+# thresholds as the tags' colors on the page: replies in 2 days are green, over a week amber; one maintainer or none is
+# amber, and so are 5 unanswered PRs or more.
+FILTERS = {
+    "ai_welcome": "Not AI welcome",
+    "newcomers_welcome": "Not known to welcome newcomers",
+    "warm_reviews": "Reviews not warm",
+    "fast_replies": "First reply takes over 2 days",
+    "beginner_issues": "No free beginner issues",
+    "strong_fit": "Not a strong fit",
+    "hide_no_ai": "Bans AI",
+    "hide_newcomers_wait": "Newcomers wait",
+    "hide_strict": "Strict reviews",
+    "hide_curt": "Curt reviews",
+    "hide_slow_replies": "First reply takes over a week",
+    "hide_one_maintainer": "One maintainer or none",
+    "hide_unanswered": "5 or more unanswered PRs",
+}
+# The ones that need Claude's reading of the AI policy or the reviews.
+CLAUDE_FILTERS = ["ai_welcome", "warm_reviews", "hide_no_ai", "hide_strict", "hide_curt"]
 # What Claude answers when it plans the searches of the profile's types: each type by its name.
 PLAN_SCHEMA = {
     "type": "object",
@@ -303,7 +329,7 @@ class Explore:
         temporary.replace(self.path)
         self.changed()
 
-    def start(self, count: int | None, minutes: int | None, workers: int) -> None:
+    def start(self, count: int | None, minutes: int | None, workers: int, filters: list[str]) -> None:
         """Start a run on the running event loop. ValueError when one is running or the limits are off."""
         if self.run is not None and self.run["status"] == "running":
             raise ValueError("Explore is already running")
@@ -313,6 +339,9 @@ class Explore:
             raise ValueError("Run 1 to 600 minutes")
         if workers < 1 or workers > MAX_WORKERS:
             raise ValueError(f"1 to {MAX_WORKERS} workers")
+        for each in filters:
+            if each not in FILTERS:
+                raise ValueError(f"Unknown filter: {each}")
 
         lanes = {}
         self.cursors = {}
@@ -330,6 +359,7 @@ class Explore:
             "count": count,
             "minutes": minutes,
             "workers": workers,
+            "filters": filters,
             "found": 0,
             "looked_at": 0,
             "lanes": lanes,
@@ -479,6 +509,8 @@ class Explore:
         repo = name.split("/")[1]
         try:
             signals = await self.repo_signals.fetch(name, judged=False)
+            filters = run["filters"]
+            reply = signals["median_days_to_first_reply"]
             reason = ""
             if signals["archived"]:
                 reason = "Archived"
@@ -488,9 +520,44 @@ class Explore:
                 reason = "No commits in 30 days"
             elif signals["outside_merged_90d"] == 0:
                 reason = "No outside PR merged in 90 days"
+            elif "newcomers_welcome" in filters and signals["newcomers"]["tag"] != "welcomes":
+                reason = FILTERS["newcomers_welcome"]
+            elif "hide_newcomers_wait" in filters and signals["newcomers"]["tag"] == "wait":
+                reason = FILTERS["hide_newcomers_wait"]
+            elif "fast_replies" in filters and (reply is None or reply > 2):
+                reason = FILTERS["fast_replies"]
+            elif "hide_slow_replies" in filters and reply is not None and reply > 7:
+                reason = FILTERS["hide_slow_replies"]
+            elif "beginner_issues" in filters and signals["unclaimed_beginner_issues"] == 0:
+                reason = FILTERS["beginner_issues"]
+            elif "hide_one_maintainer" in filters and signals["active_mergers_30d"] <= 1:
+                reason = FILTERS["hide_one_maintainer"]
+            elif "hide_unanswered" in filters and signals["stale_outside_prs"] >= 5:
+                reason = FILTERS["hide_unanswered"]
             if reason:
                 run["skipped"][reason] = run["skipped"].get(reason, 0) + 1
                 return
+
+            # The AI policy and the reviews first, when a filter needs them, so only a repo that passes gets its README judged.
+            judged = False
+            if any(each in CLAUDE_FILTERS for each in filters):
+                signals = await self.repo_signals.complete(name, signals)
+                judged = True
+                policy = signals["ai_policy"]["tag"]
+                tone = signals["atmosphere"]["tone"] if signals["atmosphere"] else None
+                if "ai_welcome" in filters and policy != "welcome":
+                    reason = FILTERS["ai_welcome"]
+                elif "hide_no_ai" in filters and policy == "no_ai":
+                    reason = FILTERS["hide_no_ai"]
+                elif "warm_reviews" in filters and tone != "warm":
+                    reason = FILTERS["warm_reviews"]
+                elif "hide_strict" in filters and tone == "strict":
+                    reason = FILTERS["hide_strict"]
+                elif "hide_curt" in filters and tone == "curt":
+                    reason = FILTERS["hide_curt"]
+                if reason:
+                    run["skipped"][reason] = run["skipped"].get(reason, 0) + 1
+                    return
 
             try:
                 readme = await asyncio.to_thread(get_readme, owner, repo)
@@ -527,10 +594,16 @@ class Explore:
                 },
                 "required": ["is_project", "type", "fit", "note"],
             }
-            # The fit, and the repo's AI policy and review atmosphere, all at once.
-            verdict, signals = await asyncio.gather(judge(prompt, schema, "medium"), self.repo_signals.complete(name, signals))
+            # The fit, and the repo's AI policy and review atmosphere (unless a filter read them already), all at once.
+            if judged:
+                verdict = await judge(prompt, schema, "medium")
+            else:
+                verdict, signals = await asyncio.gather(judge(prompt, schema, "medium"), self.repo_signals.complete(name, signals))
             if not verdict["is_project"]:
                 run["skipped"]["Not a code project"] = run["skipped"].get("Not a code project", 0) + 1
+                return
+            if "strong_fit" in filters and verdict["fit"] != "strong":
+                run["skipped"][FILTERS["strong_fit"]] = run["skipped"].get(FILTERS["strong_fit"], 0) + 1
                 return
             # Checks that finish after the run found enough are dropped, so it never finds more than asked.
             if self.stopping or (run["count"] is not None and run["found"] >= run["count"]):
