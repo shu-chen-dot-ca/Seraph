@@ -12,7 +12,8 @@ An amber dot after the name: its image.yaml changed since it was built, so a Reb
 New image (NewImageDialog) only saves an image.yaml, the defaults with a system, desktop and description: nothing
 is built and no agent runs. Such an image is listed below the built ones as "not built", with Build (its first
 build) and a menu: Edit image.yaml (the same editor, with Check, as an image's Definition), Rename and Delete.
-Sherpa helps change it: it can fill the YAML in and press Check.
+Names may have capitals; two names that differ only in capitals count as the same. Sherpa helps
+change it: it can fill the YAML in and press Check.
 Save a VM makes an image from that VM's disk as it is (a few
 minutes). Build and Rebuild build image.yaml mechanically, with no agent; only what changed since the last build
 runs again. One image builds at a time.
@@ -483,7 +484,7 @@ function RenameDialog(props: { image: { name: string }; onClose: () => void }) {
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Rename {props.image.name}</DialogTitle>
-          <DialogDescription>VMs made from it keep pointing at it after a rename.</DialogDescription>
+          <DialogDescription>Letters (capitals too), digits and -. VMs made from it keep pointing at it after a rename.</DialogDescription>
         </DialogHeader>
         <div className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 gap-y-2">
           <label className="text-muted-foreground">Name</label>

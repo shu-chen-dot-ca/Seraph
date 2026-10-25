@@ -80,7 +80,8 @@ INVENTORY_DIR = IMAGES_DIR / "inventory"
 DEFINITIONS_DIR = IMAGES_DIR / "definitions"
 # What New image offers. GNOME first: the default. None is a terminal-only image (no desktop, no browser).
 DESKTOPS = list(image_build.DESKTOPS.values())
-NAME_PATTERN = r"[a-z][a-z0-9-]{0,40}"
+# Capitals too. Two names that differ only in case are the same name (name_taken): they would be mixed up.
+NAME_PATTERN = r"[A-Za-z][A-Za-z0-9-]{0,40}"
 # Tasks are checked this often; Incus's image list is read again every REFRESH_SECONDS.
 CHECK_SECONDS = 2
 REFRESH_SECONDS = 10
@@ -239,11 +240,11 @@ class Images:
             return [image["name"] for image in self.images]
 
     def name_taken(self, name: str) -> bool:
-        """Whether an image, built or not, has this name."""
+        """Whether an image, built or not, has this name, whatever its capitals: Ubuntu-1 and ubuntu-1 would be mixed up."""
         with self.lock:
-            names = [alias for image in self.images for alias in image["aliases"]]
-        names += [path.parent.name for path in DEFINITIONS_DIR.glob("*/image.yaml")]
-        return name in names
+            names = [alias.lower() for image in self.images for alias in image["aliases"]]
+        names += [path.parent.name.lower() for path in DEFINITIONS_DIR.glob("*/image.yaml")]
+        return name.lower() in names
 
     def find(self, name: str) -> dict:
         with self.lock:
@@ -330,10 +331,12 @@ class Images:
             self.rename_unbuilt(name, new_name)
             return
         if not re.fullmatch(NAME_PATTERN, new_name):
-            raise ImagesError("The name must start with a letter and have only a-z, 0-9 and -, at most 41 characters")
+            raise ImagesError("The name must start with a letter and have only letters (capitals too), digits and -, at most 41 characters")
         self.find(name)
-        if self.name_taken(new_name):
-            raise ImagesError(f"There is already an image named {new_name}")
+        # Only its own name may differ in case (ubuntu-1 to Ubuntu-1).
+        same = new_name.lower() == name.lower()
+        if not same and self.name_taken(new_name):
+            raise ImagesError(f"There is already an image named {new_name} (or the same in other capitals)")
         with self.lock:
             busy = [task for task in self.tasks if task["status"] == "running" and task["name"] == name]
         if busy:
@@ -342,8 +345,9 @@ class Images:
         if result.returncode != 0:
             raise ImagesError(f"Could not rename {name}: {result.stderr.strip()}")
         # A folder or builder VM left under the new name by an image deleted outside the app would be in the way.
-        shutil.rmtree(DEFINITIONS_DIR / new_name, ignore_errors=True)
-        VM(image_build.BUILDER_PREFIX + new_name).delete()
+        if not same:
+            shutil.rmtree(DEFINITIONS_DIR / new_name, ignore_errors=True)
+            VM(image_build.BUILDER_PREFIX + new_name).delete()
         if (DEFINITIONS_DIR / name).exists():
             (DEFINITIONS_DIR / name).rename(DEFINITIONS_DIR / new_name)
         # Its builder VM (with the snapshots the next build starts from) goes along, if it has one.
@@ -386,16 +390,19 @@ class Images:
 
     def rename_unbuilt(self, name: str, new_name: str) -> None:
         if not re.fullmatch(NAME_PATTERN, new_name):
-            raise ImagesError("The name must start with a letter and have only a-z, 0-9 and -, at most 41 characters")
-        if self.name_taken(new_name):
-            raise ImagesError(f"There is already an image named {new_name}")
+            raise ImagesError("The name must start with a letter and have only letters (capitals too), digits and -, at most 41 characters")
+        # Only its own name may differ in case (ubuntu-1 to Ubuntu-1).
+        same = new_name.lower() == name.lower()
+        if not same and self.name_taken(new_name):
+            raise ImagesError(f"There is already an image named {new_name} (or the same in other capitals)")
         with self.lock:
             busy = [task for task in self.tasks if task["status"] == "running" and task["name"] == name]
         if busy:
             raise ImagesError(f"{name} is being built; wait until that is done.")
         # A folder or builder VM left under the new name by an image deleted outside the app would be in the way.
-        shutil.rmtree(DEFINITIONS_DIR / new_name, ignore_errors=True)
-        VM(image_build.BUILDER_PREFIX + new_name).delete()
+        if not same:
+            shutil.rmtree(DEFINITIONS_DIR / new_name, ignore_errors=True)
+            VM(image_build.BUILDER_PREFIX + new_name).delete()
         (DEFINITIONS_DIR / name).rename(DEFINITIONS_DIR / new_name)
         subprocess.run(
             ["incus", "rename", image_build.BUILDER_PREFIX + name, image_build.BUILDER_PREFIX + new_name],
@@ -426,9 +433,9 @@ class Images:
         """Save a new image's image.yaml: the system, desktop and description picked, then the defaults. Nothing is
         built: it is listed as not built until its first build."""
         if not re.fullmatch(NAME_PATTERN, name):
-            raise ImagesError("The name must start with a letter and have only a-z, 0-9 and -, at most 41 characters")
+            raise ImagesError("The name must start with a letter and have only letters (capitals too), digits and -, at most 41 characters")
         if self.name_taken(name):
-            raise ImagesError(f"There is already an image named {name}")
+            raise ImagesError(f"There is already an image named {name} (or the same in other capitals)")
         labels = [each["label"] for each in image_build.SYSTEMS if each["id"] == system]
         if not labels:
             raise ImagesError(f"Unknown system {system}")
@@ -475,7 +482,7 @@ class Images:
         """The image's folder (made when missing: an image saved from a VM has none until its agent writes to it)."""
         # The name comes from the URL too: nothing outside DEFINITIONS_DIR.
         if not re.fullmatch(NAME_PATTERN, name):
-            raise ImagesError(f"{name} can't have a definition: the name must have only a-z, 0-9 and -")
+            raise ImagesError(f"{name} can't have a definition: the name must have only letters, digits and -")
         folder = DEFINITIONS_DIR / name
         folder.mkdir(parents=True, exist_ok=True)
         return folder
@@ -637,9 +644,9 @@ class Images:
     def save_vm(self, vm_name: str, name: str) -> dict:
         """Make an image from a stopped VM (a few minutes). The VM can't start until it is done."""
         if not re.fullmatch(NAME_PATTERN, name):
-            raise ImagesError("The name must start with a letter and have only a-z, 0-9 and -, at most 41 characters")
+            raise ImagesError("The name must start with a letter and have only letters (capitals too), digits and -, at most 41 characters")
         if self.name_taken(name):
-            raise ImagesError(f"There is already an image named {name}")
+            raise ImagesError(f"There is already an image named {name} (or the same in other capitals)")
         try:
             record = self.vms.get(vm_name)
         except VMsError as error:

@@ -7,7 +7,8 @@ Sherpa helps fill this in and change image.yaml afterwards.
 Save only saves it: the image is listed as "not built", with Build and Edit image.yaml, until its first build. Save
 and build also starts that build (minutes).
 
-The name starts as the system and the first free number (ubuntu-1), like vm1 and agent-1, until you type one.
+The name starts as the system and the first free number (ubuntu-1), like vm1 and agent-1, until you type one. It may
+have capitals (Ubuntu-Web); two names that differ only in capitals count as the same.
 The choices come from GET /api/images/new/options. Saving is POST /api/images/new, building POST
 /api/images/<name>/rebuild.
 */
@@ -48,7 +49,10 @@ export default function NewImageDialog(props: { onClose: () => void }) {
 
   // The first free <system>-<n> (ubuntu-1), counting images, the ones never built and the ones being made.
   const base = system.split("-")[0];
-  const taken = [...data.images.flatMap((image) => image.aliases), ...data.unbuilt.map((image) => image.name), ...data.tasks.map((task) => task.name)];
+  // Names are the same whatever their capitals (Ubuntu-1 is ubuntu-1).
+  const taken = [...data.images.flatMap((image) => image.aliases), ...data.unbuilt.map((image) => image.name), ...data.tasks.map((task) => task.name)].map(
+    (each) => each.toLowerCase(),
+  );
   let number = 1;
   while (taken.includes(`${base}-${number}`)) {
     number += 1;
