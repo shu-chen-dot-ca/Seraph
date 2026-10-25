@@ -12,10 +12,13 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
 - Drafts: nothing goes to GitHub from here. A PR, an issue comment or a question becomes a draft
   in the user's Inbox and its job waits on the user. A PR draft's diff is read from the repo
   folder in the VM, so only the agent holding the VM can make one, with the commit it starts from
-  (base_sha: Approve sends exactly that diff on that commit, github_account.py). No draft has emoji in it (EMOJI,
-  the user's rule; a template's emoji are written as words). A PR is written the way the project's
-  own people write theirs: pr_examples shows its main contributors' latest merged PRs and some
-  outside ones, and draft_pr refuses until the agent read them for that repo. The job's before and
+  (base_sha: Approve sends exactly that diff on that commit, github_account.py). No draft has emoji
+  in it (EMOJI, the user's rule; a template's emoji are written as words). A PR is
+  written from the project's contribution rules and its recently merged PRs: contributing_guide
+  gathers the rules wherever they are (CONTRIBUTING in any folder, developer guides in the docs, the
+  PR template, AGENTS.md, and the guides the README and CONTRIBUTING link to, on GitHub or on the
+  project's website), pr_examples shows its main contributors' latest merged PRs and some outside ones,
+  and draft_pr refuses until the agent read both for that repo. The job's before and
   after pictures go in the PR body as ![before](evidence:ev_...): the Inbox shows them in place,
   and sending uploads them to the user's fork (or the user does, sending by hand).
 - Evidence: what the user looks at to decide on a draft. Screenshots of the VM's desktop, image
@@ -24,9 +27,9 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   (jobs.py), and each draft gets a copy. A PR draft needs at least one before and one after.
 - Tests: run_tests runs the project's tests in the VM on the unchanged code (before), then on the
   change (after), with the same command, live in a terminal window on the VM's desktop for the user.
-  Two scopes: focused, the basic checks (the tests that cover the change, the default), and full, the
-  project's official checks (what its rules ask to run before a PR). When the official checks would
-  take over an hour, the agent runs the basic ones and asks the user (draft_question) before the PR.
+  Two scopes: focused, the basic checks (the tests that cover the change, when the rules ask for no
+  more), and full, the project's official checks (what its rules ask to run before a PR), run however
+  long they take (up to TEST_TIMEOUT). It refuses until the agent read the rules (contributing_guide).
   A passing before is needed to go past set_up and an after for a PR draft; an official before of
   another job on the same repo and VM counts too (job_progress carries it over), so a project
   already set up isn't set up again.
@@ -52,7 +55,9 @@ describe() gives the one line the chat shows for each call, of these tools and o
 import asyncio
 import base64
 import hashlib
+import html
 import json
+import posixpath
 import re
 import secrets
 import shlex
@@ -65,7 +70,7 @@ from claude_agent_sdk import tool
 
 from github_searcher.artifacts import ArtifactsError
 from github_searcher.jobs import EVIDENCE_DIR
-from github_searcher.search import get_merged_prs, get_repository, get_thread
+from github_searcher.search import get_contents, get_merged_prs, get_readme, get_repository, get_thread, get_tree
 from sandbox.agent.computer_use import WATCH, Computer, ComputerError
 from sandbox.agent.tools import HIDE_MIN_LENGTH
 from sandbox.file_transfer import FileTransferError, to_vm
@@ -90,8 +95,9 @@ OUTPUT_LIMIT = 20_000
 # The live feed carries only the end of a command's output: this many lines, at most TAIL_CHARS.
 TAIL_LINES = 20
 TAIL_CHARS = 2000
-# A test run may take this long; then it is stopped and counts as failed.
-TEST_TIMEOUT = 3 * 3600
+# A test run may take this long; then it is stopped and counts as failed. Long on purpose: the project's official
+# checks are run however long they take.
+TEST_TIMEOUT = 12 * 3600
 # A fix_issue job can't go past set_up until its tests passed on the unchanged code.
 STEPS_AFTER_SETUP = ["reproduce", "fix", "test", "draft"]
 # What a test run covers: focused, the basic checks (the tests that cover the change: the default), or full, the
@@ -128,6 +134,19 @@ PR_EXAMPLES_EACH = 2
 PR_EXAMPLES_OUTSIDE = 3
 PR_EXAMPLE_CHARS = 3000
 OUTSIDE_ROLES = ["CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE"]
+# contributing_guide: a repo file holds rules for contributors when its name has "contribut" in it (not CONTRIBUTORS, a
+# list of people) or it is in a contributing folder, it is a PR template, or it is one of GUIDE_FILES at the top, in
+# .github/ or in docs/ (an AGENTS.md deeper down is only for its folder: those are named, not shown). Only text files,
+# never in folders of other people's code, test data or translations. Links in the README and in those files are
+# followed when their text or address has one of GUIDE_LINK_WORDS: a file in the repo, or a page on the web (https,
+# at most GUIDE_PAGES of them). Each document is cut at GUIDE_CHARS, all of them together at GUIDE_TOTAL_CHARS.
+GUIDE_FILES = ["agents.md", "ai_policy.md", "development.md", "developing.md", "hacking.md"]
+GUIDE_TEXT_ENDINGS = (".md", ".mdx", ".rst", ".txt", ".adoc")
+GUIDE_SKIP_FOLDERS = ["node_modules/", "vendor/", "third_party/", "site-packages/", "tests/", "fixtures/", "i18n/", "locale/", "locales/", "translations/"]
+GUIDE_LINK_WORDS = ["contribut", "developer guide", "developer-guide", "development guide", "hacking", "pull request", "pull-request"]
+GUIDE_PAGES = 5
+GUIDE_CHARS = 30_000
+GUIDE_TOTAL_CHARS = 120_000
 # Where run_tests's output goes for the terminal window on the desktop.
 TESTS_LOG = "~/.cache/sandbox-tests.log"
 # The overview's wording, said once for every tool that takes one.
@@ -146,6 +165,8 @@ class WorkTools:
         self.agent_id = record["id"]
         # The repos (owner/name, lower case) whose PRs it looked at with pr_examples since the backend started.
         self.pr_examples_read = set()
+        # The repos (owner/name, lower case) whose rules for contributors it read with contributing_guide.
+        self.guides_read = set()
 
     def list(self) -> list:
         names = {"type": "array", "items": {"type": "string"}}
@@ -299,9 +320,10 @@ class WorkTools:
             tool(
                 "run_tests",
                 "Run the project's tests in the VM for one of your fix jobs (only while you hold the VM), and keep the result on "
-                "the job and as evidence. scope: focused (the basic checks, the default: the test files and folders that cover "
-                "the code you change, e.g. `pytest tests/test_parser.py tests/cli/`) or full (the project's official checks: what "
-                "its rules ask to run before a PR, as one command, e.g. `pytest -n 2 && ruff check .`). command: what runs them "
+                "the job and as evidence. Read the project's rules first (contributing_guide). scope: full (the project's official "
+                "checks: what its rules ask to run before a PR, as one command, e.g. `pytest -n 2 && ruff check .`, however long "
+                "they take) or focused (the basic checks, when the rules ask for no more: the test files and folders that cover "
+                "the code you change, e.g. `pytest tests/test_parser.py tests/cli/`). command: what runs them "
                 "(setup belongs in bash before, not here). "
                 "path: the repo folder (e.g. ~/click); base: what you branch from (e.g. origin/main). when: before (on the "
                 "unchanged code: the folder must not differ from base; it has to pass before you change anything), or after (on "
@@ -412,14 +434,23 @@ class WorkTools:
                 {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
             )(self.pr_examples),
             tool(
+                "contributing_guide",
+                "The project's rules for contributors, wherever they are, in full: every CONTRIBUTING file (any folder), "
+                "developer guides in its docs, its PR template, AGENTS.md and the like, and the guides its README and those "
+                "files link to, in the repo or on the project's website. Read all of it before you set up, and follow every "
+                "rule (setup, what to run before a PR and how, commit and PR style), however long its checks take. name: "
+                "owner/name. run_tests and draft_pr refuse until you read it for the job's repo.",
+                {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
+            )(self.contributing_guide),
+            tool(
                 "draft_pr",
                 "Draft a pull request for the user's Inbox from your work in the VM (only while you hold it). Only when you are certain the "
                 "fix is right and complete, and your evidence shows it. path is the repo folder in the VM (e.g. ~/click), base what to "
                 "compare against (e.g. origin/main): the PR goes into that branch. The diff is everything that differs from base, committed or "
                 "not, new files included; it is sent as one commit with the title as its message, your own commits stay in the VM. "
-                "title and body are the PR exactly as it would be sent, in the project's own form: its rules (CONTRIBUTING, its PR "
-                "template: every heading of it must be in the body) and the way its main contributors write their PRs (read "
-                "pr_examples first: their title style, length, sections, tone). No emoji anywhere. Your before and after pictures "
+                "title and body are the PR exactly as it would be sent, written from the project's contribution rules "
+                "(contributing_guide, its PR template: every heading of it must be in the body) and the way its recently merged "
+                "PRs are written (pr_examples: their title style, length, sections, tone). Read both first. No emoji anywhere. Your before and after pictures "
                 "go in the body as ![before](evidence:ev_...) (a Before / After table); they are uploaded with the PR. You push and send "
                 "nothing: the user reviews it, approving sends it from their account, and you get a message with their decision. project, problem, cause, fix and "
                 "risks are only for the user, who reads them first to understand and judge the PR. " + PLAIN,
@@ -596,6 +627,8 @@ class WorkTools:
             return f"Naming itself {args.get('name')}"
         if name == "pr_examples":
             return f"Reading how {args.get('name')}'s people write their PRs"
+        if name == "contributing_guide":
+            return f"Reading {args.get('name')}'s rules for contributors"
         if name == "evidence_add":
             return f"Evidence, {args.get('stage')}: {args.get('topic')} ({args.get('kind')})"
         if name == "evidence_remove":
@@ -1394,6 +1427,172 @@ class WorkTools:
             lines.append(body or "(none)")
         return {"content": [{"type": "text", "text": "\n".join(lines)}]}
 
+    async def contributing_guide(self, args: dict) -> dict:
+        name = (args.get("name") or "").strip()
+        if name.count("/") != 1:
+            return {"content": [{"type": "text", "text": "name must be owner/name."}], "is_error": True}
+        owner = name.split("/")[0]
+        repo = name.split("/")[1]
+        try:
+            info = await asyncio.to_thread(get_repository, owner, repo)
+            tree = await asyncio.to_thread(get_tree, owner, repo, info["default_branch"])
+        except (httpx.HTTPError, ValueError) as error:
+            return {"content": [{"type": "text", "text": f"Could not read {name}: {error}"}], "is_error": True}
+        ref = info["default_branch"]
+        files = set()
+        for item in tree["tree"]:
+            if item["type"] == "blob":
+                files.add(item["path"])
+
+        # The repo's files with rules for contributors, wherever they are (see GUIDE_FILES): the contributing guides and
+        # PR templates first, then AGENTS.md and the like, the ones nearest the top first. A translation
+        # (CONTRIBUTING.es.md) says the same as its original.
+        paths = []
+        folder_rules = []
+        for path in files:
+            lower = path.lower()
+            base = lower.split("/")[-1]
+            if any(folder in lower for folder in GUIDE_SKIP_FOLDERS):
+                continue
+            if not base.endswith(GUIDE_TEXT_ENDINGS) and base != "contributing":
+                continue
+            if re.search(r"\.[a-z]{2}(-[a-z]{2})?\.[a-z]+$", base):
+                continue
+            guide = ("contribut" in base and not base.startswith("contributors")) or "contributing/" in lower
+            if guide or "pull_request_template" in lower:
+                paths.append(path)
+            elif base in GUIDE_FILES and (lower == base or lower.startswith((".github/", "docs/")) and lower.count("/") == 1):
+                paths.append(path)
+            elif base == "agents.md":
+                folder_rules.append(path)
+        paths.sort(key=lambda path: (0 if "contribut" in path.lower() or "pull_request_template" in path.lower() else 1, path.count("/"), len(path)))
+        folder_rules.sort()
+
+        # Read them all at once, and the README for its links.
+        results = await asyncio.gather(*[asyncio.to_thread(get_contents, owner, repo, path, ref) for path in paths], return_exceptions=True)
+        documents = []
+        for path, data in zip(paths, results):
+            if isinstance(data, Exception) or isinstance(data, list) or data.get("encoding") != "base64":
+                continue
+            documents.append((path, base64.b64decode(data["content"]).decode("utf-8", errors="replace")))
+        # No CONTRIBUTING of its own: GitHub shows the one in the owner's .github repo instead, when there is one.
+        if not any("contribut" in path.lower() for path, text in documents):
+            for path in ["CONTRIBUTING.md", ".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md"]:
+                try:
+                    data = await asyncio.to_thread(get_contents, owner, ".github", path)
+                except (httpx.HTTPError, ValueError):
+                    continue
+                if isinstance(data, dict) and data.get("encoding") == "base64":
+                    documents.append((f"{owner}/.github: {path}", base64.b64decode(data["content"]).decode("utf-8", errors="replace")))
+                    break
+        try:
+            readme = await asyncio.to_thread(get_readme, owner, repo)
+        except (httpx.HTTPError, ValueError):
+            readme = ""
+
+        # Links to more rules, in the README and in those files: [text](address) or a bare address, followed when the
+        # text or the address says it is about contributing. A file of this repo (a relative link, or its GitHub link)
+        # is read from the repo; another file on GitHub as its raw text; anything else as a web page.
+        linked = []
+        urls = []
+        this_repo = f"https://github.com/{owner}/{repo}/".lower()
+        for source, text in [("README.md", readme)] + documents:
+            folder = posixpath.dirname(source) if ": " not in source else ""
+            for match in re.finditer(r"\[([^\]]*)\]\(\s*<?([^)\s>]+)>?[^)]*\)|(https?://[^\s<>\"'`)\]]+)", text):
+                label = match.group(1) or ""
+                address = (match.group(2) or match.group(3)).split("#")[0]
+                if address == "" or not any(word in (label + " " + address).lower() for word in GUIDE_LINK_WORDS):
+                    continue
+                if address.lower().startswith(this_repo):
+                    # .../blob/<branch>/<path> or .../tree/<branch>/<path>
+                    parts = address[len(this_repo):].split("/", 2)
+                    if len(parts) != 3 or parts[0] not in ["blob", "tree"]:
+                        continue
+                    path = parts[2]
+                elif address.startswith("https://"):
+                    if address not in urls:
+                        urls.append(address)
+                    continue
+                elif ":" in address:
+                    continue
+                elif address.startswith("/"):
+                    path = posixpath.normpath(address.lstrip("/"))
+                else:
+                    path = posixpath.normpath(posixpath.join(folder, address))
+                if path in files and path not in paths and path not in linked:
+                    linked.append(path)
+        results = await asyncio.gather(*[asyncio.to_thread(get_contents, owner, repo, path, ref) for path in linked], return_exceptions=True)
+        for path, data in zip(linked, results):
+            if isinstance(data, Exception) or isinstance(data, list) or data.get("encoding") != "base64":
+                continue
+            documents.append((path, base64.b64decode(data["content"]).decode("utf-8", errors="replace")))
+        for url in urls[:GUIDE_PAGES]:
+            address = url
+            match = re.match(r"https://github\.com/([^/]+)/([^/]+)/blob/(.+)", url)
+            if match:
+                address = f"https://raw.githubusercontent.com/{match.group(1)}/{match.group(2)}/{match.group(3)}"
+            try:
+                host = httpx.URL(address).host
+                if host == "localhost" or re.fullmatch(r"[0-9.]+|[0-9a-fA-F:]*:[0-9a-fA-F:]*", host):
+                    continue
+                response = await asyncio.to_thread(httpx.get, address, follow_redirects=True, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+            except (httpx.HTTPError, httpx.InvalidURL) as error:
+                documents.append((f"{url} (web page)", f"Could not read it: {error}"))
+                continue
+            # Only public pages: never this computer or its network, also not after a redirect.
+            host = response.url.host
+            if host == "localhost" or re.fullmatch(r"[0-9.]+|[0-9a-fA-F:]*:[0-9a-fA-F:]*", host) or response.url.scheme != "https":
+                continue
+            if response.status_code != 200:
+                documents.append((f"{url} (web page)", f"The page answered {response.status_code}."))
+                continue
+            # A badge or a picture behind the link is no guide.
+            if not response.headers.get("content-type", "").startswith("text/"):
+                continue
+            text = response.text[:2_000_000]
+            if "html" in response.headers.get("content-type", ""):
+                text = re.sub(r"(?is)<(script|style|nav|header|footer|svg)\b.*?</\1>", " ", text)
+                text = re.sub(r"(?s)<[^>]+>", " ", text)
+                text = html.unescape(text)
+                text = re.sub(r"[ \t\r\f\v]+", " ", text)
+                text = re.sub(r"\n\s*\n+", "\n\n", text).strip()
+            documents.append((f"{url} (web page)", text))
+
+        self.guides_read.add(name.lower())
+        if not documents and not folder_rules:
+            text = (
+                f"{name} has no rules for contributors that could be found: no CONTRIBUTING, developer guide, PR template or "
+                "AGENTS.md in the repo, and no link to one in its README. Go by its README and its CI config (.github/workflows/)."
+            )
+            return {"content": [{"type": "text", "text": text}]}
+        lines = [
+            f"The rules for contributors to {name}: {len(documents)} documents. Follow every rule in them, however long the "
+            "checks they ask for take."
+        ]
+        total = 0
+        left = []
+        for title, text in documents:
+            if total >= GUIDE_TOTAL_CHARS:
+                left.append(title)
+                continue
+            if len(text) > GUIDE_CHARS:
+                line = text[:GUIDE_CHARS].count("\n") + 1
+                text = text[:GUIDE_CHARS] + f"\n[cut at line {line}: read on with read_files, start_line {line}]"
+            total += len(text)
+            lines.append("")
+            lines.append(f"=== {title} ===")
+            lines.append(text)
+        if left:
+            lines.append("")
+            lines.append("Too much to show at once, read these with read_files too: " + ", ".join(left))
+        if folder_rules:
+            lines.append("")
+            lines.append("These folders have rules of their own: read the one for each folder you change (read_files): " + ", ".join(folder_rules))
+        if tree.get("truncated"):
+            lines.append("")
+            lines.append("GitHub listed only part of this big repo: look with list_files for more guides in its docs.")
+        return {"content": [{"type": "text", "text": "\n".join(lines)}]}
+
     async def draft_pr(self, args: dict) -> dict:
         try:
             job = self.agents.jobs.get(args["job_id"])
@@ -1432,7 +1631,10 @@ class WorkTools:
         found = EMOJI.findall(" ".join([args["title"], args["body"], overview["project"], overview["problem"], overview["cause"], overview["fix"]] + risks))
         if found:
             return {"content": [{"type": "text", "text": NO_EMOJI + " ".join(sorted(set(found)))}], "is_error": True}
-        # Written the way the project's own people write their PRs: the agent has to have looked.
+        # Written from the project's rules and the way its own people write their PRs: the agent has to have read both.
+        if job["repo"] is not None and job["repo"].lower() not in self.guides_read:
+            text = f"First read {job['repo']}'s rules for contributors (contributing_guide), then write the PR the way they say."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
         if job["repo"] is not None and job["repo"].lower() not in self.pr_examples_read:
             text = f"First read how {job['repo']}'s own people write their PRs (pr_examples), then write yours the same way."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
@@ -1813,6 +2015,10 @@ class WorkTools:
             return {"content": [{"type": "text", "text": f"{job['id']} is not your job."}], "is_error": True}
         if job["status"] in CLOSED_STATUSES:
             text = f"{job['id']} is {job['status']} (the user may have cancelled it); no more test runs for it. Move on."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        # What to run comes from the project's rules: the agent has to have read them.
+        if job["repo"] is not None and job["repo"].lower() not in self.guides_read:
+            text = f"First read {job['repo']}'s rules for contributors (contributing_guide): they say which checks to run before a PR, and how."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         before = job["tests"]["before"]
         if when == "after" and (before is None or not before["passed"]):
