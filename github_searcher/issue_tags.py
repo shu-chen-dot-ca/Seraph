@@ -5,15 +5,22 @@ GitHub's own labels are spelled differently in every repo ("good first issue", "
 each issue instead and gives it tags we define. One JSON file, DATA_DIR/issue_tags.json, by issue id:
 
     {"owner/name#n": {"status": "free" | "assigned" | "waiting", "level": "easy" | "medium" | "hard" | None,
+                      "checks": {"clear", "runs_in_vm", "visible", "checkable", "general", "contained": bool} | None,
                       "kind": "bug" | "feature" | "docs" | "question" | None, "reason", "updated_at", "judged_at"}, ...}
 
 status weighs everything about who may take it: assignees, open pull requests that would close it, the labels
 (good first issue, help wanted and the like invite outside contributors), what the issue template says about the
-author fixing it themselves ("Are you willing to submit a PR?"), claims in the comments, and whether the
-maintainers want it done. free: anyone can start on it now. assigned: someone is on it. waiting: nobody is, but
-it isn't ready (it needs a decision, a design, more information). level is like LeetCode's (LEVELS says what each
-level means). reason is one plain sentence on both. An issue with an assignee on GitHub is assigned without
-asking Claude; its level and kind stay None.
+author fixing it themselves ("Are you willing to submit a PR?"), claims in the comments, and whether the maintainers
+want it done. free: anyone can start on it now. assigned: someone is on it.
+waiting: nobody is, but it isn't ready (it needs a decision, a design, more information).
+
+level is how hard the fix is for us: our agent writing it in its sandbox VM, then seeing and proving it works there.
+It is decided by fixed rules, not by Claude's feel: Claude answers the yes / no questions in CHECKS (checks), and the
+level follows from them. easy: every answer is yes, so the agent can vibe code it, see the effect and prove it in the
+VM. hard: it can't be run in our VM, the fix touches code where a change ripples, or two or more answers are no.
+medium: one answer is no. reason is Claude's plain sentence on the status, then a line on the level that says which
+checks failed. An issue with an assignee on GitHub is assigned without asking Claude; its level, checks and kind stay
+None.
 
 Issues go in batches, not one Claude run each: up to BATCH issues of one repo take one GitHub call, and as many
 of them as fit in CHARS_PER_RUN take one Claude run, the repo said once; AT_ONCE batches run at the same time.
@@ -24,6 +31,12 @@ comment (often why it was closed). Without those, a claim followed by a pull req
 looked like a claim with no pull request at all. Bodies are cut to BODY_CHARS, but the template's part about the author
 fixing it themselves (WILLING finds it) is always kept. updated_at is the issue's last change on GitHub when it
 was tagged: when that changes, the backend tags it again, and a free one every hour anyway (backend/issues_api.py).
+The level is kept once given: the checks and kind stay from one read to the next while the issue hasn't changed on
+GitHub (Claude is told, and the old ones are kept even if it answers otherwise), so a refresh doesn't flip easy and
+medium; only the status is judged afresh every time. When the issue changed, Claude sees the old answers and keeps
+them unless what is new shows otherwise. Tags from before the rules (no checks) are judged afresh once, by the
+backend on its own. Cost isn't a
+concern here: Claude reads at high effort, CHARS_PER_RUN of issues a run. judged_at is when it was last read.
 
 Kept apart from the lists on purpose, like issue_facts.py: undo/redo of a list shouldn't undo tags, and an issue
 that comes back with an undo keeps its tags. version goes up on every change.
@@ -48,21 +61,56 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 DATA_DIR = PROJECT_ROOT / os.environ["DATA_DIR"]
-LEVELS = """\
-- easy: small and well defined, a general programming problem (a wrong condition, a missing check, a message,
-  a small missing option). Little knowledge of this project or its field is needed. The change stays local, its
-  effect is easy to see, and nothing else depends on it in a hidden way. It is easy to check: a short test or a
-  visible result shows it works.
-- medium: needs some knowledge of this project (how its code is organized, its conventions) or of its field
-  (the library's concepts, a file format, a protocol). Still, the effect of the change can be observed well, and
-  the project's test suite plus a focused new test are enough to know it is right.
-- hard: needs real understanding of the project or its field, or touches central or shared code where a change
-  can ripple (public API, performance, concurrency, data formats, security, numerical accuracy, platform
-  differences). Hard to validate fully, or the change carries real responsibility: a design decision,
-  compatibility, many users affected."""
+# Where our agent fixes an issue (sandbox/): the prompt says so, since the checks are about this setup.
+SANDBOX = (
+    "Our agent (Claude Code) fixes the issue inside a sandbox VM: a Linux desktop (Ubuntu, Debian or Fedora) with a "
+    "shell, mouse and keyboard, a browser, Docker and internet, 2 to 16 CPUs, up to 16 GB of RAM, and an NVIDIA GPU when "
+    "one is handed in. It clones the repo, reproduces the problem, writes the fix, runs the project's tests before and "
+    "after, and takes screenshots or command output as proof."
+)
+# The yes / no questions the level is decided from: (key, question, what it means when the answer is no).
+CHECKS = [
+    (
+        "clear",
+        "Is it clear what done looks like: the wanted behavior or change is stated or obvious, with no design choice left "
+        "for the maintainers?",
+        "what done looks like isn't settled",
+    ),
+    (
+        "runs_in_vm",
+        "Can the project be built and the problem be reproduced in our VM? No when it needs macOS, Windows or a phone, "
+        "hardware other than one NVIDIA GPU, a paid service, an account or an API key, several machines, or a build that "
+        "takes hours.",
+        "can't be run in our VM",
+    ),
+    (
+        "visible",
+        "Can the problem, and later the fix, be seen plainly in the VM: a failing test, an error or wrong output from a "
+        "command, or a wrong screen in an app or a page?",
+        "its effect is hard to see",
+    ),
+    (
+        "checkable",
+        "Would a short test or one plain look at the result prove it is fixed, with the project's own tests runnable in "
+        "the VM?",
+        "hard to prove it is fixed",
+    ),
+    (
+        "general",
+        "Is general programming knowledge enough: no deep knowledge of this project's internals or of its field (a "
+        "protocol, a file format, math, compilers, ...) beyond reading the code around it?",
+        "needs knowledge of the project or its field",
+    ),
+    (
+        "contained",
+        "Does the fix stay local, away from central or shared code where a change can ripple: public API, data formats, "
+        "concurrency, security, performance, numerical accuracy, platform differences?",
+        "touches code where a change can ripple",
+    ),
+]
 # Issues of one repo per GitHub call; the text of as many as fit in CHARS_PER_RUN goes in one Claude run.
 BATCH = 20
-CHARS_PER_RUN = 100_000
+CHARS_PER_RUN = 50_000
 # Batches tagged at the same time.
 AT_ONCE = 3
 BODY_CHARS = 2000
@@ -70,6 +118,7 @@ COMMENT_CHARS = 1000
 BOT_CHARS = 200
 PULL_COMMENT_CHARS = 400
 REASON_CHARS = 240
+EFFORT = "high"
 # A line where an issue template asks whether the author will fix it themselves: "Are you willing to submit a PR?",
 # "Would you like to work on this?", "I'm interested in implementing this", ... The line and the next few (the answer) are kept.
 WILLING = re.compile(
@@ -88,11 +137,16 @@ SCHEMA = {
                 "properties": {
                     "number": {"type": "integer"},
                     "status": {"type": "string", "enum": ["free", "assigned", "waiting"]},
-                    "level": {"type": "string", "enum": ["easy", "medium", "hard"]},
                     "kind": {"type": "string", "enum": ["bug", "feature", "docs", "question"]},
                     "reason": {"type": "string"},
+                    "clear": {"type": "boolean"},
+                    "runs_in_vm": {"type": "boolean"},
+                    "visible": {"type": "boolean"},
+                    "checkable": {"type": "boolean"},
+                    "general": {"type": "boolean"},
+                    "contained": {"type": "boolean"},
                 },
-                "required": ["number", "status", "level", "kind", "reason"],
+                "required": ["number", "status", "kind", "reason", "clear", "runs_in_vm", "visible", "checkable", "general", "contained"],
             },
         }
     },
@@ -162,6 +216,8 @@ class IssueTags:
         found = {}
         texts = []
         updated = {}
+        # {number: (checks, kind)}: read before and unchanged since, so those stay (and so the level).
+        kept = {}
         for number in numbers:
             issue = data.get(f"i{number}")
             if issue is None:
@@ -171,7 +227,7 @@ class IssueTags:
             assignees = [user["login"] for user in issue["assignees"]["nodes"]]
             if assignees:
                 reason = f"Assigned on GitHub to {', '.join(assignees)}."
-                found[issue_id] = {"status": "assigned", "level": None, "kind": None, "reason": reason, "updated_at": issue["updatedAt"], "judged_at": now}
+                found[issue_id] = {"status": "assigned", "level": None, "checks": None, "kind": None, "reason": reason, "updated_at": issue["updatedAt"], "judged_at": now}
                 continue
             updated[number] = issue["updatedAt"]
 
@@ -247,6 +303,18 @@ class IssueTags:
                         commenter += ", a bot"
                         limit = BOT_CHARS
                 text += f"\n--- {commenter} ({comment['authorAssociation']}), {comment['createdAt'][:10]}:\n{comment['body'][:limit]}"
+
+            # Read before by the rules: its checks and kind stay while nothing changed on GitHub, so the level doesn't flip
+            # between reads. Tags from before the rules (no checks) are judged afresh.
+            with self.lock:
+                before = self.tags.get(issue_id)
+            if before is not None and before.get("checks"):
+                answers = ", ".join(f"{key} {'yes' if value else 'no'}" for key, value in before["checks"].items())
+                if before["updated_at"] == issue["updatedAt"]:
+                    kept[number] = (before["checks"], before["kind"])
+                    text += f"\n\nRead before: {answers}; kind {before['kind']}. Nothing changed since: give the same answers."
+                else:
+                    text += f"\n\nRead before: {answers}; kind {before['kind']}. It changed since: keep those answers unless what is new shows otherwise."
             texts.append(text)
 
         # As many issues per Claude run as fit in CHARS_PER_RUN.
@@ -292,15 +360,16 @@ class IssueTags:
                 "outcome wanted is clear, and nothing waits on the maintainers.\n"
                 "- waiting: nobody is on it, but it isn't ready to pick up: it needs a maintainer's decision or a design, more "
                 "information or a reproduction, or the maintainers keep it for themselves.\n\n"
-                "level: how hard it is to fix well, the way LeetCode rates problems. Judge how much knowledge of this project and "
-                "its field the fix needs, whether the effect of the fix can be seen plainly, without hidden knock-on effects, and "
-                f"how easily the fix can be checked.\n{LEVELS}\n\n"
+                f"The checks, for how hard it is for us to fix. {SANDBOX} Answer each one yes (true) or no (false) on its own, "
+                "from what the issue and its comments say; when it is unclear, answer no.\n"
+                + "".join(f"- {key}: {question}\n" for key, question, failed in CHECKS)
+                + "\n"
                 "kind: bug, feature (new behavior or an improvement), docs, or question (a support question, nothing to fix).\n\n"
-                "reason: one short, plain sentence on why it has that status and level, at most 160 characters (no file or "
-                "function names).\n\n"
+                "reason: one short, plain sentence on why it has that status, at most 160 characters (no file or function "
+                "names).\n\n"
                 "Answer for every issue, by its number.\n\n" + "\n\n".join(run)
             )
-            answer = await judge(prompt, SCHEMA, "medium")
+            answer = await judge(prompt, SCHEMA, EFFORT)
             answered = {}
             for item in answer["issues"]:
                 # Only the issues asked about.
@@ -309,10 +378,30 @@ class IssueTags:
                 reason = item["reason"].strip()
                 if len(reason) > REASON_CHARS:
                     reason = reason[:REASON_CHARS - 1].rstrip() + "…"
+                checks = {}
+                for key, question, failed in CHECKS:
+                    checks[key] = item[key]
+                kind = item["kind"]
+                if item["number"] in kept:
+                    checks = kept[item["number"]][0]
+                    kind = kept[item["number"]][1]
+                # The level by the rules: every check yes is easy; not runnable in our VM, a rippling change, or two or
+                # more checks no is hard; one is medium.
+                failures = [failed for key, question, failed in CHECKS if not checks.get(key)]
+                level = "medium"
+                if not failures:
+                    level = "easy"
+                elif not checks.get("runs_in_vm") or not checks.get("contained") or len(failures) >= 2:
+                    level = "hard"
+                if level == "easy":
+                    reason += " Easy: our agent can write it, see it and prove it in the VM."
+                else:
+                    reason += f" {level.capitalize()}: {'; '.join(failures)}."
                 answered[f"{full_name}#{item['number']}"] = {
                     "status": item["status"],
-                    "level": item["level"],
-                    "kind": item["kind"],
+                    "level": level,
+                    "checks": checks,
+                    "kind": kind,
                     "reason": reason,
                     "updated_at": updated[item["number"]],
                     "judged_at": datetime.now(UTC).isoformat(),

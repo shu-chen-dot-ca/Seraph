@@ -161,6 +161,8 @@ export type IssueItem = {
 export type IssueTags = {
   status: "free" | "assigned" | "waiting";
   level: "easy" | "medium" | "hard" | null;
+  // The yes / no answers the level follows from by fixed rules; missing on tags from before the rules.
+  checks?: Record<"clear" | "runs_in_vm" | "visible" | "checkable" | "general" | "contained", boolean> | null;
   kind: "bug" | "feature" | "docs" | "question" | null;
   reason: string;
   updated_at: string;

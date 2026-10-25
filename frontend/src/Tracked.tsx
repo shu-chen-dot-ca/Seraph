@@ -9,8 +9,9 @@ ones and every good first or help wanted one. An issue is new for three days aft
 unless Mark all as read saw it; the row shows how many are new, the sidebar the total. Check now asks GitHub at once.
 
 GitHub's labels aren't shown: each issue carries the app's own tags instead, the same as on the Issues page
-(github_searcher/issue_tags.py, made by Claude in the background): Free or Assigned, Easy / Medium / Hard, and its
-kind, each in its own column, the reason on hover. Assigned on GitHub counts as Assigned at once, without waiting
+(github_searcher/issue_tags.py, made by Claude in the background): Free or Assigned, Easy / Medium / Hard (how hard
+the fix is for our agent in its VM, by fixed rules, the same as on the Issues page; kept until the issue changes), and
+its kind, each in its own column, the reason on hover. Assigned on GitHub counts as Assigned at once, without waiting
 for the tags. Tag again (on the repo's row) has Claude read all its unassigned issues again now.
 
 The list is a table like the Explore page's: Name and its description under it, then TRACKED_COLUMNS: first the
@@ -86,7 +87,7 @@ const TRACKED_COLUMNS: { key: TrackedKey; label: string; title: string; better?:
   { key: "stars", label: "Stars", title: "Stars on GitHub" },
   { key: "new", label: "New", title: "Open issues opened in the last 3 days and not marked read, assigned or not" },
   { key: "free", label: "Free", title: "Open issues a newcomer can start on now: nobody is on it and the maintainers want it done" },
-  { key: "easy", label: "Easy", title: "Free issues Claude rates easy" },
+  { key: "easy", label: "Easy", title: "Free issues that are easy: our agent can write the fix, see it and prove it in its VM" },
   { key: "open", label: "Open", title: "Open issues its last check found" },
   { key: "checked", label: "Checked", title: "When the backend last asked GitHub" },
 ];
@@ -102,7 +103,7 @@ const ISSUE_HEADERS: { key: IssueKey; label: string; title: string }[] = [
   { key: "number", label: "#", title: "Its number on GitHub, newest first" },
   { key: "title", label: "Title", title: "A to Z" },
   { key: "free", label: "Free", title: "Free first (a newcomer can start now), then not ready yet, then assigned" },
-  { key: "level", label: "Level", title: "How hard: easy, medium or hard, like LeetCode's levels; the hardest first" },
+  { key: "level", label: "Level", title: "How hard the fix is for our agent in its VM, by fixed rules: easy (it can write it, see it and prove it there), medium or hard; the hardest first" },
   { key: "kind", label: "Kind", title: "Bug, docs, feature or question: A to Z" },
   { key: "opened", label: "Opened", title: "When it was opened on GitHub, newest first" },
   { key: "updated", label: "Updated", title: "Its last change on GitHub: a comment, a label, an edit…; the latest first" },

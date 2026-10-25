@@ -185,7 +185,8 @@ async def keep_facts() -> None:
 
 
 async def keep_tags() -> None:
-    """Runs as long as the backend: tags every issue that has no tags yet, changed on GitHub since, or was free an hour ago.
+    """Runs as long as the backend: tags every issue that has no tags yet, changed on GitHub since, was free an hour ago,
+    or has a level from before the level rules.
 
     Those are the Issues list's issues, then the tracked repos' open issues nobody is assigned to (the page
     shows an assigned one as assigned without asking), newest first. issue_tags.tag batches them.
@@ -226,6 +227,9 @@ async def keep_tags() -> None:
             elif updated_at is not None and tags["updated_at"] != updated_at:
                 todo.append(issue_id)
             elif tags["status"] == "free" and datetime.fromisoformat(tags["judged_at"]) < free_before:
+                todo.append(issue_id)
+            elif tags["level"] is not None and "checks" not in tags:
+                # Its level is from before the level rules (issue_tags.CHECKS): once more, by them.
                 todo.append(issue_id)
 
         if todo:

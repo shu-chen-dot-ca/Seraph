@@ -20,9 +20,12 @@ with it. Times re-render every minute.
 GitHub's labels aren't shown: each issue carries the app's own tags instead, the same as on the Tracked page
 (github_searcher/issue_tags.py, made by Claude in the background), each in its own column and sorted like the others:
 Free (a newcomer can start now) or Assigned (someone is on it: an assignee, a claim, the author doing it), its Kind, and
-a Level like LeetCode's: easy (small, well defined, a general programming problem), medium (needs some project or domain
-knowledge, still easy to observe and check with the test suite) or hard (needs real understanding, changes can ripple,
-hard to validate). The level picker shows one level only. Tag again (in the open row) has Claude read it again now.
+a Level: how hard the fix is for our agent in its sandbox VM, decided by fixed rules from six yes / no checks Claude
+answers (the goal is clear, it runs in our VM, its effect is easy to see, easy to prove fixed, general programming
+knowledge is enough, the change stays local). easy: all yes, so the agent can vibe code it, see it and prove it in the
+VM; hard: it can't run in our VM, the change ripples, or two or more are no; medium: one is no. The reason on hover ends
+with which checks failed. A level is kept once given: it changes only when the issue changes on GitHub. The level
+picker shows one level only. Tag again (in the open row) has Claude read it again now.
 
 Rows open in place: the tags and why, the facts in full (author and role, last comment and who wrote it, assignees, linked PRs,
 the repo's last push), the agent's note, the issue body and its comments below it, each with who wrote it and when
@@ -91,7 +94,7 @@ const TITLE_COLUMN: IssueColumn = { key: "title", label: "Title", title: "A to Z
 const ISSUE_COLUMNS: IssueColumn[] = [
   { key: "repo", label: "Repo", title: "The repo it is in", better: "text" },
   { key: "free", label: "Free", title: "Free first (a newcomer can start now), then not ready yet, then assigned", better: "higher" },
-  { key: "level", label: "Level", title: "How hard the issue is: easy, medium or hard, judged by Claude like LeetCode's levels", better: "higher" },
+  { key: "level", label: "Level", title: "How hard the fix is for our agent in its VM, by fixed rules: easy (it can write it, see it and prove it there), medium or hard", better: "higher" },
   { key: "kind", label: "Kind", title: "Bug, docs, feature or question: A to Z", better: "text" },
   { key: "stars", label: "Stars", title: "The repo's stars", better: "higher" },
   { key: "opened", label: "Opened", title: "When the issue was opened on GitHub", better: "higher" },
