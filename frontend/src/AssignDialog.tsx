@@ -79,7 +79,8 @@ export default function AssignDialog(props: { issue: IssueItem; onClose: () => v
       }}
     >
       <DialogContent className="sm:max-w-md">
-        <DialogHeader>
+        {/* min-w-0 lets the truncated title shrink; without it a long issue title widens the dialog's grid past its box */}
+        <DialogHeader className="min-w-0">
           <DialogTitle>
             Assign {props.issue.repo}#{props.issue.number}
           </DialogTitle>
