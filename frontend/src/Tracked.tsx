@@ -28,7 +28,7 @@ left (Name, AI policy, ...) up to Free; with none, it is the list's order. Every
 
 Each row opens in place to its issues, newest first, with tabs Free (a newcomer can start on it now) / Assigned (someone is on it) / All (Free when there are free
 ones). The issues are a table too, sorted the same way by clicks on its columns' headers (one order for every open
-repo; Free first, then to its right to the end, then # and Title): ISSUE_HEADERS. A click on an issue opens it in full in a pop-up, its comments below (IssueDetailsDialog); its # and the
+repo; Free first, then to its right to the end, then # and Title): ISSUE_HEADERS (Checked: when Claude last read it and its comments and updated its tags). A click on an issue opens it in full in a pop-up, its comments below (IssueDetailsDialog); its # and the
 arrow button at the row's end open it on GitHub in a new tab. An issue goes into the Issues list with one click (its
 repo into Repos too), or links there when it is in already. The list is short (repos the user picked), so every row is drawn; times re-render every minute.
 Many rows are picked like in a mail app (components/ui/row-selection.tsx): Ctrl-click, Shift-click, dragging a rectangle,
@@ -97,10 +97,10 @@ const TRACKED_COLUMNS: { key: TrackedKey; label: string; title: string; better?:
 const POLICY_RANK: Record<string, number> = { welcome: 5, disclose: 4, none: 3, unclear: 2, no_ai: 1 };
 const NEWCOMER_RANK: Record<string, number> = { welcomes: 4, ok: 3, few: 2, wait: 1 };
 const TONE_RANK: Record<string, number> = { warm: 4, neutral: 3, strict: 2, curt: 1 };
-// An open repo's issues: #, Title (the room left over), the tags (Free, Level, Kind), Opened, Updated, comments, then
-// GitHub and Add.
-const ISSUE_COLUMNS = "grid grid-cols-[56px_minmax(0,1fr)_72px_64px_72px_150px_80px_36px_120px] items-center gap-2";
-type IssueKey = "number" | "title" | "free" | "level" | "kind" | "opened" | "updated" | "comments";
+// An open repo's issues: #, Title (the room left over), the tags (Free, Level, Kind), Opened, Updated, Checked (Claude
+// last read it), comments, then GitHub and Add.
+const ISSUE_COLUMNS = "grid grid-cols-[56px_minmax(0,1fr)_72px_64px_72px_150px_80px_80px_36px_120px] items-center gap-2";
+type IssueKey = "number" | "title" | "free" | "level" | "kind" | "opened" | "updated" | "read" | "comments";
 const ISSUE_HEADERS: { key: IssueKey; label: string; title: string }[] = [
   { key: "number", label: "#", title: "Its number on GitHub, newest first" },
   { key: "title", label: "Title", title: "A to Z" },
@@ -109,6 +109,7 @@ const ISSUE_HEADERS: { key: IssueKey; label: string; title: string }[] = [
   { key: "kind", label: "Kind", title: "Bug, docs, feature or question: A to Z" },
   { key: "opened", label: "Opened", title: "When it was opened on GitHub, newest first" },
   { key: "updated", label: "Updated", title: "Its last change on GitHub: a comment, a label, an edit…; the latest first" },
+  { key: "read", label: "Checked", title: "When Claude last read it and its comments and updated its tags (Free, Level, Kind); the latest first" },
   { key: "comments", label: "", title: "Comments, the most first" },
 ];
 // The tags' order for sorting and their colors (the same as on the Issues page): levels like LeetCode's green / amber / red.
@@ -296,6 +297,9 @@ export default function Tracked() {
     }
     if (key === "updated") {
       return issue.updated_at !== undefined ? new Date(issue.updated_at).getTime() : null;
+    }
+    if (key === "read") {
+      return tags !== null ? new Date(tags.judged_at).getTime() : null;
     }
     return issue.comments;
   }
@@ -779,6 +783,9 @@ export default function Tracked() {
                                 </span>
                                 <span className="truncate text-muted-foreground" title={issue.updated_at !== undefined ? new Date(issue.updated_at).toLocaleString() : "Known after the next check"}>
                                   {issue.updated_at !== undefined ? timeAgo(issue.updated_at) : "–"}
+                                </span>
+                                <span className="truncate text-muted-foreground" title={tags !== null ? new Date(tags.judged_at).toLocaleString() : "Claude hasn't read it yet"}>
+                                  {tags !== null ? timeAgo(tags.judged_at) : "–"}
                                 </span>
                                 <span className="flex items-center gap-1 text-muted-foreground tabular-nums" title="Comments">
                                   <MessageSquare className="size-3.5" />
