@@ -1,16 +1,18 @@
-"""The GitHub page: your PRs on GitHub and how each one stands (github_searcher/pr_tracking.py), and changes you
-make to them, as you (github_searcher/github_account.py). Its Account tab connects the account itself
-(backend/github_account_api.py).
+"""The GitHub page: your PRs on GitHub and how each one stands (github_searcher/pr_tracking.py), the comments
+the app posted for you, and changes you make to them, as you (github_searcher/github_account.py). Its Account
+tab connects the account itself (backend/github_account_api.py).
 
 keep_prs(), which the app runs in the background, reads the PRs again every PRS_REFRESH_SECONDS, and at once
 when Approve just sent a PR that isn't followed yet. Check now (POST /api/github/refresh) reads them at once.
 The buttons (each asks "are you sure?" in the browser first): close or reopen one of your PRs, delete a closed
-or merged PR's branch from your fork. After a change, the PRs are read again. The PRs reach the browser through
-/api/live (topic "prs").
+or merged PR's branch from your fork, delete a comment the app posted (the draft then says when). After a change
+to a PR, the PRs are read again. The PRs reach the browser through /api/live (topic "prs"), the comments with
+the Inbox's drafts (topic "inbox").
 """
 
 import asyncio
 import time
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
 
@@ -41,6 +43,24 @@ async def change_pr(owner: str, name: str, number: int, action: str) -> dict:
     except SendError as error:
         raise HTTPException(status_code=400, detail=str(error))
     await asyncio.to_thread(pr_tracking.refresh)
+    return {"done": done}
+
+
+@router.post("/github/comments/{draft_id}/delete")
+async def delete_comment(draft_id: str) -> dict:
+    """Delete a comment the app posted for you, from its draft. The draft keeps that it was deleted, and when."""
+    try:
+        draft = inbox.get(draft_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No draft {draft_id}.")
+    sent = draft["sent"]
+    if sent is None or sent["kind"] != "comment":
+        raise HTTPException(status_code=400, detail="That draft didn't post a comment.")
+    try:
+        done = await asyncio.to_thread(github_account.manage, "delete_comment", sent["repo"], sent["id"])
+    except SendError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    inbox.mark_sent(draft_id, {**sent, "deleted_at": datetime.now(UTC).isoformat()})
     return {"done": done}
 
 

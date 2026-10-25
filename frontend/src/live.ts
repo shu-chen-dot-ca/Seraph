@@ -435,6 +435,7 @@ export type DraftSent = {
   base_sha?: string;
   commit?: string;
   id?: number; // comment: its id on GitHub
+  deleted_at?: string; // comment: when you deleted it on the GitHub page
 };
 
 // One of your PRs on GitHub and how it stands (github_searcher/pr_tracking.py): the ones Approve sent, and your

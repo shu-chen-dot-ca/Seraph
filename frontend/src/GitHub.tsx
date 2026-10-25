@@ -1,5 +1,5 @@
 /*
-The GitHub page (#/github, #/github?tab=closed|account): your GitHub things in one place. Tabs:
+The GitHub page (#/github, #/github?tab=closed|comments|account): your GitHub things in one place. Tabs:
 - Open PRs / Closed PRs (merged ones too): your PRs on GitHub and how each one stands
   (github_searcher/pr_tracking.py): every PR the Inbox's Approve sent, and your other PRs on other people's
   projects (the ones you sent by hand, found with your account), the newest change first. The header says when
@@ -14,6 +14,8 @@ The GitHub page (#/github, #/github?tab=closed|account): your GitHub things in o
   it fixes with who they are assigned to, why the last read failed (if it did), links (the PR on GitHub, the draft
   it was sent from in the Inbox, its job), and what you can do: Close PR on an open one; Reopen PR and Delete
   branch (from your fork) on a closed one; Delete branch on a merged one.
+- Comments: the comments the app posted for you (approved comment drafts), newest first: where (repo and number),
+  the start of the text, when. A click opens it: the whole text, links (on GitHub, its draft), and Delete comment.
 - Account: your GitHub account, the one Approve in the Inbox sends PRs and comments as and these buttons act as
   (github_searcher/github_account.py). Paste a classic token with the public_repo scope and Connect: the backend
   checks it with GitHub (a fine-grained token, or one without that scope, is turned down with why) and keeps it on
@@ -42,11 +44,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { since, useNow } from "@/components/ui/job-progress";
+import { Markdown } from "@/components/ui/markdown";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, useLive, useLoaded, type GithubAccountStatus, type TrackedPR } from "@/live";
 import { cn } from "@/lib/utils";
 
-const TABS = ["open", "closed", "account"];
+const TABS = ["open", "closed", "comments", "account"];
 
 const CHECKS_TEXT: Record<string, string> = {
   waiting: "Waiting for a maintainer to approve the checks",
@@ -132,6 +135,7 @@ export default function GitHub(props: { tab: string | null }) {
 
   const openPRs = prs.items.filter((pr) => pr.state === "open");
   const closedPRs = prs.items.filter((pr) => pr.state !== "open");
+  const comments = inbox.filter((draft) => draft.sent !== null && draft.sent.kind === "comment").sort((a, b) => (b.sent?.at ?? "").localeCompare(a.sent?.at ?? ""));
   // The forks Approve sent PRs from, once each.
   const forks: string[] = [];
   for (const draft of inbox) {
@@ -215,6 +219,9 @@ export default function GitHub(props: { tab: string | null }) {
             </TabsTrigger>
             <TabsTrigger value="closed" className="px-2.5">
               Closed PRs <span className="text-xs text-muted-foreground tabular-nums">{closedPRs.length}</span>
+            </TabsTrigger>
+            <TabsTrigger value="comments" className="px-2.5">
+              Comments <span className="text-xs text-muted-foreground tabular-nums">{comments.length}</span>
             </TabsTrigger>
             <TabsTrigger value="account" className="px-2.5">
               Account
@@ -413,6 +420,67 @@ export default function GitHub(props: { tab: string | null }) {
                           </Button>
                         )}
                       </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+        {tab === "comments" && comments.length === 0 && (
+          <div className="px-3 py-2 text-muted-foreground">No comments yet. A comment you approve in the Inbox shows here once it is on GitHub.</div>
+        )}
+        {tab === "comments" &&
+          comments.map((draft) => {
+            const sent = draft.sent!;
+            const isOpen = open.includes(draft.id);
+            const deleted = sent.deleted_at !== undefined;
+            return (
+              <div key={draft.id} className="border-b">
+                <div className={cn("flex cursor-pointer items-start gap-2 px-3 py-1.5 hover:bg-accent/50", isOpen && "bg-accent/40")} onClick={() => toggle(draft.id)}>
+                  <ChevronRight className={cn("mt-0.5 size-3.5 shrink-0 text-muted-foreground transition-transform", isOpen && "rotate-90")} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex min-w-0 items-baseline gap-2">
+                      <span className={cn("truncate", deleted && "text-muted-foreground line-through")}>{draft.body.split("\n")[0]}</span>
+                      <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                        {deleted ? `deleted ${since(sent.deleted_at ?? null, now)} ago` : `posted ${since(sent.at, now)} ago`}
+                      </span>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      on {sent.repo} #{sent.number}
+                    </div>
+                  </div>
+                </div>
+                {isOpen && (
+                  <div className="space-y-2 px-3 pb-3 pl-[30px] text-xs">
+                    <Markdown text={draft.body} repo={sent.repo} githubImagesOnly issueRefs />
+                    <div className="flex flex-wrap items-center gap-3">
+                      {!deleted && (
+                        <a href={sent.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 hover:underline">
+                          Open on GitHub <ExternalLink className="size-3" />
+                        </a>
+                      )}
+                      <a href={`#/inbox/${draft.id}`} className="hover:underline">
+                        Its draft
+                      </a>
+                      {!deleted && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="ml-auto"
+                          disabled={busy}
+                          onClick={() =>
+                            ask({
+                              title: `Delete your comment on ${sent.repo} #${sent.number}?`,
+                              text: "It is deleted from GitHub, for good. People who were notified may still have it in their email.",
+                              label: "Delete comment",
+                              path: `/api/github/comments/${draft.id}/delete`,
+                            })
+                          }
+                        >
+                          Delete comment
+                        </Button>
+                      )}
                     </div>
                   </div>
                 )}

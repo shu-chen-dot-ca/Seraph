@@ -8,7 +8,7 @@ The left tree, like Proxmox's resource tree. Every line is a link to a page, in 
 - doing it, under a line: Jobs (open / all), Agents (one child per agent), then under another line VMs (one child per VM);
 - the computer, under another line: Resource (this computer's CPU, memory, GPUs, disk, network and battery,
   Resource.tsx);
-- pinned at the bottom: Inbox, GitHub (your PRs on GitHub and how each stands, and your account, with how
+- pinned at the bottom: Inbox, GitHub (your PRs on GitHub and how each stands, your comments and your account, with how
   many PRs are open; GitHub.tsx) and Settings (below).
 Counts and status dots come straight from the live store, so the tree updates itself.
 The chevrons only fold Issues / Agents / VMs; clicking a name opens that page.

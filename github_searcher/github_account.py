@@ -36,11 +36,11 @@ What was sent is kept on the draft as "sent" (Inbox.mark_sent):
 
     PR:      {"kind": "pr", "url", "number", "repo", "fork", "branch", "base_branch", "base_sha",
               "commit", "as": "<your login>", "at"}
-    comment: {"kind": "comment", "url", "id", "repo", "number", "as", "at"}
+    comment: {"kind": "comment", "url", "id", "repo", "number", "as", "at", "deleted_at" once deleted from the GitHub page}
 
 manage(action, repo, number) is one change you make from the GitHub page, as you: close or reopen one
-of your PRs, or delete a closed PR's branch from your fork. It checks first that the PR is yours and the
-branch is in your fork. Following your PRs is pr_tracking.py.
+of your PRs, delete a closed PR's branch from your fork, or delete a comment the app posted for you. It
+checks first that the PR is yours and the branch is in your fork. Following your PRs is pr_tracking.py.
 
 Later (not built yet): the agent's next version pushed onto the same PR. "sent" has what that needs:
 the fork, branch and commit (tree() on base_sha with the new diff, in a commit whose parent is "commit").
@@ -477,15 +477,22 @@ class GithubAccount:
         }
 
     def manage(self, action: str, repo: str, number: int) -> str:
-        """One change on GitHub from the GitHub page, as you. action: "close" or "reopen" your PR repo#number, or
-        "delete_branch" (a closed or merged PR's branch, from your fork). Returns what happened, in words; SendError
-        says why it didn't. Runs in a thread."""
+        """One change on GitHub from the GitHub page, as you. action: "close" or "reopen" your PR repo#number,
+        "delete_branch" (a closed or merged PR's branch, from your fork), or "delete_comment" (number is the comment's
+        id on GitHub). Returns what happened, in words; SendError says why it didn't. Runs in a thread."""
         account = self.load()
         if account is None:
             raise SendError("Connect your GitHub account first: the GitHub page, Account.")
         headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {account['token']}", "X-GitHub-Api-Version": "2022-11-28"}
         try:
             with httpx.Client(base_url=API, headers=headers, timeout=60) as client:
+                if action == "delete_comment":
+                    response = client.delete(f"/repos/{repo}/issues/comments/{number}")
+                    if response.status_code == 404:
+                        return "The comment is gone already."
+                    response.raise_for_status()
+                    return "Deleted the comment."
+
                 response = client.get(f"/repos/{repo}/pulls/{number}")
                 response.raise_for_status()
                 pull = response.json()

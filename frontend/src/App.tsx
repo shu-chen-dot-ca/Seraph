@@ -5,7 +5,7 @@ On its right: this repo on GitHub (a new tab, so the app stays open). Sherpa's r
 right of every page (Sherpa.tsx).
 
 The page lives in the URL hash, so refresh and back/forward work and switching pages never reloads:
-  #/inbox  #/inbox/<draft id>  #/github  #/github?tab=closed|account  #/issues  #/issues?repo=owner/name  #/jobs  #/jobs/<job id>  #/explore  #/repos  #/tracked
+  #/inbox  #/inbox/<draft id>  #/github  #/github?tab=closed|comments|account  #/issues  #/issues?repo=owner/name  #/jobs  #/jobs/<job id>  #/explore  #/repos  #/tracked
   #/agents  #/agents/<agent id>  #/vms  #/vms?tab=images  #/vms?tab=defaults  #/vms/<vm name>  #/resource
 Links are plain <a href="#/..."> everywhere; App only reads the hash.
 
