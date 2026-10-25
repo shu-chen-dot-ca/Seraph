@@ -5,7 +5,13 @@ DATA_DIR/agents/<id>.json:
 
     {"id": "agent_a1b2c3", "name": "agent-1", "target_vm": "vm1" | null, "claude_session_id",
      "history": [HistoryEntry, ...], "context_used", "context_max", "cost_usd", "created_at",
-     "pending": [message, ...], "awake": bool, "archived_at": null | when it was archived}
+     "pending": [message, ...], "awake": bool, "archived_at": null | when it was archived,
+     "name_by": "auto" | "user" | "agent"}
+
+name_by says who gave the name. An agent made without one gets the first free "agent-N" (auto); while it
+has that, it may name itself once, for the work it does (WorkTools.name_yourself), and the app tells it so
+with its first message or job. A name the user gave (user) is never changed by the agent, and one it gave
+itself (agent) stays too; the user can always rename it.
 
 Any agent can be archived: it stops, its open jobs are cancelled and it leaves every VM queue, but its
 conversation stays, so it can pick up where it left off (an update on its PR). The app's messages to an
@@ -139,8 +145,9 @@ class Agents:
             # wakes for them; the others (e.g. interrupted by the user) keep waiting for a message.
             self.pending[agent.id] = record.get("pending", [])
             self.wake[agent.id] = asyncio.Event()
-            # Agents from before archiving.
+            # Agents from before archiving, and from before name_by (an "agent-N" name was the automatic one).
             record.setdefault("archived_at", None)
+            record.setdefault("name_by", "auto" if re.fullmatch(r"agent-\d+", record["name"]) else "user")
             if record.get("awake") and self.pending[agent.id] and record["archived_at"] is None:
                 self.wake[agent.id].set()
             self.nudges[agent.id] = {"count": 0, "state": None}
@@ -366,6 +373,7 @@ class Agents:
         """A new agent with no target VM. Without a name it gets the first free "agent-N"."""
         names = [agent.name for agent in self.agents.values()]
         name = name.strip()
+        name_by = "user" if name else "auto"
         if name in names:
             raise ValueError(f"There is already an agent named {name}")
         if not name:
@@ -388,6 +396,7 @@ class Agents:
             "cost_usd": 0.0,
             "created_at": datetime.now(UTC).isoformat(),
             "archived_at": None,
+            "name_by": name_by,
         }
         computer_tools = ComputerTools(self.vms, agent_id, functools.partial(record.get, "target_vm"), record["history"])
         agent = Agent(record, computer_tools, WorkTools(self, record), self.changed)
@@ -404,8 +413,9 @@ class Agents:
         del created["awake"]
         return created
 
-    def rename(self, agent_id: str, new_name: str) -> None:
-        """The user renamed the agent. Jobs, drafts and the VM queue know it by its id, so nothing else changes."""
+    def rename(self, agent_id: str, new_name: str, by: str = "user") -> None:
+        """The user (or the agent itself, by "agent") renamed the agent. Jobs, drafts and the VM queue know it by its
+        id, so nothing else changes."""
         agent = self.agents[agent_id]
         new_name = new_name.strip()
         if not new_name:
@@ -416,6 +426,7 @@ class Agents:
             raise ValueError(f"There is already an agent named {new_name}")
         agent.name = new_name
         agent.record["name"] = new_name
+        agent.record["name_by"] = by
         self.save(agent)
         self.version += 1
 
@@ -494,6 +505,11 @@ class Agents:
         waiting = [message for message in self.pending[agent_id] if message["from"] == "User"]
         if len(waiting) >= MAX_QUEUED:
             raise ValueError(f"{MAX_QUEUED} messages already wait; send more when one has gone in")
+        # Its very first message: an agent with the automatic name hears it may name itself.
+        agent = self.agents[agent_id]
+        if agent.record["name_by"] == "auto" and not agent.history and not self.pending[agent_id]:
+            text = f"You have the automatic name {agent.name}. Once you know what the user wants, give yourself a short name for that work with name_yourself."
+            self.pending[agent_id].append({"from": "System", "text": text, "shown": False})
         self.pending[agent_id].append({"from": "User", "text": text.strip(), "shown": False})
         self.wake[agent_id].set()
         self.version += 1
@@ -608,6 +624,8 @@ class Agents:
         text = f"New job {job['id']}: {title}"
         if instructions:
             text += f"\nInstructions from the user: {instructions}"
+        if agent.record["name_by"] == "auto":
+            text += f"\nYou still have the automatic name {agent.name}: give yourself a short name for your work with name_yourself."
         if vm_name is None:
             text += "\nYou have no target VM: pick the VM that suits the job with vms_list and choose_vm, then queue_for_vm when ready."
         else:
@@ -640,6 +658,8 @@ class Agents:
         text = f"New job {job['id']}: {title}"
         if instructions:
             text += f"\nInstructions from the user: {instructions}"
+        if agent.record["name_by"] == "auto":
+            text += f"\nYou still have the automatic name {agent.name}: give yourself a short name for your work with name_yourself."
         if vm_name is None:
             text += "\nYou have no target VM. If the job needs one, pick the one that suits it with vms_list and choose_vm."
         else:

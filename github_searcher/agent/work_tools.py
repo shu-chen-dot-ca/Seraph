@@ -30,6 +30,8 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   It lists it, looks at its pictures and text (artifact_view: a picture comes back as a picture), keeps
   screenshots of its VM there, and copies files between it and the VM it holds; never anywhere else on this
   computer, and it can't delete anything there. It shows one of its pictures in chat as ![...](artifact:path).
+- Its name: while it has the automatic one (agent-N), the agent may name itself once (name_yourself);
+  a name the user gave is never changed (agents.py, name_by).
 - VMs: the agent sees every VM with what its image has (sandbox/images.py lists each image once) and
   picks the one that suits its jobs as its target VM (the user can set it too). It can't make VMs.
   It joins its target VM's queue (sandbox/vm_queue.py) and releases the VM when its jobs there are done.
@@ -375,6 +377,13 @@ class WorkTools:
                 },
             )(self.artifact_to_vm),
             tool(
+                "name_yourself",
+                "Give yourself a name, once, while you still have the automatic one (agent-N; the app tells you): 2 to 30 "
+                "lowercase letters, digits and hyphens, for the work you do, e.g. hermes-reasoning or cli-typo-fixes. A name "
+                "the user gave you is never changed, and the one you give yourself stays.",
+                {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
+            )(self.name_yourself),
+            tool(
                 "draft_pr",
                 "Draft a pull request for the user's Inbox from your work in the VM (only while you hold it). Only when you are certain the "
                 "fix is right and complete, and your evidence shows it. path is the repo folder in the VM (e.g. ~/click), base what to "
@@ -554,6 +563,8 @@ class WorkTools:
             return f"Copying {args.get('source')} from the VM into its artifacts"
         if name == "artifact_to_vm":
             return f"Copying {args.get('path')} from its artifacts into the VM"
+        if name == "name_yourself":
+            return f"Naming itself {args.get('name')}"
         if name == "evidence_add":
             return f"Evidence, {args.get('stage')}: {args.get('topic')} ({args.get('kind')})"
         if name == "evidence_remove":
@@ -1285,6 +1296,21 @@ class WorkTools:
         except FileTransferError as error:
             return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
         return {"content": [{"type": "text", "text": f"Copied into the VM as {where.stdout.strip()}/{source.name}."}]}
+
+    async def name_yourself(self, args: dict) -> dict:
+        name = (args.get("name") or "").strip()
+        if self.record["name_by"] != "auto":
+            who = "the user" if self.record["name_by"] == "user" else "you"
+            text = f"Your name, {self.record['name']}, was given by {who}; it stays."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,29}", name):
+            text = "A name is 2 to 30 lowercase letters, digits and hyphens, starting with a letter or digit, e.g. hermes-reasoning."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        try:
+            self.agents.rename(self.agent_id, name, "agent")
+        except ValueError as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        return {"content": [{"type": "text", "text": f"You are {name} now."}]}
 
     async def draft_pr(self, args: dict) -> dict:
         try:
