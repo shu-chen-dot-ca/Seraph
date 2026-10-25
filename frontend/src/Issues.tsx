@@ -9,7 +9,7 @@ Each row shows what helps decide whether an issue is worth fixing, from its fact
 kept fresh by the backend; Refresh on top fetches them all now, then has Claude read every open issue and its comments
 again, to see if it is still free or anything changed; it spins until both are done, minutes for many, then says
 which ones were free and aren't anymore): repo stars,
-when it was opened, its last activity, comments,
+when it was opened, its last activity, when Claude last read it and updated its tags (Checked), comments,
 and amber words when someone is assigned or a PR is open for it. The list is a table like the Repos and Explore
 pages': #, Title (taking the room left over), then ISSUE_COLUMNS, every column as wide as its widest cell over the
 rows shown (a hidden copy of them, the sizer at the bottom, measures them: lib/column-widths.ts), the text in the
@@ -87,7 +87,7 @@ const ROLE: Record<string, string> = {
 };
 const MAINTAINERS = ["OWNER", "MEMBER", "COLLABORATOR"];
 
-type SortKey = "number" | "title" | "repo" | "free" | "level" | "kind" | "stars" | "opened" | "active" | "comments" | "status" | "agent";
+type SortKey = "number" | "title" | "repo" | "free" | "level" | "kind" | "stars" | "opened" | "active" | "read" | "comments" | "status" | "agent";
 
 // The table's columns: # and Title (which takes the room left over), then the rest. All but Title are measured by the
 // sizer. better says which way the first click on a header sorts: higher first, or A to Z.
@@ -102,6 +102,7 @@ const ISSUE_COLUMNS: IssueColumn[] = [
   { key: "stars", label: "Stars", title: "The repo's stars", better: "higher" },
   { key: "opened", label: "Opened", title: "When the issue was opened on GitHub", better: "higher" },
   { key: "active", label: "Updated", title: "Its last change on GitHub: a comment, a label, an edit…", better: "higher" },
+  { key: "read", label: "Checked", title: "When Claude last read it and its comments and updated its tags (Free, Level, Kind)", better: "higher" },
   { key: "comments", label: "Comments", title: "Comments", better: "higher" },
   { key: "status", label: "Status", title: "What is being done about it (its latest job): in progress first", better: "higher" },
   { key: "agent", label: "Agent", title: "The agent on its latest job", better: "text" },
@@ -267,6 +268,9 @@ export default function Issues(props: { repo: string | null; open: string | null
     if (key === "agent") {
       return job !== undefined ? (agentNames[job.agent] ?? job.agent).toLowerCase() : null;
     }
+    if (key === "read") {
+      return issue.tags ? new Date(issue.tags.judged_at).getTime() : null;
+    }
     if (facts === null || facts === undefined) {
       return null;
     }
@@ -405,6 +409,9 @@ export default function Issues(props: { repo: string | null; open: string | null
     }
     if (key === "active") {
       return facts !== null ? <span title={new Date(facts.updated_at).toLocaleString()}>{timeAgo(facts.updated_at)}</span> : "–";
+    }
+    if (key === "read") {
+      return issue.tags ? <span title={new Date(issue.tags.judged_at).toLocaleString()}>{timeAgo(issue.tags.judged_at)}</span> : "–";
     }
     if (key === "comments") {
       return facts !== null ? facts.comments : thread !== undefined ? thread.comments.length : issue.comments;
