@@ -4,15 +4,17 @@ An image is an Incus image with a name (an Incus alias). Incus also keeps unname
 downloads builds start from; those aren't ours and aren't listed.
 
 Each image we make is defined by one file, image.yaml: the system, the desktop, package lists, and steps for
-anything else (see image_build.py). A build turns it into the image, mechanically, from official sources only;
-what the app itself needs in every image comes from sandbox/image/base_layer.sh, never from image.yaml.
-DATA_DIR/images/definitions/<name>/ holds:
+anything else (see image_build.py). Under it go the defaults (DATA_DIR/images/defaults.yaml, the Defaults tab: the
+same lists and steps for every image), unless it says defaults: false. A build turns the two into the image,
+mechanically, from official sources only; what the app itself needs in every image comes from
+sandbox/image/base_layer.sh, in neither. DATA_DIR/images/definitions/<name>/ holds:
 
     image.yaml   the definition: what the next build makes
     chat.json    the image agent's conversation
 
-and DATA_DIR/images/built/<fingerprint>.yaml (image_build.BUILT_DIR) the image.yaml each build was made from, so
-what a VM was made from (its image_fingerprint) is known for good, also after its image is rebuilt.
+and DATA_DIR/images/built/ (image_build.BUILT_DIR) what each build was made from: <fingerprint>.yaml its image.yaml,
+<fingerprint>.defaults.yaml the defaults (when it had them). So what a VM was made from (its image_fingerprint) is
+known for good, also after its image is rebuilt or the defaults change.
 
 How images come and change. Each runs in the background, as a task shown above the list:
 - New image: the image's agent (image_agent.py) writes image.yaml from what the user picked and builds it ("agent"
@@ -22,7 +24,8 @@ How images come and change. Each runs in the background, as a task shown above t
   from the old one keep their own disk.
 - The user changes image.yaml in Details > Definition, or asks the image's agent to. Every change is checked first
   (image_build.parse_definition). Nothing changes in the image until it is rebuilt: definition_changed (in the live
-  feed) says image.yaml differs from what the image was built from, and the Images tab shows a dot.
+  feed) says image.yaml, or the defaults it has, differ from what the image was built from, and the Images tab
+  shows a dot. A change to the defaults gives every image that has them a dot.
 - save a VM: `incus publish` of a stopped VM (a few minutes): everything on its disk comes along. It has no
   image.yaml until its agent writes one, so it can't be rebuilt until then.
 An image can only be deleted once no VM was made from it (stopped ones count too). Its builder VM goes with it.
@@ -41,8 +44,7 @@ restart ends it as failed (the conversation went with the backend). One build at
 makes another image. Tasks that worked are dropped once the image shows up; failed ones stay until the user
 dismisses them.
 
-The default image (what New VM picks first) and the dependencies New image starts with are saved in
-DATA_DIR/images/settings.json. Until one is picked the default is SANDBOX_IMAGE from .env. Deleting the default
+The default image (what New VM picks first) is saved in DATA_DIR/images/settings.json. Until one is picked the default is SANDBOX_IMAGE from .env. Deleting the default
 leaves no default ("") until the user makes another one the default.
 
 Images.version goes up on every change, so the live feed (backend /api/live) sends the list again.
@@ -79,19 +81,6 @@ INVENTORY_DIR = IMAGES_DIR / "inventory"
 DEFINITIONS_DIR = IMAGES_DIR / "definitions"
 # What New image offers. GNOME first: the default. None is a terminal-only image (no desktop, no browser).
 DESKTOPS = list(image_build.DESKTOPS.values())
-# What goes in every new image until the user changes the list in New image (its Dependencies).
-DEFAULT_PACKAGES = [
-    "Git and Git LFS",
-    "Build tools (gcc, make, pkg-config)",
-    "Python 3 and uv",
-    "Node.js LTS with npm, pnpm and Yarn",
-    "Docker with Compose",
-    "Playwright with Chromium",
-    "VS Code",
-    "GitHub CLI",
-    "tmux, ripgrep, jq, htop, unzip",
-    "SQLite and the PostgreSQL client",
-]
 NAME_PATTERN = r"[a-z][a-z0-9-]{0,40}"
 # Tasks are checked this often; Incus's image list is read again every REFRESH_SECONDS.
 CHECK_SECONDS = 2
@@ -123,14 +112,11 @@ class Images:
         self.images: list[dict] = []
         IMAGES_DIR.mkdir(parents=True, exist_ok=True)
         self.default = DEFAULT_IMAGE
-        # What goes in every new image (New image starts with this list).
-        self.packages = list(DEFAULT_PACKAGES)
         settings_path = IMAGES_DIR / "settings.json"
         if settings_path.exists():
             settings = json.loads(settings_path.read_text())
             # "" stays "": the default was deleted and none is picked yet.
             self.default = settings.get("default", DEFAULT_IMAGE)
-            self.packages = settings.get("packages") or list(DEFAULT_PACKAGES)
         # The short version of each inspected image's list (see highlights()), by fingerprint; lists never change.
         self.highlights_by_fingerprint: dict[str, dict] = {}
         # {"id", "kind": "agent" | "build" | "save" | "inspect", "name", "vm" (saved VM), "pid" (None for "agent"),
@@ -152,7 +138,7 @@ class Images:
 
     def save_settings(self) -> None:
         temporary = IMAGES_DIR / "settings.json.tmp"
-        temporary.write_text(json.dumps({"default": self.default, "packages": self.packages}, indent=2))
+        temporary.write_text(json.dumps({"default": self.default}, indent=2))
         temporary.replace(IMAGES_DIR / "settings.json")
 
     def save_tasks(self) -> None:
@@ -378,19 +364,11 @@ class Images:
     # --- The image's definition -----------------------------------------------------
 
     def new_options(self) -> dict:
-        """What New image offers, the dependencies it starts with, and the system it picks first."""
-        with self.lock:
-            packages = list(self.packages)
+        """What New image offers, and the system it picks first."""
         systems = [{"id": system["id"], "label": system["label"]} for system in image_build.SYSTEMS]
-        return {"systems": systems, "desktops": DESKTOPS, "packages": packages, "system": image_build.SYSTEMS[0]["id"]}
+        return {"systems": systems, "desktops": DESKTOPS, "system": image_build.SYSTEMS[0]["id"]}
 
-    def set_packages(self, packages: list[str]) -> None:
-        """The list that goes in every new image from now on."""
-        with self.lock:
-            self.packages = [item.strip() for item in packages if item.strip()]
-            self.save_settings()
-
-    def new_request(self, name: str, system: str, desktop: str, packages: list[str], comments: str) -> str:
+    def new_request(self, name: str, system: str, desktop: str, use_defaults: bool, comments: str) -> str:
         """What the user asked for in New image, for the agent that writes the new image's image.yaml.
         Makes the image's folder (without image.yaml yet)."""
         if not re.fullmatch(NAME_PATTERN, name):
@@ -406,16 +384,35 @@ class Images:
         # Firefox on every desktop; a terminal-only image has no browser.
         if desktop != DESKTOPS[-1]:
             lines.append("Browser: Firefox")
-        lines.append("Dependencies:")
-        for item in packages:
-            if item.strip():
-                lines.append(f"- {item.strip()}")
+        if use_defaults:
+            lines.append("Defaults: in (everything in the defaults goes under its image.yaml)")
+        else:
+            lines.append("Defaults: left out (its image.yaml says defaults: false)")
         if comments.strip():
             lines += ["Comments:", comments.strip()]
         # A folder left by an image of this name that is gone would be in the way.
         shutil.rmtree(DEFINITIONS_DIR / name, ignore_errors=True)
         (DEFINITIONS_DIR / name).mkdir(parents=True)
         return "\n".join(lines)
+
+    # --- The defaults ----------------------------------------------------------------
+
+    def read_defaults(self) -> dict:
+        """The defaults as they are now, and as the app first had them (to go back to)."""
+        return {"defaults": image_build.read_defaults(), "original": image_build.DEFAULTS_TEMPLATE.read_text()}
+
+    def write_defaults(self, text: str) -> None:
+        """Change the defaults, only to ones that are right. Every image that has them changes at its next Rebuild."""
+        try:
+            image_build.parse_definition(text, defaults=True)
+        except image_build.DefinitionError as error:
+            raise ImagesError(str(error))
+        # Write, then rename: a crash never leaves half a file.
+        temporary = image_build.DEFAULTS_FILE.with_suffix(".yaml.tmp")
+        temporary.write_text(text)
+        temporary.replace(image_build.DEFAULTS_FILE)
+        with self.lock:
+            self.version += 1
 
     def image_dir(self, name: str) -> Path:
         """The image's folder (made when missing: an image saved from a VM has none until its agent writes to it)."""
@@ -426,19 +423,28 @@ class Images:
         folder.mkdir(parents=True, exist_ok=True)
         return folder
 
-    def built_definition(self, fingerprint: str) -> str | None:
-        """The image.yaml the image with this fingerprint was built from, or None (saved from a VM, or older)."""
+    def built_definition(self, fingerprint: str, suffix: str = ".yaml") -> str | None:
+        """What the image with this fingerprint was built from: its image.yaml, or (suffix ".defaults.yaml") the
+        defaults under it. None when it had none (saved from a VM, built without the defaults)."""
         if not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
             return None
-        path = image_build.BUILT_DIR / f"{fingerprint}.yaml"
+        path = image_build.BUILT_DIR / f"{fingerprint}{suffix}"
         return path.read_text() if path.exists() else None
 
+    def defaults_changed(self, image: dict) -> bool:
+        """Whether the image was built with the defaults and they changed since."""
+        built = self.built_definition(image["fingerprint"], ".defaults.yaml")
+        return built is not None and built != image_build.read_defaults()
+
     def definition_changed(self, image: dict) -> bool:
-        """Whether image.yaml differs from what the image was built from (or it was never built from one)."""
+        """Whether a Rebuild would make something else: image.yaml differs from what the image was built from (or it
+        was never built from one), or it is the same and has the defaults, which changed since."""
         path = DEFINITIONS_DIR / image["name"] / "image.yaml"
         if not path.exists():
             return False
-        return path.read_text() != self.built_definition(image["fingerprint"])
+        if path.read_text() != self.built_definition(image["fingerprint"]):
+            return True
+        return self.defaults_changed(image)
 
     def definition_updated_at(self, name: str) -> float:
         """When image.yaml last changed (0 without one), so the browser knows to fetch it again."""
@@ -465,18 +471,28 @@ class Images:
             self.version += 1
 
     def definition(self, name: str) -> dict:
-        """image.yaml now, and a diff from what the image was built from ("" when the same or never built).
-        Also for an image still being made (it has a folder but isn't listed yet)."""
+        """image.yaml now, a diff from what the image was built from ("" when the same or never built), whether the
+        defaults it has changed since, and what a build makes of it now (combined with the defaults; "" while it
+        isn't right). Also for an image still being made (it has a folder but isn't listed yet)."""
         if not (DEFINITIONS_DIR / name).exists():
             name = self.find(name)["name"]
         now = self.read_definition(name)
         built = None
+        defaults_changed = False
         if name in self.names():
             built = self.built_definition(self.find(name)["fingerprint"])
+            defaults_changed = now == built and self.defaults_changed(self.find(name))
         diff = ""
         if built is not None:
             diff = "".join(difflib.unified_diff(built.splitlines(keepends=True), now.splitlines(keepends=True), "built", "image.yaml"))
-        return {"definition": now, "diff": diff}
+        combined = ""
+        try:
+            definition = image_build.parse_definition(now)
+            defaults = image_build.parse_definition(image_build.read_defaults(), defaults=True)
+            combined = image_build.combined_yaml(image_build.combine(definition, defaults))
+        except image_build.DefinitionError:
+            pass
+        return {"definition": now, "diff": diff, "defaults_changed": defaults_changed, "combined": combined}
 
     def discard_changes(self, name: str) -> None:
         """Put image.yaml back to what the image was built from."""

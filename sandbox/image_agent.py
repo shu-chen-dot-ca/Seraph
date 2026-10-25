@@ -1,8 +1,9 @@
 """The agent of an image (the Agent tab of its Details): a Claude conversation that writes the image's image.yaml.
 
-An image is defined by one file, image.yaml (images.py), and the app builds it from that, mechanically, from
-official sources only (image_build.py). The agent only writes image.yaml; it never builds or publishes anything
-by hand. Turns:
+An image is defined by one file, image.yaml (images.py), with the defaults (the Defaults tab, the same for every
+image) under it unless it says defaults: false. The app builds the two, mechanically, from official sources only
+(image_build.py). The agent only writes image.yaml; it reads the defaults but never changes them, and it never
+builds or publishes anything by hand. Turns:
 - New image: the agent turns what the user picked into image.yaml and builds it with build: the same build as
   Rebuild, as a "build" task, which publishes the image when everything works. When it fails, the agent reads the
   log, fixes image.yaml and builds again; only the changed part runs again. Its steps go to the "agent" task's log.
@@ -69,23 +70,33 @@ SYSTEMS_TEXT = "; ".join(f"{system['id']} ({', '.join(system['sources'])})" for 
 PROMPT = f"""You look after one VM image, {{name}}, in an app where AI agents work on GitHub issues inside VMs made from
 images, and a human watches those VMs in the browser.
 
-The image is defined by one file, image.yaml, and nothing else: the app builds the image from it, mechanically,
-from official sources only. read_definition, edit_definition and write_definition work on it. Every change is
-checked, and a wrong one is refused with the reason. The user sees it (Details > Definition) and may change it too.
+The image is defined by one file, image.yaml, and the defaults under it: the app builds the image from the two,
+mechanically, from official sources only. read_definition, edit_definition and write_definition work on image.yaml;
+read_definition also shows what a build makes of it with the defaults. Every change is checked, and a wrong one is
+refused with the reason. The user sees it (Details > Definition) and may change it too.
+
+The defaults are the user's, the same for every image (the Defaults tab), and you never change them: read_defaults
+shows them. They go under image.yaml unless it says defaults: false: lists get the defaults' items first, then
+image.yaml's, default steps run first, and a step in image.yaml with a default step's name takes its place (that is
+how to change a default step for this image). So image.yaml only has what this image needs beyond the defaults;
+never repeat what they have. To leave out only part of the defaults, write defaults: false and copy into image.yaml
+the parts this image keeps.
 
 image.yaml has these keys, and no others:
   system: the system and the desktops it offers: {SYSTEMS_TEXT}
   desktop: gnome, kde or none (terminal only)
+  defaults: true or false; true when left out
   packages: the system's own packages (apt on Ubuntu and Debian, dnf on Fedora), by their names there
   python: Python, uv and a shared venv at $SANDBOX_VM_PY_VENV, first on PATH, that everyone may write to
     packages: pip packages for that venv
   node: Node.js from nodejs.org
-    version: its major version ({image_build.NODE_MAJOR} when left out)
+    version: its major version (when left out: the defaults', or {image_build.NODE_MAJOR})
     packages: global npm packages
   docker: Docker with Compose from Docker's own repository; the desktop user may use it without sudo
     images: Docker images pulled into the image
   steps: anything the lists can't say, in order. Each has name: and run: (bash, run as root after
-    "set -euxo pipefail", with DEBIAN_FRONTEND=noninteractive and these settings in its environment: {SETTINGS_TEXT}).
+    "set -euxo pipefail", with DEBIAN_FRONTEND=noninteractive and these settings in its environment: {SETTINGS_TEXT};
+    also SANDBOX_FAMILY, apt or dnf, and SANDBOX_DESKTOP, gnome, kde or none).
 Leave out what isn't wanted: without python:, there is no venv. Lists are names only, one per item (pip and npm
 version specs are fine, without spaces).
 
@@ -108,8 +119,10 @@ that changed: a changed list takes a few minutes, a changed package or step runs
 system or desktop runs everything. So builds stay quick: put what changes often in the lists, nothing big is built
 from source or downloaded only to warm a cache, and each script ends within 30 minutes.
 
-1. New image: a [System] message asks you to make a new image, with what the user picked. Write image.yaml for it
-(pick sensible defaults where they leave something open, and say which), then build. To find out something first
+1. New image: a [System] message asks you to make a new image, with what the user picked: the system, the desktop,
+whether the defaults go in, and comments. Write image.yaml for it: the system, the desktop, defaults: false when they
+are left out, and what the comments ask for beyond the defaults (pick sensible choices where they leave something
+open, and say which). Then build. To find out something first
 (a package's name on that system), start_try_vm and run; nothing you do there goes into the image. When a build
 fails, its log says where: fix image.yaml and build again. If something can't be done, say why and end.
 
@@ -218,7 +231,14 @@ class ImageAgents:
         history = chat["history"]
         agent_task = running["agent_task"]
         tools = [
-            tool("read_definition", "Read image.yaml as it is now.", {})(functools.partial(self.read_definition, name)),
+            tool(
+                "read_definition",
+                "Read image.yaml as it is now, and what a build makes of it with the defaults under it.",
+                {},
+            )(functools.partial(self.read_definition, name)),
+            tool("read_defaults", "Read the defaults: the user's, the same for every image. You can't change them.", {})(
+                functools.partial(self.read_defaults, name)
+            ),
             tool(
                 "edit_definition",
                 "Replace old_text with new_text in image.yaml. old_text must be in it exactly once (copy it from read_definition). "
@@ -323,6 +343,8 @@ class ImageAgents:
                         summary = tool_name
                         if tool_name == "read_definition":
                             summary = "Read image.yaml"
+                        if tool_name == "read_defaults":
+                            summary = "Read the defaults"
                         if tool_name in ["edit_definition", "write_definition"]:
                             summary = "Changed image.yaml"
                         if tool_name == "changes":
@@ -382,8 +404,14 @@ class ImageAgents:
     # An exception here reaches the agent as a failed tool call.
 
     async def read_definition(self, name: str, args: dict) -> dict:
-        text = self.images.read_definition(name)
-        return {"content": [{"type": "text", "text": text or "image.yaml is empty: not written yet."}]}
+        definition = self.images.definition(name)
+        if not definition["definition"]:
+            return {"content": [{"type": "text", "text": "image.yaml is empty: not written yet."}]}
+        text = f"{definition['definition']}\n--- What a build makes of it, with the defaults under it:\n{definition['combined']}"
+        return {"content": [{"type": "text", "text": text}]}
+
+    async def read_defaults(self, name: str, args: dict) -> dict:
+        return {"content": [{"type": "text", "text": self.images.read_defaults()["defaults"]}]}
 
     async def edit_definition(self, name: str, args: dict) -> dict:
         text = self.images.read_definition(name)

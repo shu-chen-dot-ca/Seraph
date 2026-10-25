@@ -1,6 +1,7 @@
 """The Images tab on the VMs page: the default image, rename, delete, New image (the image's agent writes its
 image.yaml and builds it), Rebuild (image.yaml is built again, no agent), save a VM as an image, what each image has
-(its inventory: system, languages, tools, packages), its image.yaml and its agent.
+(its inventory: system, languages, tools, packages), its image.yaml and its agent, and the defaults that go under
+every image's image.yaml (the Defaults tab).
 
 The list itself reaches the browser through /api/live (topic "images"). Builds and saves run in the
 background and answer at once; the task shows in the list until it is done. Most of this makes Incus
@@ -28,12 +29,8 @@ class NewImageRequest(BaseModel):
     name: str
     system: str
     desktop: str
-    packages: list[str]
+    defaults: bool = True
     comments: str = ""
-
-
-class PackagesRequest(BaseModel):
-    packages: list[str]
 
 
 class DefinitionRequest(BaseModel):
@@ -86,14 +83,23 @@ def delete_image(name: str) -> dict:
 
 @router.get("/images/new/options")
 def new_image_options() -> dict:
-    """What New image offers: systems, desktops, and the dependencies it starts with."""
+    """What New image offers: systems and desktops."""
     return images.new_options()
 
 
-@router.put("/images/new/packages")
-def set_new_image_packages(body: PackagesRequest) -> dict:
-    """The dependencies New image starts with from now on."""
-    images.set_packages(body.packages)
+@router.get("/image-defaults")
+def image_defaults() -> dict:
+    """The defaults that go under every image's image.yaml (unless it says defaults: false), and the app's own first ones."""
+    return images.read_defaults()
+
+
+@router.put("/image-defaults")
+def change_image_defaults(body: DefinitionRequest) -> dict:
+    """Change the defaults (refused, with the reason, when they aren't right). Images get them at their next Rebuild."""
+    try:
+        images.write_defaults(body.text)
+    except ImagesError as error:
+        raise HTTPException(status_code=400, detail=str(error))
     return {}
 
 
@@ -102,7 +108,7 @@ async def new_image(body: NewImageRequest) -> dict:
     """Starts the new image's agent with what the user picked: it writes image.yaml and builds it. Answers at once."""
     name = body.name.strip()
     try:
-        request = images.new_request(name, body.system, body.desktop, body.packages, body.comments)
+        request = images.new_request(name, body.system, body.desktop, body.defaults, body.comments)
         image_agents.build(name, request)
     except ImagesError as error:
         raise HTTPException(status_code=409, detail=str(error))

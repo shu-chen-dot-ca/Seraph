@@ -4,12 +4,14 @@ The VMs overview: one row per VM with its state, CPU and memory use, who holds i
 Everything comes from the live "vms" topic (the backend samples usage about once a second), so the
 numbers move on their own. A row opens that VM's page; the holder links to its agent.
 New VM opens NewVMDialog. The Images tab (#/vms?tab=images) manages the images VMs start from (Images.tsx),
-which puts its own buttons in this same header row, right of the tabs.
+which puts its own buttons in this same header row, right of the tabs. The Defaults tab (#/vms?tab=defaults) is
+the YAML that goes under every image's image.yaml (Defaults.tsx).
 */
 
 import { Monitor, Plus } from "lucide-react";
 import { useState } from "react";
 
+import Defaults from "@/Defaults";
 import Images from "@/Images";
 import NewVMDialog from "@/NewVMDialog";
 import { Button } from "@/components/ui/button";
@@ -20,7 +22,7 @@ import { cn } from "@/lib/utils";
 
 const COLUMNS = "grid grid-cols-[minmax(0,1fr)_minmax(0,160px)_130px_72px_130px_minmax(0,180px)_64px] items-center gap-3";
 
-export default function VMs(props: { tab: "vms" | "images" }) {
+export default function VMs(props: { tab: "vms" | "images" | "defaults" }) {
   const vms = useLive("vms");
   const agents = useLive("agents");
   const imagesData = useLive("images");
@@ -39,7 +41,7 @@ export default function VMs(props: { tab: "vms" | "images" }) {
   }
 
   function setTab(value: string) {
-    window.location.hash = value === "images" ? "#/vms?tab=images" : "#/vms";
+    window.location.hash = value === "vms" ? "#/vms" : `#/vms?tab=${value}`;
   }
 
   const tabs = (
@@ -52,6 +54,9 @@ export default function VMs(props: { tab: "vms" | "images" }) {
           <TabsTrigger value="images" className="px-2.5">
             Images
             <span className="text-xs text-muted-foreground tabular-nums">{imagesData.images.length}</span>
+          </TabsTrigger>
+          <TabsTrigger value="defaults" className="px-2.5">
+            Defaults
           </TabsTrigger>
         </TabsList>
       </Tabs>
@@ -75,6 +80,9 @@ export default function VMs(props: { tab: "vms" | "images" }) {
 
   if (props.tab === "images") {
     return <Images tabs={tabs} />;
+  }
+  if (props.tab === "defaults") {
+    return <Defaults tabs={tabs} />;
   }
 
   return (

@@ -6,7 +6,8 @@ were made from that exact image (stopped ones too). The default image is what Ne
 menu: make it the default, rename it, rebuild it, delete it (only once no VM was made from it).
 Details opens what the image has (ImageInventory) in a dialog, with Inspect again, its image.yaml (what defines it)
 and its agent; an image that wasn't listed yet has Inspect instead (about two minutes, in a throwaway VM).
-An amber dot after the name: its image.yaml changed since it was built, so a Rebuild would give a different image.
+An amber dot after the name: its image.yaml, or the defaults under it, changed since it was built, so a Rebuild
+would give a different image.
 
 New images come from New image (NewImageDialog: the image's agent writes its image.yaml and builds it) or Save a VM
 (that VM's disk as it is, a few minutes). Rebuild builds image.yaml again, mechanically, with no agent; only what
@@ -211,7 +212,7 @@ export default function Images(props: { tabs: ReactNode }) {
             <span className="flex min-w-0 flex-wrap items-center gap-1.5">
               <span className="truncate font-medium">{image.name}</span>
               {image.definition_changed && (
-                <span title="Its image.yaml changed since this build. Rebuild to apply it.">
+                <span title="Its image.yaml, or the defaults it has, changed since this build. Rebuild to apply it.">
                   <StatusDot tone="amber" />
                 </span>
               )}
