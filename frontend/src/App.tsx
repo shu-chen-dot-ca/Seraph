@@ -1,11 +1,12 @@
 /*
 The whole app: a 36px header, the sidebar tree on the left, and one page on the right.
 The header starts with a View menu; Reset view puts every panel, fold, sort and column back to its default.
-On its right: this repo on GitHub (a new tab, so the app stays open).
+On its right: this repo on GitHub (a new tab, so the app stays open). The Guide's round button sits at the bottom
+right of every page (Guide.tsx).
 
 The page lives in the URL hash, so refresh and back/forward work and switching pages never reloads:
   #/inbox  #/inbox/<draft id>  #/issues  #/issues?repo=owner/name  #/jobs  #/jobs/<job id>  #/explore  #/repos  #/tracked
-  #/agents  #/agents/<agent id>  #/vms  #/vms?tab=images  #/vms/<vm name>
+  #/agents  #/agents/<agent id>  #/vms  #/vms?tab=images  #/vms?tab=defaults  #/vms/<vm name>
 Links are plain <a href="#/..."> everywhere; App only reads the hash.
 
 A VM page, once visited, stays mounted (hidden) while you are elsewhere, so its desktop iframe keeps its
@@ -18,6 +19,7 @@ import { useEffect, useState } from "react";
 import AgentChat from "@/AgentChat";
 import Agents from "@/Agents";
 import Explore from "@/Explore";
+import Guide from "@/Guide";
 import Inbox from "@/Inbox";
 import Issues from "@/Issues";
 import Jobs from "@/Jobs";
@@ -175,7 +177,9 @@ export default function App() {
             {page === "tracked" && <Tracked />}
             {page === "agents" && id === null && <Agents />}
             {page === "agents" && id !== null && <AgentChat key={id} agentId={id} />}
-            {page === "vms" && id === null && <VMs tab={query.get("tab") === "images" ? "images" : "vms"} />}
+            {page === "vms" && id === null && (
+              <VMs tab={query.get("tab") === "images" ? "images" : query.get("tab") === "defaults" ? "defaults" : "vms"} />
+            )}
             {mountedVMs.map((name) => (
               <div key={name} className={name === openVM ? "h-full" : "hidden"}>
                 <VMPage name={name} active={name === openVM} />
@@ -192,7 +196,9 @@ export default function App() {
         accent={accent}
         onAccent={changeAccent}
       />
-      <Toaster theme={theme} position="bottom-right" />
+      {/* Toasts sit above the Guide's round button. */}
+      <Toaster theme={theme} position="bottom-right" offset={{ bottom: 72 }} />
+      <Guide />
       <TitleTooltips />
     </TooltipProvider>
   );

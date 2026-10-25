@@ -511,20 +511,23 @@ export type Image = {
   used_by: string[]; // names of the VMs made from this exact image, stopped ones too
   inventory: InventoryHighlights | null; // null until it is inspected
   inspecting: boolean; // a build, save or inspect of it is running
-  definition_changed: boolean; // its image.yaml changed since it was built: a Rebuild applies it
+  definition_changed: boolean; // its image.yaml, or the defaults it has, changed since it was built: a Rebuild applies it
   definition_updated_at: number; // when its image.yaml last changed (seconds), so a view of it knows to fetch again
 };
 
-// An image's image.yaml, what defines it (GET /api/images/<name>/definition), and a diff from what it was built
-// from ("" when the same, or never built).
-export type ImageDefinition = { definition: string; diff: string };
+// An image's image.yaml, what defines it (GET /api/images/<name>/definition), a diff from what it was built from
+// ("" when the same, or never built), whether the defaults it has changed since that build, and what a build makes
+// of it now, with the defaults under it ("" while image.yaml isn't right).
+export type ImageDefinition = { definition: string; diff: string; defaults_changed: boolean; combined: string };
+
+// The defaults that go under every image's image.yaml (GET /api/image-defaults), and the app's own first ones.
+export type ImageDefaults = { defaults: string; original: string };
 
 // What New image offers (GET /api/images/new/options): system ids and labels, desktops (the first is the default,
-// the last is "None (terminal only)"), the dependencies that go in every new image, and the system picked first.
+// the last is "None (terminal only)"), and the system picked first.
 export type NewImageOptions = {
   systems: { id: string; label: string }[];
   desktops: string[];
-  packages: string[];
   system: string;
 };
 
@@ -538,6 +541,22 @@ export type ImageAgentEntry =
   | { type: "turn_end"; stopped: boolean; cost_usd: number; time: string };
 
 export type ImageAgentChat = { history: ImageAgentEntry[]; busy: boolean; cost_usd: number };
+
+// The Guide (github_searcher/guide.py), from GET /api/guide: its chat (entries like the image agent's), and the page
+// action it waits for, done by the browser tab its message came from.
+export type GuideAction =
+  | { kind: "look" }
+  | { kind: "go_to"; address: string }
+  | { kind: "click"; element: number }
+  | { kind: "fill"; element: number; text: string }
+  | { kind: "point"; element: number };
+
+export type GuideChat = {
+  history: ImageAgentEntry[];
+  busy: boolean;
+  cost_usd: number;
+  pending: { id: number; tab: string; action: GuideAction } | null;
+};
 
 // The agent making a new image (New image), a build (by Rebuild or the agent), a VM being saved as an image, or an inspect.
 // Tasks that worked disappear once their image is listed; failed ones stay until dismissed.

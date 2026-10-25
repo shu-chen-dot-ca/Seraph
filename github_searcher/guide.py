@@ -1,0 +1,364 @@
+"""The Guide: the round button at the bottom right of every page (frontend/src/Guide.tsx), a Claude conversation that
+knows the whole app and can see and use the page the user is on.
+
+What it knows: every page's own description (the comment at the top of each file in frontend/src), put in its prompt
+at each turn, and the app's source, read-only, for the details (read_source, search_source; SOURCE_FOLDERS only, so
+never .env or anything else on this machine).
+What it sees: each message comes with the page the user is on, read by the browser: the address, the sidebar, the text
+on the page, and every button, link and field, numbered (Guide.tsx readPage).
+What it does: go_to, click, fill and point act on the page in the user's browser tab (the one the message came from),
+and answer with the page as it is after. The browser refuses a click inside a confirmation (Delete, Reject...): the
+user confirms those themselves. look_page reads the page again.
+
+How an action reaches the browser: the tool puts it in `pending`, the browser (which asks GET /api/guide every half
+second while a turn runs) does it and posts what happened (POST /api/guide/result), which the tool waits for, up to
+ACTION_TIMEOUT seconds.
+
+One conversation, DATA_DIR/guide_chat.json: {"session_id", "history": [entry, ...], "cost_usd"}, with entries like
+the image agent's (sandbox/image_agent.py). Each turn connects to Claude Code, resumes the conversation by its
+session id, and disconnects at the end. Claude Code's own tools are off: only the tools here.
+
+    guide = Guide()
+    guide.send("how do I give an agent more memory?", page, tab)
+"""
+
+import asyncio
+import json
+import os
+from datetime import UTC, datetime
+from pathlib import Path
+
+from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient, ResultMessage, SystemMessage, TextBlock, ToolResultBlock, ToolUseBlock, UserMessage, create_sdk_mcp_server, tool
+from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# override: the backend reloads itself on code changes, and .env changes should apply then too.
+load_dotenv(PROJECT_ROOT / ".env", override=True)
+
+DATA_DIR = PROJECT_ROOT / os.environ["DATA_DIR"]
+# Claude Code runs here. With no file tools this only decides where it keeps the conversation.
+AGENT_HOME = DATA_DIR / "guide_home"
+TOOL_SERVER = "guide"
+# How long a page action may take in the browser.
+ACTION_TIMEOUT = 20
+# How much of a tool's result the chat keeps. The Guide gets it in full.
+RESULT_CUT = 4000
+# What read_source and search_source may read: the app's own code, nothing else.
+SOURCE_FOLDERS = ["frontend/src", "backend", "github_searcher", "sandbox"]
+SOURCE_TYPES = [".py", ".ts", ".tsx", ".css", ".md", ".yaml", ".sh"]
+SOURCE_LIMIT = 120_000
+SEARCH_LIMIT = 80
+
+PROMPT = """You are the Guide of Seraph, an app on the user's own computer that finds open-source work and does it: Explore
+finds repos to contribute to, Repos and Tracked keep them, Issues lists issues to work on, AI agents work on them as
+jobs inside VMs (virtual machines the user can watch in the browser), and whatever an agent wants to post on GitHub
+waits in the Inbox for the user to approve. You live in the round button at the bottom right of every page: the user
+opens you to ask how something works or where something is, or to get something done.
+
+You know the whole app. Below is every page's own description (the comment at the top of each file in frontend/src).
+For details, read_source reads a file of the app (in frontend/src, backend, github_searcher or sandbox) and
+search_source finds where something is. Look things up rather than guess; never make up a button or a page.
+
+You see the user's page: each message comes with it. The address, the sidebar, the text on the page, and every
+button, link and field, each with a number. When a pop-up is open you only get the pop-up: the rest can't be used then.
+You can use the page, in the user's browser, while they watch:
+- go_to opens an address (#/explore, #/vms/<name>, ...),
+- click clicks a button, link, tab, switch, menu item or option (a select opens with a click on it; then click the
+  option),
+- fill types text into a field, replacing what is in it,
+- point highlights something on their screen, to show them where it is,
+- look_page reads the page again.
+Each of them answers with the page as it is after, numbered again: always use the numbers from the latest page.
+
+How to help:
+- A question: answer it in a few plain sentences, and point at what you talk about when it is on the page. When it is
+  on another page, say where, or go there when that helps.
+- Something to do: do it, step by step. When they need words they don't have (a job's description, a message to an
+  agent, an Explore profile), write good ones from what they told you, fill them in, and say so, so they read them over.
+- What makes a lasting change (Save, Create, Start, Send, Approve, Reject, Delete, Stop): click it only when the user
+  asked for exactly that. Otherwise fill everything in, point at the button, and leave the click to them.
+- Pop-ups that ask "are you sure?" are always the user's to answer: you can't click in them. Point at the button.
+- You can't see or use what is inside a VM's desktop or terminal: that is a screen of its own.
+- When something can't be done in the app, say so plainly.
+Keep it short: the user reads you in a small panel. Plain words, no headings.
+
+The pages:
+
+"""
+
+
+class Guide:
+    def __init__(self):
+        self.path = DATA_DIR / "guide_chat.json"
+        # The turn running now, or None: {"client", "chat", "stopped", "task", "tab"}.
+        self.running = None
+        # The page action the browser should do now, or None: {"id", "tab", "action"}; and what waits for its answer.
+        self.pending = None
+        self.waiter = None
+        self.action_id = 0
+        # The page the Guide saw last, for naming the element in a click, fill or point ("[12] button "Save"").
+        self.last_page = ""
+
+    def load(self) -> dict:
+        if not self.path.exists():
+            return {"session_id": None, "history": [], "cost_usd": 0.0}
+        return json.loads(self.path.read_text())
+
+    def save(self, chat: dict) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Write, then rename: a crash never leaves half a chat.
+        temporary = self.path.with_name(self.path.name + ".tmp")
+        temporary.write_text(json.dumps(chat))
+        temporary.replace(self.path)
+
+    def chat(self) -> dict:
+        """For the panel: the conversation, whether a turn runs, what it cost so far, and the page action waiting."""
+        if self.running is not None:
+            chat = self.running["chat"]
+        else:
+            chat = self.load()
+        return {"history": chat["history"], "busy": self.running is not None, "cost_usd": chat["cost_usd"], "pending": self.pending}
+
+    def send(self, text: str, page: str, tab: str) -> None:
+        """Start a turn with the user's message and their page. Answers at once; call it on the event loop."""
+        if self.running is not None:
+            raise ValueError("The Guide is still working. Wait, or stop it.")
+        if not text.strip():
+            raise ValueError("The message is empty")
+        chat = self.load()
+        chat["history"].append({"type": "user", "text": text.strip(), "time": datetime.now(UTC).isoformat()})
+        self.save(chat)
+        self.last_page = page
+        self.running = {"client": None, "chat": chat, "stopped": False, "task": None, "tab": tab}
+        message = f"[The page the user is on now]\n{page}\n\n[The user]\n{text.strip()}"
+        # Kept, so the task isn't garbage collected while it runs.
+        self.running["task"] = asyncio.get_running_loop().create_task(self.run(message))
+
+    def result(self, action_id: int, ok: bool, text: str) -> None:
+        """What the browser did with a page action. An answer that comes too late is dropped."""
+        if self.pending is None or self.pending["id"] != action_id or self.waiter is None or self.waiter.done():
+            return
+        # The browser numbered the page again when it read it (also when the action failed).
+        if "Address:" in text:
+            self.last_page = text[text.index("Address:"):]
+        self.waiter.set_result((ok, text))
+
+    async def interrupt(self) -> None:
+        running = self.running
+        if running is None:
+            return
+        # Also seen by run() when the turn is still starting.
+        running["stopped"] = True
+        # A page action it waits for ends now.
+        if self.waiter is not None and not self.waiter.done():
+            self.waiter.set_result((False, "Stopped by the user."))
+        if running["client"] is None:
+            return
+        try:
+            await running["client"].interrupt()
+        except Exception:
+            # Not connected yet, or the turn just ended.
+            pass
+
+    def clear(self) -> None:
+        """Start a new conversation: the old one is forgotten."""
+        if self.running is not None:
+            raise ValueError("The Guide is still working. Stop it first.")
+        self.path.unlink(missing_ok=True)
+
+    async def run(self, text: str) -> None:
+        """One turn: send the message and add to the chat until the Guide ends its turn."""
+        AGENT_HOME.mkdir(parents=True, exist_ok=True)
+        running = self.running
+        chat = running["chat"]
+        history = chat["history"]
+
+        # Every page's description, read again each turn, so it follows the code.
+        docs = ""
+        for path in sorted((PROJECT_ROOT / "frontend" / "src").glob("*.tsx")):
+            source = path.read_text()
+            if source.startswith("/*") and "*/" in source:
+                docs += f"=== {path.name} ===\n{source[2:source.index('*/')].strip()}\n\n"
+
+        tools = [
+            tool("look_page", "Read the user's page again: the address, the text, and every button, link and field, numbered.", {})(self.look_page),
+            tool("go_to", "Open an address of the app in the user's tab, like #/explore or #/vms/vm1. Answers with the page.", {"address": str})(self.go_to),
+            tool(
+                "click",
+                "Click the element with this number (from the latest page). Answers with the page after. Refused inside a "
+                "confirmation: point at it instead.",
+                {"element": int},
+            )(self.click),
+            tool("fill", "Type text into the field with this number (from the latest page), replacing what is in it. Answers with the page after.", {"element": int, "text": str})(
+                self.fill
+            ),
+            tool("point", "Highlight the element with this number (from the latest page) on the user's screen, until they click somewhere.", {"element": int})(
+                self.point
+            ),
+            tool(
+                "read_source",
+                "Read a file of the app's code, by its path from the repo's root, like frontend/src/Explore.tsx or github_searcher/explore.py. "
+                f"Only in {', '.join(SOURCE_FOLDERS)}.",
+                {"path": str},
+            )(self.read_source),
+            tool("search_source", "Find the lines of the app's code that have this text (not case sensitive), with their file and line.", {"text": str})(
+                self.search_source
+            ),
+        ]
+        client = ClaudeSDKClient(
+            ClaudeAgentOptions(
+                model=os.environ["CLAUDE_MODEL"],
+                system_prompt=PROMPT + docs,
+                # No built-in tools: nothing on this machine is in reach.
+                tools=[],
+                allowed_tools=[f"mcp__{TOOL_SERVER}__{item.name}" for item in tools],
+                mcp_servers={TOOL_SERVER: create_sdk_mcp_server(name=TOOL_SERVER, tools=tools)},
+                permission_mode="dontAsk",
+                setting_sources=[],
+                strict_mcp_config=True,
+                resume=chat["session_id"],
+                cwd=str(AGENT_HOME),
+                # The backend runs in this repo: its CLAUDE.md and Claude Code's memory are not for the Guide.
+                env={"CLAUDE_CODE_DISABLE_CLAUDE_MDS": "1", "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"},
+            )
+        )
+        running["client"] = client
+        try:
+            await client.connect()
+            await client.query(text)
+            if running["stopped"]:
+                await client.interrupt()
+            async for message in client.receive_response():
+                # The conversation's id comes first, so a turn cut off by a restart can still be continued.
+                if isinstance(message, SystemMessage) and message.subtype == "init" and message.data.get("session_id"):
+                    chat["session_id"] = message.data["session_id"]
+
+                if isinstance(message, ResultMessage):
+                    chat["session_id"] = message.session_id
+                    # Each turn has its own connection, so the connection's total is this turn's cost.
+                    cost = message.total_cost_usd or 0.0
+                    chat["cost_usd"] += cost
+                    stopped = running["stopped"] or message.terminal_reason in ["aborted_streaming", "aborted_tools"]
+                    if message.is_error and not stopped:
+                        error = "; ".join(message.errors or []) or message.result or message.subtype
+                        history.append({"type": "system", "text": f"Error: {error}", "time": datetime.now(UTC).isoformat()})
+                    history.append({"type": "turn_end", "stopped": stopped, "cost_usd": cost, "time": datetime.now(UTC).isoformat()})
+
+                # Text and tool calls come in the Guide's messages; tool results come back in user messages.
+                blocks = []
+                if isinstance(message, (AssistantMessage, UserMessage)) and isinstance(message.content, list):
+                    blocks = message.content
+                for block in blocks:
+                    if isinstance(block, TextBlock) and isinstance(message, AssistantMessage) and block.text.strip():
+                        history.append({"type": "text", "text": block.text})
+                    if isinstance(block, ToolUseBlock):
+                        tool_name = block.name.removeprefix(f"mcp__{TOOL_SERVER}__")
+                        # The element as the page named it: [12] button "Save" → button "Save".
+                        element = f"element {block.input.get('element', '')}"
+                        for line in self.last_page.split("\n"):
+                            if line.startswith(f"[{block.input.get('element', '')}] "):
+                                element = line.split("] ", 1)[1][:80]
+                        summary = tool_name
+                        if tool_name == "look_page":
+                            summary = "Looked at the page"
+                        if tool_name == "go_to":
+                            summary = f"Went to {block.input.get('address', '')}"
+                        if tool_name == "click":
+                            summary = f"Clicked {element}"
+                        if tool_name == "fill":
+                            summary = f"Filled in {element}"
+                        if tool_name == "point":
+                            summary = f"Pointed at {element}"
+                        if tool_name == "read_source":
+                            summary = f"Read {block.input.get('path', '')}"
+                        if tool_name == "search_source":
+                            summary = f"Looked for {block.input.get('text', '')} in the app's code"
+                        history.append({"type": "tool", "id": block.id, "name": tool_name, "summary": summary})
+                    if isinstance(block, ToolResultBlock):
+                        parts = block.content if isinstance(block.content, list) else [{"type": "text", "text": block.content or ""}]
+                        result = "\n".join(part.get("text", "") for part in parts if part.get("type") == "text")
+                        history.append({"type": "tool_result", "id": block.tool_use_id, "text": result[:RESULT_CUT], "is_error": bool(block.is_error)})
+                self.save(chat)
+        except Exception as error:
+            history.append({"type": "system", "text": f"Error: {error}", "time": datetime.now(UTC).isoformat()})
+        finally:
+            self.running = None
+            self.pending = None
+            self.waiter = None
+            self.save(chat)
+            try:
+                await client.disconnect()
+            except Exception:
+                # A Claude Code that already died has nothing left to close.
+                pass
+
+    # --- Tools ---------------------------------------------------------------------
+    # An exception here reaches the Guide as a failed tool call.
+
+    async def act(self, action: dict) -> dict:
+        """Have the browser tab the message came from do a page action, and wait for what happened."""
+        self.action_id += 1
+        self.pending = {"id": self.action_id, "tab": self.running["tab"], "action": action}
+        self.waiter = asyncio.get_running_loop().create_future()
+        try:
+            ok, text = await asyncio.wait_for(self.waiter, ACTION_TIMEOUT)
+        except TimeoutError:
+            raise ValueError("The user's page didn't answer: its tab may be closed or asleep. Tell the user.")
+        finally:
+            self.pending = None
+            self.waiter = None
+        if not ok:
+            raise ValueError(text)
+        return {"content": [{"type": "text", "text": text}]}
+
+    async def look_page(self, args: dict) -> dict:
+        return await self.act({"kind": "look"})
+
+    async def go_to(self, args: dict) -> dict:
+        if not args["address"].startswith("#/"):
+            raise ValueError("An address starts with #/, like #/explore.")
+        return await self.act({"kind": "go_to", "address": args["address"]})
+
+    async def click(self, args: dict) -> dict:
+        return await self.act({"kind": "click", "element": args["element"]})
+
+    async def fill(self, args: dict) -> dict:
+        return await self.act({"kind": "fill", "element": args["element"], "text": args["text"]})
+
+    async def point(self, args: dict) -> dict:
+        return await self.act({"kind": "point", "element": args["element"]})
+
+    async def read_source(self, args: dict) -> dict:
+        path = (PROJECT_ROOT / args["path"].strip().lstrip("/")).resolve()
+        allowed = any(path.is_relative_to(PROJECT_ROOT / folder) for folder in SOURCE_FOLDERS)
+        if not allowed or path.suffix not in SOURCE_TYPES:
+            raise ValueError(f"Only the app's code: {', '.join(SOURCE_TYPES)} files in {', '.join(SOURCE_FOLDERS)}.")
+        if not path.is_file():
+            raise ValueError(f"There is no {args['path']}. search_source finds where things are.")
+        text = path.read_text()
+        if len(text) > SOURCE_LIMIT:
+            text = text[:SOURCE_LIMIT] + "\n[...cut]"
+        return {"content": [{"type": "text", "text": text}]}
+
+    async def search_source(self, args: dict) -> dict:
+        needle = args["text"].strip().lower()
+        if needle == "":
+            raise ValueError("Say what to look for.")
+        lines = await asyncio.to_thread(self.find_lines, needle)
+        if not lines:
+            return {"content": [{"type": "text", "text": f"No line of the app's code has {args['text']}."}]}
+        text = "\n".join(lines[:SEARCH_LIMIT])
+        if len(lines) > SEARCH_LIMIT:
+            text += f"\n... and {len(lines) - SEARCH_LIMIT} more. Look for something narrower."
+        return {"content": [{"type": "text", "text": text}]}
+
+    def find_lines(self, needle: str) -> list[str]:
+        lines = []
+        for folder in SOURCE_FOLDERS:
+            for path in sorted((PROJECT_ROOT / folder).rglob("*")):
+                if not path.is_file() or path.suffix not in SOURCE_TYPES or "__pycache__" in path.parts or "node_modules" in path.parts:
+                    continue
+                for number, line in enumerate(path.read_text(errors="replace").split("\n"), start=1):
+                    if needle in line.lower():
+                        lines.append(f"{path.relative_to(PROJECT_ROOT)}:{number}: {line.strip()[:200]}")
+        return lines
