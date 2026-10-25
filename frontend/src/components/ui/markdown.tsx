@@ -8,7 +8,8 @@ import { cn } from "@/lib/utils"
 
 // Where images may load from in text an agent wrote (drafts, its chat replies). An image from any other
 // host would let an agent send data out (in the image's URL) even from a VM with its internet off,
-// just by the user opening the text. Those show as a plain link instead.
+// just by the user opening the text. Those show as a plain link instead. The exceptions are this app's own
+// pictures, which never leave this machine: evidence (/api/evidence/..., the Inbox puts a PR's pictures there).
 const GITHUB_IMAGE_HOSTS = [
   "github.com",
   "raw.githubusercontent.com",
@@ -121,12 +122,15 @@ const GITHUB_IMAGES_ONLY: Components = {
   img: ({ node: _node, ...rest }) => {
     const src = String(rest.src ?? "")
     let host = ""
+    let evidence = false
     try {
-      host = new URL(src, window.location.href).hostname
+      const url = new URL(src, window.location.href)
+      host = url.hostname
+      evidence = url.origin === window.location.origin && url.pathname.startsWith("/api/evidence/")
     } catch {
       host = ""
     }
-    if (!GITHUB_IMAGE_HOSTS.includes(host)) {
+    if (!GITHUB_IMAGE_HOSTS.includes(host) && !evidence) {
       return (
         <a href={src} target="_blank" rel="noreferrer">
           {rest.alt || "image"} ({host || "unknown host"})

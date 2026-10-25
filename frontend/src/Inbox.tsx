@@ -6,7 +6,9 @@ Bottom: the open item (#/inbox/<id>), in tabs. The first two are for you, the la
 - Overview (Overview.tsx): what it is about in plain words (problem, cause, fix, what could go wrong) and the
   agent's before and after, side by side. A question is only this tab.
 - Diff (PRs): the unified diff split into files, each folding open with +/- counts and colored lines.
-- PR message / Comment: the title and text exactly as they would go to GitHub, to copy when you send it.
+- PR message / Comment: the title and text exactly as they would go to GitHub, with Copy for sending by hand. A PR's
+  before and after pictures are in its text as ![...](evidence:ev_...): shown here in place, and listed above it with
+  Copy picture and Download, since GitHub needs its own copy (by hand, paste each over its line in GitHub's PR box).
 The bar at the bottom decides: Reject, Reply & keep working, or Approve, with an optional reply.
 Nothing is ever sent to GitHub: a decision only goes to the agent (and the draft's job goes back
 to the agent's queue). After a decision on the Pending tab the next pending item opens.
@@ -277,6 +279,26 @@ export default function Inbox(props: { selected: string | null }) {
     setBusy("");
   }
 
+  // A picture to the clipboard, as PNG (what browsers can copy), to paste over its line in GitHub's PR box.
+  async function copyPicture(file: string) {
+    try {
+      const blob = await (await fetch(`/api/evidence/${file}`)).blob();
+      const bitmap = await createImageBitmap(blob);
+      const canvas = document.createElement("canvas");
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      canvas.getContext("2d")?.drawImage(bitmap, 0, 0);
+      const png = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+      if (png === null) {
+        throw new Error("no picture");
+      }
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+      toast.success("Picture copied. Paste it over its line in GitHub's PR box.");
+    } catch {
+      toast.error("The browser did not allow copying the picture. Download it and drag it in instead.");
+    }
+  }
+
   async function copyText(text: string, what: string) {
     try {
       await navigator.clipboard.writeText(text);
@@ -326,6 +348,12 @@ export default function Inbox(props: { selected: string | null }) {
     shownTab = "overview";
   }
   const showTabs = draft !== undefined && draft.kind !== "question";
+  // The pictures a PR's text shows (![...](evidence:ev_...)): here they load from this app.
+  const pictures = draft !== undefined ? draft.evidence.filter((item) => item.file !== null && draft.body.includes(`evidence:${item.id}`)) : [];
+  let shownBody = draft !== undefined ? draft.body : "";
+  for (const item of pictures) {
+    shownBody = shownBody.replaceAll(`evidence:${item.id}`, `${window.location.origin}/api/evidence/${item.file}`);
+  }
 
   return (
     <ResizablePanelGroup orientation="vertical">
@@ -544,8 +572,39 @@ export default function Inbox(props: { selected: string | null }) {
                       <FileCheck className="size-3.5 text-ok" /> Follows the project's PR template <span className="font-mono">{draft.template}</span>
                     </div>
                   )}
+                  {pictures.length > 0 && (
+                    <div className="space-y-2 rounded-md border bg-muted/30 p-2.5">
+                      <div className="text-xs text-muted-foreground">
+                        GitHub needs its own copy of these pictures.{" "}
+                        In the PR box on GitHub, select each{" "}
+                        <code className="font-mono">![…](evidence:…)</code> and paste its picture over it, or drag the downloaded file there.
+                      </div>
+                      <div className="flex flex-wrap gap-3">
+                        {pictures.map((item) => (
+                          <div key={item.id} className="w-48 space-y-1">
+                            <img src={`/api/evidence/${item.file}`} alt={item.caption} className="h-28 w-full rounded border bg-black object-contain" />
+                            <div className="truncate text-xs" title={item.caption}>
+                              <span className="font-mono">{item.id}</span> · {item.stage}
+                            </div>
+                            <div className="flex items-center gap-1">
+                              {item.file !== null && !item.file.endsWith(".gif") && (
+                                <Button variant="ghost" size="xs" onClick={() => copyPicture(item.file ?? "")}>
+                                  <Copy /> Copy picture
+                                </Button>
+                              )}
+                              <Button variant="ghost" size="xs" asChild>
+                                <a href={`/api/evidence/${item.file}`} download={item.file}>
+                                  <Download /> Download
+                                </a>
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   {draft.kind === "pr" && <div className="text-[15px] font-semibold">{draft.title}</div>}
-                  <Markdown text={draft.body || "*No text.*"} repo={draft.repo ?? undefined} githubImagesOnly issueRefs />
+                  <Markdown text={shownBody || "*No text.*"} repo={draft.repo ?? undefined} githubImagesOnly issueRefs />
                 </div>
               )}
               {shownTab === "diff" && files.length === 0 && <div className="px-4 py-3 text-muted-foreground">This draft has no changes.</div>}

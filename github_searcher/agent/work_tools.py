@@ -11,7 +11,9 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   progress (job_progress: the step it is on and a headline in everyday words) for the user to follow.
 - Drafts: nothing goes to GitHub from here. A PR, an issue comment or a question becomes a draft
   in the user's Inbox and its job waits on the user. A PR draft's diff is read from the repo
-  folder in the VM, so only the agent holding the VM can make one.
+  folder in the VM, so only the agent holding the VM can make one. The job's before and
+  after pictures go in the PR body as ![before](evidence:ev_...): the Inbox shows them in place,
+  and the user uploads them with the PR, sending by hand.
 - Evidence: what the user looks at to decide on a draft. Screenshots of the VM's desktop, image
   files from the VM (a plot, a render) and command runs (a test failing, then passing), each
   "before" or "after" the agent's change, under a topic that pairs them. It is kept on the job
@@ -40,6 +42,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import re
 import secrets
 import shlex
 import subprocess
@@ -323,7 +326,8 @@ class WorkTools:
                 "fix is right and complete, and your evidence shows it. path is the repo folder in the VM (e.g. ~/click), base what to "
                 "compare against (e.g. origin/main). The diff is everything that differs from base, committed or not, new files included. "
                 "title and body are the PR exactly as it would be sent, in the project's own form: its PR template (checked: every "
-                "heading of the repo's template must be in the body), CONTRIBUTING and title style. Nothing is pushed or sent: the user "
+                "heading of the repo's template must be in the body), CONTRIBUTING and title style. Your before and after pictures "
+                "go in the body as ![before](evidence:ev_...) (a Before / After table). Nothing is pushed or sent: the user "
                 "reviews it, and you get a message with their decision. project, problem, cause, fix and risks are only for the user, "
                 "who reads them first to understand and judge the PR. " + PLAIN,
                 {
@@ -1111,6 +1115,21 @@ class WorkTools:
                 text = f"A risk is {len(risk)} characters; keep each under {OVERVIEW_RISK_CHARS}."
                 return {"content": [{"type": "text", "text": text}], "is_error": True}
         overview["risks"] = risks
+        # The job's pictures go in the body, as ![what](evidence:ev_...): the Inbox shows them there, and sending
+        # uploads them to the user's fork (github_account.py).
+        pictures = [item["id"] for item in job["evidence"] if item["kind"] in ["screenshot", "image"]]
+        shown = re.findall(r"evidence:(ev_[0-9a-f]{6})", args["body"])
+        unknown = [evidence_id for evidence_id in shown if evidence_id not in pictures]
+        if unknown:
+            text = f"The body shows {', '.join(unknown)}, which aren't pictures of {job['id']}: use the ids evidence_add gave your screenshots and images."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if pictures and not shown:
+            text = (
+                "Put your before and after pictures in the body, where the project's template asks for screenshots (else in a "
+                "short Screenshots section at the end), as a table:\n| Before | After |\n| --- | --- |\n"
+                "| ![before](evidence:ev_a1b2c3) | ![after](evidence:ev_d4e5f6) |\nwith your evidence ids. They are uploaded with the PR."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
         # The user decides on evidence, not on the agent's word: no PR without a before and an after
         # of the problem itself (the test suite's runs are kept apart: they show nothing about the issue).
         stages = [item["stage"] for item in job["evidence"] if item["topic"] not in TESTS_TOPICS.values()]

@@ -103,6 +103,7 @@ The user doesn't know the project or its code. They decide on your drafts by wha
 - Every topic needs `context`: 1 to 3 sentences in plain words on what is shown, what to look at, and what it means. Write it for someone seeing the project for the first time. Use the same context for a topic's before and after. The caption then says in one line what that side shows: "The line stays at 0 while the slider is at 0.7: the picture is out of date."
 - Label what you draw: titles, axis names, "before (current version)" and "after (with the fix)", so the picture explains itself.
 - A good set is small: one or two before/after pairs of what the issue is about, and the test runs (added for you). Not twenty pictures.
+- The before and after pictures also go in the PR itself, so the maintainers see the proof: see Drafts below.
 - Evidence must be honest: never edit output, stage a picture or pick a run that hides a failure. If the after doesn't show the fix, fix the code, not the caption.
 - After the user replies and you change the code, take the afters again (the same topic and stage replaces the old one) and `evidence_remove` what no longer fits.
 - Comments and questions carry the job's evidence too: use it when a picture helps the user answer ("which of these two layouts?").
@@ -118,6 +119,7 @@ Draft a PR only when you are certain the fix is right and complete, and your evi
 
 Every draft has two audiences:
 - The PR's title and body (or the comment's body) are what would go to GitHub, exactly as they would be sent. Write them for the project's maintainers, in the project's own form: its PR template (when the repo has one, `draft_pr` checks that every heading of it is there; fill each in and tick the checklist items you did), CONTRIBUTING, and the title style of its recent merged PRs.
+  - Your before and after pictures go in the body, where the template asks for screenshots, or else in a short Screenshots section at the end, as a table with the evidence ids: `| Before | After |`, `| --- | --- |`, `| ![before](evidence:ev_a1b2c3) | ![after](evidence:ev_d4e5f6) |`. The Inbox shows them in place. `draft_pr` checks that the job's pictures are there.
 - The overview is for the user, who reads it first and doesn't know the project. Plain words, no function or file names; explain any technical term in a few words. Short: each part is 1 to 2 sentences.
   - `project`: what the project is, in one line ("matplotlib: a Python library that draws charts").
   - `problem`: what goes wrong as someone using it sees it, specific about when and what. Not "the chart is drawn twice", but "While you drag a slider, the chart shows the picture from before the slider moved; the right picture only appears once the slider stops."
