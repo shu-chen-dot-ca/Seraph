@@ -39,10 +39,13 @@ Assign opens AssignDialog; the arrow button next to it (and the #) opens the iss
 Only the rows on screen are drawn, so thousands of issues stay fast. Undo / redo like the Repos page.
 Many rows are picked like in a mail app (components/ui/row-selection.tsx): Ctrl-click, Shift-click, dragging a
 rectangle, Ctrl+A; a bar at the bottom then removes them at once, as one undo step (it asks first; Enter confirms).
+Remove assigned (in the bar on top) takes out every issue someone else is on (assigned on GitHub, or tagged Assigned)
+in one go, whatever the tab and filters, except ones an agent here has a job for (its latest not cancelled); it asks
+first too, and is one undo step.
 */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ArrowUp, ExternalLink, Loader2, RefreshCw, Redo2, Tags, Undo2, UserPlus, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ExternalLink, Loader2, RefreshCw, Redo2, Tags, Undo2, UserPlus, UserX, X } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -156,6 +159,7 @@ export default function Issues(props: { repo: string | null; open: string | null
   const [selected, setSelected] = useState<string[]>([]);
   const [anchor, setAnchor] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [confirmRemoveAssigned, setConfirmRemoveAssigned] = useState(false);
   // The list's order: as listed (none), or by these columns, from left to right as the table shows them, Title and #
   // last; best is the way a column's first click sorts, or not.
   const [sorts, setSorts] = useState<{ key: SortKey; best: boolean }[]>([]);
@@ -195,6 +199,16 @@ export default function Issues(props: { repo: string | null; open: string | null
   for (const repo of repos.items) {
     repoStars[repo.full_name] = repo.stars;
   }
+
+  // Issues someone else is on (assigned on GitHub, or tagged Assigned) that no agent here works on: no job, or the
+  // latest cancelled. Remove assigned takes them all out.
+  const assignedIds = issues.items
+    .filter((issue) => {
+      const job = latestJob[issue.id];
+      const isAssigned = (issue.facts?.assignees.length ?? 0) > 0 || issue.tags?.status === "assigned";
+      return isAssigned && (job === undefined || job.status === "cancelled");
+    })
+    .map((issue) => issue.id);
 
   // Count per tab (within the repo filter), then the rows of the current tab.
   const inRepo = issues.items.filter((issue) => props.repo === null || issue.repo === props.repo);
@@ -673,6 +687,14 @@ export default function Issues(props: { repo: string | null; open: string | null
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
+            <Button variant="ghost" size="sm" disabled={assignedIds.length === 0} onClick={() => setConfirmRemoveAssigned(true)}>
+              <UserX /> Remove assigned
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Remove every issue someone else is on: assigned on GitHub, or a claim Claude found in the comments. Ones your agents have a job for stay.</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
             <Button variant="ghost" size="icon" disabled={!issues.can_undo} onClick={undo} aria-label="Undo">
               <Undo2 />
             </Button>
@@ -1018,6 +1040,25 @@ export default function Issues(props: { repo: string | null; open: string | null
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction variant="destructive" onClick={() => remove(chosen)}>
+              Remove
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={confirmRemoveAssigned} onOpenChange={setConfirmRemoveAssigned}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Remove {assignedIds.length} assigned {assignedIds.length === 1 ? "issue" : "issues"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Someone else is on them: assigned on GitHub, or a claim Claude found in the comments. Ones your agents have a job for stay. Undo brings them back.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={() => remove(assignedIds)}>
               Remove
             </AlertDialogAction>
           </AlertDialogFooter>
