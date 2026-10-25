@@ -16,8 +16,8 @@ Names may have capitals; two names that differ only in capitals count as the sam
 change it: it can fill the YAML in and press Check.
 Save a VM makes an image from that VM's disk as it is (a few
 minutes). Build and Rebuild build image.yaml mechanically, with no agent; only what changed since the last build
-runs again. One image builds at a time.
-Tasks run in the background, shown above the list with their last log lines until the
+runs again. Several images can build at the same time, each in its own builder VM, as long as memory allows; one
+image has one task at a time. Tasks run in the background, shown above the list with their last log lines until the
 image is listed; the whole log opens in a dialog, and a build also shows its image.yaml. Everything comes from the
 live "images" topic.
 */
@@ -72,8 +72,8 @@ export default function Images(props: { tabs: ReactNode }) {
   const [showing, setShowing] = useState("");
   const shown = data.images.find((image) => image.fingerprint === showing);
 
-  // One build at a time.
-  const buildRunning = data.tasks.some((task) => task.kind === "build" && task.status === "running");
+  // The images with a task running: one task at a time per image. Other images may build meanwhile.
+  const busy = data.tasks.filter((task) => task.status === "running").map((task) => task.name);
   const editedUnbuilt = data.unbuilt.find((image) => image.name === definitionOf);
 
   async function makeDefault(image: Image) {
@@ -268,7 +268,7 @@ export default function Images(props: { tabs: ReactNode }) {
                 <DropdownMenuItem onSelect={() => setRenaming(image)}>
                   <Pencil /> Rename
                 </DropdownMenuItem>
-                <DropdownMenuItem disabled={buildRunning} onSelect={() => setRebuilding(image)}>
+                <DropdownMenuItem disabled={busy.includes(image.name)} onSelect={() => setRebuilding(image)}>
                   <Hammer /> Rebuild
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
@@ -294,7 +294,7 @@ export default function Images(props: { tabs: ReactNode }) {
             <span className="text-muted-foreground">–</span>
             <span className="text-right text-muted-foreground">–</span>
             <span className="flex justify-end">
-              <Button size="xs" variant="ghost" disabled={image.building || buildRunning} onClick={() => rebuild(image)}>
+              <Button size="xs" variant="ghost" disabled={image.building} onClick={() => rebuild(image)}>
                 {image.building ? <Loader2 className="animate-spin" /> : <Hammer />} {image.building ? "Building" : "Build"}
               </Button>
             </span>

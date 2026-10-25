@@ -5,7 +5,7 @@ come with every desktop), and the description, if one is written here, as its de
 Sherpa helps fill this in and change image.yaml afterwards.
 
 Save only saves it: the image is listed as "not built", with Build and Edit image.yaml, until its first build. Save
-and build also starts that build (minutes).
+and build also starts that build (minutes; other images may build at the same time).
 
 The name starts as the system and the first free number (ubuntu-1), like vm1 and agent-1, until you type one. It may
 have capitals (Ubuntu-Web); two names that differ only in capitals count as the same.

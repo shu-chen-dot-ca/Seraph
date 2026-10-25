@@ -1,6 +1,6 @@
 """The Images tab on the VMs page: the default image, rename, delete, New image (saves its image.yaml, the defaults
-with the system, desktop and description picked; nothing is built), Build or Rebuild (image.yaml is built, no agent),
-save a VM as an image, what each image has
+with the system, desktop and description picked; nothing is built), Build or Rebuild (image.yaml is built, no agent;
+several images at once), save a VM as an image, what each image has
 (its inventory: system, languages, tools, packages), its image.yaml and its agent, and the defaults every new
 image.yaml starts as (the Defaults tab). Check runs the mechanical check of either without saving it.
 
@@ -132,7 +132,7 @@ def new_image(body: NewImageRequest) -> dict:
 @router.post("/images/{name}/rebuild")
 def rebuild_image(name: str) -> dict:
     """Builds the image from its image.yaml (no agent), as a task; the new build replaces it. Also the first build of
-    one never built. Answers at once."""
+    one never built. Other images may build meanwhile. Answers at once."""
     if image_agents.busy(name):
         raise HTTPException(status_code=409, detail=f"{name}'s agent is working. Wait, or stop it.")
     try:

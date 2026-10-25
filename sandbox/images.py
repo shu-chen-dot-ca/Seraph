@@ -21,7 +21,8 @@ How images come and change. Builds, saves and inspects run in the background, as
   image.yaml and Delete. Sherpa helps the user change it (it can fill the YAML in and press Check).
 - Build (Rebuild once there is an image): image.yaml is built, with no agent (image_build.py, "build" task). Only
   what changed since the last build runs again: its builder VM keeps snapshots between builds. The new build
-  replaces the image; VMs made from the old one keep their own disk.
+  replaces the image; VMs made from the old one keep their own disk. Several images build at once, each in its own
+  builder VM, as long as memory allows (each takes SANDBOX_BUILD_MEMORY; MIN_FREE_RAM_GB stays free).
 - The user changes image.yaml in Details > Definition, or asks the image's agent to. Every change is checked first
   (image_build.check_definition). Nothing changes in the image until it is rebuilt: definition_changed (in the live
   feed) says image.yaml differs from what the image was built from, and the Images tab shows a dot. Changing the
@@ -39,8 +40,8 @@ replaced by a rebuild) are kept, since VMs made from them still have what they l
 
 A task (build, save, inspect) is a process of its own (its own session) that writes DATA_DIR/images/<task id>.log
 and prints "==> Done" last when it worked. Its record in DATA_DIR/images/tasks.json keeps the pid, so a
-backend restart (it reloads on code changes) doesn't stop it: the task is followed again from there. One build at
-a time. Tasks that worked are dropped once the image shows up; failed ones stay until the user dismisses
+backend restart (it reloads on code changes) doesn't stop it: the task is followed again from there. One task at
+a time per image. Tasks that worked are dropped once the image shows up; failed ones stay until the user dismisses
 them.
 
 The default image (what New VM picks first) is saved in DATA_DIR/images/settings.json. Until one is picked the default is SANDBOX_IMAGE from .env. Deleting the default
@@ -82,6 +83,9 @@ DEFINITIONS_DIR = IMAGES_DIR / "definitions"
 DESKTOPS = list(image_build.DESKTOPS.values())
 # Capitals too. Two names that differ only in case are the same name (name_taken): they would be mixed up.
 NAME_PATTERN = r"[A-Za-z][A-Za-z0-9-]{0,40}"
+# Each build's VM takes this much memory (GiB), and this much must stay free for this machine (as for VMs).
+BUILD_MEMORY_GB = int(os.environ["SANDBOX_BUILD_MEMORY"].removesuffix("GiB"))
+MIN_FREE_RAM_GB = int(os.environ["SANDBOX_MIN_FREE_RAM_GB"])
 # Tasks are checked this often; Incus's image list is read again every REFRESH_SECONDS.
 CHECK_SECONDS = 2
 REFRESH_SECONDS = 10
@@ -574,7 +578,7 @@ class Images:
     def build(self, name: str) -> dict:
         """Build the image from its image.yaml (image_build.py), as a task, replacing the image of that name. Also for
         one never built (it has an image.yaml but isn't listed yet). Minutes: only what changed since the last build
-        runs again."""
+        runs again. Other images may build meanwhile, as long as memory allows."""
         if not (DEFINITIONS_DIR / name).exists():
             name = self.find(name)["name"]
         text = self.read_definition(name)
@@ -586,10 +590,15 @@ class Images:
         with self.lock:
             building = [task for task in self.tasks if task["status"] == "running" and task["kind"] == "build"]
             busy = [task for task in self.tasks if task["status"] == "running" and task["name"] == name]
-        if building:
-            raise ImagesError(f"{building[0]['name']} is being built; one image at a time.")
         if busy:
             raise ImagesError(f"{name} is busy ({busy[0]['kind']} is running); wait until that is done.")
+        # Builds that just started haven't taken their memory yet, so each running one counts in full.
+        free_gb = int(Path("/proc/meminfo").read_text().split("MemAvailable:")[1].split()[0]) / 1024 / 1024
+        if free_gb - BUILD_MEMORY_GB * (len(building) + 1) < MIN_FREE_RAM_GB:
+            raise ImagesError(
+                f"Not enough free memory for another build: {free_gb:.1f}GB free, {len(building)} building already, each "
+                f"takes {BUILD_MEMORY_GB}GB and {MIN_FREE_RAM_GB}GB must stay free. Wait for one to end."
+            )
         script = f"set -e\n{sys.executable} -m sandbox.image_build {name} {self.image_dir(name)}\nbash {INSPECT_SCRIPT} {name} {INVENTORY_DIR}\necho '==> Done'\n"
         task, process = self.start_task("build", name, None, script)
         # Reap it when it ends, so it doesn't stay a zombie; check_tasks reads the outcome from the log.
