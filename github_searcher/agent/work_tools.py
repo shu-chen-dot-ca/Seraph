@@ -21,10 +21,11 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   and draft_pr refuses until the agent read both for that repo. The job's before and
   after pictures go in the PR body as ![before](evidence:ev_...): the Inbox shows them in place,
   and sending uploads them to the user's fork (or the user does, sending by hand).
-- Evidence: what the user looks at to decide on a draft. Screenshots of the VM's desktop, image
-  files from the VM (a plot, a render) and command runs (a test failing, then passing), each
-  "before" or "after" the agent's change, under a topic that pairs them. It is kept on the job
-  (jobs.py), and each draft gets a copy. A PR draft needs at least one before and one after.
+- Evidence: what the user looks at to decide on a draft. Real screenshots of the project running on
+  the VM's desktop (its window, or a terminal running it), screen recordings (GIF) and command runs
+  (a test failing, then passing), each "before" or "after" the agent's change, under a topic that
+  pairs them. Never pictures the agent drew: an image made with matplotlib is refused. It is kept on
+  the job (jobs.py), and each draft gets a copy. A PR draft needs at least one before and one after.
 - Tests: run_tests runs the project's tests in the VM on the unchanged code (before), then on the
   change (after), with the same command, live in a terminal window on the VM's desktop for the user.
   Two scopes: focused, the basic checks (the tests that cover the change, when the rules ask for no
@@ -147,6 +148,8 @@ GUIDE_LINK_WORDS = ["contribut", "developer guide", "developer-guide", "developm
 GUIDE_PAGES = 5
 GUIDE_CHARS = 30_000
 GUIDE_TOTAL_CHARS = 120_000
+# A picture made with matplotlib says so in its file ("Software: Matplotlib version ..."): the agent drew it.
+MATPLOTLIB_MARK = b"matplotlib"
 # Where run_tests's output goes for the terminal window on the desktop.
 TESTS_LOG = "~/.cache/sandbox-tests.log"
 # The overview's wording, said once for every tool that takes one.
@@ -486,14 +489,16 @@ class WorkTools:
                 "Add evidence to one of your jobs, for the user to decide on its drafts (only while you hold the VM). The user sees "
                 "it next to your draft in the Inbox, with each topic's before and after side by side. "
                 "kind: screenshot (the VM's desktop now; region [x, y, width, height] takes only that part, e.g. one window), "
-                "image (an image file in the VM, path: a PNG, JPEG, GIF or WebP up to 5 MB, e.g. a plot or a render), or "
+                "image (an image file in the VM, path: a PNG, JPEG, GIF or WebP up to 5 MB: a screen recording, or a picture the "
+                "project itself made; never one you drew, and one made with matplotlib is refused), or "
                 "command (runs command in the VM and keeps the command, its exit code and its output, e.g. the failing test, "
                 "the tool's wrong output). stage: before (the problem, before your change), after (the same with your change), "
                 "or other. topic: a few words naming what is shown, the same for its before and after (e.g. \"help output\", "
                 "\"tests\"). context: what this comparison shows and how to read it, for the user who doesn't know the project "
                 "(the same text for a topic's before and after). caption: one line on what this side shows. Adding a topic and stage "
-                "again replaces the old one. Make it easy to see: a chart you drew of the numbers, a picture of the app's window, "
-                "a short GIF of something that moves, one image with before and after labeled; raw output only when it speaks for itself.",
+                "again replaces the old one. Pictures are real screenshots of the project running on the desktop: the app's window, "
+                "or a terminal window running the program or a few lines that use the library; a short screen-recorded GIF of "
+                "something that moves. Never a chart, table or side-by-side image you made. Raw output only when it speaks for itself.",
                 {
                     "type": "object",
                     "properties": {
@@ -1947,6 +1952,14 @@ class WorkTools:
                 mime = "image/webp"
             else:
                 return {"content": [{"type": "text", "text": f"{path} is not a PNG, JPEG, GIF or WebP image."}], "is_error": True}
+            # Pictures are real screenshots, never ones the agent drew (the user's rule). matplotlib marks its files.
+            if MATPLOTLIB_MARK in data[:4096].lower() and "matplotlib" not in (job["repo"] or "").lower():
+                text = (
+                    f"{path} was made with matplotlib: a picture you drew. Evidence must be a real screenshot of the project "
+                    "running on the desktop: its window, or a terminal window running it (kind screenshot). If the project itself "
+                    "makes this picture, open it in its window or an image viewer and take a screenshot."
+                )
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
 
         if kind == "command":
             command = (args.get("command") or "").strip()
