@@ -24,7 +24,7 @@
 
 Seraph is a local workbench for contributing to open source with AI agents, without handing them the keys.
 
-It searches GitHub for projects that fit you and welcome outside contributors, then for issues in them that are worth doing. Agents set each issue up in a sandbox VM, reproduce the bug, fix it, and back the fix with test runs and before-and-after evidence. Every PR, comment and question lands in your **Inbox** as a draft. Nothing goes to GitHub until you approve it: with your GitHub account connected in Settings, Approve opens the PR or posts the comment as you, after you confirm. Without one, you send it yourself.
+It searches GitHub for projects that fit you and welcome outside contributors, then for issues in them that are worth doing. Agents set each issue up in a sandbox VM, reproduce the bug, fix it, and back the fix with test runs and before-and-after evidence. Every PR, comment and question lands in your **Inbox** as a draft. Nothing goes to GitHub until you approve it: with your GitHub account connected on the GitHub page, Approve opens the PR or posts the comment as you, after you confirm. Without one, you send it yourself.
 
 > **Why a human in the loop?** Maintainers notice drive-by AI pull requests. One agent's note on matplotlib, as it appears in the app: *"AI-generated PRs on good first issues get closed, so you must write the fix yourself."* This tool does the legwork and leaves the judgement, and the name on the PR, to you.
 
@@ -43,10 +43,10 @@ It searches GitHub for projects that fit you and welcome outside contributors, t
 - **The project's own rules.** Before it sets anything up, the agent gathers the project's rules for contributors wherever they are: CONTRIBUTING in any folder, developer guides in its docs, the PR template, AGENTS.md, and guides the README links to on the project's website. It follows all of them, and writes the PR from those rules and the project's recently merged PRs.
 - **Proof before a PR.** Whatever the project's rules ask to run before a PR (or else the tests that cover the change) must pass on the unchanged code and again after the fix, with the same command, however long it takes. A PR draft is refused without before-and-after evidence: real screenshots of the project running, screen recordings, or command runs, never charts or pictures the agent drew. The fix is the agent's own: it never builds on someone else's fix, and no PR credits a co-author.
 - **One Inbox for every decision.** A plain-words overview, the evidence side by side, the diff and the PR message. **Approve** (it sends the PR from your GitHub account, once you confirm), **Reply** (the agent applies your feedback and drafts again) or **Reject**. If someone else takes an issue while an agent works on it, the Inbox asks you whether the agent keeps working or stops.
-- **Your PRs, followed.** The PRs page lists every PR you sent, from the app or by hand, and how it stands in plain words: checks waiting for a maintainer's approval, running, passed or failed; reviews; the latest comment and who wrote it; and whether the issue it fixes is still open. It checks GitHub every few minutes.
+- **Your GitHub in one place.** The GitHub page lists every PR you sent, from the app or by hand, and how it stands in plain words: checks waiting for a maintainer's approval, running, passed or failed; reviews; the latest comment and who wrote it; and whether the issue it fixes is still open. It checks GitHub every few minutes. From there you close or reopen a PR, delete a finished PR's branch from your fork, see and delete the comments the app posted for you, and connect your account. Each of those asks you first.
 - **Sherpa, the built-in guide.** The round button at the bottom right of every page. Ask how something works, or ask it to do it: it sees the page you are on and opens pages, clicks and fills in fields while you watch. Its chats are kept.
 - **This computer at a glance.** The Resource page shows CPU, memory, GPUs, disk, network and battery, and what each running VM takes.
-- **Fast UI.** A Proxmox-style sidebar and one websocket with no polling. Long lists render only the rows on screen. Light and dark themes with an accent color, your GitHub account, and env vars for all VMs, live in Settings.
+- **Fast UI.** A Proxmox-style sidebar and one websocket with no polling. Long lists render only the rows on screen. Light and dark themes with an accent color, and env vars for all VMs, live in Settings.
 - **Rate limits handled.** GitHub requests are spread over as many tokens as you give it, paced, and retried when a rate limit clears.
 
 ## How it works
@@ -60,7 +60,7 @@ It searches GitHub for projects that fit you and welcome outside contributors, t
 3. **Queue.** The agent lines up for its VM. When the VM is its turn, the agent does all of its jobs there, then releases the VM.
 4. **Fix and prove.** In the VM it clones the repo, reproduces the problem, runs the tests before and after the fix, and captures evidence.
 5. **Decide.** The draft waits in your Inbox. Reply and the agent keeps working. Approve, confirm, and the PR opens on GitHub from your account: the agent's own commits, with your name, on a new branch in your fork, the pictures uploaded there too.
-6. **Follow.** The PRs page shows how each PR is doing: checks, reviews, comments, and the issue it fixes.
+6. **Follow.** The GitHub page shows how each PR is doing: checks, reviews, comments, and the issue it fixes.
 
 ## Quick start
 
@@ -70,7 +70,7 @@ It searches GitHub for projects that fit you and welcome outside contributors, t
 - [uv](https://docs.astral.sh/uv/) (Python 3.11+) and Node.js 22+
 - A Claude subscription for Claude Code: get a token with `claude setup-token`
 - One or more GitHub tokens for searching. Read access to public repos is enough, and tokens from different accounts add up.
-- To send PRs from the app: a [classic GitHub token](https://github.com/settings/tokens/new?scopes=public_repo&description=Seraph) with the `public_repo` scope, pasted in Settings. GitHub's fine-grained tokens can't open PRs on projects you don't own.
+- To send PRs from the app: a [classic GitHub token](https://github.com/settings/tokens/new?scopes=public_repo&description=Seraph) with the `public_repo` scope, pasted on the GitHub page (Account). GitHub's fine-grained tokens can't open PRs on projects you don't own.
 - Memory and disk: each VM takes 4, 8 or 16 GB of RAM (8 GB is always kept free for the host). An image is 9 to 30 GB depending on what it has, and each VM disk is 30 to 500 GB (48 GB by default).
 
 ### 1. Prepare Incus (once)
@@ -127,7 +127,7 @@ Open **http://localhost:5173**. Then:
 3. **Explore → Profile.** Say who you are and what kinds of repos you want, then **Start**. Approve the ones you like into Repos.
 4. **Agents → New agent**, set its VM, and ask it to find good first issues in your Repos.
 5. In **Issues**, press **Assign** on one you like, and watch the job in **Jobs** and on the VM's desktop.
-6. **Settings → GitHub account.** Paste your classic token, so Approve can open PRs as you.
+6. **GitHub → Account.** Paste your classic token, so Approve can open PRs as you.
 7. Decide on its drafts in the **Inbox**.
 
 Stuck anywhere? Ask Sherpa, the round button at the bottom right.
