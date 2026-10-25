@@ -3,8 +3,9 @@ An image's image.yaml: the one place it is defined (sandbox/images.py): the syst
 steps. The app builds the image from it, mechanically, from official sources (Rebuild, no agent); what the app needs
 in every image comes from its own base layer, never from here. The agent writes it; you can read and change it here
 too. It is built mechanically, so it is checked mechanically: Check (while editing) runs the same check as Save
-without saving, the YAML's keys and values and every step's bash (bash -n: read, never run), and lists what is
-wrong (in the row of the buttons); a change that doesn't pass isn't saved. Sherpa presses Check after it fills the
+without saving, the YAML's keys and values, every step's bash (bash -n: read, never run) and that every Docker
+image can be pulled (its registry is asked, as every build does before it starts), and lists what is wrong (in the
+row of the buttons). Save checks the same without the Docker images; a change that doesn't pass isn't saved. Sherpa presses Check after it fills the
 YAML in. A new image's image.yaml starts as the defaults
 (the VMs page's Defaults tab); from then on it is the image's own. Nothing changes in the image until it is
 rebuilt, so when image.yaml differs from what the image was built from, an amber dot shows, its changes can be
@@ -185,7 +186,7 @@ export default function ImageDefinition(props: { name: string; updatedAt: number
             </Button>
             {!fresh && <span className="text-xs text-muted-foreground">A saved image.yaml changes the image at its next Rebuild.</span>}
             {fresh && checked.problems.length === 0 && (
-              <span className="text-xs text-ok">No problems: the keys and values are right, and every step's bash parses.</span>
+              <span className="text-xs text-ok">No problems: the keys and values are right, every step's bash parses, and every Docker image can be pulled.</span>
             )}
             {fresh && checked.problems.length > 0 && (
               <span className="min-w-0 flex-1 text-xs whitespace-pre-wrap text-destructive">{checked.problems.join("\n")}</span>

@@ -21,7 +21,8 @@ How images come and change. Builds, saves and inspects run in the background, as
   image.yaml and Delete. Sherpa helps the user change it (it can fill the YAML in and press Check).
 - Build (Rebuild once there is an image): image.yaml is built, with no agent (image_build.py, "build" task). Only
   what changed since the last build runs again: its builder VM keeps snapshots between builds. The new build
-  replaces the image; VMs made from the old one keep their own disk. Several images build at once, each in its own
+  replaces the image; VMs made from the old one keep their own disk. Before it starts, image.yaml is checked
+  online (image_build.check_definition): a Docker image that can't be pulled stops it right away. Several images build at once, each in its own
   builder VM, as long as memory allows (each takes SANDBOX_BUILD_MEMORY; MIN_FREE_RAM_GB stays free).
 - The user changes image.yaml in Details > Definition, or asks the image's agent to. Every change is checked first
   (image_build.check_definition). Nothing changes in the image until it is rebuilt: definition_changed (in the live
@@ -584,7 +585,8 @@ class Images:
         text = self.read_definition(name)
         if not text:
             raise ImagesError(f"{name} has no image.yaml, so it can't be built. Write one in its Definition first.")
-        problems = image_build.check_definition(text)
+        # Online: a Docker image that can't be pulled stops the build here, not after all its steps.
+        problems = image_build.check_definition(text, online=True)
         if problems:
             raise ImagesError(f"{name}'s image.yaml isn't right: {'; '.join(problems)}")
         with self.lock:

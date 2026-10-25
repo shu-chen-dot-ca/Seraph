@@ -97,9 +97,10 @@ def new_image_options() -> dict:
 
 @router.post("/image-check")
 def check_image_yaml(body: CheckRequest) -> dict:
-    """The mechanical check of an image.yaml or the defaults, the same as Save's, without saving: the YAML's keys and
-    values, and every step's bash (bash -n, nothing runs). No problems: an empty list."""
-    return {"problems": image_build.check_definition(body.text, body.defaults)}
+    """The mechanical check of an image.yaml or the defaults, without saving: the YAML's keys and values, every step's
+    bash (bash -n, nothing runs), and that every Docker image can be pulled (asked of its registry, as a build does
+    before it starts; Save skips this). No problems: an empty list."""
+    return {"problems": image_build.check_definition(body.text, body.defaults, online=True)}
 
 
 @router.get("/image-defaults")

@@ -50,16 +50,20 @@ It prints each step for the task's log, and stops the builder VM at the end, als
 What failed builds before, and what keeps it from happening again:
 - A builder VM hung in its firmware at boot: VM.wait_agent forces it off and on, once (every wait for a boot does).
 - Firefox and writable browser terminals are in base_layer.sh, and CHECK_SCRIPT fails an image without them.
+- A Docker image that was gone (minio/minio): the online check (check_definition) stops a build before it starts.
 """
 
 import hashlib
 import json
 import os
+import re
 import shlex
 import signal
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -121,6 +125,11 @@ DEMO_DIR = os.environ["SANDBOX_VM_DEMO_DIR"]
 PY_VENV = os.environ["SANDBOX_VM_PY_VENV"]
 # Each script (the base layer, a step, a list) may run this long. Builds are meant to take minutes, not hours.
 SCRIPT_TIMEOUT = 1800
+# What a registry may answer for an image's manifest (one platform or several).
+DOCKER_MANIFESTS = (
+    "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, "
+    "application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json"
+)
 # Every script starts with this: stop at the first error, and show each command in the log.
 SCRIPT_HEADER = "set -euxo pipefail\nexport DEBIAN_FRONTEND=noninteractive\n"
 
@@ -279,10 +288,12 @@ def parse_definition(text: str, defaults: bool = False) -> dict:
     }
 
 
-def check_definition(text: str, defaults: bool = False) -> list[str]:
+def check_definition(text: str, defaults: bool = False, online: bool = False) -> list[str]:
     """The mechanical check of image.yaml (or, with defaults=True, the defaults), without building: what
     parse_definition finds wrong, or else each step whose run bash can't parse (bash -n only reads it, it runs
-    nothing). No problems: an empty list. A build can still fail on what it downloads or installs."""
+    nothing), and with online=True each Docker image its registry won't give (docker_pull_problem). Save checks
+    offline; Check and the start of every build online. No problems: an empty list. A build can still fail on
+    what it downloads or installs."""
     try:
         definition = parse_definition(text, defaults)
     except DefinitionError as error:
@@ -292,7 +303,53 @@ def check_definition(text: str, defaults: bool = False) -> list[str]:
         result = subprocess.run(["bash", "-n"], input=step["run"], capture_output=True, text=True, timeout=10)
         if result.returncode != 0:
             problems.append(f"Step {step['name']}: " + "; ".join(line.removeprefix("bash: ") for line in result.stderr.strip().splitlines()))
+    if not online:
+        return problems
+    for image in definition["docker"]["images"]:
+        problem = docker_pull_problem(image)
+        if problem is not None:
+            problems.append(problem)
     return problems
+
+
+def docker_pull_problem(image: str) -> str | None:
+    """Why a Docker image can't be pulled, asked of its registry without pulling it (its manifest), or None.
+    Catches an image that is gone, private or misspelled in seconds instead of at the end of a build (MinIO
+    stopped publishing minio/minio, and a build failed on it after all its steps). Any registry: Docker Hub,
+    ghcr.io, quay.io, ..., each with its own anonymous pull token."""
+    name, _, digest = image.partition("@")
+    first = name.split("/")[0]
+    registry = "registry-1.docker.io"
+    if "/" in name and ("." in first or ":" in first or first == "localhost"):
+        registry = first
+        name = name[len(first) + 1:]
+    tag = "latest"
+    if ":" in name.split("/")[-1]:
+        name, _, tag = name.rpartition(":")
+    if registry == "registry-1.docker.io" and "/" not in name:
+        name = "library/" + name
+    # A registry that wants a token says where to get one (WWW-Authenticate) when asked without.
+    challenge = ""
+    try:
+        urllib.request.urlopen(f"https://{registry}/v2/", timeout=10)
+    except urllib.error.HTTPError as error:
+        challenge = error.headers.get("WWW-Authenticate", "")
+    except OSError as error:
+        return f"Docker image {image}: {registry} can't be reached to check it ({error})"
+    fields = dict(re.findall(r'(\w+)="([^"]*)"', challenge))
+    headers = {"Accept": DOCKER_MANIFESTS}
+    try:
+        if "realm" in fields:
+            query = urllib.parse.urlencode({"service": fields.get("service", ""), "scope": f"repository:{name}:pull"})
+            answer = json.load(urllib.request.urlopen(f"{fields['realm']}?{query}", timeout=10))
+            headers["Authorization"] = "Bearer " + (answer.get("token") or answer.get("access_token") or "")
+        manifest = urllib.request.Request(f"https://{registry}/v2/{name}/manifests/{digest or tag}", method="HEAD", headers=headers)
+        urllib.request.urlopen(manifest, timeout=10)
+    except urllib.error.HTTPError as error:
+        return f"Docker image {image} can't be pulled: {registry} answers {error.code} (gone, private or misspelled)"
+    except (OSError, ValueError) as error:
+        return f"Docker image {image}: couldn't check it ({error})"
+    return None
 
 
 def stages(definition: dict) -> list[list[tuple[str, str]]]:

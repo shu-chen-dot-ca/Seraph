@@ -5,9 +5,10 @@ own image.yaml, so a change here only reaches images made after it.
 
 The same keys as image.yaml, without system and desktop: packages (one list, or split into apt: and dnf: where the
 names differ), python, node, docker and steps. The defaults are built mechanically, so they are checked mechanically:
-Check (while editing) runs the same check as Save without saving: the YAML's keys and values, and every step's bash
-(bash -n: read, never run). It lists what is wrong, or says there are no problems; a change that doesn't pass isn't
-saved. Its answer shows in the row of the buttons, where the hint is otherwise. Sherpa presses Check after it fills
+Check (while editing) checks without saving: the YAML's keys and values, every step's bash (bash -n: read, never
+run), and that every Docker image can be pulled (its registry is asked, as every build does before it starts). It
+lists what is wrong, or says there are no problems. Save runs the same check without the Docker images, and a
+change that doesn't pass isn't saved. Its answer shows in the row of the buttons, where the hint is otherwise. Sherpa presses Check after it fills
 the YAML in, and fixes what it reports.
 
 Comes from GET /api/image-defaults; Save is PUT /api/image-defaults.
@@ -130,7 +131,7 @@ export default function Defaults(props: { tabs: ReactNode }) {
             </Button>
             {!fresh && <span className="text-xs text-muted-foreground">Only new images start from a change; images already made keep theirs.</span>}
             {fresh && checked.problems.length === 0 && (
-              <span className="text-xs text-ok">No problems: the keys and values are right, and every step's bash parses.</span>
+              <span className="text-xs text-ok">No problems: the keys and values are right, every step's bash parses, and every Docker image can be pulled.</span>
             )}
             {fresh && checked.problems.length > 0 && (
               <span className="min-w-0 flex-1 text-xs whitespace-pre-wrap text-destructive">{checked.problems.join("\n")}</span>
