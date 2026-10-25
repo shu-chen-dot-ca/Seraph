@@ -32,6 +32,11 @@ X11 = (
 # JPEG, not PNG: a PNG of the screen is over 1MB, too big for one message to Claude.
 SCREENSHOT_PATH = "/tmp/computer-use-screen.jpg"
 SCREENSHOT_QUALITY = 60
+# The VMs overview's small picture (preview): its own file, so it never swaps an agent's screenshot.
+# scrot writes the small copy next to the full one, with -thumb in its name.
+PREVIEW_PATH = "/tmp/computer-use-preview.jpg"
+PREVIEW_THUMB_PATH = "/tmp/computer-use-preview-thumb.jpg"
+PREVIEW_PERCENT = 25
 # bash gives back at most this many bytes of stdout and of stderr: the last ones, where errors
 # and summaries are. Cut inside the VM, so a command that prints without end can't fill this
 # machine's memory.
@@ -82,6 +87,17 @@ class Computer:
         result = self.vm.exec(command, timeout=30, tag=self.tag)
         if result.returncode != 0:
             raise ComputerError(f"Could not take a screenshot: {result.stderr.strip()}")
+        return base64.b64decode(result.stdout)
+
+    def preview(self) -> bytes:
+        """A small JPEG of the screen (a quarter of its size), for the VMs overview. Only looks."""
+        command = (
+            f"{X11} scrot --overwrite --quality {SCREENSHOT_QUALITY} --thumb {PREVIEW_PERCENT} {PREVIEW_PATH} "
+            f"&& base64 -w0 {PREVIEW_THUMB_PATH}"
+        )
+        result = self.vm.exec(command, timeout=15, tag=self.tag)
+        if result.returncode != 0:
+            raise ComputerError(f"Could not take a picture of the screen: {result.stderr.strip()}")
         return base64.b64decode(result.stdout)
 
     def click(self, x: int, y: int, button: str = "left", count: int = 1) -> None:

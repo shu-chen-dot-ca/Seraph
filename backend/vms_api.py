@@ -1,5 +1,6 @@
-"""The VMs pages: create, rename and delete VMs, power, settings, the desktop viewer, each VM's queue, and copying
-files between this computer and a VM (the Resources tab; only the user can, see sandbox/file_transfer.py).
+"""The VMs pages: create, rename and delete VMs, power, settings, the desktop viewer, a small picture of each VM's
+screen (the VMs overview's Desktop card), each VM's queue, and copying files between this computer and a VM (the
+Resources tab; only the user can, see sandbox/file_transfer.py).
 
 Create, start, stop and restart run in background threads inside
 sandbox/vms.py and answer at once; the browser follows the state through
@@ -11,14 +12,16 @@ interrupts that agent, which lives on the event loop.
 
 import asyncio
 import os
+import subprocess
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 from backend.shared import agents, images, queue, vms
 from sandbox import file_transfer
+from sandbox.agent.computer_use import Computer, ComputerError
 from sandbox.file_transfer import FileTransferError
 from sandbox.images import ImagesError
 from sandbox.vm import VMError
@@ -210,6 +213,22 @@ def vm_viewer(name: str) -> dict:
     # bell=off: no ding in the browser each time the desktop beeps (e.g. while the agent types).
     desktop = f"http://{address}:{NOVNC_PORT}/vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=2000&bell=off"
     return {"desktop": desktop, "terminal": None}
+
+
+@router.get("/vms/{name}/screen")
+def vm_screen(name: str) -> Response:
+    """A small JPEG of the VM's screen right now, for the Desktop card on the VMs overview. Only looks: nothing
+    reaches the desktop. 409 while the desktop isn't up (off, booting, or a terminal-only image)."""
+    try:
+        record = vms.get(name)
+    except VMsError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    try:
+        jpeg = Computer(record.vm).preview()
+    except (ComputerError, subprocess.TimeoutExpired) as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    # Always a new picture: the card asks again every few seconds.
+    return Response(content=jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @router.get("/vms/{name}/settings")
