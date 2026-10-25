@@ -11,7 +11,9 @@ What it sees: each message comes with the page the user is on, read by the brows
 on the page, and every button, link and field, numbered (Sherpa.tsx readPage).
 What it does: go_to, click, fill and point act on the page in the user's browser tab (the one the message came from),
 and answer with the page as it is after. The browser refuses a click inside a confirmation (Delete, Reject...): the
-user confirms those themselves.
+user confirms those themselves, except the ones marked data-sherpa-may-confirm (deleting an image), which a click
+with confirm (the user asked for exactly that) may answer. Clicks are events sent to the element in the page, never
+the user's mouse.
 look_page reads the page again, and screenshot shows it: the browser draws the app's own page to an image (nothing
 outside the app, no other window), with each element's number on it when asked.
 What it reads on GitHub: the agents' GitHub tools (agent/github_tools.py, through the app's tokens), read-only: READMEs,
@@ -126,6 +128,7 @@ You can use the page, in the user's browser, while they watch:
   element's number is drawn on it. Take one when how it looks matters (a layout, a color, a chart, where something
   sits), not for every step: the page's text is usually enough.
 Each of them answers with the page as it is after, numbered again: always use the numbers from the latest page.
+Your clicks go to the element itself; the user's mouse never moves.
 
 How to help:
 - A question: answer it in a few plain sentences, and point at what you talk about when it is on the page. When it is
@@ -136,7 +139,10 @@ How to help:
   asked for exactly that. Otherwise fill everything in, point at the button, and leave the click to them.
 - After you fill in a YAML (the VMs page's Defaults tab, an image's Definition), click its Check: the mechanical
   check Save uses, without saving. Fix what it lists and check again, so what you leave for the user passes.
-- Pop-ups that ask "are you sure?" are always the user's to answer: you can't click in them. Point at the button.
+- Pop-ups that ask "are you sure?" are the user's to answer: you can't click in them. Point at the button.
+  The one exception is deleting an image (VMs page, Images tab, the image's menu, Delete): when the user asked you to
+  delete that image, click Delete in the pop-up with confirm true. Never set confirm for anything else, and never for an
+  image the user didn't ask you to delete.
 - You can't see or use what is inside a VM's desktop or terminal: that is a screen of its own.
 - When something can't be done in the app, say so plainly.
 - Long text the user may want to keep or paste (a whole YAML, a long prompt): write it in your message as well as
@@ -368,8 +374,9 @@ class Sherpa:
             tool(
                 "click",
                 "Click the element with this number (from the latest page). Answers with the page after. Refused inside a "
-                "confirmation: point at it instead.",
-                {"element": int},
+                "confirmation (point at it instead), except deleting an image: confirm true answers that one, only when the user "
+                "asked you to delete that image. confirm false for every other click.",
+                {"element": int, "confirm": bool},
             )(self.click),
             tool("fill", "Type text into the field with this number (from the latest page), replacing what is in it. Answers with the page after.", {"element": int, "text": str})(
                 self.fill
@@ -558,7 +565,7 @@ class Sherpa:
         return await self.act({"kind": "go_to", "address": args["address"]})
 
     async def click(self, args: dict) -> dict:
-        return await self.act({"kind": "click", "element": args["element"]})
+        return await self.act({"kind": "click", "element": args["element"], "confirm": bool(args.get("confirm"))})
 
     async def fill(self, args: dict) -> dict:
         return await self.act({"kind": "fill", "element": args["element"], "text": args["text"]})

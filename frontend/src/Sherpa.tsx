@@ -3,7 +3,9 @@ Sherpa: a round button at the bottom right of every page that opens a chat with 
 (github_searcher/sherpa.py). Ask it how something works, where something is, or to do something: it sees the page you
 are on and can use it while you watch: open pages, click, type into fields (a job's description, a VM's settings...)
 and highlight what it talks about (a pulsing ring, gone at your next click outside the chat). It never answers an
-"are you sure?" pop-up for you, and it leaves lasting changes (Save, Create, Delete...) to you unless you ask.
+"are you sure?" pop-up for you (except deleting an image, when you asked it to: data-sherpa-may-confirm marks that
+pop-up), and it leaves lasting changes (Save, Create, Delete...) to you unless you ask.
+Its clicks are events sent to the button itself: your mouse pointer never moves, and nothing outside the app is touched.
 
 It can take a screenshot of the app: the page drawn to an image from its own DOM (modern-screenshot), so nothing
 outside the app gets in, no other window or tab. Frames (a VM's desktop, another site) and Sherpa's own chat are
@@ -100,6 +102,9 @@ function readPage(): string {
   if (popup !== null) {
     roots = [popup, ...document.querySelectorAll("[role=listbox], [role=menu]")];
     lines.push("A pop-up is open (close it before using the page under it):", popup.innerText.trim().slice(0, TEXT_KEPT));
+    if (popup.hasAttribute("data-sherpa-may-confirm")) {
+      lines.push("You may answer this one (click with confirm true), but only when the user asked you for exactly this.");
+    }
   } else {
     lines.push("Sidebar:", document.querySelector("nav")?.innerText.trim() ?? "", "", "Text on the page:");
     const text = (document.querySelector("main")?.innerText ?? "").replace(/\n{3,}/g, "\n\n").trim();
@@ -385,13 +390,24 @@ export default function Sherpa() {
           } else if (element === null) {
             ok = false;
             result = `Element ${action.element} isn't on the page any more. The page now:\n\n${readPage()}`;
-          } else if (action.kind === "point" || (action.kind === "click" && element.closest("[role=alertdialog]") !== null)) {
+          } else if (
+            action.kind === "point" ||
+            (action.kind === "click" && element.closest("[role=alertdialog]") !== null && !(action.confirm && element.closest("[data-sherpa-may-confirm]") !== null))
+          ) {
+            // A confirmation is the user's to answer, except one marked data-sherpa-may-confirm (deleting an image) clicked
+            // with confirm. Refused, it is highlighted for the user instead.
             pointed.current?.classList.remove("sherpa-point");
             element.classList.add("sherpa-point");
             element.scrollIntoView({ block: "nearest" });
             pointed.current = element;
             ok = action.kind === "point";
-            result = ok ? "It is highlighted on the user's screen until they click somewhere." : "That is in a confirmation: the user answers those. It is highlighted for them.";
+            result = "It is highlighted on the user's screen until they click somewhere.";
+            if (!ok) {
+              result = "That is in a confirmation: the user answers those. It is highlighted for them.";
+            }
+            if (!ok && element.closest("[data-sherpa-may-confirm]") !== null) {
+              result = "That is in a confirmation. Click it with confirm true only when the user asked you for exactly this; it is highlighted for them meanwhile.";
+            }
           } else if (action.kind === "click") {
             // The whole press, as a mouse does it: Radix opens menus and selects on pointerdown, tabs on mousedown.
             element.scrollIntoView({ block: "nearest" });

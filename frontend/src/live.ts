@@ -551,7 +551,7 @@ export type SherpaAction =
   | { kind: "look" }
   | { kind: "screenshot"; numbers: boolean }
   | { kind: "go_to"; address: string }
-  | { kind: "click"; element: number }
+  | { kind: "click"; element: number; confirm: boolean }
   | { kind: "fill"; element: number; text: string }
   | { kind: "point"; element: number };
 

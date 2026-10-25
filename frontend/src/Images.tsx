@@ -13,7 +13,8 @@ New image (NewImageDialog) only saves an image.yaml, the defaults with a system,
 is built and no agent runs. Such an image is listed below the built ones as "not built", with Build (its first
 build) and a menu: Edit image.yaml (the same editor, with Check, as an image's Definition), Rename and Delete.
 Names may have capitals; two names that differ only in capitals count as the same. Sherpa helps
-change it: it can fill the YAML in and press Check.
+change it: it can fill the YAML in and press Check. Sherpa may also answer Delete's "are you sure?" when the user
+asked it to delete that image (data-sherpa-may-confirm on that pop-up; every other confirmation stays the user's).
 Save a VM makes an image from that VM's disk as it is (a few
 minutes). Build and Rebuild build image.yaml mechanically, with no agent; only what changed since the last build
 runs again. Several images can build at the same time, each in its own builder VM, as long as memory allows; one
@@ -398,7 +399,8 @@ export default function Images(props: { tabs: ReactNode }) {
           }
         }}
       >
-        <AlertDialogContent>
+        {/* Sherpa may confirm this one, when the user asked it to delete the image. */}
+        <AlertDialogContent data-sherpa-may-confirm>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {deleting?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
