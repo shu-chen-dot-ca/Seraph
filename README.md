@@ -1,5 +1,8 @@
+<h1 align="center">Seraph</h1>
+
 <p align="center">
-  <img src="docs/banner.svg" alt="Seraph: agents find good first issues, fix them in VMs and prove it. Nothing reaches GitHub until you send it yourself." width="100%">
+  <b>Agents find open-source work worth doing, fix it in sandbox VMs and prove it.</b><br>
+  Nothing reaches GitHub until you send it yourself.
 </p>
 
 <p align="center">
@@ -17,10 +20,6 @@
   <a href="#features">Features</a> ·
   <a href="#safety">Safety</a> ·
   <a href="docs/architecture.md">Architecture</a>
-</p>
-
-<p align="center">
-  <img src="docs/screenshots/inbox-evidence.png" alt="The Inbox: a PR draft for matplotlib with before-and-after renders the agent captured in its VM" width="100%">
 </p>
 
 Seraph is a local workbench for contributing to open source with AI agents, without handing them the keys.
@@ -55,19 +54,6 @@ Agents search GitHub for good first issues that are worth doing, and check how f
 3. **Queue.** The agent lines up for its VM. When the VM is its turn, the agent does all of its jobs there, then releases the VM.
 4. **Fix and prove.** In the VM it clones the repo, reproduces the problem, runs the tests before and after the fix, and captures evidence.
 5. **Decide.** The draft waits in your Inbox. Reply and the agent keeps working. Approve and you open the PR on GitHub yourself.
-
-## Screenshots
-
-<table>
-  <tr>
-    <td width="50%"><img src="docs/screenshots/issues.png" alt="Issues list with live GitHub facts and linked PRs"><p align="center"><b>Issues</b>: picked by agents, with live facts</p></td>
-    <td width="50%"><img src="docs/screenshots/jobs.png" alt="A job with its steps, headline, the agent's notes and its drafts"><p align="center"><b>Jobs</b>: steps, notes and drafts</p></td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="docs/screenshots/repos.png" alt="A repo expanded in place like an editor's file tree, with the agent's note on its maintainers"><p align="center"><b>Repos</b>: browse code in place</p></td>
-    <td width="50%"><img src="docs/screenshots/inbox-diff.png" alt="A PR draft's diff in the Inbox, with Copy diff and Download .patch"><p align="center"><b>Inbox</b>: review the diff before you send it</p></td>
-  </tr>
-</table>
 
 ## Quick start
 
@@ -185,7 +171,7 @@ github_searcher/  lists, jobs, inbox, the agents manager, GitHub reads, token ba
   agent/          one agent: its Claude conversation, system prompt and tools
 sandbox/          Incus VMs, the VM queue, images, and the agent's VM tools
   image/          base image build: provision.sh, package list, inventory
-docs/             diagrams and screenshots
+docs/             architecture and diagrams
 data/             runtime state, not in git
 ```
 
