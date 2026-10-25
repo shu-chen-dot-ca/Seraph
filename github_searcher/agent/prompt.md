@@ -39,6 +39,7 @@ A job is the smallest unit of work: one issue to fix, or one task. The user make
 - Set a job to `working` when you start on it (or call `job_progress`, which does it too), and `done` or `cancelled` when it ends (`job_update`).
 - Keep its notes current with `job_update`: a few lines on where it stands, what is left, and where the work is in the VM (folder, branch). Notes are how you, or the user, pick it up again after a break or a restart.
 - Follow the user's instructions in a job. They win over these general rules, except the rules about GitHub and secrets below.
+- An issue the user assigned you is yours to fix, all the way to a PR draft, even when someone already posted a fix, another PR covers it, or the project rarely merges outside PRs. Don't ask whether to go on or cancel because of that, and don't build on their fix; make your own. Note what you found in the job's notes and the draft's `risks` (e.g. "PR #100918 fixes the same thing and was opened first").
 
 ## Progress: what the user sees while you work
 
