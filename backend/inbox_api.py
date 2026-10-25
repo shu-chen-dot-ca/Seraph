@@ -1,7 +1,10 @@
 """The Inbox: the user decides on the agents' drafts (PRs, comments, questions).
 
-Approving sends nothing to GitHub; it only tells the agent. Every decision goes
-through Agents.decide, which also puts the draft's job back in the queue and
+Approving tells the agent. Only with send (the Inbox asks "are you sure?" first, and only when your
+GitHub account is connected in Settings) does Approve on a PR or comment send it to GitHub as you,
+before the agent is told; if GitHub refuses, nothing is decided. POST /send does the same for one
+approved before (while no account was connected). Sending runs in a thread (github_account.py).
+Every decision goes through Agents.decide, which also puts the draft's job back in the queue and
 wakes the agent, so those endpoints run on the event loop (`async def`). The
 drafts themselves reach the browser through /api/live.
 
@@ -10,13 +13,15 @@ served by name. Names are only ever ones the agent tools made (ev_<hex>.<ext>), 
 a request can't reach any other file.
 """
 
+import asyncio
 import re
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
-from backend.shared import agents, inbox
+from backend.shared import agents, github_account, inbox
+from github_searcher.github_account import SendError
 from github_searcher.jobs import EVIDENCE_DIR
 
 router = APIRouter(prefix="/api")
@@ -26,18 +31,29 @@ EVIDENCE_TYPES = {"jpg": "image/jpeg", "png": "image/png", "gif": "image/gif", "
 
 class ReplyRequest(BaseModel):
     text: str = ""
+    # Approve only: send the PR or comment to GitHub as you first.
+    send: bool = False
 
 
 @router.post("/inbox/{draft_id}/approve")
 async def approve(draft_id: str, body: ReplyRequest | None = None) -> dict:
     """A note can come along (the reply box's text); without one the body can be left out."""
     reply = ""
+    send = False
     if body is not None:
         reply = body.text
+        send = body.send
     try:
+        if send:
+            draft = inbox.get(draft_id)
+            if draft["status"] != "pending":
+                raise ValueError(f"{draft_id} was already {draft['status']}")
+            await asyncio.to_thread(github_account.send, draft_id)
         return agents.decide(draft_id, "approved", reply)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"No draft {draft_id}")
+    except SendError as error:
+        raise HTTPException(status_code=400, detail=str(error))
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error))
 
@@ -67,6 +83,25 @@ async def reply(draft_id: str, body: ReplyRequest) -> dict:
         raise HTTPException(status_code=404, detail=f"No draft {draft_id}")
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error))
+
+
+@router.post("/inbox/{draft_id}/send")
+async def send(draft_id: str) -> dict:
+    """An approved PR or comment that isn't on GitHub yet, sent as you now; its agent is told."""
+    try:
+        draft = inbox.get(draft_id)
+        if draft["status"] != "approved":
+            raise ValueError("Only an approved draft is sent from here; a pending one is sent by Approve.")
+        draft = await asyncio.to_thread(github_account.send, draft_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No draft {draft_id}")
+    except SendError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    what = "PR" if draft["kind"] == "pr" else "comment"
+    agents.notify(draft["agent"], f"The user sent your approved {what} draft {draft_id} ({draft['title']}) to GitHub: {draft['sent']['url']}")
+    return draft
 
 
 @router.get("/inbox/{draft_id}/patch")

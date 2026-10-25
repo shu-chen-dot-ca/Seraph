@@ -1,8 +1,8 @@
 """The backend: one FastAPI app that serves everything under /api.
 
 The pieces are made once in backend/shared.py (the Repos, Issues and Tracked lists,
-jobs, the inbox, the VMs, the VM queue and the agents), and each page has its
-own router in backend/*_api.py.
+jobs, the inbox, your GitHub account, the VMs, the VM queue and the agents), and each page has its
+own router in backend/*_api.py (Settings' GitHub account: github_account_api.py).
 
 The browser never polls. It keeps one websocket open on /api/live, gets every
 topic when it connects, then only the topics that changed. Every store has a
@@ -32,7 +32,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
-from backend import agents_api, explore_api, images_api, inbox_api, issues_api, repos_api, sherpa_api, tracked_api, vms_api
+from backend import agents_api, explore_api, github_account_api, images_api, inbox_api, issues_api, repos_api, sherpa_api, tracked_api, vms_api
 from backend.shared import agents, explore, images, inbox, issue_facts, issue_tags, issues, jobs, rejections, repo_signals, repos, resource_usage, sherpa, tracked, tracked_issues, vms
 from github_searcher.token_balancer import BALANCER
 
@@ -67,6 +67,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(inbox_api.router)
+app.include_router(github_account_api.router)
 app.include_router(issues_api.router)
 app.include_router(repos_api.router)
 app.include_router(explore_api.router)

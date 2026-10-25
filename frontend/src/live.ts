@@ -405,6 +405,33 @@ export type Draft = {
   reply: string;
   created_at: string;
   decided_at: string | null;
+  base_sha: string; // the commit the diff starts from; "" on drafts from before sending
+  sent: DraftSent | null; // what went to GitHub as you (github_searcher/github_account.py); null until then
+};
+
+// A PR or comment Approve sent to GitHub from your account. PRs keep what following them up will need.
+export type DraftSent = {
+  kind: "pr" | "comment";
+  url: string;
+  number: number;
+  repo: string;
+  as: string; // your GitHub login
+  at: string;
+  fork?: string; // PR: "you/name"
+  branch?: string; // PR: its branch in the fork
+  base_branch?: string;
+  base_sha?: string;
+  commit?: string;
+  id?: number; // comment: its id on GitHub
+};
+
+// Settings' GitHub account (GET /api/github_account), the one that sends what you approve. Never the token.
+export type GithubAccountStatus = {
+  connected: boolean;
+  login?: string;
+  name?: string;
+  scopes?: string[];
+  connected_at?: string;
 };
 
 export type AgentStatus = "idle" | "working" | "in_queue" | "using_vm";

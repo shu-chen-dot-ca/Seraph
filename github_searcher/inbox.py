@@ -2,18 +2,20 @@
 
 Agents never send anything to GitHub. A pull request, a comment or a question becomes a draft
 here, and the user approves, rejects, or replies to it (the agent then keeps working).
-Approving sends nothing either; it only tells the agent. Each draft is one JSON file,
-DATA_DIR/inbox/<id>.json:
+Approving tells the agent. With the user's GitHub account connected (Settings, github_account.py),
+Approve on a PR or comment also sends it to GitHub as them, first; "sent" then says what went out
+(mark_sent). Each draft is one JSON file, DATA_DIR/inbox/<id>.json:
 
     {"id": "draft_a1b2c3", "kind": "pr" | "comment" | "question", "agent": "<agent id>",
      "job": "job_..." | null, "repo": "owner/name" | null, "target": "owner/name#n" | null,
      "title", "body": "markdown",
      "diff": "unified diff (pr only)", "branch": "branch in the VM (pr only)", "base": "origin/main (pr only)",
+     "base_sha": "the commit base was when drafted, where the diff starts (pr only; empty on older drafts)",
      "vm": "vm1" | null, "path": "repo folder in the VM (pr only)" | null,
      "evidence": [Evidence, ...] (a copy of the job's, see jobs.py),
      "overview": {...} (for the user, see below), "template": ".github/pull_request_template.md" | null,
      "status": "pending" | "approved" | "rejected" | "replied", "reply": "the user's text",
-     "created_at", "decided_at": null until decided}
+     "created_at", "decided_at": null until decided, "sent": null | what went to GitHub (github_account.py)}
 
 "body" is what would be sent to GitHub; "overview" is only for the user, who doesn't know the
 project: plain words on what is wrong and what the draft does about it.
@@ -61,6 +63,9 @@ class Inbox:
             # And from before overviews.
             draft.setdefault("overview", {})
             draft.setdefault("template", None)
+            # And from before sending.
+            draft.setdefault("base_sha", "")
+            draft.setdefault("sent", None)
             self.drafts[draft["id"]] = draft
 
     def save(self, draft: dict) -> None:
@@ -86,7 +91,7 @@ class Inbox:
 
     def create(self, kind: str, agent: str, title: str, body: str, job: str | None = None,
                repo: str | None = None, target: str | None = None, diff: str = "", branch: str = "",
-               base: str = "", vm: str | None = None, path: str | None = None, evidence: list | None = None,
+               base: str = "", base_sha: str = "", vm: str | None = None, path: str | None = None, evidence: list | None = None,
                overview: dict | None = None, template: str | None = None) -> dict:
         with self.lock:
             draft_id = "draft_" + secrets.token_hex(3)
@@ -104,6 +109,7 @@ class Inbox:
                 "diff": diff,
                 "branch": branch,
                 "base": base,
+                "base_sha": base_sha,
                 "vm": vm,
                 "path": path,
                 "evidence": copy.deepcopy(evidence or []),
@@ -113,6 +119,7 @@ class Inbox:
                 "reply": "",
                 "created_at": datetime.now(UTC).isoformat(),
                 "decided_at": None,
+                "sent": None,
             }
             self.drafts[draft_id] = draft
             self.save(draft)
@@ -132,5 +139,15 @@ class Inbox:
             draft["status"] = status
             draft["reply"] = reply
             draft["decided_at"] = datetime.now(UTC).isoformat()
+            self.save(draft)
+            return copy.deepcopy(draft)
+
+    def mark_sent(self, draft_id: str, sent: dict) -> dict:
+        """What went to GitHub for this draft (github_account.py). Returns the draft as it is now."""
+        with self.lock:
+            if draft_id not in self.drafts:
+                raise KeyError(f"No draft {draft_id}")
+            draft = self.drafts[draft_id]
+            draft["sent"] = copy.deepcopy(sent)
             self.save(draft)
             return copy.deepcopy(draft)

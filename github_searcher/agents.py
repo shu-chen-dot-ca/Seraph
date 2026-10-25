@@ -29,7 +29,7 @@ user took the VM or its place away (on_kick: it is interrupted, and what it stil
 VM is killed).
 
 The user's side: assign() turns an issue into a job for an agent, decide() passes the user's
-decision on a draft back to its agent.
+decision on a draft back to its agent (with the link, when Approve sent it to GitHub).
 
 Everything here runs in the backend's event loop. notify() and the queue callbacks may be called
 from request threads, so they hand their work to the loop. version goes up on every change the
@@ -589,8 +589,17 @@ class Agents:
         kinds = {"pr": "PR", "comment": "comment", "question": "question"}
         about = f"your {kinds.get(draft['kind'], draft['kind'])} draft {draft_id} ({draft['title']})"
         job_name = job["id"] if job is not None else "your work"
-        if decision == "approved" and draft["kind"] == "pr":
+        # Approve sends a PR or comment first when the user's GitHub account is connected (inbox_api.py): then it is on GitHub.
+        sent = draft["sent"]
+        if decision == "approved" and draft["kind"] == "pr" and sent is not None:
+            text = (
+                f"The user approved {about}, and it is on GitHub now, as their PR: {sent['url']} (branch {sent['branch']} of "
+                f"{sent['fork']}). Put the link in the job's notes. If it finishes {job_name}, mark the job done with job_update."
+            )
+        elif decision == "approved" and draft["kind"] == "pr":
             text = f"The user approved {about}. They send it to GitHub themselves. If it finishes {job_name}, mark the job done with job_update."
+        elif decision == "approved" and draft["kind"] == "comment" and sent is not None:
+            text = f"The user approved {about}, and it is posted: {sent['url']}. Carry on with {job_name}."
         elif decision == "approved" and draft["kind"] == "comment":
             text = f"The user approved {about}. They post it themselves. Carry on with {job_name}."
         elif decision == "approved":

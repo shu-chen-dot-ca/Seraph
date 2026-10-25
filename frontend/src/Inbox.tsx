@@ -6,20 +6,36 @@ Bottom: the open item (#/inbox/<id>), in tabs. The first two are for you, the la
 - Overview (Overview.tsx): what it is about in plain words (problem, cause, fix, what could go wrong) and the
   agent's before and after, side by side. A question is only this tab.
 - Diff (PRs): the unified diff split into files, each folding open with +/- counts and colored lines.
-- PR message / Comment: the title and text exactly as they would go to GitHub, with Copy for sending by hand. A PR's
+- PR message / Comment: the title and text exactly as they go to GitHub, with Copy for sending by hand. A PR's
   before and after pictures are in its text as ![...](evidence:ev_...): shown here in place, and listed above it with
-  Copy picture and Download, since GitHub needs its own copy (by hand, paste each over its line in GitHub's PR box).
-The bar at the bottom decides: Reject, Reply & keep working, or Approve, with an optional reply.
-Nothing is ever sent to GitHub: a decision only goes to the agent (and the draft's job goes back
-to the agent's queue). After a decision on the Pending tab the next pending item opens.
+  Copy picture and Download, since GitHub needs its own copy (sending uploads them to your fork; by hand, paste
+  each over its line in GitHub's PR box).
+The bar at the bottom decides: Reject, Reply & keep working, or Approve, with an optional reply. A decision goes to
+the agent (and the draft's job goes back to the agent's queue).
+With your GitHub account connected (Settings), Approve on a PR or comment first asks "are you sure?" (Open PR / Post
+comment), then sends it to GitHub as you (github_searcher/github_account.py): a PR from a new branch in your fork,
+its pictures uploaded there. If GitHub refuses, nothing is decided and the error shows. Without an account nothing is
+sent; you send it yourself. A sent item's bar links to it on GitHub. One approved but not sent (approved before you
+connected) has Send to GitHub, with the same question. The bar says who Approve sends as.
+After a decision on the Pending tab the next pending item opens.
 J / K (or the arrow keys) move through the list when you are not typing.
 */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Check, ChevronRight, CircleHelp, Copy, Download, ExternalLink, FileCheck, GitPullRequest, Images, Loader2, MessageSquare, Reply, X } from "lucide-react";
+import { Check, ChevronRight, CircleHelp, Copy, Download, ExternalLink, FileCheck, GitPullRequest, Images, Loader2, MessageSquare, Reply, Send, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/ui/markdown";
@@ -28,7 +44,7 @@ import { DRAFT_TONE, JOB_LABEL, JOB_TONE, StatusDot } from "@/components/ui/stat
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import Overview from "@/Overview";
-import { api, useLive, useLoaded } from "@/live";
+import { api, useLive, useLoaded, type Draft, type GithubAccountStatus } from "@/live";
 import { cn } from "@/lib/utils";
 
 const COLUMNS = "grid grid-cols-[12px_88px_120px_190px_minmax(0,1fr)_44px] items-center gap-2";
@@ -57,6 +73,10 @@ export default function Inbox(props: { selected: string | null }) {
   // Diff files folded open or shut by hand, by "draft id:path"; others follow BIG_FILE_LINES.
   const [fileOpen, setFileOpen] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState("");
+  // Settings' GitHub account: who Approve sends PRs and comments as (null until known).
+  const [account, setAccount] = useState<GithubAccountStatus | null>(null);
+  // The "are you sure?" before sending: for Approve, or for Send to GitHub on an approved item.
+  const [confirming, setConfirming] = useState<"" | "approve" | "send">("");
   const [now, setNow] = useState(Date.now());
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -94,6 +114,18 @@ export default function Inbox(props: { selected: string | null }) {
     overscan: 10,
     getItemKey: (index) => rows[index].id,
   });
+
+  // Who the GitHub account is: at first, and again when Settings connects or disconnects one.
+  useEffect(() => {
+    function load() {
+      api<GithubAccountStatus>("/api/github_account")
+        .then(setAccount)
+        .catch(() => setAccount({ connected: false }));
+    }
+    load();
+    window.addEventListener("github-account", load);
+    return () => window.removeEventListener("github-account", load);
+  }, []);
 
   // Ages ("5m", "2h") stay current.
   useEffect(() => {
@@ -254,7 +286,8 @@ export default function Inbox(props: { selected: string | null }) {
     [files, fileOpen, draftId],
   );
 
-  async function decide(action: "approve" | "reject" | "reply") {
+  // send: Approve also sends the PR or comment to GitHub as you, first (after the "are you sure?").
+  async function decide(action: "approve" | "reject" | "reply", send = false) {
     if (draft === undefined) {
       return;
     }
@@ -266,15 +299,41 @@ export default function Inbox(props: { selected: string | null }) {
     // On the Pending tab the decided item leaves the list; the one after it (or before) opens next.
     const index = rows.findIndex((each) => each.id === draft.id);
     const next = tab === "pending" && index !== -1 ? (rows[index + 1] ?? rows[index - 1]) : undefined;
-    setBusy(action);
+    setBusy(send ? "send" : action);
     try {
-      await api(`/api/inbox/${draft.id}/${action}`, { method: "POST", body: { text: text } });
+      const result = await api<Draft>(`/api/inbox/${draft.id}/${action}`, { method: "POST", body: { text: text, send: send } });
       setReplies((current) => ({ ...current, [draft.id]: "" }));
+      const sent = result.sent;
+      if (send && sent !== null) {
+        toast.success(sent.kind === "pr" ? `PR opened: ${sent.repo}#${sent.number}` : `Comment posted on ${sent.repo}#${sent.number}`, {
+          action: { label: "Open", onClick: () => window.open(sent.url, "_blank", "noopener,noreferrer") },
+        });
+      }
       if (next !== undefined) {
         window.location.hash = `#/inbox/${next.id}`;
       }
     } catch (err) {
-      toast.error(`Could not ${action}: ${err instanceof Error ? err.message : err}`);
+      toast.error(`Could not ${send ? "send it" : action}: ${err instanceof Error ? err.message : err}`);
+    }
+    setBusy("");
+  }
+
+  // An approved PR or comment that isn't on GitHub yet (approved before your account was connected).
+  async function sendApproved() {
+    if (draft === undefined) {
+      return;
+    }
+    setBusy("send");
+    try {
+      const result = await api<Draft>(`/api/inbox/${draft.id}/send`, { method: "POST" });
+      const sent = result.sent;
+      if (sent !== null) {
+        toast.success(sent.kind === "pr" ? `PR opened: ${sent.repo}#${sent.number}` : `Comment posted on ${sent.repo}#${sent.number}`, {
+          action: { label: "Open", onClick: () => window.open(sent.url, "_blank", "noopener,noreferrer") },
+        });
+      }
+    } catch (err) {
+      toast.error(`Could not send it: ${err instanceof Error ? err.message : err}`);
     }
     setBusy("");
   }
@@ -315,7 +374,8 @@ export default function Inbox(props: { selected: string | null }) {
         return;
       }
       const target = event.target as HTMLElement;
-      if (target.closest("input, textarea, select, [contenteditable=''], [contenteditable='true'], [role='dialog']")) {
+      // Nor in a pop-up: the "are you sure?" before sending is about the item open under it.
+      if (target.closest("input, textarea, select, [contenteditable=''], [contenteditable='true'], [role='dialog'], [role='alertdialog']")) {
         return;
       }
       let step = 0;
@@ -373,7 +433,11 @@ export default function Inbox(props: { selected: string | null }) {
                 </TabsTrigger>
               </TabsList>
             </Tabs>
-            <span className="ml-auto text-xs text-muted-foreground">Nothing here is sent to GitHub. Decisions go to the agent.</span>
+            <span className="ml-auto text-xs text-muted-foreground">
+              {account !== null && account.connected
+                ? `Approved PRs and comments go to GitHub as @${account.login}. Decisions go to the agent.`
+                : "Nothing here is sent to GitHub. Decisions go to the agent."}
+            </span>
           </div>
 
           <div className={cn(COLUMNS, "h-7 shrink-0 border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground")}>
@@ -576,6 +640,7 @@ export default function Inbox(props: { selected: string | null }) {
                     <div className="space-y-2 rounded-md border bg-muted/30 p-2.5">
                       <div className="text-xs text-muted-foreground">
                         GitHub needs its own copy of these pictures.{" "}
+                        {account !== null && account.connected && "Sending uploads them to your fork and links them in the text. By hand: "}
                         In the PR box on GitHub, select each{" "}
                         <code className="font-mono">![…](evidence:…)</code> and paste its picture over it, or drag the downloaded file there.
                       </div>
@@ -630,7 +695,11 @@ export default function Inbox(props: { selected: string | null }) {
                   }}
                 />
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground">Approve sends nothing to GitHub; the agent is told, with your note.</span>
+                  <span className="text-xs text-muted-foreground">
+                    {draft.kind !== "question" && account !== null && account.connected
+                      ? `Approve ${draft.kind === "pr" ? "opens this PR" : "posts this comment"} on GitHub as @${account.login}, after you confirm; the agent is told, with your note.`
+                      : "Approve sends nothing to GitHub; the agent is told, with your note."}
+                  </span>
                   <div className="ml-auto flex items-center gap-1.5">
                     <Button variant="outline" size="sm" disabled={busy !== ""} onClick={() => decide("reject")}>
                       {busy === "reject" ? <Loader2 className="animate-spin" /> : <X />} Reject
@@ -647,9 +716,16 @@ export default function Inbox(props: { selected: string | null }) {
                       variant={draft.kind === "question" ? "outline" : "default"}
                       size="sm"
                       disabled={busy !== ""}
-                      onClick={() => decide("approve")}
+                      onClick={() => {
+                        if (draft.kind !== "question" && account !== null && account.connected) {
+                          setConfirming("approve");
+                        } else {
+                          decide("approve");
+                        }
+                      }}
                     >
-                      {busy === "approve" ? <Loader2 className="animate-spin" /> : <Check />} Approve
+                      {busy === "approve" || busy === "send" ? <Loader2 className="animate-spin" /> : <Check />}
+                      {busy === "send" ? "Sending…" : "Approve"}
                     </Button>
                   </div>
                 </div>
@@ -662,10 +738,55 @@ export default function Inbox(props: { selected: string | null }) {
                   <StatusDot tone={DRAFT_TONE[draft.status]} />
                   <span className="font-medium">{DECISION_LABEL[draft.status] ?? draft.status}</span>
                   {draft.decided_at !== null && <span className="text-xs text-muted-foreground">{new Date(draft.decided_at).toLocaleString()}</span>}
+                  {draft.sent !== null && (
+                    <a href={draft.sent.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-primary hover:underline">
+                      {draft.sent.kind === "pr" ? `PR #${draft.sent.number}` : "Comment"} on GitHub, as @{draft.sent.as} <ExternalLink className="size-3" />
+                    </a>
+                  )}
+                  {draft.status === "approved" && draft.sent === null && (draft.kind === "pr" || draft.kind === "comment") && account !== null && account.connected && (
+                    <Button size="sm" className="ml-auto" disabled={busy !== ""} onClick={() => setConfirming("send")}>
+                      {busy === "send" ? <Loader2 className="animate-spin" /> : <Send />}
+                      {busy === "send" ? "Sending…" : "Send to GitHub"}
+                    </Button>
+                  )}
                 </div>
                 {draft.reply !== "" && <div className="mt-1 border-l-2 border-muted-foreground/30 pl-3 whitespace-pre-wrap">{draft.reply}</div>}
               </div>
             )}
+
+            <AlertDialog
+              open={confirming !== ""}
+              onOpenChange={(open) => {
+                if (!open) {
+                  setConfirming("");
+                }
+              }}
+            >
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>{draft.kind === "pr" ? `Open this PR on ${draft.repo}?` : `Post this comment on ${draft.target}?`}</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    {draft.kind === "pr"
+                      ? `It opens as @${account?.login}, from a new branch in your fork, with the title, text and diff shown here. Anyone can see it. You can close it on GitHub later, but not delete it.`
+                      : `It is posted as @${account?.login}, with the text shown here. Anyone can see it. You can edit or delete it on GitHub later.`}
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={() => {
+                      if (confirming === "approve") {
+                        decide("approve", true);
+                      } else {
+                        sendApproved();
+                      }
+                    }}
+                  >
+                    {draft.kind === "pr" ? "Open PR" : "Post comment"}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </div>
         )}
       </ResizablePanel>

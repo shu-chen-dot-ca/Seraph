@@ -1,6 +1,6 @@
 /*
 The Settings dialog, opened from the bottom of the sidebar: the theme (Light, Dark or System), the accent color,
-and the env vars for all VMs.
+your GitHub account, and the env vars for all VMs.
 
 App owns the theme and accent: it applies them to <html> (class "dark" and data-accent) and keeps them in localStorage,
 so a pick shows on the whole app at once, behind the dialog. index.html applies the saved ones before the first paint.
@@ -8,6 +8,13 @@ so a pick shows on the whole app at once, behind the dialog. index.html applies 
 Each theme card has a tiny drawing of the app in that theme; System's is split corner to corner, light and dark.
 The accent colors live in index.css. A swatch carries data-accent itself, so it shows that color as it looks in
 the current theme (orange, green and teal get dark text in dark mode, which the check mark follows).
+
+GitHub account: the account Approve in the Inbox sends PRs and comments as (github_searcher/github_account.py).
+Paste a classic token with the public_repo scope and Connect: the backend checks it with GitHub (a fine-grained token,
+or one without that scope, is turned down with why) and keeps it on this computer. It never comes back to the
+browser: GET /api/github_account says only who it is (Connected as @login) and the token's scopes. Change token
+pastes a new one; Disconnect forgets it, and Approve then sends nothing again. "make one" opens GitHub's new-token
+page with public_repo ticked. Both tell the Inbox (a "github-account" window event), which shows who it sends as.
 
 The env vars for all VMs are kept by the backend (sandbox/vms.py), not the browser: GET /api/vms/global_env each
 time the dialog opens (unless you have unsaved edits), PUT to save. Agents can add empty ones (for you to fill in),
@@ -22,7 +29,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { api } from "@/live";
+import { api, type GithubAccountStatus } from "@/live";
 import { cn } from "@/lib/utils";
 
 export type ThemeMode = "light" | "dark" | "system";
@@ -60,6 +67,59 @@ export default function SettingsDialog(props: {
   const [envEdited, setEnvEdited] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [account, setAccount] = useState<GithubAccountStatus | null>(null);
+  const [token, setToken] = useState("");
+  const [changingToken, setChangingToken] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [accountError, setAccountError] = useState("");
+
+  // Who the GitHub account is, each time the dialog opens. The token itself never comes back.
+  useEffect(() => {
+    if (!props.open) {
+      return;
+    }
+    let stopped = false;
+    api<GithubAccountStatus>("/api/github_account")
+      .then((data) => {
+        if (!stopped) {
+          setAccount(data);
+        }
+      })
+      .catch((err) => {
+        if (!stopped) {
+          setAccountError(`Could not load the GitHub account: ${err instanceof Error ? err.message : err}`);
+        }
+      });
+    return () => {
+      stopped = true;
+    };
+  }, [props.open]);
+
+  async function connectAccount() {
+    setConnecting(true);
+    setAccountError("");
+    try {
+      const data = await api<GithubAccountStatus>("/api/github_account", { method: "PUT", body: { token: token } });
+      setAccount(data);
+      setToken("");
+      setChangingToken(false);
+      window.dispatchEvent(new Event("github-account"));
+      toast.success(`Connected as @${data.login}. Approve in the Inbox now sends PRs and comments as this account.`);
+    } catch (err) {
+      setAccountError(err instanceof Error ? err.message : String(err));
+    }
+    setConnecting(false);
+  }
+
+  async function disconnectAccount() {
+    setAccountError("");
+    try {
+      setAccount(await api<GithubAccountStatus>("/api/github_account", { method: "DELETE" }));
+      window.dispatchEvent(new Event("github-account"));
+    } catch (err) {
+      setAccountError(err instanceof Error ? err.message : String(err));
+    }
+  }
 
   // The env vars for all VMs: each time the dialog opens, and after a save or a discard (unless you are editing them).
   useEffect(() => {
@@ -202,6 +262,89 @@ export default function SettingsDialog(props: {
               );
             })}
           </div>
+        </section>
+
+        <section>
+          <div className="mb-2 font-medium">GitHub account</div>
+          {accountError !== "" && <p className="mb-2 border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-destructive">{accountError}</p>}
+          {account === null && accountError === "" && (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" /> Loading…
+            </div>
+          )}
+          {account !== null && account.connected && !changingToken && (
+            <div className="flex items-center gap-2">
+              <span>
+                Connected as{" "}
+                <a href={`https://github.com/${account.login}`} target="_blank" rel="noreferrer" className="font-medium hover:underline">
+                  @{account.login}
+                </a>
+              </span>
+              <span className="text-xs text-muted-foreground">{(account.scopes ?? []).join(", ")}</span>
+              <div className="ml-auto flex items-center gap-1.5">
+                <Button variant="outline" size="sm" onClick={() => setChangingToken(true)}>
+                  Change token
+                </Button>
+                <Button variant="ghost" size="sm" onClick={disconnectAccount}>
+                  Disconnect
+                </Button>
+              </div>
+            </div>
+          )}
+          {account !== null && (!account.connected || changingToken) && (
+            <div className="flex items-center gap-1.5">
+              <Input
+                className="min-w-0 flex-1 font-mono text-xs"
+                placeholder="ghp_…"
+                type="password"
+                // Sherpa never reads it.
+                data-secret
+                autoComplete="off"
+                spellCheck={false}
+                value={token}
+                onChange={(event) => setToken(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && token.trim() !== "" && !connecting) {
+                    event.preventDefault();
+                    connectAccount();
+                  }
+                }}
+              />
+              <Button size="sm" onClick={connectAccount} disabled={token.trim() === "" || connecting}>
+                {connecting && <Loader2 className="animate-spin" />}
+                Connect
+              </Button>
+              {changingToken && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setChangingToken(false);
+                    setToken("");
+                  }}
+                >
+                  Cancel
+                </Button>
+              )}
+            </div>
+          )}
+          {account !== null && account.connected && !changingToken && (account.scopes ?? []).includes("repo") && (
+            <p className="mt-1 text-xs text-muted-foreground">This token can also write to your private repos; public_repo alone is enough.</p>
+          )}
+          <p className="mt-2 text-xs text-muted-foreground">
+            Approve in the Inbox sends PRs and comments as this account, after you confirm. It needs a classic token with the
+            public_repo scope (
+            <a
+              href="https://github.com/settings/tokens/new?scopes=public_repo&description=Seraph"
+              target="_blank"
+              rel="noreferrer"
+              className="text-primary hover:underline"
+            >
+              make one
+            </a>
+            ): fine-grained tokens can't open PRs on projects you don't own. The token stays on this computer; agents, Sherpa and
+            searches never use it.
+          </p>
         </section>
 
         <section>

@@ -11,9 +11,10 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   progress (job_progress: the step it is on and a headline in everyday words) for the user to follow.
 - Drafts: nothing goes to GitHub from here. A PR, an issue comment or a question becomes a draft
   in the user's Inbox and its job waits on the user. A PR draft's diff is read from the repo
-  folder in the VM, so only the agent holding the VM can make one. The job's before and
+  folder in the VM, so only the agent holding the VM can make one, with the commit it starts from
+  (base_sha: Approve sends exactly that diff on that commit, github_account.py). The job's before and
   after pictures go in the PR body as ![before](evidence:ev_...): the Inbox shows them in place,
-  and the user uploads them with the PR, sending by hand.
+  and sending uploads them to the user's fork (or the user does, sending by hand).
 - Evidence: what the user looks at to decide on a draft. Screenshots of the VM's desktop, image
   files from the VM (a plot, a render) and command runs (a test failing, then passing), each
   "before" or "after" the agent's change, under a topic that pairs them. It is kept on the job
@@ -324,12 +325,13 @@ class WorkTools:
                 "draft_pr",
                 "Draft a pull request for the user's Inbox from your work in the VM (only while you hold it). Only when you are certain the "
                 "fix is right and complete, and your evidence shows it. path is the repo folder in the VM (e.g. ~/click), base what to "
-                "compare against (e.g. origin/main). The diff is everything that differs from base, committed or not, new files included. "
+                "compare against (e.g. origin/main): the PR goes into that branch. The diff is everything that differs from base, committed or "
+                "not, new files included; it is sent as one commit with the title as its message, your own commits stay in the VM. "
                 "title and body are the PR exactly as it would be sent, in the project's own form: its PR template (checked: every "
                 "heading of the repo's template must be in the body), CONTRIBUTING and title style. Your before and after pictures "
-                "go in the body as ![before](evidence:ev_...) (a Before / After table). Nothing is pushed or sent: the user "
-                "reviews it, and you get a message with their decision. project, problem, cause, fix and risks are only for the user, "
-                "who reads them first to understand and judge the PR. " + PLAIN,
+                "go in the body as ![before](evidence:ev_...) (a Before / After table); they are uploaded with the PR. You push and send "
+                "nothing: the user reviews it, approving sends it from their account, and you get a message with their decision. project, problem, cause, fix and "
+                "risks are only for the user, who reads them first to understand and judge the PR. " + PLAIN,
                 {
                     "type": "object",
                     "properties": {
@@ -1254,6 +1256,16 @@ class WorkTools:
             )
             return {"content": [{"type": "text", "text": text}], "is_error": True}
 
+        # The commit the diff starts from, as it is now: sending the PR builds it on that commit (github_account.py),
+        # wherever the base moves later.
+        try:
+            result = await asyncio.to_thread(vm_record.vm.exec, f"cd {folder} && git rev-parse --verify {base}^{{commit}}", 60)
+        except Exception as error:
+            return {"content": [{"type": "text", "text": f"Could not reach the VM: {error}"}], "is_error": True}
+        base_sha = result.stdout.strip()
+        if result.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", base_sha) is None:
+            return {"content": [{"type": "text", "text": f"{args['base']} is not a commit in {args['path']}."}], "is_error": True}
+
         # The user may have cancelled the job while the commands ran.
         job = self.agents.jobs.get(job["id"])
         if job["status"] in CLOSED_STATUSES:
@@ -1271,6 +1283,7 @@ class WorkTools:
             diff=diff,
             branch=branch,
             base=args["base"].strip(),
+            base_sha=base_sha,
             vm=vm_name,
             path=path,
             evidence=job["evidence"],
