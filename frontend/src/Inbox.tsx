@@ -3,7 +3,8 @@ The Inbox: everything the agents want to send (PRs, comments) or ask (questions)
 kind the app makes itself, Taken: an issue an agent has a job for isn't free anymore (someone else is on it
 now, github_searcher/agents.py issue_taken); you pick Keep working or Stop the agent (its job is cancelled).
 
-Top: the list (Pending / Decided / All), newest first; only the rows on screen are drawn.
+Top: the list, every item in one list, newest first; only the rows on screen are drawn. Pending ones are in bold,
+decided ones grayed out; they still open like any other.
 Bottom: the open item (#/inbox/<id>), in tabs. The first two are for you, the last is what would be sent:
 - Overview (Overview.tsx): what it is about in plain words (problem, cause, fix, what could go wrong) and the
   agent's before and after, side by side. A question is only this tab.
@@ -23,7 +24,7 @@ comment), then sends it to GitHub as you (github_searcher/github_account.py): a 
 its pictures uploaded there. If GitHub refuses, nothing is decided and the error shows. Without an account nothing is
 sent; you send it yourself. A sent item's bar links to it on GitHub. One approved but not sent (approved before you
 connected) has Send to GitHub, with the same question. The bar says who Approve sends as.
-After a decision on the Pending tab the next pending item opens.
+After a decision the next pending item opens (the one after it in the list, or else before).
 J / K (or the arrow keys) move through the list when you are not typing.
 */
 
@@ -73,7 +74,6 @@ export default function Inbox(props: { selected: string | null }) {
   const agents = useLive("agents");
   const jobs = useLive("jobs");
   const loaded = useLoaded("inbox");
-  const [tab, setTab] = useState("pending");
   // Overview, diff or message. Every item opens on its overview.
   const [prTab, setPRTab] = useState("overview");
   // The reply box's text per draft, so switching items keeps what you typed.
@@ -100,20 +100,8 @@ export default function Inbox(props: { selected: string | null }) {
     agentNames[agent.id] = agent.name;
   }
 
-  const counts = {
-    pending: inbox.filter((each) => each.status === "pending").length,
-    decided: inbox.filter((each) => each.status !== "pending").length,
-    all: inbox.length,
-  };
-  const rows = inbox.filter((each) => {
-    if (tab === "pending") {
-      return each.status === "pending";
-    }
-    if (tab === "decided") {
-      return each.status !== "pending";
-    }
-    return true;
-  });
+  const pendingCount = inbox.filter((each) => each.status === "pending").length;
+  const rows = inbox;
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -304,9 +292,11 @@ export default function Inbox(props: { selected: string | null }) {
       toast.error("Write a reply first.");
       return;
     }
-    // On the Pending tab the decided item leaves the list; the one after it (or before) opens next.
+    // The decided item stays in the list, grayed out; the next pending one after it (or before) opens.
     const index = rows.findIndex((each) => each.id === draft.id);
-    const next = tab === "pending" && index !== -1 ? (rows[index + 1] ?? rows[index - 1]) : undefined;
+    const after = rows.slice(index + 1).filter((each) => each.status === "pending");
+    const before = rows.slice(0, Math.max(index, 0)).filter((each) => each.status === "pending");
+    const next = after[0] ?? before[before.length - 1];
     setBusy(send ? "send" : action);
     try {
       const result = await api<Draft>(`/api/inbox/${draft.id}/${action}`, { method: "POST", body: { text: text, send: send } });
@@ -428,19 +418,7 @@ export default function Inbox(props: { selected: string | null }) {
       <ResizablePanel defaultSize="38" minSize={120}>
         <div className="flex h-full flex-col">
           <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-            <Tabs value={tab} onValueChange={setTab}>
-              <TabsList>
-                <TabsTrigger value="pending" className="px-2.5">
-                  Pending <span className="text-xs text-muted-foreground tabular-nums">{counts.pending}</span>
-                </TabsTrigger>
-                <TabsTrigger value="decided" className="px-2.5">
-                  Decided <span className="text-xs text-muted-foreground tabular-nums">{counts.decided}</span>
-                </TabsTrigger>
-                <TabsTrigger value="all" className="px-2.5">
-                  All <span className="text-xs text-muted-foreground tabular-nums">{counts.all}</span>
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
+            <span className="text-xs text-muted-foreground tabular-nums">{pendingCount} pending</span>
             <span className="ml-auto text-xs text-muted-foreground">
               {account !== null && account.connected
                 ? `Approved PRs and comments go to GitHub as @${account.login}. Decisions go to the agent.`
@@ -461,7 +439,7 @@ export default function Inbox(props: { selected: string | null }) {
             {!loaded && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
             {loaded && rows.length === 0 && (
               <div className="px-3 py-2 text-muted-foreground">
-                {tab === "pending" ? "Nothing waiting for you. Agents put PRs, comments and questions here, and the app asks when someone else takes an issue an agent works on." : "Nothing here."}
+                Nothing here yet. Agents put PRs, comments and questions here, and the app asks when someone else takes an issue an agent works on.
               </div>
             )}
             <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
@@ -483,6 +461,7 @@ export default function Inbox(props: { selected: string | null }) {
                     className={cn(
                       COLUMNS,
                       "absolute left-0 h-7 w-full border-b px-3 hover:bg-accent/50",
+                      each.status !== "pending" && "text-muted-foreground",
                       each.id === props.selected && "bg-selected hover:bg-selected",
                     )}
                     style={{ top: item.start }}
