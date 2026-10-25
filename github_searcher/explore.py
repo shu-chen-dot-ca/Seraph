@@ -52,7 +52,11 @@ it in DATA_DIR/explore_run.json, with where its searches are and what it looked 
 be checked again), and at start resume() goes on with it. Only when the same `uv run serve` started both (SERVE_ID):
 when the user closed the backend, the run shows as stopped ("The backend was closed"). What it
 found always stays. The minutes limit counts from when the run started, so the time a reload takes counts too.
-Everything here runs on the backend's event loop, so the found list needs no lock.
+
+When the network is gone (GitHub unreachable: UNREACHABLE), nothing is lost: a search is sent again, and a repo goes
+back to be checked again, every NETWORK_PAUSE seconds until the network is back. A request cut off after it reached
+GitHub (other httpx.TransportError, like a read timeout) is tried again the same way up to NETWORK_TRIES times in all,
+then counts as an error (the page's Skipped line; the errors are kept in the run but not shown). Everything here runs on the backend's event loop, so the found list needs no lock.
 """
 
 import asyncio
@@ -140,6 +144,12 @@ MAX_PAGES = 10
 MAX_WORKERS = 16
 README_CHARS = 4000
 ERRORS_KEPT = 20
+# The network gone ("Network is unreachable", can't connect): a search or a repo is tried again after a pause, until
+# the network is back. A request cut off after it reached GitHub (a timeout while reading) is tried again up to
+# NETWORK_TRIES times in all, since it may be the repo's own (one too big to answer in time).
+NETWORK_TRIES = 5
+NETWORK_PAUSE = 30
+UNREACHABLE = (httpx.ConnectError, httpx.ConnectTimeout)
 FULL_NAME = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 # How well a repo fits the profile: Claude picks a level, and the repo keeps its number (score() uses it; the
 # Repos page shows the level again: the frontend's FIT_LEVELS has the same steps).
@@ -224,6 +234,8 @@ class Explore:
         self.cursors = {}
         # Every repo the run looked at, lower case, so one found by two searches is checked once.
         self.seen = set()
+        # How many times the network failed while checking a repo, by name.
+        self.network_tries = {}
         # A running run, kept here at shutdown so the next start goes on with it (save_for_restart, resume).
         self.run_path = DATA_DIR / "explore_run.json"
         # Found repos waiting for the user's decision, kept across runs and restarts.
@@ -380,6 +392,7 @@ class Explore:
             lanes[lane["id"]] = {"label": lane["label"], "share": lane["share"], "found": 0, "in_flight": 0, "exhausted": lane["share"] == 0}
             self.cursors[lane["id"]] = {"pending": [{"name": seed} for seed in lane.get("seeds", [])], "query": 0, "page": 1}
         self.seen = set()
+        self.network_tries = {}
         self.stopping = False
         self.run = {
             "status": "running",
@@ -533,6 +546,7 @@ class Explore:
         run = self.run
         cursor = self.cursors[lane_id]
         lane = [each for each in self.run_profile["lanes"] if each["id"] == lane_id][0]
+        network_tries = 0
         while True:
             if cursor["pending"]:
                 candidate = cursor["pending"].pop(0)
@@ -568,12 +582,23 @@ class Explore:
             try:
                 result = await asyncio.to_thread(search_repositories, q, cursor["page"])
             except Exception as error:
+                # The network gone: the same search again after a pause (a second at a time, so a stop isn't kept
+                # waiting).
+                network_tries += 1
+                if isinstance(error, UNREACHABLE) or (isinstance(error, httpx.TransportError) and network_tries < NETWORK_TRIES):
+                    for _ in range(NETWORK_PAUSE):
+                        if self.stopping:
+                            return None
+                        await asyncio.sleep(1)
+                    continue
+                network_tries = 0
                 # A bad search (a typo in the profile) or GitHub failing: on to the next search.
                 run["errors"] = (run["errors"] + [{"name": f"search: {q}", "error": str(error)[:300], "at": datetime.now(UTC).isoformat()}])[-ERRORS_KEPT:]
                 cursor["query"] += 1
                 cursor["page"] = 1
                 self.changed()
                 continue
+            network_tries = 0
             for item in result["items"]:
                 cursor["pending"].append({"name": item["full_name"], "archived": item["archived"], "fork": item["fork"]})
             if len(result["items"]) < 100 or cursor["page"] >= MAX_PAGES:
@@ -753,6 +778,19 @@ class Explore:
             self.save_found()
         except asyncio.CancelledError:
             raise
+        except httpx.TransportError as error:
+            # The network gone: after a pause, back to the front of its lane to be checked again. The pause keeps this
+            # worker waiting, so they don't run through the candidates while the network is down.
+            self.network_tries[name] = self.network_tries.get(name, 0) + 1
+            if isinstance(error, UNREACHABLE) or self.network_tries[name] < NETWORK_TRIES:
+                await asyncio.sleep(NETWORK_PAUSE)
+                self.cursors[lane_id]["pending"].insert(0, {"name": name})
+                self.seen.discard(name.lower())
+                run["looked_at"] -= 1
+                run["lanes"][lane_id]["exhausted"] = False
+            else:
+                run["skipped"]["Error"] = run["skipped"].get("Error", 0) + 1
+                run["errors"] = (run["errors"] + [{"name": name, "error": str(error)[:300], "at": datetime.now(UTC).isoformat()}])[-ERRORS_KEPT:]
         except Exception as error:
             run["skipped"]["Error"] = run["skipped"].get("Error", 0) + 1
             run["errors"] = (run["errors"] + [{"name": name, "error": str(error)[:300], "at": datetime.now(UTC).isoformat()}])[-ERRORS_KEPT:]
