@@ -25,7 +25,8 @@ project: plain words on what is wrong and what the draft does about it.
     pr:      {"project", "problem", "cause", "fix", "risks": ["what could go wrong", ...]}
     comment: {"project", "problem", "why"}  (why post this comment now)
 
-"template" is the repo's PR template a PR's body was checked against (none: the repo has none).
+"template" is the repo's PR template when a PR's body keeps all its headings (None: the repo has none, or the body
+is written another way, as the project's merged PRs or the user's instructions have it).
 
 "taken" is the one kind the app makes, not the agent (Agents.issue_taken): an issue an agent has a job
 for went from free to assigned. Its body says who seems to be on it; approved means keep working,

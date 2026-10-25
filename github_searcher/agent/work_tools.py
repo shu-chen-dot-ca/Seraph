@@ -456,8 +456,9 @@ class WorkTools:
                 "name: every commit must be your own, never cherry-picked from someone else, and nothing credits a co-author. What "
                 "you didn't commit goes in one more commit, with the title as its message. "
                 "title and body are the PR exactly as it would be sent, written from the project's contribution rules "
-                "(contributing_guide, its PR template: every heading of it must be in the body) and the way its recently merged "
-                "PRs are written (pr_examples: their title style, length, sections, tone). Read both first. No emoji anywhere. Your before and after pictures "
+                "(contributing_guide) and the way its recently merged PRs are written (pr_examples: their title style, length, "
+                "sections, tone, and whether they keep the PR template's headings; the result says which headings you left out). "
+                "Read both first. The user's instructions on the form win. No emoji anywhere. Your before and after pictures "
                 "go in the body as ![before](evidence:ev_...) (a Before / After table); they are uploaded with the PR. You push and send "
                 "nothing: the user reviews it, approving sends it from their account, and you get a message with their decision. project, problem, cause, fix and "
                 "risks are only for the user, who reads them first to understand and judge the PR. " + PLAIN,
@@ -1700,8 +1701,10 @@ class WorkTools:
         path = result.stdout.strip().split("\n")[0]
         branch = result.stdout.strip().split("\n")[-1]
 
-        # The body must be in the project's own form. When the repo has a PR template, every heading of it must be in the
-        # body. The first line printed is the template's path, the rest its text; nothing printed means there is none.
+        # The project's PR template, if it has one: the draft says whether the body keeps its headings (the Inbox shows
+        # that), and the agent hears which it left out. Not a rule: many projects' merged PRs don't use the template, and
+        # the user may ask for another form. The first line printed is the template's path, the rest its text; nothing
+        # printed means there is none.
         command = (
             f"cd {folder} && f=$(find . .github docs -maxdepth 1 -iname pull_request_template.md 2>/dev/null | head -1); "
             '[ -z "$f" ] || { echo "$f"; cat "$f"; }'
@@ -1711,6 +1714,7 @@ class WorkTools:
         except Exception as error:
             return {"content": [{"type": "text", "text": f"Could not reach the VM: {error}"}], "is_error": True}
         template = None
+        left_out = ""
         if result.stdout.strip():
             template = result.stdout.split("\n")[0].removeprefix("./")
             template_text = "\n".join(result.stdout.split("\n")[1:])
@@ -1722,11 +1726,11 @@ class WorkTools:
                 if heading.startswith("#") and heading.lower() not in body_lines:
                     missing.append(heading)
             if missing:
-                text = (
-                    f"The body doesn't follow this repo's PR template ({template}): it lacks {', '.join(missing)}. Write it in the "
-                    f"template's form: keep its headings, fill each in, tick the checklist items you did. The template:\n{template_text}"
+                left_out = (
+                    f" It leaves out these headings of the project's PR template ({template}): {', '.join(missing)}. That is right "
+                    "when the user asked for another form or the project's merged PRs don't use the template; otherwise draft again in its form."
                 )
-                return {"content": [{"type": "text", "text": text}], "is_error": True}
+                template = None
 
         # -N marks new files as "intent to add", so git diff shows them too. head stops a huge diff
         # inside the VM (one byte over the limit is enough to tell), so it never fills this machine's memory.
@@ -1912,6 +1916,7 @@ class WorkTools:
             f"with {len(job['evidence'])} pieces of evidence. "
             f"Nothing was pushed or sent: the user reviews it, and you'll get a message with their decision. "
             f"{job['id']} waits on the user now; move on to your next job (release_vm if none is left for {vm_name})."
+            f"{left_out}"
         )
         return {"content": [{"type": "text", "text": text}]}
 
