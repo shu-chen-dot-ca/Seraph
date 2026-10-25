@@ -23,10 +23,11 @@ knowledge, still easy to observe and check with the test suite) or hard (needs r
 hard to validate). The level picker shows one level only. Tag again (in the open row) has Claude read it again now.
 
 Rows open in place: the tags and why, the facts in full (author and role, last comment and who wrote it, assignees, linked PRs,
-the repo's last push), the agent's note, the issue body (fetched from GitHub on every open, so new comments show;
-the last one fetched shows meanwhile), and every job for the issue with its progress (steps and the agent's headline) and links to its agent, VM and drafts.
+the repo's last push), the agent's note, the issue body and its comments below it, each with who wrote it and when
+(fetched from GitHub on every open, so new comments show; the last one fetched shows meanwhile; the first 40 comments,
+past that a line says how many more are on GitHub), and every job for the issue with its progress (steps and the agent's headline) and links to its agent, VM and drafts.
 A job in progress shows in the row as a small progress bar with its step.
-Assign opens AssignDialog.
+Assign opens AssignDialog; the arrow button next to it (and the #) opens the issue on GitHub in a new tab.
 Only the rows on screen are drawn, so thousands of issues stay fast. Undo / redo like the Repos page.
 Many rows are picked like in a mail app (components/ui/row-selection.tsx): Ctrl-click, Shift-click, dragging a
 rectangle, Ctrl+A; a bar at the bottom then removes them at once, as one undo step (it asks first; Enter confirms).
@@ -99,7 +100,7 @@ const ISSUE_COLUMNS: IssueColumn[] = [
 ];
 const TITLE_MIN = 200;
 // Assign and Remove at the end of each row.
-const ACTIONS_WIDTH = 104;
+const ACTIONS_WIDTH = 130;
 
 // The order of a latest job's status, in progress first being the highest. No job (or a cancelled one) is New.
 const STATUS_RANK: Record<string, number> = { waiting_on_user: 5, working: 4, queued: 3, new: 2, done: 1 };
@@ -713,6 +714,11 @@ export default function Issues(props: { repo: string | null; open: string | null
                       >
                         <UserPlus /> Assign
                       </Button>
+                      <Button variant="ghost" size="icon-xs" asChild>
+                        <a href={issue.html_url} target="_blank" rel="noreferrer" aria-label={`Open ${issue.id} on GitHub`} title="Open on GitHub" onClick={(event) => event.stopPropagation()}>
+                          <ExternalLink />
+                        </a>
+                      </Button>
                       <Button
                         variant="ghost"
                         size="icon-xs"
@@ -847,6 +853,22 @@ export default function Issues(props: { repo: string | null; open: string | null
                         <div className="border bg-background px-4 py-3">
                           <Markdown text={thread.body || "*No description.*"} repo={issue.repo} issueRefs />
                         </div>
+                      )}
+                      {/* The comments below the text, oldest first: claims like "can I take this?" and the answers. */}
+                      {thread !== undefined &&
+                        thread.comments.map((comment, index) => (
+                          <div key={index} className="border bg-background px-4 py-2">
+                            <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
+                              <span className="font-medium text-foreground">{comment.author}</span>
+                              <span title={new Date(comment.at).toLocaleString()}>{timeAgo(comment.at)}</span>
+                            </div>
+                            <Markdown text={comment.body} repo={issue.repo} issueRefs />
+                          </div>
+                        ))}
+                      {thread !== undefined && commentCount > thread.comments.length && (
+                        <a href={issue.html_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-muted-foreground hover:text-foreground">
+                          {commentCount - thread.comments.length} more on GitHub <ExternalLink className="size-3" />
+                        </a>
                       )}
 
                       <div>
