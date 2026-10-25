@@ -2,8 +2,9 @@
 One agent's page: under the header, the job it is on now (every step, the current one marked, the
 agent's headline in everyday words, the project's test suite runs, what it does this moment, its todo count and times, and a warning
 when it has been quiet too long); the conversation on the left; on the right where it stands in a VM
-queue, its jobs with their progress (a queued one has an x that takes it off: the job is cancelled, and the agent is
-told), and its latest todo list.
+queue, its jobs in two lists that each fold with their header: In queue (still to do, being done or waiting on
+you, in the order it takes them, with their progress; a queued one has an x that takes it off: the job is cancelled,
+and the agent is told) and Finished (done and cancelled, newest first), and its latest todo list.
 
 The conversation is the agent's history (HistoryEntry in live.ts; append-only on the server). The page
 loads the last 200 entries, then fetches only the new part (/history?since=<end>) whenever the live
@@ -199,6 +200,8 @@ export default function AgentChat(props: { agentId: string }) {
     }
   });
   const [seen, setSeen] = useState(false);
+  // The job lists (In queue, Finished) folded on the right, by key.
+  const [foldedLists, setFoldedLists] = useState<string[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
 
@@ -421,14 +424,28 @@ export default function AgentChat(props: { agentId: string }) {
     agentNames[agent.id] = agent.name;
   }
 
-  // Its jobs: open ones first, each group newest first (the jobs topic is newest first).
+  // Its jobs in two lists. In queue is oldest first, the order the agent takes them; Finished newest first (the
+  // jobs topic is newest first).
   const mine = jobs.filter((job) => job.agent === summary.id);
-  const myJobs = [...mine.filter((job) => OPEN_STATUSES.includes(job.status)), ...mine.filter((job) => !OPEN_STATUSES.includes(job.status))];
+  const jobLists = [
+    {
+      key: "queue",
+      label: "In queue",
+      jobs: mine.filter((job) => OPEN_STATUSES.includes(job.status)).reverse(),
+      empty: "Nothing to do. Assign issues to it from the Issues page.",
+    },
+    {
+      key: "finished",
+      label: "Finished",
+      jobs: mine.filter((job) => !OPEN_STATUSES.includes(job.status)),
+      empty: "No finished jobs yet.",
+    },
+  ];
   // The job it is on now, for the progress strip under the header.
   const job = currentJob(summary.id, jobs);
   const stuck = stuckFor(summary, now);
 
-  // Take a queued job off its list: it is cancelled (it stays below as Cancelled), and the agent is told.
+  // Take a queued job off its list: it is cancelled (it moves to Finished as Cancelled), and the agent is told.
   async function removeJob(id: string) {
     try {
       await api(`/api/jobs/${id}/cancel`, { method: "POST" });
@@ -797,60 +814,74 @@ export default function AgentChat(props: { agentId: string }) {
               </div>
             </div>
 
-            <div className="flex h-7 items-center border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground">
-              Jobs
-              <span className="ml-1.5 tabular-nums">{myJobs.length}</span>
-            </div>
-            {myJobs.length === 0 && <div className="border-b px-3 py-2 text-muted-foreground">No jobs. Assign issues to it from the Issues page.</div>}
-            {myJobs.map((job) => (
-              <div key={job.id} className={cn("border-b px-3 py-1.5", !OPEN_STATUSES.includes(job.status) && "text-muted-foreground")}>
-                <div className="flex items-center gap-1.5">
-                  <StatusDot tone={JOB_TONE[job.status] ?? "gray"} />
-                  {job.repo !== null ? (
-                    <a href={`#/issues?repo=${encodeURIComponent(job.repo)}`} className="truncate hover:underline" title={job.title}>
-                      {job.title}
-                    </a>
-                  ) : (
-                    <span className="truncate" title={job.title}>
-                      {job.title}
-                    </span>
-                  )}
-                  {job.status === "queued" && (
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      className="ml-auto shrink-0"
-                      aria-label={`Remove ${job.id}`}
-                      title="Remove it from the queue: the job is cancelled and the agent is told"
-                      onClick={() => removeJob(job.id)}
-                    >
-                      <X />
-                    </Button>
-                  )}
+            {jobLists.map((list) => {
+              const folded = foldedLists.includes(list.key);
+              return (
+                <div key={list.key}>
+                  <button
+                    type="button"
+                    className="flex h-7 w-full items-center gap-1 border-b bg-muted/40 px-2 text-xs font-medium text-muted-foreground hover:text-foreground"
+                    aria-expanded={!folded}
+                    onClick={() => setFoldedLists(folded ? foldedLists.filter((key) => key !== list.key) : [...foldedLists, list.key])}
+                  >
+                    <ChevronRight className={cn("size-3.5 transition-transform", !folded && "rotate-90")} />
+                    {list.label}
+                    <span className="ml-0.5 tabular-nums">{list.jobs.length}</span>
+                  </button>
+                  {!folded && list.jobs.length === 0 && <div className="border-b px-3 py-2 text-muted-foreground">{list.empty}</div>}
+                  {!folded &&
+                    list.jobs.map((job) => (
+                      <div key={job.id} className={cn("border-b px-3 py-1.5", !OPEN_STATUSES.includes(job.status) && "text-muted-foreground")}>
+                        <div className="flex items-center gap-1.5">
+                          <StatusDot tone={JOB_TONE[job.status] ?? "gray"} />
+                          {job.repo !== null ? (
+                            <a href={`#/issues?repo=${encodeURIComponent(job.repo)}`} className="truncate hover:underline" title={job.title}>
+                              {job.title}
+                            </a>
+                          ) : (
+                            <span className="truncate" title={job.title}>
+                              {job.title}
+                            </span>
+                          )}
+                          {job.status === "queued" && (
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              className="ml-auto shrink-0"
+                              aria-label={`Remove ${job.id}`}
+                              title="Remove it from the queue: the job is cancelled and the agent is told"
+                              onClick={() => removeJob(job.id)}
+                            >
+                              <X />
+                            </Button>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-x-2 pl-3.5 text-xs text-muted-foreground">
+                          <span>{JOB_LABEL[job.status] ?? job.status}</span>
+                          <span className="font-mono">{job.id}</span>
+                          {job.vm !== null && (
+                            <a href={`#/vms/${job.vm}`} className="text-primary hover:underline">
+                              {job.vm}
+                            </a>
+                          )}
+                          {job.drafts.map((draft) => (
+                            <a key={draft} href={`#/inbox/${draft}`} className="font-mono text-primary hover:underline">
+                              {draft}
+                            </a>
+                          ))}
+                        </div>
+                        {OPEN_STATUSES.includes(job.status) && (
+                          <div className="space-y-0.5 py-0.5 pl-3.5">
+                            <JobProgressBar job={job} />
+                            {job.headline !== "" && <div className="line-clamp-2 text-xs">{job.headline}</div>}
+                          </div>
+                        )}
+                        {job.notes !== "" && <div className="line-clamp-3 pl-3.5 text-xs whitespace-pre-wrap text-muted-foreground">{job.notes}</div>}
+                      </div>
+                    ))}
                 </div>
-                <div className="flex flex-wrap items-center gap-x-2 pl-3.5 text-xs text-muted-foreground">
-                  <span>{JOB_LABEL[job.status] ?? job.status}</span>
-                  <span className="font-mono">{job.id}</span>
-                  {job.vm !== null && (
-                    <a href={`#/vms/${job.vm}`} className="text-primary hover:underline">
-                      {job.vm}
-                    </a>
-                  )}
-                  {job.drafts.map((draft) => (
-                    <a key={draft} href={`#/inbox/${draft}`} className="font-mono text-primary hover:underline">
-                      {draft}
-                    </a>
-                  ))}
-                </div>
-                {OPEN_STATUSES.includes(job.status) && (
-                  <div className="space-y-0.5 py-0.5 pl-3.5">
-                    <JobProgressBar job={job} />
-                    {job.headline !== "" && <div className="line-clamp-2 text-xs">{job.headline}</div>}
-                  </div>
-                )}
-                {job.notes !== "" && <div className="line-clamp-3 pl-3.5 text-xs whitespace-pre-wrap text-muted-foreground">{job.notes}</div>}
-              </div>
-            ))}
+              );
+            })}
 
             <div className="flex h-7 items-center border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground">Todo</div>
             <div className="space-y-0.5 px-3 py-2">
