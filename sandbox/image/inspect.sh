@@ -31,9 +31,14 @@ incus launch "$FINGERPRINT" "$VM" --vm --profile "$SANDBOX_PROFILE" \
     --device root,size="${SANDBOX_DISK_GB_MIN}GiB"
 
 echo "==> Waiting for it"
-for _ in $(seq 150); do
+for i in $(seq 180); do
     if incus exec "$VM" -- true >/dev/null 2>&1; then
         break
+    fi
+    # Now and then a VM hangs in its firmware at boot (VM.wait_agent in sandbox/vm.py): force it off and on, once.
+    if [ "$i" = 90 ]; then
+        echo "==> It hung while booting; starting it again"
+        incus restart --force "$VM"
     fi
     sleep 2
 done

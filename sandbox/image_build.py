@@ -46,6 +46,9 @@ Builds run as their own process (so a backend restart doesn't stop them), as a t
     python -m sandbox.image_build <image name> <image folder>
 
 It prints each step for the task's log, and stops the builder VM at the end, also when it fails or is stopped.
+
+What failed builds before, and what keeps it from happening again:
+- A builder VM hung in its firmware at boot: VM.wait_agent forces it off and on, once (every wait for a boot does).
 """
 
 import hashlib
@@ -358,14 +361,8 @@ def launch(vm: VM, source: str) -> str:
     result = subprocess.run(command, capture_output=True, stdin=subprocess.DEVNULL, text=True)
     if result.returncode != 0:
         raise VMError(f"Could not start a VM from images:{source}: {result.stderr.strip()}")
-    responds = False
-    for _ in range(150):
-        responds = vm.responds()
-        if responds:
-            break
-        time.sleep(2)
-    if not responds:
-        raise VMError(f"The VM from images:{source} didn't answer commands within 5 minutes")
+    if vm.wait_agent(300):
+        print("==> The VM hung while booting and was started again")
     vm.guard_shadow_stack()
     release = vm.exec_root('. /etc/os-release && echo "$PRETTY_NAME"', 30)
     return release.stdout.strip()
@@ -419,6 +416,7 @@ def reboot_and_check(vm: VM) -> str | None:
     try:
         vm.stop()
         vm.start()
+        # wait_ready starts a VM that hangs while booting again, once (VM.wait_agent).
         vm.wait_ready(300)
     except VMError as error:
         return f"After a reboot: {error}"
@@ -493,10 +491,8 @@ def main() -> None:
 
         for index in range(first, 3):
             vm.start()
-            for _ in range(150):
-                if vm.responds():
-                    break
-                time.sleep(2)
+            if vm.wait_agent(300):
+                print("==> The VM hung while booting and was started again")
             for title, script in scripts[index]:
                 print(f"==> {title}")
                 if run_script(vm, script, system["family"], definition["desktop"]) != 0:
