@@ -2,7 +2,8 @@
 
 The token goes one way. The browser sends it once (PUT), and nothing ever sends it back: GET only says
 who it is and what the token may do (github_searcher/github_account.py). Approve in the Inbox then
-sends PRs and comments as that account (backend/inbox_api.py).
+sends PRs and comments as that account (backend/inbox_api.py), and the GitHub page's buttons change
+them as that account (backend/github_api.py).
 """
 
 from fastapi import APIRouter, HTTPException

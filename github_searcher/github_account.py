@@ -1,10 +1,12 @@
-"""Your GitHub account: the one token that sends what you approve in the Inbox, as you.
+"""Your GitHub account: the one token that sends what you approve in the Inbox, as you, and that
+the GitHub page uses to manage what you sent.
 
 The GitHub page's Account tab (frontend/src/GitHub.tsx) takes the token. connect() checks it with GitHub
 and keeps it in DATA_DIR/github_account.json, a file only this computer's user may read. The browser only
 ever gets status(): who it is connected as and what the token may do, never the token. Agents, Sherpa and
-the VMs never get it either; only the Inbox's Approve and Send to GitHub use it (backend/inbox_api.py).
-It is kept apart from the search tokens in .env (token_balancer.py), which only read.
+the VMs never get it either; only the Inbox's Approve and Send to GitHub (backend/inbox_api.py) and the
+GitHub page's buttons (backend/github_api.py) use it. It is kept apart from the search tokens in .env
+(token_balancer.py), which only read.
 
 It must be a classic token with the public_repo scope: GitHub's fine-grained tokens can't open a PR
 or post a comment on a project you don't own.
@@ -36,10 +38,12 @@ What was sent is kept on the draft as "sent" (Inbox.mark_sent):
               "commit", "as": "<your login>", "at"}
     comment: {"kind": "comment", "url", "id", "repo", "number", "as", "at"}
 
-Later (not built yet): following a sent PR and acting on it. "sent" has what that needs: the number,
-to read the PR's reviews, comments and checks into the Inbox; and the fork, branch and commit, to
-push the agent's next version onto the same PR (tree() on base_sha with the new diff, in a commit
-whose parent is "commit").
+manage(action, repo, number) is one change you make from the GitHub page, as you: close or reopen one
+of your PRs, or delete a closed PR's branch from your fork. It checks first that the PR is yours and the
+branch is in your fork. Following your PRs is pr_tracking.py.
+
+Later (not built yet): the agent's next version pushed onto the same PR. "sent" has what that needs:
+the fork, branch and commit (tree() on base_sha with the new diff, in a commit whose parent is "commit").
 
 Sends go one at a time (a second click waits, then finds the draft sent). A failure raises SendError
 with what GitHub said and at which step; nothing is kept on the draft then.
@@ -471,3 +475,57 @@ class GithubAccount:
             "as": account["login"],
             "at": datetime.now(UTC).isoformat(),
         }
+
+    def manage(self, action: str, repo: str, number: int) -> str:
+        """One change on GitHub from the GitHub page, as you. action: "close" or "reopen" your PR repo#number, or
+        "delete_branch" (a closed or merged PR's branch, from your fork). Returns what happened, in words; SendError
+        says why it didn't. Runs in a thread."""
+        account = self.load()
+        if account is None:
+            raise SendError("Connect your GitHub account first: the GitHub page, Account.")
+        headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {account['token']}", "X-GitHub-Api-Version": "2022-11-28"}
+        try:
+            with httpx.Client(base_url=API, headers=headers, timeout=60) as client:
+                response = client.get(f"/repos/{repo}/pulls/{number}")
+                response.raise_for_status()
+                pull = response.json()
+                if pull["user"]["login"].lower() != account["login"].lower():
+                    raise SendError(f"{repo}#{number} isn't yours: it was opened by {pull['user']['login']}.")
+                if action in ["close", "reopen"]:
+                    if pull["merged"]:
+                        raise SendError("It is merged already.")
+                    state = "closed"
+                    if action == "reopen":
+                        state = "open"
+                    response = client.patch(f"/repos/{repo}/pulls/{number}", json={"state": state})
+                    response.raise_for_status()
+                    if action == "reopen":
+                        return "Reopened it."
+                    return "Closed it."
+                if action == "delete_branch":
+                    # Deleting an open PR's branch would close it without a word: close it first.
+                    if pull["state"] != "closed":
+                        raise SendError("Close the PR first.")
+                    head = pull["head"]
+                    if head["repo"] is None:
+                        return "Its branch is gone already."
+                    if head["repo"]["owner"]["login"].lower() != account["login"].lower():
+                        raise SendError(f"Its branch is in {head['repo']['full_name']}, not in your fork.")
+                    response = client.delete(f"/repos/{head['repo']['full_name']}/git/refs/heads/{head['ref']}")
+                    if response.status_code in [404, 422]:
+                        return "Its branch is gone already."
+                    response.raise_for_status()
+                    return f"Deleted the branch {head['ref']} from {head['repo']['full_name']}."
+        except httpx.HTTPStatusError as error:
+            response = error.response
+            try:
+                data = response.json()
+            except ValueError:
+                data = {}
+            message = data.get("message") or f"{response.status_code} {response.reason_phrase}"
+            if response.status_code == 401:
+                message += ". Connect your account again (the GitHub page, Account), with a new token."
+            raise SendError(f"GitHub refused: {message}") from None
+        except httpx.HTTPError as error:
+            raise SendError(f"Could not reach GitHub: {error}") from None
+        raise SendError(f"Unknown action {action}.")

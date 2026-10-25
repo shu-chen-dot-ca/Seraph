@@ -12,20 +12,32 @@ The GitHub page (#/github, #/github?tab=closed|account): your GitHub things in o
   - How many comments and who wrote the latest (a maintainer, a bot, you), and the issue it fixes, open or closed.
   A click opens the row in place: each reviewer's latest review, the latest comment's text, the labels, the issues
   it fixes with who they are assigned to, why the last read failed (if it did), links (the PR on GitHub, the draft
-  it was sent from in the Inbox, its job).
-- Account: your GitHub account, the one Approve in the Inbox sends PRs and comments as
+  it was sent from in the Inbox, its job), and what you can do: Close PR on an open one; Reopen PR and Delete
+  branch (from your fork) on a closed one; Delete branch on a merged one.
+- Account: your GitHub account, the one Approve in the Inbox sends PRs and comments as and these buttons act as
   (github_searcher/github_account.py). Paste a classic token with the public_repo scope and Connect: the backend
   checks it with GitHub (a fine-grained token, or one without that scope, is turned down with why) and keeps it on
   this computer. It never comes back to the browser: GET /api/github_account says only who it is (Connected as
   @login) and the token's scopes. Change token pastes a new one; Disconnect forgets it, and Approve then sends
   nothing again. "make one" opens GitHub's new-token page with public_repo ticked. Both tell the Inbox (a
   "github-account" window event), which shows who it sends as. Below: your forks the app sends PRs from.
+Every button that changes something on GitHub asks "are you sure?" first (Enter confirms), then acts as you.
 */
 
 import { ChevronRight, ExternalLink, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Loader2, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -60,6 +72,9 @@ const REVIEW_STATE: Record<string, string> = {
   dismissed: "review dismissed",
 };
 
+// What a button does, waiting for its "are you sure?".
+type Confirm = { title: string; text: string; label: string; path: string };
+
 // Who someone is, in plain words, from GitHub's role for them.
 function who(login: string, role: string, pr: TrackedPR): string {
   if (login === pr.author) {
@@ -80,6 +95,10 @@ export default function GitHub(props: { tab: string | null }) {
   const loaded = useLoaded("prs");
   const [tab, setTab] = useState(props.tab !== null && TABS.includes(props.tab) ? props.tab : "open");
   const [open, setOpen] = useState<string[]>([]);
+  // The last button clicked stays set while its "are you sure?" fades out, so the text doesn't blank.
+  const [confirm, setConfirm] = useState<Confirm | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [account, setAccount] = useState<GithubAccountStatus | null>(null);
   const [token, setToken] = useState("");
   const [changingToken, setChangingToken] = useState(false);
@@ -136,6 +155,26 @@ export default function GitHub(props: { tab: string | null }) {
     } catch (err) {
       toast.error(`Could not check the PRs: ${err instanceof Error ? err.message : err}`);
     }
+  }
+
+  function ask(next: Confirm) {
+    setConfirm(next);
+    setConfirmOpen(true);
+  }
+
+  async function act() {
+    if (confirm === null) {
+      return;
+    }
+    const title = confirm.title;
+    setBusy(true);
+    try {
+      const result = await api<{ done: string }>(confirm.path, { method: "POST" });
+      toast.success(result.done);
+    } catch (err) {
+      toast.error(`${title.replace("?", "")}: ${err instanceof Error ? err.message : err}`);
+    }
+    setBusy(false);
   }
 
   async function connectAccount() {
@@ -219,6 +258,7 @@ export default function GitHub(props: { tab: string | null }) {
             } else if (pr.state === "closed") {
               icon = <GitPullRequestClosed className="size-4 shrink-0 text-destructive" />;
             }
+            const path = `/api/github/prs/${pr.repo}/${pr.number}`;
             return (
               <div key={pr.id} className="border-b">
                 <div className={cn("flex cursor-pointer items-start gap-2 px-3 py-1.5 hover:bg-accent/50", isOpen && "bg-accent/40")} onClick={() => toggle(pr.id)}>
@@ -320,6 +360,59 @@ export default function GitHub(props: { tab: string | null }) {
                           Its job
                         </a>
                       )}
+                      <span className="ml-auto flex gap-1.5">
+                        {pr.state === "open" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={busy}
+                            onClick={() =>
+                              ask({
+                                title: `Close ${pr.repo} #${pr.number}?`,
+                                text: "It closes on GitHub, as you, without merging. Its branch stays, so you can reopen it.",
+                                label: "Close PR",
+                                path: `${path}/close`,
+                              })
+                            }
+                          >
+                            Close PR
+                          </Button>
+                        )}
+                        {pr.state === "closed" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={busy}
+                            onClick={() =>
+                              ask({
+                                title: `Reopen ${pr.repo} #${pr.number}?`,
+                                text: "It opens again on GitHub, as you, and the project's people are told.",
+                                label: "Reopen PR",
+                                path: `${path}/reopen`,
+                              })
+                            }
+                          >
+                            Reopen PR
+                          </Button>
+                        )}
+                        {pr.state !== "open" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={busy}
+                            onClick={() =>
+                              ask({
+                                title: `Delete the branch of ${pr.repo} #${pr.number}?`,
+                                text: "Its branch is deleted from your fork, for good. The PR stays on GitHub, but it can't be reopened after.",
+                                label: "Delete branch",
+                                path: `${path}/delete_branch`,
+                              })
+                            }
+                          >
+                            Delete branch
+                          </Button>
+                        )}
+                      </span>
                     </div>
                   </div>
                 )}
@@ -397,8 +490,8 @@ export default function GitHub(props: { tab: string | null }) {
                 <p className="mt-1 text-xs text-muted-foreground">This token can also write to your private repos; public_repo alone is enough.</p>
               )}
               <p className="mt-2 text-xs text-muted-foreground">
-                Approve in the Inbox sends PRs and comments as this account, after you confirm. It needs a classic token with the
-                public_repo scope (
+                Approve in the Inbox sends PRs and comments as this account, after you confirm, and the buttons on this page act as it. It needs a
+                classic token with the public_repo scope (
                 <a
                   href="https://github.com/settings/tokens/new?scopes=public_repo&description=Seraph"
                   target="_blank"
@@ -428,6 +521,20 @@ export default function GitHub(props: { tab: string | null }) {
         )}
       </div>
 
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{confirm?.title}</AlertDialogTitle>
+            <AlertDialogDescription>{confirm?.text}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction variant={confirm?.label === "Reopen PR" ? "default" : "destructive"} onClick={act}>
+              {confirm?.label}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
