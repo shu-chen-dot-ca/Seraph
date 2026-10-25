@@ -23,6 +23,11 @@ class MessageRequest(BaseModel):
     text: str
 
 
+class QueuedRequest(BaseModel):
+    index: int  # where it waits among the user's queued messages, oldest first
+    text: str  # its text, to make sure it is that one
+
+
 class TargetRequest(BaseModel):
     vm: str | None = None
 
@@ -84,6 +89,18 @@ async def send_message(agent_id: str, body: MessageRequest) -> dict:
         raise HTTPException(status_code=404, detail=f"No agent {agent_id}")
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
+    return {}
+
+
+@router.post("/agents/{agent_id}/queue/cancel")
+async def cancel_queued_message(agent_id: str, body: QueuedRequest) -> dict:
+    """Takes one of the user's queued messages out before it goes in."""
+    try:
+        agents.cancel_queued(agent_id, body.index, body.text)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No agent {agent_id}")
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error))
     return {}
 
 

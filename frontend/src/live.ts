@@ -414,6 +414,7 @@ export type AgentSummary = {
   cost_usd: number;
   history_length: number;
   pending: number; // user messages waiting for the current turn to end
+  queued: string[]; // their texts, oldest first
   activity: string; // the last tool summary or system line
   last_event_at: string | null; // when something last happened in its turn (to tell a slow command from a stuck agent)
   in_tool: boolean; // a tool call is running (a command, the test suite): quiet then is not stuck

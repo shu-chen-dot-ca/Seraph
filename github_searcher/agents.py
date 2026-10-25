@@ -12,7 +12,8 @@ one prompt, each starting with [User] (the user typed it) or [System] (the app: 
 that is its turn now, the user's decision on a draft, a reminder), and runs one turn with them.
 A message sent while the agent works waits in a queue (the chat shows it as pending; MAX_QUEUED of
 the user's at most). Each of the user's messages gets a turn of its own, in order, together with the
-app's messages that came before it; interrupting a turn (Esc in the chat) starts the next one.
+app's messages that came before it; interrupting a turn (Esc in the chat) starts the next one. The user can take
+one of their queued messages out before it goes in (cancel_queued); the agent list carries their texts (queued).
 Waiting messages are saved with the record, so a backend restart (it reloads on every code
 change) doesn't lose them. An agent that was in a turn or about to start one (awake) is woken
 with them after the restart; one cut off in the middle of a turn gets one more saying so.
@@ -324,6 +325,7 @@ class Agents:
                     "cost_usd": agent.cost_usd,
                     "history_length": len(agent.history),
                     "pending": len([message for message in self.pending[agent.id] if message["from"] == "User"]),
+                    "queued": [message["text"] for message in self.pending[agent.id] if message["from"] == "User"],
                     "activity": activity,
                     "last_event_at": agent.last_event_at,
                     # A tool call without its result yet: a command or the test suite is running, so a long quiet
@@ -428,6 +430,24 @@ class Agents:
             raise ValueError(f"{MAX_QUEUED} messages already wait; send more when one has gone in")
         self.pending[agent_id].append({"from": "User", "text": text.strip(), "shown": False})
         self.wake[agent_id].set()
+        self.version += 1
+
+    def cancel_queued(self, agent_id: str, index: int, text: str) -> None:
+        """Take one of the user's queued messages out before it goes in: the index-th of theirs, when it still has that
+        text (one may have gone in meanwhile, moving the others up), or else the first of theirs with that text."""
+        if agent_id not in self.agents:
+            raise KeyError(f"No agent {agent_id}")
+        users = [message for message in self.pending[agent_id] if message["from"] == "User"]
+        chosen = None
+        if 0 <= index < len(users) and users[index]["text"] == text:
+            chosen = users[index]
+        for message in users:
+            if chosen is None and message["text"] == text:
+                chosen = message
+        if chosen is None:
+            raise ValueError("That message isn't waiting anymore: it went in, or was taken out already.")
+        self.pending[agent_id].remove(chosen)
+        self.save(self.agents[agent_id])
         self.version += 1
 
     def notify(self, agent_id: str, text: str) -> None:

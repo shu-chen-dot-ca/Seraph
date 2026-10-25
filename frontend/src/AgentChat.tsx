@@ -12,7 +12,8 @@ result are paired by id and shown as one row that opens to the input and the res
 the view down only while it is at the bottom, so reading further up is never interrupted.
 
 A message sent while the agent works waits for its turn to end; the composer shows those as queued (10 at most,
-each gets a turn of its own). Esc anywhere on the page (not while a dialog or menu is open) interrupts the turn, and
+each gets a turn of its own; the live agent list carries their texts, so they show after a reload too), each with an x
+that takes it out before it goes in. Esc anywhere on the page (not while a dialog or menu is open) interrupts the turn, and
 the next queued message goes in. What you type
 and don't send is kept in this browser per agent (localStorage), so it is still there when you come back, after a
 reload, and after a backend restart.
@@ -197,8 +198,6 @@ export default function AgentChat(props: { agentId: string }) {
       return "";
     }
   });
-  // Messages this page sent. The last `pending` of them are the ones still waiting for the turn to end.
-  const [sent, setSent] = useState<string[]>([]);
   const [seen, setSeen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
@@ -323,7 +322,6 @@ export default function AgentChat(props: { agentId: string }) {
     atBottom.current = true;
     try {
       await api(`/api/agents/${props.agentId}/message`, { method: "POST", body: { text: message } });
-      setSent((current) => [...current, message]);
     } catch (err) {
       setText(message);
       toast.error(`Could not send: ${err instanceof Error ? err.message : err}`);
@@ -334,9 +332,17 @@ export default function AgentChat(props: { agentId: string }) {
     atBottom.current = true;
     try {
       await api(`/api/agents/${props.agentId}/message`, { method: "POST", body: { text: "/compact" } });
-      setSent((current) => [...current, "/compact"]);
     } catch (err) {
       toast.error(`Could not compact: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  // Take a queued message out before it goes in.
+  async function cancelQueued(index: number, message: string) {
+    try {
+      await api(`/api/agents/${props.agentId}/queue/cancel`, { method: "POST", body: { index, text: message } });
+    } catch (err) {
+      toast.error(`Could not take it out: ${err instanceof Error ? err.message : err}`);
     }
   }
 
@@ -405,7 +411,8 @@ export default function AgentChat(props: { agentId: string }) {
   const cap = summary.context_max > 0 ? Math.min(summary.context_max, CONTEXT_CAP) : CONTEXT_CAP;
   const capText = cap >= 1_000_000 ? `${cap / 1_000_000}M` : `${Math.round(cap / 1000)}k`;
   const percent = Math.min(100, (summary.context_used / cap) * 100);
-  const queued = pending > 0 ? sent.slice(-pending) : [];
+  // Summaries from before the backend sent the texts have none.
+  const queued = summary.queued ?? [];
 
   const vmNames = vms.map((vm) => vm.name);
   const queueVM = vms.find((vm) => vm.name === summary.vm);
@@ -694,8 +701,18 @@ export default function AgentChat(props: { agentId: string }) {
                     {pending} of {MAX_QUEUED} queued, each gets its own turn · Esc stops this turn and sends the next
                   </div>
                   {queued.map((message, index) => (
-                    <div key={index} className="truncate rounded-sm border border-dashed px-2 py-1 text-muted-foreground" title={message}>
-                      {message}
+                    <div key={index} className="flex items-center gap-1 rounded-sm border border-dashed py-0.5 pr-0.5 pl-2 text-muted-foreground" title={message}>
+                      <span className="min-w-0 flex-1 truncate">{message}</span>
+                      <Button
+                        size="icon-xs"
+                        variant="ghost"
+                        className="shrink-0"
+                        title="Take it out: it won't be sent"
+                        aria-label="Cancel this queued message"
+                        onClick={() => cancelQueued(index, message)}
+                      >
+                        <X />
+                      </Button>
                     </div>
                   ))}
                 </div>
