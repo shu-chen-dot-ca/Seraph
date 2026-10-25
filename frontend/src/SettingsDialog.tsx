@@ -10,7 +10,8 @@ The accent colors live in index.css. A swatch carries data-accent itself, so it 
 the current theme (orange, green and teal get dark text in dark mode, which the check mark follows).
 
 The env vars for all VMs are kept by the backend (sandbox/vms.py), not the browser: GET /api/vms/global_env each
-time the dialog opens (unless you have unsaved edits), PUT to save. Running VMs get them at once, stopped ones when
+time the dialog opens (unless you have unsaved edits), PUT to save. Agents can add empty ones (for you to fill in),
+so one may show up here with no value. Running VMs get them at once, stopped ones when
 they start. A VM's own env var with the same name (its Settings tab) wins, unless it is empty.
 */
 
@@ -228,7 +229,7 @@ export default function SettingsDialog(props: {
                   />
                   <Input
                     className="min-w-0 flex-1 font-mono text-xs"
-                    placeholder="value"
+                    placeholder={row.value === "" ? "empty: an agent asked for it, fill it in" : "value"}
                     type={row.shown ? "text" : "password"}
                     // Sherpa never reads it, shown or not.
                     data-secret
@@ -288,7 +289,8 @@ export default function SettingsDialog(props: {
           )}
           <p className="mt-2 text-xs text-muted-foreground">
             Every VM gets these in every shell (shells opened after saving; stopped VMs when they start). A VM's own env var with the same
-            name, in its Settings tab, wins. Agents see the names, never the values.
+            name, in its Settings tab, wins. Agents see each name and whether it has a value, never the value. They can add empty ones
+            for you to fill in.
           </p>
         </section>
       </DialogContent>

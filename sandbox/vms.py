@@ -554,6 +554,9 @@ class VMs:
         self.records: dict[str, VMRecord] = {}
         self.lock = threading.Lock()  # Guards self.records and self.version.
         self.version = 0
+        # One change to the env variables for all VMs at a time, so an agent adding an empty one never
+        # writes back an older copy over a value the user just saved. Reentrant: the agents' changes call set_global_env.
+        self.global_env_lock = threading.RLock()
         if GLOBAL_ENV_PATH.exists():
             VMRecord.global_env = json.loads(GLOBAL_ENV_PATH.read_text())
         for path in sorted(VMS_DIR.glob("*.json")):
@@ -705,12 +708,14 @@ class VMs:
         for key in env:
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
                 raise VMsError(f"Not a valid variable name: {key}")
-        GLOBAL_ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
-        # Write, then rename: a crash never leaves half a file.
-        temporary = GLOBAL_ENV_PATH.parent / "global_env.json.tmp"
-        temporary.write_text(json.dumps(env, indent=2))
-        temporary.replace(GLOBAL_ENV_PATH)
-        VMRecord.global_env = dict(env)
+        with self.global_env_lock:
+            GLOBAL_ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
+            # Write, then rename: a crash never leaves half a file.
+            temporary = GLOBAL_ENV_PATH.parent / "global_env.json.tmp"
+            temporary.write_text(json.dumps(env, indent=2))
+            temporary.replace(GLOBAL_ENV_PATH)
+            VMRecord.global_env = dict(env)
+        # Not under the lock: write_env always writes what global_env is at that moment.
         with self.lock:
             records = list(self.records.values())
         failed = []
@@ -723,6 +728,26 @@ class VMs:
             except Exception as error:
                 failed.append(f"{record.name}: {error}")
         return failed
+
+    def add_empty_global_env(self, name: str) -> None:
+        """An agent asks for a secret for all VMs: a new, empty variable for the user to fill in. Agents can never set a value."""
+        with self.global_env_lock:
+            if name in VMRecord.global_env:
+                raise VMsError(f"{name} already exists, for all VMs")
+            env = dict(VMRecord.global_env)
+            env[name] = ""
+            self.set_global_env(env)
+
+    def remove_empty_global_env(self, name: str) -> None:
+        """An agent takes back an empty variable for all VMs. One with a value only the user can remove."""
+        with self.global_env_lock:
+            if name not in VMRecord.global_env:
+                raise VMsError(f"There is no {name} for all VMs")
+            if VMRecord.global_env[name] != "":
+                raise VMsError(f"{name} has a value; only the user can remove it")
+            env = dict(VMRecord.global_env)
+            del env[name]
+            self.set_global_env(env)
 
     def get(self, name: str) -> VMRecord:
         with self.lock:

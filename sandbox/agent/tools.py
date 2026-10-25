@@ -5,7 +5,7 @@ results. What each action does inside the VM lives in computer_use.py.
 An exception raised here reaches Claude as a failed tool call.
 
 An agent works on one VM, its target VM, and only while it holds it (VMQueue).
-Every tool except wait checks that first and refuses otherwise, so an agent that
+Every tool except wait (and the env tools' part for all VMs, below) checks that first and refuses otherwise, so an agent that
 waits in line, or lost the VM to the user, can't touch it. The target can change
 between jobs, so it is looked up on every call.
 
@@ -18,7 +18,9 @@ names and whether each has a value, never the values. It may add a new, empty
 one (for the user to fill in) and remove ones that are still empty; it can never
 set, change or remove a value. Commands it runs do get them (they are in every
 login shell), and any value that shows up in a command's output is replaced by
-[hidden] before the agent sees it.
+[hidden] before the agent sees it. The same goes for the ones for all VMs (the
+Settings dialog): any agent may list their names and add or remove empty ones
+(for_all_vms), also while it holds no VM, since they belong to no one VM.
 
 The agent may lock the human's mouse and keyboard out of the desktop while it
 works there: once per turn. The user can unlock it any time, and then it stays
@@ -43,7 +45,7 @@ import base64
 from claude_agent_sdk import tool
 
 from sandbox.agent.computer_use import Computer
-from sandbox.vms import VMRecord, VMs
+from sandbox.vms import VMRecord, VMs, VMsError
 
 # The only waits the agent can pick. Short ones are for things that are about
 # instant; for something slow it waits 10s at a time and looks in between.
@@ -159,21 +161,32 @@ class ComputerTools:
             )(self.unlock_desktop),
             tool(
                 "env_vars",
-                "List the environment variables the user set for this VM: each name and whether it has a value. "
-                "Never the values; use them in commands as $NAME.",
+                "List the environment variables the user set: this VM's own (while you hold it) and the ones for all VMs. "
+                "Each name and whether it has a value, never the values; use them in commands as $NAME. Works without a VM too.",
                 {},
             )(self.env_vars),
             tool(
                 "env_var_add",
                 "Add a new, empty environment variable for a secret the job needs (e.g. OPENAI_API_KEY), "
-                "then ask the user to fill in its value in the VM's Settings tab. Only for secrets: "
-                "anything else (settings, config) goes in files in the VM.",
-                {"name": str},
+                "then ask the user to fill in its value. for_all_vms: false (default) adds it to the VM you hold, for the "
+                "VM's Settings tab; true adds it for every VM, for Settings at the bottom of the sidebar (no VM needed): "
+                "for secrets that aren't about one VM, like an API key every job uses. Only for secrets: anything else "
+                "(settings, config) goes in files in the VM.",
+                {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}, "for_all_vms": {"type": "boolean"}},
+                    "required": ["name"],
+                },
             )(self.env_var_add),
             tool(
                 "env_var_remove",
-                "Remove an environment variable that is still empty. Ones with a value can't be removed.",
-                {"name": str},
+                "Remove an environment variable that is still empty: this VM's own, or with for_all_vms: true one for all VMs. "
+                "Ones with a value can't be removed.",
+                {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}, "for_all_vms": {"type": "boolean"}},
+                    "required": ["name"],
+                },
             )(self.env_var_remove),
         ]
 
@@ -204,8 +217,12 @@ class ComputerTools:
             return f"Running `{command}`"
         if name == "env_vars":
             return "Looking at the environment variable names"
+        if name == "env_var_add" and args.get("for_all_vms"):
+            return f"Adding the environment variable `{args.get('name')}` for all VMs (empty, for you to fill in)"
         if name == "env_var_add":
             return f"Adding the environment variable `{args.get('name')}` (empty, for you to fill in)"
+        if name == "env_var_remove" and args.get("for_all_vms"):
+            return f"Removing the empty environment variable `{args.get('name')}` for all VMs"
         if name == "env_var_remove":
             return f"Removing the empty environment variable `{args.get('name')}`"
         if name == "vm_start":
@@ -298,20 +315,32 @@ class ComputerTools:
         return {"content": [{"type": "text", "text": output}]}
 
     async def env_vars(self, args: dict) -> dict:
-        record = self.held_vm()
+        # The VM's own only while it holds the VM; the ones for all VMs always. Names and set or empty, never values.
+        own = {}
         lines = []
-        for name, value in record.env.items():
+        try:
+            own = self.held_vm().env
+        except (ValueError, VMsError):
+            lines.append("(You hold no VM, so only the ones for all VMs are listed.)")
+        for name, value in own.items():
             lines.append(f"{name}: {'set' if value else 'empty'}")
-        for name, value in record.global_env.items():
+        for name, value in VMRecord.global_env.items():
             # The VM's own value wins over the one for all VMs.
-            if record.env.get(name):
+            if own.get(name):
                 continue
             lines.append(f"{name}: {'set' if value else 'empty'} (for all VMs)")
-        return {"content": [{"type": "text", "text": "\n".join(lines) or "No environment variables are set."}]}
+        if not own and not VMRecord.global_env:
+            lines.append("No environment variables are set.")
+        return {"content": [{"type": "text", "text": "\n".join(lines)}]}
 
     async def env_var_add(self, args: dict) -> dict:
-        record = self.held_vm()
         name = args["name"]
+        # Only ever an empty one: agents can't set a value, here or anywhere.
+        if args.get("for_all_vms"):
+            await asyncio.to_thread(self.vms.add_empty_global_env, name)
+            text = f"Added {name} for all VMs, empty. Ask the user to fill it in in Settings (at the bottom of the sidebar)."
+            return {"content": [{"type": "text", "text": text}]}
+        record = self.held_vm()
         if name in record.env:
             raise ValueError(f"{name} already exists")
         if record.global_env.get(name):
@@ -322,8 +351,11 @@ class ComputerTools:
         return {"content": [{"type": "text", "text": f"Added {name}, empty. Ask the user to fill it in in the VM's Settings tab."}]}
 
     async def env_var_remove(self, args: dict) -> dict:
-        record = self.held_vm()
         name = args["name"]
+        if args.get("for_all_vms"):
+            await asyncio.to_thread(self.vms.remove_empty_global_env, name)
+            return {"content": [{"type": "text", "text": f"Removed {name} for all VMs."}]}
+        record = self.held_vm()
         if name not in record.env:
             raise ValueError(f"There is no {name}")
         if record.env[name] != "":
