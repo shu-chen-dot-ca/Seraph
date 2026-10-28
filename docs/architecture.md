@@ -19,7 +19,8 @@ The diagrams are SVG files in this folder and follow your light or dark theme.
 
 ![Swimlanes for you, agents, the VM and GitHub: find, assign, queue, work in the VM, draft, decide in the Inbox, then Approve opens the PR from your account.](issue-to-draft.svg)
 
-- A **job** is the smallest unit of work. You make one by assigning an issue or with New job, and an agent can also make its own.
+- A **job** is the smallest unit of work. You make one by assigning an issue, with Set up on the Repos page, or with New job, and an agent can also make its own.
+- **Set up** (`set_up_repo`: understand → set up → show → introduce) has no fix and no draft. The agent reads the README and docs. An app with a clear frontend it sets up and leaves running on the VM's desktop; a server goes in the VM's demo service, so it keeps running after the agent lets go of the VM and after a restart. A library or other low-level repo it clones and opens in VS Code. Then it writes a short introduction to the repo, in its chat and in the job's notes.
 - First the agent reads the project's rules for contributors (`contributing_guide`): every CONTRIBUTING file in any folder, developer guides in the docs, the PR template, AGENTS.md, and the guides the README and CONTRIBUTING link to, in the repo or on the project's website. `run_tests` and `draft_pr` refuse until it has.
 - In the VM, it runs whatever the project's rules ask to run before a PR (its official checks), however long they take, or else the tests that cover the change (the basic checks). They must pass **before** it changes anything and again **after** the change, with the same command. The job and the Inbox say which ran.
 - A project already set up in the VM isn't set up again: a passing full-suite run from an earlier job on the same repo and VM counts for the next one.
@@ -36,6 +37,7 @@ The diagrams are SVG files in this folder and follow your light or dark theme.
 ![State diagram of one agent and one VM: no VM, waiting in line, holding; agent transitions in grey, your controls in amber.](vm-queue.svg)
 
 - VMs aren't tied to repos or agents. Each one keeps a holder and a line of waiting agents (`sandbox/vm_queue.py`), saved with the VM, so both survive a restart.
+- Each VM also keeps notes on what is set up in it (`sandbox/vms.py`), written by the agent holding it and by you. Agents see them when they pick a VM and again when it becomes theirs; a fork starts with its source's notes.
 - An agent uses VM tools only while it holds its target VM. Once it gets the VM, it does all its jobs there, then releases it.
 - When you take a VM away or remove an agent from the line, that agent is interrupted, and every command it started in the VM is killed.
 
