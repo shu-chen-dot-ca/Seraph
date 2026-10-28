@@ -23,7 +23,8 @@ With your GitHub account connected (the GitHub page, Account), Approve on a PR o
 comment), then sends it to GitHub as you (github_searcher/github_account.py): a PR from a new branch in your fork,
 its pictures uploaded there. If GitHub refuses, nothing is decided and the error shows. Without an account nothing is
 sent; you send it yourself. A sent item's bar links to it on GitHub. One approved but not sent (approved before you
-connected) has Send to GitHub, with the same question. The bar says who Approve sends as.
+connected) has Send to GitHub, with the same question; while no account is connected, its bar says in amber it isn't on
+GitHub yet, with a link to the GitHub page's Account tab to connect one. The bar says who Approve sends as.
 A decided item's bar says what you decided, and has a box to message its agent about it: the message goes into the
 agent's chat (its page, #/agents/<id>, which Open chat opens), saying which item it is about. An archived agent comes
 back for it; a deleted one can't get messages.
@@ -904,6 +905,15 @@ export default function Inbox(props: { selected: string | null }) {
                     <a href={draft.sent.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-primary hover:underline">
                       {draft.sent.kind === "pr" ? `PR #${draft.sent.number}` : "Comment"} on GitHub, as @{draft.sent.as} <ExternalLink className="size-3" />
                     </a>
+                  )}
+                  {draft.status === "approved" && draft.sent === null && (draft.kind === "pr" || draft.kind === "comment") && account !== null && !account.connected && (
+                    <span className="text-xs text-warn">
+                      Not on GitHub yet:{" "}
+                      <a href="#/github?tab=account" className="underline hover:text-foreground">
+                        connect your GitHub account
+                      </a>{" "}
+                      to send it from here.
+                    </span>
                   )}
                   <div className="ml-auto flex items-center gap-1.5">
                     <Button variant="ghost" size="sm" disabled={busy !== ""} onClick={() => setDeleting({ ids: [draft.id], pending: 0 })}>
