@@ -21,7 +21,12 @@ Title, Repo) up to Free; with none, it is the list's order. Every sorted header 
 blue with an arrow. A table wider than the page scrolls sideways, the header
 with it. Times re-render every minute.
 
-GitHub's labels aren't shown: each issue carries the app's own tags instead, the same as on the Tracked page
+Marked (next to Free) says what the maintainers marked the issue with on GitHub, from its labels (only maintainers can
+label an issue), each spelled however the repo spells it: Good first issue (green: good first issue, first-timers,
+beginner, starter, newcomer), Help wanted (green: help wanted, contributions or PRs welcome, up for grabs, accepting
+PRs) and Confirmed (accepted, confirmed, approved, triaged); "–" when none, and hovering shows all its labels. Sorted,
+good first issue counts most, then help wanted, then confirmed, and one marked more ways goes higher.
+GitHub's labels aren't shown otherwise: each issue carries the app's own tags instead, the same as on the Tracked page
 (github_searcher/issue_tags.py, made by Claude in the background), each in its own column and sorted like the others:
 Free (a newcomer can start now) or Assigned (someone is on it: an assignee, a claim, the author doing it), its Kind, and
 a Level: how hard the fix is for our agent in its sandbox VM, decided by fixed rules from six yes / no checks Claude
@@ -100,7 +105,7 @@ const ROLE: Record<string, string> = {
 };
 const MAINTAINERS = ["OWNER", "MEMBER", "COLLABORATOR"];
 
-type SortKey = "number" | "title" | "repo" | "free" | "level" | "kind" | "stars" | "opened" | "active" | "read" | "comments" | "status" | "agent";
+type SortKey = "number" | "title" | "repo" | "free" | "marked" | "level" | "kind" | "stars" | "opened" | "active" | "read" | "comments" | "status" | "agent";
 
 // The table's columns: # and Title (which takes the room left over), then the rest. All but Title are measured by the
 // sizer. better says which way the first click on a header sorts: higher first, or A to Z.
@@ -110,6 +115,7 @@ const TITLE_COLUMN: IssueColumn = { key: "title", label: "Title", title: "A to Z
 const ISSUE_COLUMNS: IssueColumn[] = [
   { key: "repo", label: "Repo", title: "The repo it is in", better: "text" },
   { key: "free", label: "Free", title: "Free first (a newcomer can start now), then not ready yet, then assigned", better: "higher" },
+  { key: "marked", label: "Marked", title: "What the maintainers marked it with on GitHub: good first issue, help wanted (they want an outside PR) or confirmed. Hover for all its labels", better: "higher" },
   { key: "level", label: "Level", title: "How hard the fix is for our agent in its VM, by fixed rules: easy (it can write it, see it and prove it there), medium or hard", better: "higher" },
   { key: "kind", label: "Kind", title: "Bug, docs, feature or question: A to Z", better: "text" },
   { key: "stars", label: "Stars", title: "The repo's stars", better: "higher" },
@@ -126,6 +132,13 @@ const ACTIONS_WIDTH = 130;
 
 // The order of a latest job's status, in progress first being the highest. No job (or a cancelled one) is New.
 const STATUS_RANK: Record<string, number> = { waiting_on_user: 5, working: 4, queued: 3, new: 2, done: 1 };
+
+// GitHub labels only maintainers can put on an issue, by what they say, for the Marked column. Every repo spells them
+// its own way ("good first issue", "good-first-issue", "Good First Issue 👋", "help wanted", "status: accepted").
+// Confirmed has word edges so "unconfirmed" and "untriaged" don't count.
+const GOOD_FIRST = /good.?first|first.?timer|beginner|starter|newcomer/i;
+const HELP_WANTED = /help.?wanted|contributions?.?welcome|prs?.?welcome|pull.?requests?.?welcome|up.?for.?grabs|accepting.?prs/i;
+const CONFIRMED = /\b(accepted|confirmed|approved|triaged)\b/i;
 
 // Free first when sorted (the same as on the Tracked page).
 const FREE_RANK: Record<string, number> = { free: 3, waiting: 2, assigned: 1 };
@@ -251,6 +264,21 @@ export default function Issues(props: { repo: string | null; open: string | null
         return FREE_RANK.assigned;
       }
       return issue.tags ? FREE_RANK[issue.tags.status] : null;
+    }
+    if (key === "marked") {
+      // Good first issue counts most, then help wanted, then confirmed; an issue marked more than one way adds them up.
+      const labels = facts?.labels ?? issue.labels;
+      let rank = 0;
+      if (labels.some((label) => GOOD_FIRST.test(label))) {
+        rank += 4;
+      }
+      if (labels.some((label) => HELP_WANTED.test(label))) {
+        rank += 2;
+      }
+      if (labels.some((label) => CONFIRMED.test(label))) {
+        rank += 1;
+      }
+      return rank;
     }
     if (key === "level") {
       return issue.tags?.level ? (LEVEL_RANK[issue.tags.level] ?? null) : null;
@@ -381,6 +409,25 @@ export default function Issues(props: { repo: string | null; open: string | null
         );
       }
       return <span title={issue.tags.reason}>–</span>;
+    }
+    if (key === "marked") {
+      const labels = facts !== null ? facts.labels : issue.labels;
+      const goodFirst = labels.some((label) => GOOD_FIRST.test(label));
+      const helpWanted = labels.some((label) => HELP_WANTED.test(label));
+      const confirmed = labels.some((label) => CONFIRMED.test(label));
+      const allLabels = labels.length > 0 ? `Its labels: ${labels.join(", ")}` : "No labels";
+      if (!goodFirst && !helpWanted && !confirmed) {
+        return <span title={allLabels}>–</span>;
+      }
+      return (
+        <span className="whitespace-nowrap" title={allLabels}>
+          {goodFirst && <span className="text-ok">Good first issue</span>}
+          {goodFirst && (helpWanted || confirmed) && " · "}
+          {helpWanted && <span className="text-ok">Help wanted</span>}
+          {helpWanted && confirmed && " · "}
+          {confirmed && "Confirmed"}
+        </span>
+      );
     }
     if (key === "kind") {
       if (!issue.tags?.kind) {
