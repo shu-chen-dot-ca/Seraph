@@ -26,6 +26,8 @@ A message sent while the agent works waits in a queue (the chat shows it as pend
 the user's at most). Each of the user's messages gets a turn of its own, in order, together with the
 app's messages that came before it; interrupting a turn (Esc in the chat) starts the next one. The user can take
 one of their queued messages out before it goes in (cancel_queued); the agent list carries their texts (queued).
+When the user fills in empty env variables an agent added for a secret (env_var_add), that agent is told
+(secrets_filled, from the env endpoints in backend/vms_api.py), so it never asks for them in the Inbox.
 Waiting messages are saved with the record, so a backend restart (it reloads on every code
 change) doesn't lose them. An agent that was in a turn or about to start one (awake) is woken
 with them after the restart; one cut off in the middle of a turn gets one more saying so.
@@ -552,6 +554,18 @@ class Agents:
         if self.agents[agent_id].record["archived_at"] is None:
             self.wake[agent_id].set()
         self.version += 1
+
+    def secrets_filled(self, names: list[str], where: str) -> None:
+        """The user gave a value to empty env variables (where: "for all VMs" or "on vm2"). Each agent that added
+        one of them (env_var_add in its history) is told, so it carries on with what waited for it. Any thread."""
+        if threading.get_ident() != self.loop_thread:
+            self.loop.call_soon_threadsafe(self.secrets_filled, names, where)
+            return
+        for agent in self.agents.values():
+            added = [entry.get("input", {}).get("name") for entry in agent.history if entry["type"] == "tool" and entry["name"] == "env_var_add"]
+            filled = [name for name in names if name in added]
+            if filled:
+                self.notify(agent.id, f"The user filled in {', '.join(filled)} ({where}). Carry on with what waited for it.")
 
     async def interrupt(self, agent_id: str) -> None:
         await self.agents[agent_id].interrupt()

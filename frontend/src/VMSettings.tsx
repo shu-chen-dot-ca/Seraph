@@ -4,7 +4,8 @@ The Settings tab of a VM page: its name, CPU and memory, internet, autostart, en
 Most of it reads the live "vms" topic, so a change shows up as soon as the backend has made it.
 The env values are the one thing the live feed leaves out (it only carries the names, so agents and
 other views never see secrets): they come from GET /api/vms/{name}/settings, fetched again whenever
-the names change (an agent can add or remove empty ones) unless you have unsaved edits.
+the names change (an agent can add or remove empty ones) unless you have unsaved edits. Once you save a value for an
+empty one, the agent that added it is told and carries on.
 
 CPU and memory only change while the VM is stopped; Incus applies them on the next start.
 Rename works running or not; the page moves to the new name (#/vms/<new name>).

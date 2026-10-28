@@ -11,7 +11,8 @@ the current theme (orange, green and teal get dark text in dark mode, which the 
 
 The env vars for all VMs are kept by the backend (sandbox/vms.py), not the browser: GET /api/vms/global_env each
 time the dialog opens (unless you have unsaved edits), PUT to save. Agents can add empty ones (for you to fill in),
-so one may show up here with no value. Running VMs get them at once, stopped ones when
+so one may show up here with no value; once you save a value for it, the agent that added it is told and carries on.
+Running VMs get them at once, stopped ones when
 they start. A VM's own env var with the same name (its Settings tab) wins, unless it is empty.
 */
 

@@ -5,7 +5,8 @@ Resources tab; only the user can, see sandbox/file_transfer.py).
 
 Create, start, stop and restart run in background threads inside
 sandbox/vms.py and answer at once; the browser follows the state through
-/api/live. Settings and the viewer make Incus calls that block, so those
+/api/live. Saving env variables (a VM's or the ones for all VMs) that an agent added empty tells that agent
+they are filled in now (Agents.secrets_filled). Settings and the viewer make Incus calls that block, so those
 endpoints are plain `def` (FastAPI runs them in a thread pool). The queue
 endpoints are `async def`: they are quick, and taking a VM from an agent
 interrupts that agent, which lives on the event loop.
@@ -327,12 +328,17 @@ def set_env(name: str, body: EnvRequest) -> dict:
         record = vms.get(name)
     except VMsError as error:
         raise HTTPException(status_code=404, detail=str(error))
+    old = dict(record.env)
     try:
         record.set_env(body.env)
     except VMsError as error:
         raise HTTPException(status_code=400, detail=str(error))
     except VMError as error:
         raise HTTPException(status_code=500, detail=str(error))
+    # Empty ones an agent added that have a value now: that agent is told, and carries on.
+    filled = [key for key, value in body.env.items() if value != "" and old.get(key) == ""]
+    if filled:
+        agents.secrets_filled(filled, f"on {name}")
     return {}
 
 
@@ -348,10 +354,15 @@ def set_global_env(body: EnvRequest) -> dict:
 
     "failed" lists the running VMs they could not be written to, each with why.
     """
+    old = dict(VMRecord.global_env)
     try:
         failed = vms.set_global_env(body.env)
     except VMsError as error:
         raise HTTPException(status_code=400, detail=str(error))
+    # Empty ones an agent added that have a value now: that agent is told, and carries on.
+    filled = [key for key, value in body.env.items() if value != "" and old.get(key) == ""]
+    if filled:
+        agents.secrets_filled(filled, "for all VMs")
     return {"failed": failed}
 
 

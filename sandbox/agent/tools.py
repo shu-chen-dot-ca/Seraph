@@ -15,7 +15,8 @@ the check tool is there for asking up front.
 
 The VM's environment variables are the user's secrets: the agent may see their
 names and whether each has a value, never the values. It may add a new, empty
-one (for the user to fill in) and remove ones that are still empty; it can never
+one (for the user to fill in; it says so in the chat, not in the Inbox, and the app
+tells it once the user did) and remove ones that are still empty; it can never
 set, change or remove a value. Commands it runs do get them (they are in every
 login shell), and any value that shows up in a command's output is replaced by
 [hidden] before the agent sees it. The same goes for the ones for all VMs (the
@@ -188,7 +189,8 @@ class ComputerTools:
             tool(
                 "env_var_add",
                 "Add a new, empty environment variable for a secret the job needs (e.g. OPENAI_API_KEY), "
-                "then ask the user to fill in its value. for_all_vms: false (default) adds it to the VM you hold, for the "
+                "then say so to the user in your message (not draft_question): the app tells you once they fill it in. "
+                "for_all_vms: false (default) adds it to the VM you hold, for the "
                 "VM's Settings tab; true adds it for every VM, for Settings at the bottom of the sidebar (no VM needed): "
                 "for secrets that aren't about one VM, like an API key every job uses. Only for secrets: anything else "
                 "(settings, config) goes in files in the VM.",
@@ -446,7 +448,10 @@ class ComputerTools:
         # Only ever an empty one: agents can't set a value, here or anywhere.
         if args.get("for_all_vms"):
             await asyncio.to_thread(self.vms.add_empty_global_env, name)
-            text = f"Added {name} for all VMs, empty. Ask the user to fill it in in Settings (at the bottom of the sidebar)."
+            text = (
+                f"Added {name} for all VMs, empty. Say in your message that it is for them to fill in, in Settings (at the bottom "
+                "of the sidebar); no draft_question. You'll get a message once it has a value: go on with what doesn't need it."
+            )
             return {"content": [{"type": "text", "text": text}]}
         record = self.held_vm()
         if name in record.env:
@@ -456,7 +461,11 @@ class ComputerTools:
         env = dict(record.env)
         env[name] = ""
         await asyncio.to_thread(record.set_env, env)
-        return {"content": [{"type": "text", "text": f"Added {name}, empty. Ask the user to fill it in in the VM's Settings tab."}]}
+        text = (
+            f"Added {name}, empty. Say in your message that it is for them to fill in, in the VM's Settings tab; no "
+            "draft_question. You'll get a message once it has a value: go on with what doesn't need it."
+        )
+        return {"content": [{"type": "text", "text": text}]}
 
     async def env_var_remove(self, args: dict) -> dict:
         name = args["name"]
