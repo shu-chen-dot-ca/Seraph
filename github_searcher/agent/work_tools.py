@@ -15,6 +15,9 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   (base_sha: Approve sends exactly that diff on that commit, github_account.py) and the branch's commits since
   (commits: replayed when it is sent, all with the user's name). Every commit must be the agent's own:
   draft_pr refuses a branch with anyone else's commits (a cherry-pick), and nothing credits a co-author.
+  It also refuses a diff with what GitNexus writes by itself when it builds its index (its block in AGENTS.md
+  and CLAUDE.md, .claude/skills/gitnexus/, .gitnexus/): running a project's required tool never puts its own
+  file changes in the PR.
   No draft has emoji in it (EMOJI, the user's rule; a template's emoji are written as words). A PR is
   written from the project's contribution rules and its recently merged PRs: contributing_guide
   gathers the rules wherever they are (CONTRIBUTING in any folder, developer guides in the docs, the
@@ -1792,6 +1795,24 @@ class WorkTools:
             text = (
                 f"The diff contains the value of the environment variable {env_name}, in: {', '.join(files)}. Take it out "
                 "of those files, or keep the file out of the diff (delete it, or add it to .git/info/exclude), then try again."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        # What GitNexus writes by itself when an agent builds its index (analyze): its block in AGENTS.md and CLAUDE.md
+        # (the symbol counts), its skills in .claude/skills/gitnexus/ and its .gitnexus/ folder. None of it is the fix.
+        tool_files = []
+        for chunk in diff.split("\ndiff --git "):
+            path = chunk.split("\n")[0].split(" b/")[-1]
+            changed = [line for line in chunk.split("\n")[1:] if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))]
+            if path.startswith((".gitnexus/", ".claude/skills/gitnexus/")):
+                tool_files.append(path)
+            elif path.split("/")[-1] in ["AGENTS.md", "CLAUDE.md"] and any("gitnexus" in line.lower() for line in changed):
+                tool_files.append(path)
+        if tool_files:
+            text = (
+                f"The diff changes what GitNexus writes by itself when it builds its index: {', '.join(tool_files)}. That isn't "
+                f"your fix and must not be in the PR: restore them (git checkout {args['base']} -- <file>; git clean for new "
+                "files), keep them out of your commits (take them out of a commit that has them), check git status, then try again."
             )
             return {"content": [{"type": "text", "text": text}], "is_error": True}
 
