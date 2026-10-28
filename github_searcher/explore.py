@@ -9,13 +9,14 @@ stays in the found list, also through later runs and backend restarts (DATA_DIR/
 runs don't find it again. Explore never changes a repo that is already listed.
 
 Where it looks: the profile (DATA_DIR/explore_profile.json) is what the user writes, "about" (who they are,
-what they like), and their types of repo, each a name and a few words on what it is (the default: Prestige,
-well-known libraries, and AI & harness). The types are the tags that classify repos: Explore puts each repo it
-finds under one, and agents give one to the repos they add (work_tools.py repos_add). In the code a type is a
-lane: when the profile is saved, Claude plans each one's seed repos (looked at first) and GitHub repo searches
-(set_profile), and the finds are split evenly between them. The run keeps the lanes near their shares: the next
-candidate comes from the lane furthest below its share. Every search gets SEARCH_SUFFIX (not archived, pushed in
-the last 30 days) and runs most stars first, a page of 100 at a time.
+what they like), and their types of repo, each a name and a few words on what it is (the default, the user's own
+profile of 2026-10-27: Linux desktop, AI & harness, LLM tooling and Dev tools). The types are the tags that
+classify repos: Explore puts each repo it finds under one, and agents give one to the repos they add (work_tools.py repos_add). In the code a type is a
+lane: when the profile is saved, Claude plans each one's GitHub repo searches (set_profile), and the finds are split
+evenly between them. The run keeps the lanes near their shares: the next candidate comes from the lane furthest below
+its share. Every search gets SEARCH_SUFFIX (not archived, pushed in the last 30 days) and runs most recently updated
+first, a page of 100 at a time: not most stars first, and no famous repos looked at first, so Explore doesn't start
+from fame. The default star range is a few hundred to 15k.
 
 What it skips before any heavy work: repos it already looked at in this run, repos in Repos or Tracked, and
 repos already in the found list. Then `workers` candidates at a time (token_balancer.py paces GitHub for all of them):
@@ -89,52 +90,81 @@ DEFAULT_PROFILE = {
     "about": "",
     "lanes": [
         {
-            "id": "prestige",
-            "label": "Prestige",
-            "about": "well-known, widely used projects that are an honor to contribute to (matplotlib-level)",
-            "share": 50,
-            "seeds": [
-                "matplotlib/matplotlib",
-                "openclaw/openclaw",
-                "numpy/numpy",
-                "pandas-dev/pandas",
-                "scikit-learn/scikit-learn",
-                "scipy/scipy",
-                "pytest-dev/pytest",
-                "python/mypy",
-                "astral-sh/ruff",
-                "astral-sh/uv",
-                "fastapi/fastapi",
-                "pydantic/pydantic",
-                "huggingface/transformers",
-                "pytorch/pytorch",
-                "vllm-project/vllm",
-                "tokio-rs/tokio",
-                "vitejs/vite",
-            ],
+            "id": "linux-desktop",
+            "label": "Linux desktop",
+            "about": (
+                "Linux desktop apps and system tools: GNOME and KDE apps, Fedora tooling, Flatpak apps, system utilities. Rust,"
+                " Python or C++, where a fix can be seen and checked on a desktop."
+            ),
+            "share": 25,
             "queries": [
-                "stars:>15000 good-first-issues:>2 language:Python",
-                "stars:>15000 good-first-issues:>2 language:TypeScript",
-                "stars:>15000 good-first-issues:>2 language:Rust",
-                "stars:>15000 good-first-issues:>2 language:C++",
-                "stars:>15000 help-wanted-issues:>5",
+                "topic:gtk4 stars:300..15000",
+                "topic:gnome stars:300..15000 good-first-issues:>0",
+                "topic:libadwaita stars:300..15000",
+                "topic:kde stars:300..15000",
+                "topic:flatpak stars:300..15000",
+                "topic:linux-desktop stars:300..15000",
+                "topic:wayland language:Rust stars:300..15000",
+                "topic:fedora stars:300..15000",
             ],
         },
         {
             "id": "ai",
             "label": "AI & harness",
-            "about": "AI agents, agent harnesses, MCP, LLM tooling and applied AI",
-            "share": 50,
-            "seeds": [],
+            "about": (
+                "Agent frameworks and harnesses, MCP servers and SDKs, guardrails, evals, human-in-the-loop and review tools. "
+                "Python or TypeScript, runs locally without paid API keys (or with mocks), and a fix shows in a command's "
+                "output, a UI or a test."
+            ),
+            "share": 25,
             "queries": [
-                "topic:ai-agents stars:>1000",
-                "topic:llm-agent stars:>1000",
-                "topic:model-context-protocol stars:>500",
-                "topic:mcp stars:>1000",
-                "topic:agents topic:llm stars:>1000",
-                "topic:llm-inference stars:>2000",
-                "topic:llmops stars:>1000",
-                "agent framework in:description stars:>2000",
+                "topic:mcp stars:300..15000",
+                "topic:model-context-protocol stars:300..15000",
+                "topic:mcp-server stars:300..15000 good-first-issues:>0",
+                "topic:ai-agents stars:300..15000 good-first-issues:>2",
+                "topic:agent-framework stars:300..15000",
+                "topic:guardrails stars:300..15000",
+                "topic:llm-evaluation stars:300..15000",
+                "topic:human-in-the-loop stars:300..15000",
+            ],
+        },
+        {
+            "id": "llm-tooling",
+            "label": "LLM tooling",
+            "about": (
+                "Applied AI and LLM tooling: LLM clients and SDKs, local model front ends, chat UIs, prompt and "
+                "structured-output tools, CLIs around LLMs. Python or TypeScript, runs without a GPU or paid API (mockable), "
+                "and a fix shows in a UI, a command's output or a test."
+            ),
+            "share": 25,
+            "queries": [
+                "topic:llm language:Python stars:300..15000 good-first-issues:>2",
+                "topic:llm language:TypeScript stars:300..15000 good-first-issues:>2",
+                "topic:chatgpt stars:300..15000 help-wanted-issues:>2",
+                "topic:structured-output stars:300..15000",
+                "topic:llm-cli stars:300..15000",
+                "topic:openai language:TypeScript stars:300..15000",
+                "topic:ollama stars:300..15000",
+                "topic:prompt-engineering stars:300..15000 language:Python",
+            ],
+        },
+        {
+            "id": "dev-tools",
+            "label": "Dev tools",
+            "about": (
+                "Well-known developer tools: CLIs, linters, formatters, test runners, build tools, terminal apps and editor "
+                "extensions, in Python, TypeScript or Rust. Bugs are easy to reproduce from a terminal."
+            ),
+            "share": 25,
+            "queries": [
+                "topic:cli language:Rust stars:300..15000 good-first-issues:>2",
+                "topic:cli language:Python stars:300..15000 good-first-issues:>2",
+                "topic:linter stars:300..15000",
+                "topic:formatter stars:300..15000",
+                "topic:terminal language:Rust stars:300..15000",
+                "topic:developer-tools language:TypeScript stars:300..15000 good-first-issues:>0",
+                "topic:vscode-extension stars:300..15000 help-wanted-issues:>0",
+                "topic:testing language:Python stars:300..15000 good-first-issues:>0",
             ],
         },
     ],
@@ -151,7 +181,6 @@ ERRORS_KEPT = 20
 NETWORK_TRIES = 5
 NETWORK_PAUSE = 30
 UNREACHABLE = (httpx.ConnectError, httpx.ConnectTimeout)
-FULL_NAME = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 # How well a repo fits the profile: Claude picks a level, and the repo keeps its number (the Repos page shows the
 # level again: the frontend's FIT_LEVELS has the same steps).
 FIT_LEVELS = {"strong": 1.0, "good": 0.75, "some": 0.5, "weak": 0.25}
@@ -199,10 +228,9 @@ PLAN_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string"},
-                    "seeds": {"type": "array", "items": {"type": "string"}},
                     "queries": {"type": "array", "items": {"type": "string"}},
                 },
-                "required": ["name", "seeds", "queries"],
+                "required": ["name", "queries"],
             },
         },
     },
@@ -312,7 +340,7 @@ class Explore:
         return removed
 
     async def set_profile(self, about: str, types: list[dict]) -> None:
-        """Replace the profile: about, and the types ({"label", "about"} each). Claude plans each type's seeds and
+        """Replace the profile: about, and the types ({"label", "about"} each). Claude plans each type's
         searches first, so this takes a little while. ValueError when something is missing or Claude gives no
         usable plan; the run in progress keeps the old profile."""
         about = about.strip()
@@ -334,7 +362,7 @@ class Explore:
                     lane_id = old_lane["id"]
             while lane_id in [lane["id"] for lane in lanes]:
                 lane_id += "-2"
-            lanes.append({"id": lane_id, "label": label, "about": each["about"].strip(), "share": 0, "seeds": [], "queries": []})
+            lanes.append({"id": lane_id, "label": label, "about": each["about"].strip(), "share": 0, "queries": []})
         # An even split; the first types get what doesn't divide.
         for index, lane in enumerate(lanes):
             lane["share"] = 100 // len(lanes) + (1 if index < 100 % len(lanes) else 0)
@@ -345,13 +373,13 @@ class Explore:
             f"About them:\n{about}\n\n"
             f"The types of project they want, by name:\n{type_lines}\n\n"
             "For each type, by its name:\n"
-            "- seeds: up to 20 repos (owner/name) of that type that you are sure exist on GitHub under that name; they "
-            "are looked at first. Empty when none come to mind.\n"
             "- queries: 3 to 8 GitHub repository searches (the q of GET /search/repositories), most promising first, "
-            'like "topic:mcp stars:>1000" or "stars:>15000 good-first-issues:>2 language:Python". Use qualifiers '
-            "(topic:, language:, stars:, good-first-issues:, help-wanted-issues:, in:description); more than a few "
-            "words of plain text finds little. Each returns up to 1000 repos, most stars first. "
-            '"archived:false pushed:>(30 days ago)" is added to each, so leave those out.'
+            'like "topic:mcp stars:300..15000" or "stars:300..15000 good-first-issues:>2 language:Python". Use '
+            "qualifiers (topic:, language:, stars:, good-first-issues:, help-wanted-issues:, in:description); more than "
+            "a few words of plain text finds little. Each returns up to 1000 repos, most recently updated first. Keep "
+            "to the star range they give; with none, a few hundred to 15k stars: mid-size projects where an outside "
+            'PR gets noticed, not the famous ones. "archived:false pushed:>(30 days ago)" is added to each, so leave '
+            "those out."
         )
         try:
             plan = await judge(prompt, PLAN_SCHEMA, "medium")
@@ -360,9 +388,8 @@ class Explore:
         for planned in plan["types"]:
             for lane in lanes:
                 if lane["label"].lower() == planned["name"].strip().lower():
-                    lane["seeds"] = [seed.strip() for seed in planned["seeds"] if FULL_NAME.fullmatch(seed.strip())][:20]
                     lane["queries"] = [query.strip() for query in planned["queries"] if query.strip() != ""][:8]
-        if all(not lane["seeds"] and not lane["queries"] for lane in lanes):
+        if all(not lane["queries"] for lane in lanes):
             raise ValueError("Claude's plan has nothing to search. Say a bit more about each type.")
         self.profile = {"about": about, "lanes": lanes}
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -392,7 +419,7 @@ class Explore:
         self.run_profile = copy.deepcopy(self.profile)
         for lane in self.run_profile["lanes"]:
             lanes[lane["id"]] = {"label": lane["label"], "share": lane["share"], "found": 0, "in_flight": 0, "exhausted": lane["share"] == 0}
-            self.cursors[lane["id"]] = {"pending": [{"name": seed} for seed in lane.get("seeds", [])], "query": 0, "page": 1}
+            self.cursors[lane["id"]] = {"pending": [], "query": 0, "page": 1}
         self.seen = set()
         self.network_tries = {}
         self.stopping = False
@@ -544,7 +571,7 @@ class Explore:
             self.changed()
 
     async def next_candidate(self, lane_id: str) -> str | None:
-        """The next repo of a lane worth checking, or None when its seeds and searches are used up."""
+        """The next repo of a lane worth checking, or None when its searches are used up."""
         run = self.run
         cursor = self.cursors[lane_id]
         lane = [each for each in self.run_profile["lanes"] if each["id"] == lane_id][0]

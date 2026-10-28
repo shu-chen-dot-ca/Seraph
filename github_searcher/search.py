@@ -41,11 +41,12 @@ def get_contents(owner: str, repo: str, path: str, ref: str = "") -> dict | list
 
 
 def search_repositories(q: str, page: int = 1) -> dict:
-    # Most stars first, 100 a page. GitHub gives at most 1,000 results (10 pages) for one query.
+    # Most recently updated first, not most stars, so Explore doesn't start from the famous repos. 100 a page.
+    # GitHub gives at most 1,000 results (10 pages) for one query.
     response = BALANCER.request(
         "GET",
         "https://api.github.com/search/repositories",
-        params={"q": q, "sort": "stars", "order": "desc", "per_page": 100, "page": page},
+        params={"q": q, "sort": "updated", "order": "desc", "per_page": 100, "page": page},
     )
     response.raise_for_status()
     return response.json()

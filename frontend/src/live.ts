@@ -224,11 +224,10 @@ export type ExploreLane = {
   label: string;
   about: string; // what the lane is for, given to Claude when it judges fit
   share: number; // 0..100: the part of the finds that should come from this lane
-  seeds: string[]; // owner/name, looked at first
   queries: string[]; // GitHub repo searches
 };
 
-// The user writes about, and each type of repo (a lane's label and about); Claude plans each one's seeds and
+// The user writes about, and each type of repo (a lane's label and about); Claude plans each one's
 // searches when the profile is saved. The types are the tags that classify repos (a repo's "lane").
 export type ExploreProfile = {
   about: string;

@@ -11,6 +11,8 @@ shows the run's own and can't change them. It searches for
 each of the user's types of repo (ExploreProfileDialog; a "lane" in the code), keeping each near its share of the
 finds, and skips what is already in Repos, Tracked or the found list. Nothing is blocked: a repo removed from the
 found list or from Repos may be found again by a later run.
+It doesn't start from fame: its searches run most recently updated first, not most stars first, and the default star
+range is a few hundred to 15k (the user's profile can say otherwise).
 
 Every repo that qualifies joins the found list right away, newest first: a table with a column for each thing known
 about it (FOUND_COLUMNS). The main ones come first: outside PRs merged (of those merged or closed), newcomers' first

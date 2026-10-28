@@ -1,9 +1,10 @@
 /*
 Edit Explore's profile: "About you", and the user's types of repo, one tab each (+ adds one, up to MAX_TYPES).
-A type is a name and a few words on what it is, like Prestige or AI & harness. The types are the tags that
+A type is a name and a few words on what it is, like Linux desktop or AI & harness. The types are the tags that
 classify repos: Explore puts each repo it finds under one, and agents give one to the repos they add.
-On Save, Claude plans each type's seed repos and GitHub searches (github_searcher/explore.py set_profile),
-and the finds are split evenly between the types. A run in progress keeps the profile it started with.
+On Save, Claude plans each type's GitHub searches (github_searcher/explore.py set_profile), within the star range
+"About you" gives (a few hundred to 15k stars when it gives none), and the finds are split evenly between the types.
+To change the star range, change it in "About you" and Save. A run in progress keeps the profile it started with.
 */
 
 import { Loader2, Plus, Trash2 } from "lucide-react";
