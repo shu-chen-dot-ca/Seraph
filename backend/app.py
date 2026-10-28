@@ -33,7 +33,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
-from backend import agents_api, artifacts_api, explore_api, github_account_api, images_api, inbox_api, issues_api, github_api, repos_api, sherpa_api, tracked_api, vms_api
+from backend import agents_api, artifacts_api, explore_api, github_account_api, images_api, inbox_api, issues_api, github_api, repos_api, search_api, sherpa_api, tracked_api, vms_api
 from backend.shared import agents, explore, images, inbox, issue_facts, issue_tags, issues, jobs, pr_tracking, repo_signals, repos, resource_usage, sherpa, tracked, tracked_issues, vms
 from github_searcher.token_balancer import BALANCER
 
@@ -78,6 +78,7 @@ app.include_router(github_api.router)
 app.include_router(github_account_api.router)
 app.include_router(issues_api.router)
 app.include_router(repos_api.router)
+app.include_router(search_api.router)
 app.include_router(explore_api.router)
 app.include_router(tracked_api.router)
 app.include_router(agents_api.router)
