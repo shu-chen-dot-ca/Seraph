@@ -27,8 +27,7 @@ a field goes one step:
 - off: takes it out of the sort (with none left, back to the list's own order).
 Which field counts first goes from left to right: the shown columns in their order, then Track, then the fields not
 shown as columns (in the All fields panel's order), Name last of all. A field only orders the repos the ones before it
-leave the same. Every header the list sorts by turns blue with its arrow, and a chip at the top says each sort, in
-that order: its arrow turns it round, its x takes it out. Repos without a value for a field go last either way. What Claude judges (AI policy, review tone, what reviewers ask for,
+leave the same. Every header the list sorts by turns blue with its arrow. Repos without a value for a field go last either way. What Claude judges (AI policy, review tone, what reviewers ask for,
 fit) is always one of a fixed set, so it ranks in a fixed order (*_RANK below). For the AI policy: AI welcome best
 (green), then No AI policy (a lighter green), AI: disclose, AI: unclear, and No AI last (red); the Explore and Tracked
 pages rank it the same. The sort is remembered in this browser.
@@ -53,7 +52,7 @@ wherever it is: its RepoTree keeps what it loaded and what is unfolded while you
 */
 
 import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ArrowUp, Columns3, ExternalLink, Eye, EyeOff, ListFilter, Loader2, SquareCheck, Star, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Columns3, ExternalLink, Eye, EyeOff, ListFilter, Loader2, SquareCheck, Star, Trash2 } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -946,36 +945,6 @@ export default function Repos() {
             </Button>
           </>
         )}
-        {/* A chip for each sort, the one that counts first first. */}
-        {orderedSorts.map((sort) => {
-          const sortField = SORT_FIELDS.find((each) => each.key === sort.key)!;
-          return (
-            <span
-              key={sort.key}
-              className="flex h-6 items-center gap-1 rounded-md border border-primary/40 pr-0.5 pl-1.5 text-primary"
-              title={sort.dir === "down" ? sortField.down : sortField.up}
-            >
-              {sortField.label}
-              <button
-                type="button"
-                className="rounded-sm p-0.5 hover:bg-accent"
-                aria-label={`Turn ${sortField.label} round`}
-                title={`Turn round: ${sort.dir === "down" ? sortField.up : sortField.down}`}
-                onClick={() => setSorts(sorts.map((each) => (each.key === sort.key ? { key: sort.key, dir: sort.dir === "down" ? "up" : "down" } : each)))}
-              >
-                {sort.dir === "down" ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />}
-              </button>
-              <button
-                type="button"
-                className="rounded-sm p-0.5 hover:bg-accent"
-                aria-label={`Stop sorting by ${sortField.label}`}
-                onClick={() => setSorts(sorts.filter((each) => each.key !== sort.key))}
-              >
-                <X className="size-3" />
-              </button>
-            </span>
-          );
-        })}
         <span className="ml-auto flex items-center gap-1">
           <Button
             variant={selectMode ? "secondary" : "ghost"} size="xs"
