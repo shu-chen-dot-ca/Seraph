@@ -34,6 +34,9 @@ that takes it out before it goes in. Esc anywhere on the page (not while a dialo
 the next queued message goes in. What you type
 and don't send is kept in this browser per agent (localStorage), so it is still there when you come back, after a
 reload, and after a backend restart.
+Like Claude Code, Up in the composer (with the cursor on its first line) brings back your earlier messages, newest
+first, the queued ones too; Down (on its last line) goes forward again, and Down after the newest brings back what you
+were typing before.
 Compact sends "/compact", which Claude Code runs on the conversation itself. The target VM can only
 change while the agent is not queued for or holding a VM (the backend refuses it then).
 */
@@ -416,6 +419,10 @@ export default function AgentChat(props: { agentId: string }) {
       return "";
     }
   });
+  // Up / Down in the composer: which of your sent messages it shows (null: none, what you were typing is there), and
+  // what you were typing, for Down to bring back after the newest.
+  const [recall, setRecall] = useState<number | null>(null);
+  const [recallDraft, setRecallDraft] = useState("");
   const [seen, setSeen] = useState(false);
   // The header's confirm dialog: archive or delete this agent; null while closed.
   const [confirmAction, setConfirmAction] = useState<"archive" | "delete" | null>(null);
@@ -586,6 +593,7 @@ export default function AgentChat(props: { agentId: string }) {
       return;
     }
     setText("");
+    setRecall(null);
     // Sending takes you to the bottom, to follow the answer.
     atBottom.current = true;
     try {
@@ -593,6 +601,46 @@ export default function AgentChat(props: { agentId: string }) {
     } catch (err) {
       setText(message);
       toast.error(`Could not send: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  // Enter sends. Up on the composer's first line goes back through your sent messages, Down on its last line forward,
+  // and Down after the newest brings back what you were typing, like Claude Code.
+  function composerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.nativeEvent.isComposing) {
+      return;
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      send();
+      return;
+    }
+    if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) {
+      return;
+    }
+    const box = event.currentTarget;
+    const onFirstLine = !text.slice(0, box.selectionStart).includes("\n");
+    const onLastLine = !text.slice(box.selectionEnd).includes("\n");
+    if (event.key === "ArrowUp" && onFirstLine && sentMessages.length > 0) {
+      event.preventDefault();
+      if (recall === null) {
+        setRecallDraft(text);
+      }
+      // Clamped: the list may have changed while browsing ("Show earlier", a message that went in).
+      const from = recall === null ? sentMessages.length : Math.min(recall, sentMessages.length);
+      const index = Math.max(from - 1, 0);
+      setRecall(index);
+      setText(sentMessages[index]);
+    }
+    if (event.key === "ArrowDown" && onLastLine && recall !== null) {
+      event.preventDefault();
+      if (recall >= sentMessages.length - 1) {
+        setRecall(null);
+        setText(recallDraft);
+        return;
+      }
+      setRecall(recall + 1);
+      setText(sentMessages[recall + 1]);
     }
   }
 
@@ -686,6 +734,15 @@ export default function AgentChat(props: { agentId: string }) {
   const percent = Math.min(100, (summary.context_used / cap) * 100);
   // Summaries from before the backend sent the texts have none.
   const queued = summary.queued ?? [];
+  // What Up and Down in the composer go through, oldest first: your messages in the loaded conversation (not the
+  // Compact button's), then the queued ones.
+  const sentMessages: string[] = [];
+  for (const entry of entries) {
+    if (entry.type === "user" && !entry.text.startsWith("/compact")) {
+      sentMessages.push(entry.text);
+    }
+  }
+  sentMessages.push(...queued);
 
   const vmNames = vms.map((vm) => vm.name);
   const queueVM = vms.find((vm) => vm.name === summary.vm);
@@ -1052,12 +1109,7 @@ export default function AgentChat(props: { agentId: string }) {
                   }
                   value={text}
                   onChange={(event) => setText(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                      event.preventDefault();
-                      send();
-                    }
-                  }}
+                  onKeyDown={composerKeyDown}
                 />
                 <Button size="icon" onClick={send} disabled={text.trim() === "" || pending >= MAX_QUEUED} aria-label="Send" title="Send (Enter)">
                   <ArrowUp />
