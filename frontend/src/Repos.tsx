@@ -1,7 +1,6 @@
 /*
-The Repos list: repos the agents and Explore picked, and ones the user added by hand: on the Search page (Search.tsx),
-or with the box on the left of the bar on top (out of select mode): paste a repo's GitHub link (or a link to any page
-in it) or type owner/name, then Enter or Add. It is looked up on GitHub, added at once as one undo step, and a toast
+The Repos list: repos the agents and Explore picked, and ones the user added by hand with the box on the left of the
+bar on top (out of select mode): paste a repo's GitHub link (or a link to any page in it) or type owner/name, then Enter or Add. It is looked up on GitHub, added at once as one undo step, and a toast
 says so; one already in Repos, or a link GitHub doesn't know, says why instead.
 
 The table reads like the Explore page's: a column for each thing known about a repo, picked in the Columns dialog

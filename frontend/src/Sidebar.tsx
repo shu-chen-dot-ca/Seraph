@@ -1,7 +1,6 @@
 /*
 The left tree, like Proxmox's resource tree. Every line is a link to a page, in the order the work flows, in three parts:
-- finding work: Search (find a repo on GitHub by its name and add it to Repos by hand, Search.tsx), Explore (the
-  search for new repos; shows how many found repos wait for the user's approve or remove, with a green dot while a run
+- finding work: Explore (the search for new repos; shows how many found repos wait for the user's approve or remove, with a green dot while a run
   goes), Repos, Tracked (new issues in the repos the user keeps an eye on), Issues
   (one child per issue an agent is on now: its latest job queued, working or waiting on you, waiting on you first;
   each with the issue's number and the job's progress bar and step, like the Issues page's Status column; hover for
@@ -24,7 +23,7 @@ Inbox (pending drafts), GitHub (open PRs) and Settings stay pinned at the bottom
 (theme and accent color), which App owns.
 */
 
-import { Archive, Bot, ChevronRight, CircleDot, Compass, Eye, FolderGit2, Gauge, Inbox, ListTodo, Monitor, MoreHorizontal, Pencil, Plus, Search, Settings, Trash2 } from "lucide-react";
+import { Archive, Bot, ChevronRight, CircleDot, Compass, Eye, FolderGit2, Gauge, Inbox, ListTodo, Monitor, MoreHorizontal, Pencil, Plus, Settings, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -205,11 +204,6 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
   return (
     <nav className="flex w-56 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground select-none">
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
-        <a href="#/search" className={cn(row, "pl-6", props.page === "search" && selected)}>
-          <Search className="size-4 text-muted-foreground" />
-          Search
-        </a>
-
         <a
           href="#/explore"
           className={cn(row, "pl-6", props.page === "explore" && selected)}

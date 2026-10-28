@@ -5,9 +5,8 @@ the browser removes rows and steps through the undo history. The list reaches th
 browser through /api/live, each repo with its signals. The explorer reads the default branch
 from GitHub through search.py, which caches every answer, so opening a repo or a file again is instant.
 
-The user adds one by hand (add_repo): a GitHub link or owner/name, from the box on the Repos page or Add on the
-Search page. It is looked up on GitHub for its own spelling, stars and description, and added by the user as one undo
-step.
+The user adds one by hand (add_repo): a GitHub link or owner/name, from the box on the Repos page. It is looked up on
+GitHub for its own spelling, stars and description, and added by the user as one undo step.
 
 Remove only takes repos off the list: nothing is blocked, so Explore and agents may find and add them again. It takes
 many repos at once (the page's multi-select), as one undo step.

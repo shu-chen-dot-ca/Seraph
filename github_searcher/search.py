@@ -52,17 +52,6 @@ def search_repositories(q: str, page: int = 1) -> dict:
     return response.json()
 
 
-def find_repositories(q: str) -> dict:
-    # Best match first, like the search box on github.com (the Search page), 30 at most.
-    response = BALANCER.request(
-        "GET",
-        "https://api.github.com/search/repositories",
-        params={"q": q, "per_page": 30},
-    )
-    response.raise_for_status()
-    return response.json()
-
-
 def get_readme(owner: str, repo: str) -> str:
     key = ("readme", owner, repo)
     if key in CACHE:
