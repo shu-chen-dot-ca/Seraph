@@ -34,6 +34,8 @@ that takes it out before it goes in. Esc anywhere on the page (not while a dialo
 the next queued message goes in. What you type
 and don't send is kept in this browser per agent (localStorage), so it is still there when you come back, after a
 reload, and after a backend restart.
+A new agent (nothing in its conversation yet, like one just made with New agent or the sidebar's +) opens with the
+focus in the composer, so you can type to it right away.
 Like Claude Code, Up in the composer (with the cursor on its first line) brings back your earlier messages, newest
 first, the queued ones too; Down (on its last line) goes forward again, and Down after the newest brings back what you
 were typing before.
@@ -1096,8 +1098,11 @@ export default function AgentChat(props: { agentId: string }) {
                 </div>
               )}
               <div className="mx-auto flex max-w-4xl items-end gap-2">
+                {/* A new agent (nothing said yet, like one just made with New agent or the sidebar's +) opens with the
+                    focus here, so you can type to it right away. */}
                 <Textarea
                   className="max-h-48 min-h-14 resize-none"
+                  autoFocus={summary.history_length === 0}
                   placeholder={
                     pending >= MAX_QUEUED
                       ? `${MAX_QUEUED} messages wait; send more when one has gone in`
