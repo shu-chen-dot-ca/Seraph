@@ -64,7 +64,9 @@ be checked again), and at start resume() goes on with it. Only when the same `uv
 when the user closed the backend, the run shows as stopped ("The backend was closed"). What it
 found always stays. The minutes limit counts from when the run started, so the time a reload takes counts too.
 
-When the network is gone (GitHub unreachable: UNREACHABLE), nothing is lost: a search is sent again, and a repo goes
+When GitHub's quota is used up on every token (token_balancer.py answers 429), a repo being checked goes back to the
+front of its lane and its worker waits RATE_LIMIT_PAUSE seconds before trying again, until the quota fills up; nothing
+is skipped for it. When the network is gone (GitHub unreachable: UNREACHABLE), nothing is lost: a search is sent again, and a repo goes
 back to be checked again, every NETWORK_PAUSE seconds until the network is back. A request cut off after it reached
 GitHub (other httpx.TransportError, like a read timeout) is tried again the same way up to NETWORK_TRIES times in all,
 then counts as an error (the page's Skipped line; the errors are kept in the run but not shown). Everything here runs on the backend's event loop, so the found list needs no lock.
@@ -191,6 +193,9 @@ ERRORS_KEPT = 20
 # NETWORK_TRIES times in all, since it may be the repo's own (one too big to answer in time).
 NETWORK_TRIES = 5
 NETWORK_PAUSE = 30
+# Every token out of GitHub quota (token_balancer.py answers 429 then): how long a worker waits before trying its repo
+# again. GraphQL's quota fills up again within the hour.
+RATE_LIMIT_PAUSE = 60
 UNREACHABLE = (httpx.ConnectError, httpx.ConnectTimeout)
 # How well a repo fits the profile: Claude picks a level, and the repo keeps its number (the Repos page shows the
 # level again: the frontend's FIT_LEVELS has the same steps).
@@ -927,6 +932,18 @@ class Explore:
             self.network_tries[name] = self.network_tries.get(name, 0) + 1
             if isinstance(error, UNREACHABLE) or self.network_tries[name] < NETWORK_TRIES:
                 await asyncio.sleep(NETWORK_PAUSE)
+                self.cursors[lane_id]["pending"].insert(0, {"name": name})
+                self.seen.discard(name.lower())
+                run["looked_at"] -= 1
+                run["lanes"][lane_id]["exhausted"] = False
+            else:
+                run["skipped"]["Error"] = run["skipped"].get("Error", 0) + 1
+                run["errors"] = (run["errors"] + [{"name": name, "error": str(error)[:300], "at": datetime.now(UTC).isoformat()}])[-ERRORS_KEPT:]
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code == 429:
+                # GitHub's quota is used up on every token (mostly GraphQL's, by the signals): wait, then back to the
+                # front of its lane. Without this the run went through all its candidates as errors in minutes.
+                await asyncio.sleep(RATE_LIMIT_PAUSE)
                 self.cursors[lane_id]["pending"].insert(0, {"name": name})
                 self.seen.discard(name.lower())
                 run["looked_at"] -= 1
