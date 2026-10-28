@@ -24,12 +24,13 @@ column is as wide as its widest cell (one CSS grid, each row a subgrid) and all 
 over going before the row's buttons. The text is in the page's own color (blue for new issues, green for free ones,
 red for a failed check; the tags' own colors). A click on a header adds that column to the sort, the best first (the
 most, the latest check, the fastest reply, the friendliest tag; A to Z for the name); again the other way round; again
-takes it out. Many columns sort at once, Free first: then each sorted column to its right, to the end, then from the
-left (Name, AI policy, ...) up to Free; with none, it is the list's order. Every sorted header is blue with an arrow.
+takes it out. Many columns sort at once, like on the Explore page: from left to right, the leftmost sorted column
+first, then the next among the same (say AI policy, then Free); Name last of all, and the list's order among what is
+still the same. With none, it is the list's order. Every sorted header is blue with an arrow.
 
 Each row opens in place to its issues, newest first, with tabs Free (a newcomer can start on it now) / Assigned (someone is on it) / All (Free when there are free
 ones). The issues are a table too, sorted the same way by clicks on its columns' headers (one order for every open
-repo; Free first, then to its right to the end, then # and Title): ISSUE_HEADERS (Checked: when Claude last read it and its comments and updated its tags). A click on an issue opens it in full in a pop-up, its comments below (IssueDetailsDialog); its # and the
+repo; from left to right like the list, # and Title last, newest first among what is still the same): ISSUE_HEADERS (Checked: when Claude last read it and its comments and updated its tags). A click on an issue opens it in full in a pop-up, its comments below (IssueDetailsDialog); its # and the
 arrow button at the row's end open it on GitHub in a new tab. An issue goes into the Issues list with one click (its
 repo into Repos too), or links there when it is in already. The list is short (repos the user picked), so every row is drawn; times re-render every minute.
 Many rows are picked like on the Repos page. Hovering a row shows its box on the left; ticking it picks that repo and
@@ -238,11 +239,9 @@ export default function Tracked() {
   const rows = [...tracked.items];
   if (sorts.length > 0) {
     rows.sort((a, b) => {
-      // Free first, then each column to its right to the end, then from the left (Name, AI policy, ...) up to Free. The
-      // first sorted one that tells them apart decides; when none does, the list's order stays.
-      const keys = ["name" as TrackedKey, ...TRACKED_COLUMNS.map((column) => column.key)];
-      const freeIndex = keys.indexOf("free");
-      for (const key of [...keys.slice(freeIndex), ...keys.slice(0, freeIndex)]) {
+      // Like the Explore page: the leftmost sorted column that tells them apart decides, Name last; when none does, the
+      // list's order stays (a stable sort).
+      for (const key of [...TRACKED_COLUMNS.map((column) => column.key), "name" as TrackedKey]) {
         const sort = sorts.find((each) => each.key === key);
         if (sort === undefined) {
           continue;
@@ -589,11 +588,10 @@ export default function Tracked() {
                     });
               if (issueSorts.length > 0) {
                 shown.sort((a, b) => {
-                  // Free first, then each column to its right to the end, then # and Title. The first sorted one that
-                  // tells them apart decides.
-                  const keys = ISSUE_HEADERS.map((column) => column.key);
-                  const freeIndex = keys.indexOf("free");
-                  for (const key of [...keys.slice(freeIndex), ...keys.slice(0, freeIndex)]) {
+                  // Like the list: the leftmost sorted column that tells them apart decides, # and Title last; when
+                  // none does, they stay newest first (a stable sort).
+                  const keys = ISSUE_HEADERS.map((column) => column.key).filter((key) => key !== "number" && key !== "title");
+                  for (const key of [...keys, "number" as IssueKey, "title" as IssueKey]) {
                     const sort = issueSorts.find((each) => each.key === key);
                     if (sort === undefined) {
                       continue;
