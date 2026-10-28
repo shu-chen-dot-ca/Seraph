@@ -269,8 +269,8 @@ query($owner: String!, $name: String!, $since: GitTimestamp!, $prs: Int!, $issue
     oldestOpen: pullRequests(states: OPEN, first: $prs, orderBy: {field: CREATED_AT, direction: ASC}) {
       nodes {
         createdAt authorAssociation author { login __typename }
-        reviews(first: 5) { nodes { author { login __typename } } }
-        comments(first: 5) { nodes { author { login __typename } } }
+        reviews(first: 5) { nodes { authorAssociation author { login __typename } } }
+        comments(first: 5) { nodes { authorAssociation author { login __typename } } }
       }
     }
     defaultBranchRef { target { ... on Commit { history(since: $since) { totalCount } } } }
@@ -318,8 +318,8 @@ query($owner: String!, $name: String!, $prs: Int!) {
       nodes {
         createdAt state merged mergedAt closedAt authorAssociation author { login __typename }
         closing: timelineItems(itemTypes: [CLOSED_EVENT], last: 1) { nodes { ... on ClosedEvent { closer { __typename } } } }
-        reviews(first: 5) { nodes { createdAt author { login __typename } } }
-        comments(first: 5) { nodes { createdAt author { login __typename } } }
+        reviews(first: 5) { nodes { createdAt authorAssociation author { login __typename } } }
+        comments(first: 5) { nodes { createdAt authorAssociation author { login __typename } } }
       }
     }
     finished: pullRequests(states: [MERGED, CLOSED], first: $prs, orderBy: {field: UPDATED_AT, direction: DESC}) {

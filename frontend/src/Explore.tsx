@@ -15,7 +15,7 @@ found list or from Repos may be found again by a later run.
 Every repo that qualifies joins the found list right away, newest first: a table with a column for each thing known
 about it (FOUND_COLUMNS): its AI policy, fit, how newcomers fare, its review tone, stars, its type (the one Claude
 classified it under), PRs, issues and commits a month and the trend, how many contributors and maintainers it has, how many
-outside PRs nobody answered, and when it was found; its note under the name. Every column is as wide as its widest
+outside PRs no maintainer answered, and when it was found; its note under the name. Every column is as wide as its widest
 cell (one CSS grid for the whole table, each row a subgrid), and the text is in the page's own color, not gray: green,
 amber or red only where a value means something (the color rules in index.css). A click on a header adds that column
 to the sort, best first (A to Z for text); again the other way round; again takes it out. Many columns sort at once,
@@ -121,7 +121,7 @@ const FOUND_COLUMNS: { key: FoundKey; label: string; title: string; better: "hig
   { key: "trend", label: "Trend", title: "The last 30 days against the 90-day average", better: "higher" },
   { key: "contributors", label: "Contributors", title: "People who opened a PR lately (the newest 100 PRs, at most 90 days; bots not counted)", better: "higher" },
   { key: "maintainers", label: "Maintainers", title: "People who merged a PR in the last 30 days (bots not counted)", better: "higher" },
-  { key: "unanswered", label: "Unanswered", title: "Outside contributors' PRs open over 30 days that nobody answered", better: "lower" },
+  { key: "unanswered", label: "Unanswered", title: "Outside contributors' PRs open over 30 days that no maintainer answered", better: "lower" },
   { key: "found", label: "Found", title: "When it was found", better: "higher" },
 ];
 

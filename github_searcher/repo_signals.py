@@ -30,8 +30,9 @@ Outside contributors are PR authors who aren't owners, members or collaborators,
   by a commit counts as merged: some projects (pytorch) land changes with a bot and then close the PR.
 - Of their PRs opened in the last 90 days (among the repo's 100 newest PRs; pr_window_days says how many days
   those reach back when they cover less than 90): outside_prs_90d, and median_days_to_first_reply, until the
-  first review or comment by another person (a merge without one counts as the reply).
-stale_outside_prs: their open PRs over 30 days old that no other person has answered (among the 100 oldest
+  first review or comment by a maintainer (a merge without one counts as the reply). Only maintainers count: a
+  bot's review (an AI reviewer, a CLA check) or another outsider's comment isn't a reply.
+stale_outside_prs: their open PRs over 30 days old that no maintainer has answered (among the 100 oldest
 open PRs). active_mergers_30d: how many people merged a PR in the last 30 days (bots not counted); the page calls
 them its maintainers. active_contributors: how many people opened a PR in that window, anyone but bots.
 beginner_issues: open issues under a good-first / beginner / easy / help-wanted label, newest first. Unclaimed
@@ -268,12 +269,15 @@ class RepoSignals:
             opened = datetime.fromisoformat(pull["createdAt"])
             if opened < window_start:
                 continue
+            # The first reply from a maintainer, a person: not a bot, not the author, not another outsider.
             first = None
             for item in pull["reviews"]["nodes"] + pull["comments"]["nodes"]:
                 other = item["author"]
                 if other is None or other["__typename"] != "User":
                     continue
                 if other["login"] == author["login"] or other["login"].lower().endswith("bot"):
+                    continue
+                if item["authorAssociation"] not in MAINTAINERS:
                     continue
                 at = datetime.fromisoformat(item["createdAt"])
                 if first is None or at < first:
@@ -389,7 +393,9 @@ class RepoSignals:
                 other = item["author"]
                 if other is None or other["__typename"] != "User":
                     continue
-                if other["login"] != author["login"] and not other["login"].lower().endswith("bot"):
+                if other["login"].lower().endswith("bot") or item["authorAssociation"] not in MAINTAINERS:
+                    continue
+                if other["login"] != author["login"]:
                     replied = True
             if not replied:
                 stale += 1

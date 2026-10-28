@@ -3,9 +3,10 @@ The Repos list: repos the agents and Explore picked (the user never searches by 
 
 The table reads like the Explore page's: a column for each thing known about a repo, picked in the Columns dialog
 (components/ui/columns-dialog.tsx), in the order picked: its type and fit, score, stars, AI policy, how newcomers fare,
-review tone, PRs, issues and commits a month and the trend, contributors, maintainers, PRs nobody answered, reply
-speed, its issues in the Issues list, and more (TABLE_COLUMNS; github_searcher/repo_signals.py, kept fresh by the
-backend). What used to be tags under a row are columns too. Values are plain text in the page's own color: green,
+review tone, PRs, issues and commits a month and the trend, contributors, maintainers, PRs no maintainer answered, reply
+speed (how fast a maintainer first answers an outside PR; bots, AI reviewers and other outsiders don't count), its
+issues in the Issues list, and more (TABLE_COLUMNS; github_searcher/repo_signals.py, kept fresh by the backend). What
+used to be tags under a row are columns too. Values are plain text in the page's own color: green,
 amber or red only where a value means something (the same rules as the Explore page). No lines between columns. Name
 comes first and takes the room left over, the note under it, so the other columns sit on the right. Every column is as
 wide as its widest cell (header included) over the whole list, not only the rows on screen: a hidden copy of every
@@ -183,18 +184,18 @@ const TABLE_COLUMNS: TableColumn[] = [
   { key: "fit", label: "Fit", name: "Fit", group: "Repo", title: "How well Claude thinks it fits your Explore profile", sort: "fit" },
   { key: "language", label: "Language", name: "Language", group: "Repo", title: "Its main language on GitHub", sort: "language" },
   { key: "pushed", label: "Pushed", name: "Last push", group: "Repo", title: "The last push to GitHub", sort: "pushed" },
-  { key: "reply", label: "Reply", name: "Reply speed", group: "Outside contributors", title: "Median days until outside contributors' PRs get a first reply", sort: "reply" },
+  { key: "reply", label: "Reply", name: "Reply speed", group: "Outside contributors", title: "Median days until outside contributors' PRs get a first reply from a maintainer (bots and other outsiders don't count)", sort: "reply" },
   { key: "merged", label: "Merged", name: "Outside PRs merged", group: "Outside contributors", title: "Outside contributors' PRs merged, of those merged or closed", sort: "merged" },
   { key: "merge_time", label: "To merge", name: "Time to merge", group: "Outside contributors", title: "Median days until outside contributors' PRs are merged", sort: "merge_time" },
   { key: "outside_prs", label: "Outside PRs", name: "Outside PRs", group: "Outside contributors", title: "PRs outside contributors opened in the window (at most 90 days)", sort: "outside_prs" },
-  { key: "stale", label: "Unanswered", name: "Unanswered PRs", group: "Outside contributors", title: "Outside contributors' PRs open over 30 days that nobody answered", sort: "stale" },
+  { key: "stale", label: "Unanswered", name: "Unanswered PRs", group: "Outside contributors", title: "Outside contributors' PRs open over 30 days that no maintainer answered", sort: "stale" },
   { key: "mergers", label: "Maintainers", name: "Maintainers", group: "Outside contributors", title: "People who merged a PR in the last 30 days", sort: "mergers" },
   { key: "contributors", label: "Contributors", name: "Contributors", group: "Outside contributors", title: "People who opened a PR lately (the newest 100 PRs, at most 90 days; bots not counted)", sort: "contributors" },
   { key: "unclaimed", label: "Unclaimed", name: "Unclaimed beginner issues", group: "Outside contributors", title: "Open beginner issues nobody seems to have taken", sort: "unclaimed" },
   { key: "beginner", label: "Beginner", name: "Beginner issues", group: "Outside contributors", title: "Open beginner issues", sort: "beginner" },
   { key: "newcomer_tag", label: "Newcomers", name: "Newcomers (tag)", group: "Newcomers", title: "How newcomers' first PRs fare", sort: "newcomer_tag" },
   { key: "newcomers", label: "New", name: "Newcomers merged", group: "Newcomers", title: "Newcomers' first PRs merged, of those merged or closed", sort: "newcomers" },
-  { key: "newcomer_reply", label: "New reply", name: "Newcomer reply speed", group: "Newcomers", title: "Median days until newcomers' first PRs get a first reply", sort: "newcomer_reply" },
+  { key: "newcomer_reply", label: "New reply", name: "Newcomer reply speed", group: "Newcomers", title: "Median days until newcomers' first PRs get a first reply from a maintainer", sort: "newcomer_reply" },
   { key: "newcomer_prs", label: "New PRs", name: "Newcomer count", group: "Newcomers", title: "Newcomers who opened a first PR in the window", sort: "newcomer_prs" },
   { key: "returned", label: "Came back", name: "Newcomers who came back", group: "Newcomers", title: "Newcomers who opened a second PR", sort: "returned" },
   { key: "activity", label: "Activity", name: "Activity (tag)", group: "Activity", title: "PRs, issues and commits a month (90-day average); sorts by commits a month", sort: "commits" },
