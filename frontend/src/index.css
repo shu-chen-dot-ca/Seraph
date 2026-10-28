@@ -3,7 +3,8 @@
    Dark is the default: <html class="dark"> (set in index.html, changed in the sidebar's Settings).
    Text is 13px Instrument Sans (OpenClaw's font); code, diffs and terminal text use JetBrains Mono.
    One accent (--primary), blue unless another is picked in Settings (the data-accent rules below; Coral is OpenClaw's own).
-   Status colors: --ok green, --warn amber, --idle gray, --destructive red.
+   Status colors: --ok green, --fine a second green (good, but a step below ok), --warn amber, --idle gray,
+   --destructive red.
 
    Motion (the base layer below): anything clickable eases its colors out over 150ms, but turns on at once on hover,
    so a click shows right away; a page fades up 4px as it opens (not when the OS asks for reduced motion);
@@ -12,8 +13,8 @@
    Where color goes:
    - The accent marks what you can act on and where you are: the main button, links, the selected row, the focus ring,
      an active filter or sort, the step a job is on. Never data or decoration (tags, meters, folder icons, quote bars).
-   - Status colors carry meaning only: good (ok), needs a look (warn), bad (destructive). Everything normal stays gray.
-     Tags use them as soft fills (Badge variants ok / warn / bad; secondary for the rest), not bright outlines.
+   - Status colors carry meaning only: good (ok; fine for second best), needs a look (warn), bad (destructive). Everything normal stays gray.
+     Tags use them as soft fills (Badge variants ok / fine / warn / bad; secondary for the rest), not bright outlines.
    - Meters (rate limits, context used) are gray while fine, and turn amber or red only near the limit.
    - Text reads at 4.5:1 or more on its background, also on the soft tag fills and on a selected row: that is why light
      mode's --muted-foreground, --ok, --warn and --destructive are darker than shadcn's. Status dots reach 3:1. */
@@ -55,6 +56,7 @@
   --sidebar-accent: #e9e4dc;
   --sidebar-border: #e8e4dc;
   --ok: #166534;
+  --fine: #3f6212;
   --warn: #92400e;
   --idle: #8a857c;
   --selected: oklch(0.546 0.245 262.881 / 12%);
@@ -87,6 +89,7 @@
   --sidebar-accent: #1c1f29;
   --sidebar-border: #20232c;
   --ok: #22c55e;
+  --fine: #a3e635;
   --warn: #f59e0b;
   --idle: #6e6e78;
   --selected: oklch(0.623 0.214 259.815 / 13%);
@@ -271,6 +274,7 @@
   --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar-border: var(--sidebar-border);
   --color-ok: var(--ok);
+  --color-fine: var(--fine);
   --color-warn: var(--warn);
   --color-idle: var(--idle);
   --color-selected: var(--selected);

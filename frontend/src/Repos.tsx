@@ -26,7 +26,9 @@ Which field counts first goes from left to right: the shown columns in their ord
 shown as columns (in the All fields panel's order), Name last of all. A field only orders the repos the ones before it
 leave the same. Every header the list sorts by turns blue with its arrow, and a chip at the top says each sort, in
 that order: its arrow turns it round, its x takes it out. Repos without a value for a field go last either way. What Claude judges (AI policy, review tone, what reviewers ask for,
-fit) is always one of a fixed set, so it ranks in a fixed order (*_RANK below). The sort is remembered in this browser.
+fit) is always one of a fixed set, so it ranks in a fixed order (*_RANK below). For the AI policy: AI welcome best
+(green), then No AI policy (a lighter green), AI: disclose, AI: unclear, and No AI last (red); the Explore and Tracked
+pages rank it the same. The sort is remembered in this browser.
 
 Rows have no buttons of their own. Select (top right) turns on select mode: Delete, Track and Untrack show on the
 left of the bar, Select becomes Select all and Cancel, every row shows a box, and a click picks the row instead of
@@ -162,7 +164,7 @@ const SORT_FIELDS: { key: SortKey; label: string; group: string; better: "higher
 const SORT_GROUPS = ["Repo", "Outside contributors", "Newcomers", "Activity", "Policy and reviews"];
 
 // The fixed order of each judged or tagged value, best first being the highest. Values not listed (unknown) go last.
-const POLICY_RANK: Record<string, number> = { welcome: 5, disclose: 4, none: 3, unclear: 2, no_ai: 1 };
+const POLICY_RANK: Record<string, number> = { welcome: 5, none: 4, disclose: 3, unclear: 2, no_ai: 1 };
 const NEWCOMER_RANK: Record<string, number> = { welcomes: 5, ok: 4, few: 3, left_waiting: 2, turned_away: 1 };
 const TONE_RANK: Record<string, number> = { warm: 4, neutral: 3, strict: 2, curt: 1 };
 const TREND_RANK: Record<string, number> = { up: 3, flat: 2, down: 1 };
@@ -238,7 +240,7 @@ const DEFAULT_COLUMNS: ColumnKey[] = [
 const COLUMNS_STORAGE = "repos-columns-2";
 // The AI policy, newcomers and tone columns are tags (the Explore page's too): green for good news, amber for "have a
 // look", red for bad, gray for the rest. Other values are plain text, colored only when it means something.
-const POLICY_VARIANT: Record<string, "ok" | "warn" | "bad"> = { welcome: "ok", no_ai: "bad" };
+const POLICY_VARIANT: Record<string, "ok" | "fine" | "warn" | "bad"> = { welcome: "ok", none: "fine", no_ai: "bad" };
 const NEWCOMER_VARIANT: Record<string, "ok" | "warn" | "bad"> = { welcomes: "ok", turned_away: "bad", left_waiting: "bad" };
 const TONE_VARIANT: Record<string, "ok" | "warn" | "bad"> = { warm: "ok", strict: "warn", curt: "bad" };
 const NAME_MIN = 160;

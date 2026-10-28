@@ -21,17 +21,18 @@ export type Filters = Record<string, "include" | "exclude">;
 
 // The same keys as explore.py FILTERS ("section:value", a section being a row here), with the label and color each has on the Repos, Tracked and
 // Explore pages (components/ui/repo-tags.tsx and their columns): green for good news, amber for "have a look", red for
-// bad, gray for the rest. Replies in 2 days and getting busier are green, replies over a week amber.
-export const FILTERS: { key: string; section: string; label: string; variant: "ok" | "warn" | "bad" | "secondary"; title: string }[] = [
+// bad, gray for the rest. Replies in 2 days and getting busier are green, replies over a week amber. The AI policies go
+// best first: AI welcome (green), No AI policy (a lighter green), AI: disclose, AI: unclear, No AI (red).
+export const FILTERS: { key: string; section: string; label: string; variant: "ok" | "fine" | "warn" | "bad" | "secondary"; title: string }[] = [
   { key: "fit:strong", section: "Fit", label: "Strong fit", variant: "ok", title: "Exactly what your Explore profile asks for, Claude thinks" },
   { key: "fit:good", section: "Fit", label: "Good fit", variant: "secondary", title: "Clearly in your interests, Claude thinks" },
   { key: "fit:some", section: "Fit", label: "Some fit", variant: "secondary", title: "Related, but not what you're after, Claude thinks" },
   { key: "fit:weak", section: "Fit", label: "Weak fit", variant: "secondary", title: "Hardly matches your Explore profile, Claude thinks" },
   { key: "policy:welcome", section: "AI policy", label: "AI welcome", variant: "ok", title: "Its contribution files say AI-assisted contributions are fine" },
+  { key: "policy:none", section: "AI policy", label: "No AI policy", variant: "fine", title: "Its contribution files say nothing about AI" },
   { key: "policy:disclose", section: "AI policy", label: "AI: disclose", variant: "secondary", title: "AI-assisted contributions are allowed under conditions, e.g. saying so" },
-  { key: "policy:no_ai", section: "AI policy", label: "No AI", variant: "bad", title: "Its contribution files say AI-generated contributions are not accepted" },
   { key: "policy:unclear", section: "AI policy", label: "AI: unclear", variant: "secondary", title: "AI is mentioned, but what's allowed isn't said" },
-  { key: "policy:none", section: "AI policy", label: "No AI policy", variant: "secondary", title: "Its contribution files say nothing about AI" },
+  { key: "policy:no_ai", section: "AI policy", label: "No AI", variant: "bad", title: "Its contribution files say AI-generated contributions are not accepted" },
   { key: "newcomers:welcomes", section: "Newcomers", label: "Welcomes newcomers", variant: "ok", title: "Most newcomers' first PRs get merged, with a first reply within 3 days" },
   { key: "newcomers:ok", section: "Newcomers", label: "Newcomers OK", variant: "secondary", title: "Newcomers' first PRs fare neither clearly well nor badly" },
   { key: "newcomers:few", section: "Newcomers", label: "Few newcomers", variant: "secondary", title: "Too few newcomers lately to tell" },

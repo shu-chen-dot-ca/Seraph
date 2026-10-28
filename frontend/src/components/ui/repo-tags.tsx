@@ -21,16 +21,17 @@ const POLICY_LABEL: Record<AIPolicyTag, string> = {
   none: "No AI policy",
 }
 
-// Each tag's color, a Badge variant: green for good news, amber for "have a look", red for bad, gray for the rest.
+// Each tag's color, a Badge variant: green for good news (a lighter green, fine, for second best), amber for "have a
+// look", red for bad, gray for the rest.
 // Most tags are gray on purpose, so the few colored ones stand out.
-type TagVariant = "ok" | "warn" | "bad" | "secondary"
+type TagVariant = "ok" | "fine" | "warn" | "bad" | "secondary"
 
 const POLICY_VARIANT: Record<AIPolicyTag, TagVariant> = {
   welcome: "ok",
   disclose: "secondary",
   no_ai: "bad",
   unclear: "secondary",
-  none: "secondary",
+  none: "fine",
 }
 
 const POLICY_MEANING: Record<AIPolicyTag, string> = {
