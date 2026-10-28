@@ -25,6 +25,11 @@ Settings dialog): any agent may list their names and add or remove empty ones
 bash can show a command live in a terminal window on the desktop (visible), and start programs
 on the desktop (on_desktop), so the user sees long runs and the app being tried, not only the agent.
 
+The browser_* tools are the agent's own web browser in the VM (sandbox/agent/browser_service.py): a Firefox that
+isn't on the desktop, which the agent reads as text with numbered things to click or fill in, instead of
+screenshots and mouse clicks, and which fetches a site's data (JSON) straight into a file. Each agent has its own
+session (tabs, cookies) in it. Page text has the user's secrets hidden like bash output.
+
 The agent may lock the human's mouse and keyboard out of the desktop while it
 works there: once per turn. The user can unlock it any time, and then it stays
 unlocked for the rest of the turn. A lock the agent set ends with its turn
@@ -44,10 +49,12 @@ had running there: a long bash command, typing, a server it started.
 
 import asyncio
 import base64
+import json
 
 from claude_agent_sdk import tool
 
 from sandbox.agent.computer_use import Computer
+from sandbox.vm import BROWSER_DIR
 from sandbox.vms import VMRecord, VMs, VMsError
 
 # The only waits the agent can pick. Short ones are for things that are about
@@ -57,6 +64,8 @@ WAIT_SECONDS = [1, 3, 10, 30]
 # everything, and values that short are not secrets.
 HIDE_MIN_LENGTH = 4
 NOT_HOLDER = "You don't hold a VM. Call queue_for_vm and wait for the message that it is yours."
+# One call to the agents' browser in the VM: the request on stdin, the answer on stdout (sandbox/agent/browser_service.py).
+BROWSER_CALL = f"python3 {BROWSER_DIR}/browser_service.py call"
 
 
 class ComputerTools:
@@ -199,6 +208,71 @@ class ComputerTools:
                     "required": ["name"],
                 },
             )(self.env_var_remove),
+            tool(
+                "browser_open",
+                "Open a web page in your own browser in the VM: a Firefox that is not on the desktop (nobody sees it, and it "
+                "never gets in the way of the desktop). Returns the page as text, with the things to click or fill in numbered "
+                "for browser_click, browser_type and browser_select. Your browser keeps its tabs and cookies between calls, until "
+                "browser_close, 30 minutes unused or the VM restarting; every agent has its own.",
+                {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]},
+            )(self.browser_open),
+            tool(
+                "browser_read",
+                "Read the page your browser is on again: after it changed by itself, or the next part of a long page. "
+                "start: the character to start the text at (a long page says where to go on). find: only the lines of text, "
+                "and the numbered things, that contain this.",
+                {"type": "object", "properties": {"start": {"type": "integer"}, "find": {"type": "string"}}},
+            )(self.browser_read),
+            tool(
+                "browser_click",
+                "Click a numbered thing from the last page you read in your browser (a link, button, checkbox, tab). "
+                "Returns the page after it, with fresh numbers.",
+                {"type": "object", "properties": {"ref": {"type": "integer"}}, "required": ["ref"]},
+            )(self.browser_click),
+            tool(
+                "browser_type",
+                "Type text into a numbered field in your browser; what was in it is replaced. enter: true presses Enter "
+                "after it (to search or send a form). Returns the page after it.",
+                {
+                    "type": "object",
+                    "properties": {"ref": {"type": "integer"}, "text": {"type": "string"}, "enter": {"type": "boolean"}},
+                    "required": ["ref", "text"],
+                },
+            )(self.browser_type),
+            tool(
+                "browser_select",
+                "Pick an option, by its text, in a numbered drop-down in your browser. Returns the page after it.",
+                {"type": "object", "properties": {"ref": {"type": "integer"}, "option": {"type": "string"}}, "required": ["ref", "option"]},
+            )(self.browser_select),
+            tool(
+                "browser_fetch",
+                "Get a web address's raw answer (JSON, CSV, a file) through your browser, with its cookies: for a site's data, "
+                "instead of reading it off pages. save_to: a file in the VM (from the home folder) to save all of it in, for "
+                "big answers you then work on with bash (jq, python); without it the text comes back here, cut at 20000 "
+                "characters. GET by default. method and body (text, e.g. JSON) for anything else; that is sent from the page "
+                "you have open, so open the site first. A site with a bot check: open one of its pages with browser_open "
+                "first, so the check passes, then fetch.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string"},
+                        "method": {"type": "string"},
+                        "body": {"type": "string"},
+                        "save_to": {"type": "string"},
+                    },
+                    "required": ["url"],
+                },
+            )(self.browser_fetch),
+            tool(
+                "browser_screenshot",
+                "See the page your browser is on, when its text isn't enough (a layout, a picture, a chart).",
+                {},
+            )(self.browser_screenshot),
+            tool(
+                "browser_close",
+                "Close your browser: its tabs and cookies are gone. The next browser_open starts afresh.",
+                {},
+            )(self.browser_close),
         ]
 
     def describe(self, name: str, args: dict) -> str:
@@ -254,6 +328,27 @@ class ComputerTools:
             return "Unlocking the desktop: your mouse and keyboard work again"
         if name == "lock_desktop":
             return "Locking your mouse and keyboard out of the desktop while I work (you can unlock it any time)"
+        if name == "browser_open":
+            return f"Opening {args.get('url')} in its browser"
+        if name == "browser_read" and args.get("find"):
+            return f"Reading the page in its browser, looking for `{args.get('find')}`"
+        if name == "browser_read":
+            return "Reading the page in its browser"
+        if name == "browser_click":
+            return f"Clicking [{args.get('ref')}] in its browser"
+        if name == "browser_type":
+            text = str(args.get("text", "")).replace("\n", " ").replace("`", "'")[:80]
+            return f"Typing `{text}` into [{args.get('ref')}] in its browser"
+        if name == "browser_select":
+            return f"Picking `{args.get('option')}` in [{args.get('ref')}] in its browser"
+        if name == "browser_fetch" and args.get("save_to"):
+            return f"Fetching {args.get('url')} through its browser into `{args.get('save_to')}`"
+        if name == "browser_fetch":
+            return f"Fetching {args.get('url')} through its browser"
+        if name == "browser_screenshot":
+            return "Looking at the page in its browser"
+        if name == "browser_close":
+            return "Closing its browser"
         return f"Using {name}"
 
     async def check(self, args: dict) -> dict:
@@ -474,6 +569,67 @@ class ComputerTools:
         self.locked_record = None
         self.vms.changed()
         return {"content": [{"type": "text", "text": "Unlocked. You can't lock again this turn."}]}
+
+    async def browser_open(self, args: dict) -> dict:
+        return await self.browser("open", args)
+
+    async def browser_read(self, args: dict) -> dict:
+        return await self.browser("read", args)
+
+    async def browser_click(self, args: dict) -> dict:
+        return await self.browser("click", args)
+
+    async def browser_type(self, args: dict) -> dict:
+        return await self.browser("type", args)
+
+    async def browser_select(self, args: dict) -> dict:
+        return await self.browser("select", args)
+
+    async def browser_fetch(self, args: dict) -> dict:
+        return await self.browser("fetch", args)
+
+    async def browser_screenshot(self, args: dict) -> dict:
+        return await self.browser("screenshot", args)
+
+    async def browser_close(self, args: dict) -> dict:
+        return await self.browser("close", args)
+
+    async def browser(self, action: str, args: dict) -> dict:
+        """One call to the agents' browser in the held VM, in this agent's own session (its id)."""
+        record = self.held_vm()
+        request = dict(args)
+        request["action"] = action
+        request["session"] = self.agent_id
+        result = await asyncio.to_thread(record.vm.exec, BROWSER_CALL, 180, json.dumps(request), self.tag)
+        if record.holder != self.agent_id:
+            raise ValueError("You lost the VM meanwhile. " + NOT_HOLDER)
+        if result.returncode != 0 or not result.stdout.strip():
+            raise ValueError(f"The browser gave no answer: {result.stderr.strip()[-500:]}")
+        # The answer is one line, the last: a login shell may print something before it.
+        answer = json.loads(result.stdout.strip().split("\n")[-1])
+
+        # Not answering: still installing (the first time in a VM), starting, or failed (its log says why).
+        if answer.get("not_running"):
+            state = await asyncio.to_thread(record.vm.exec_root, "systemctl is-active sandbox-browser; journalctl -u sandbox-browser -n 8 --no-pager -o cat", 30)
+            lines = state.stdout.strip().split("\n")
+            if lines[0] == "activating":
+                raise ValueError("The browser is still starting. The first time in a VM it installs itself first, which takes a few minutes: wait 30 and try again.")
+            if lines[0] == "active":
+                raise ValueError("The browser is starting Firefox: wait 3 and try again.")
+            log = "\n".join(lines[1:])
+            raise ValueError(f"The browser isn't running ({lines[0]}); it tries again by itself every 30 seconds. Its last log lines:\n{log}")
+        if "error" in answer:
+            raise ValueError(answer["error"])
+
+        # Pages can show the user's secrets too (a settings page, an echo of a form): hidden as in bash.
+        text = answer["text"]
+        for value in sorted(list(record.global_env.values()) + list(record.env.values()), key=len, reverse=True):
+            if len(value) >= HIDE_MIN_LENGTH:
+                text = text.replace(value, "[hidden]")
+        content = [{"type": "text", "text": text}]
+        if answer.get("image"):
+            content.append({"type": "image", "data": answer["image"], "mimeType": "image/jpeg"})
+        return {"content": content}
 
     def cancel(self, vm_name: str) -> None:
         """The agent lost vm_name: kill everything it still runs there. Blocking (an incus call)."""

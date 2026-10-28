@@ -31,6 +31,58 @@ TERMINAL_PORT = int(os.environ["SANDBOX_VM_TERMINAL_PORT"])
 NO_DESKTOP_FILE = "/etc/sandbox-no-desktop"
 # A VM whose agent doesn't answer this long after it was started hung while booting (wait_agent).
 HUNG_BOOT_SECONDS = 180
+# The agents' browser in the VM (set_up_browser): its folder, and the file it runs (here, and copied in there).
+BROWSER_DIR = "/opt/sandbox-browser"
+BROWSER_SERVICE = Path(__file__).resolve().parent / "agent" / "browser_service.py"
+# Run as root before the browser starts: installs what it needs the first time (a few minutes), quick after that.
+# Playwright and its Firefox from their own official places (PyPI, Playwright's downloads), Xvfb (the display
+# nobody sees) and on Ubuntu and Debian the libraries Firefox needs from the system's own packages.
+BROWSER_INSTALL = f"""#!/usr/bin/env bash
+set -euo pipefail
+dir={BROWSER_DIR}
+export PLAYWRIGHT_BROWSERS_PATH=$dir/browsers
+if [ -x "$dir/venv/bin/playwright" ] && ls -d "$dir"/browsers/firefox-* > /dev/null 2>&1 && command -v Xvfb > /dev/null; then
+    exit 0
+fi
+if command -v apt-get > /dev/null; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get -o DPkg::Lock::Timeout=600 update
+    apt-get -y -o DPkg::Lock::Timeout=600 install python3-venv xvfb
+fi
+if command -v dnf > /dev/null; then
+    dnf -y install xorg-x11-server-Xvfb
+fi
+if [ ! -x "$dir/venv/bin/playwright" ]; then
+    python3 -m venv "$dir/venv"
+    "$dir/venv/bin/pip" install --quiet playwright
+fi
+"$dir/venv/bin/playwright" install firefox
+# Not on every release Playwright knows; the desktop's own Firefox brought most of them anyway.
+if command -v apt-get > /dev/null; then
+    "$dir/venv/bin/playwright" install-deps firefox || true
+fi
+"""
+# As the desktop user (uid 1000), so what it saves is theirs. A failed install (no internet) is tried again
+# every 30 seconds. At most 60% of the VM's memory, so it can't starve the rest.
+BROWSER_UNIT = f"""[Unit]
+Description=The agents' browser (sandbox/agent/browser_service.py)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=1000
+WorkingDirectory=~
+Environment=PLAYWRIGHT_BROWSERS_PATH={BROWSER_DIR}/browsers
+ExecStartPre=+{BROWSER_DIR}/install.sh
+ExecStart={BROWSER_DIR}/venv/bin/python {BROWSER_DIR}/browser_service.py
+TimeoutStartSec=20min
+Restart=always
+RestartSec=30
+MemoryMax=60%
+
+[Install]
+WantedBy=multi-user.target
+"""
 
 
 class VMError(Exception):
@@ -446,6 +498,32 @@ done
         result = self.exec_root(script, timeout=30)
         if result.returncode != 0:
             raise VMError(f"Could not set Firefox's graphics card name in {self.name}: {result.stderr.strip()}")
+
+    def set_up_browser(self) -> None:
+        """Put the agents' browser in the VM (sandbox/agent/browser_service.py) and start it. Safe to run again.
+
+        It runs as the systemd service sandbox-browser. The first time in a VM its start installs what it needs
+        (BROWSER_INSTALL), which takes a few minutes and doesn't hold up the VM's start: meanwhile the browser tools
+        say it is still starting. Started again here (not only at boot), so a VM always runs this file's newest
+        version.
+        """
+        result = self.exec_root(f"mkdir -p {BROWSER_DIR}", timeout=30)
+        if result.returncode != 0:
+            raise VMError(f"Could not make {BROWSER_DIR} in {self.name}: {result.stderr.strip()}")
+        self.write_file(f"{BROWSER_DIR}/browser_service.py", BROWSER_SERVICE.read_text())
+        self.write_file(f"{BROWSER_DIR}/install.sh", BROWSER_INSTALL, "0755")
+        self.write_file("/etc/systemd/system/sandbox-browser.service", BROWSER_UNIT)
+        # Not while it is still installing (it started at boot): a restart then would kill apt halfway.
+        script = """
+systemctl daemon-reload
+systemctl enable --quiet sandbox-browser
+if [ "$(systemctl is-active sandbox-browser)" != activating ]; then
+    systemctl restart --no-block sandbox-browser
+fi
+"""
+        result = self.exec_root(script, timeout=60)
+        if result.returncode != 0:
+            raise VMError(f"Could not start the browser in {self.name}: {result.stderr.strip()}")
 
     def guard_shadow_stack(self) -> None:
         """Keep shadow stacks from crashing the VM. Safe to run again; it stays set after reboots.

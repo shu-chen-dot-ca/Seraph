@@ -24,6 +24,8 @@ Every VM gets this machine's time zone when it is made and whenever it starts (V
 through this machine's network, and a browser whose clock doesn't match where its address is looks like a bot.
 For the same reason Firefox in every VM names a common graphics card to sites instead of "llvmpipe" (software
 drawing: the VM has no graphics card), also set at every start (VM.set_firefox_graphics_name).
+Every start also puts the agents' browser in the VM and starts it (VM.set_up_browser,
+sandbox/agent/browser_service.py): a Firefox nobody sees, one session per agent, that the browser_* tools use.
 
 The env variables for all VMs (set in the Settings dialog) are in DATA_DIR/global_env.json, not in vms/
 (every .json there is a VM's record). Every VM gets them, with its own on top (see VMRecord.write_env).
@@ -249,6 +251,7 @@ class VMRecord:
             self.vm.guard_shadow_stack()
             self.vm.use_host_timezone()
             self.vm.set_firefox_graphics_name()
+            self.vm.set_up_browser()
             self.write_env()
             self.status = "running"
             self.save()
@@ -283,6 +286,7 @@ class VMRecord:
             self.vm.guard_shadow_stack()
             self.vm.use_host_timezone()
             self.vm.set_firefox_graphics_name()
+            self.vm.set_up_browser()
             self.write_env()
             self.status = "running"
             self.save()
@@ -320,6 +324,7 @@ class VMRecord:
             self.vm.guard_shadow_stack()
             self.vm.use_host_timezone()
             self.vm.set_firefox_graphics_name()
+            self.vm.set_up_browser()
             self.write_env()
             self.status = "running"
             self.save()

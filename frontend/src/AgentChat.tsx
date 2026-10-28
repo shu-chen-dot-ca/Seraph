@@ -48,6 +48,7 @@ import {
   FileText,
   FlaskConical,
   FolderGit2,
+  Globe,
   GitPullRequest,
   Keyboard,
   ListOrdered,
@@ -144,6 +145,14 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   queue_for_vm: ListOrdered,
   release_vm: ListOrdered,
   vm_queue_status: ListOrdered,
+  browser_open: Globe,
+  browser_read: Globe,
+  browser_click: Globe,
+  browser_type: Globe,
+  browser_select: Globe,
+  browser_fetch: Globe,
+  browser_screenshot: Globe,
+  browser_close: Globe,
 };
 
 type ToolEntry = Extract<HistoryEntry, { type: "tool" }>;
