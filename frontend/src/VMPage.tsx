@@ -1,15 +1,17 @@
 /*
-One VM's page: a header with its state and power buttons, and three tabs.
+One VM's page: a header with its state and power buttons, and four tabs.
 
 Overview is three areas with draggable dividers:
   desktop (noVNC in an iframe)  |  queue (who holds the VM, who waits)
   ------------------------------+--------------------------------------
   stats (CPU, memory and internet speed over the last minute, disk, internet used)  and  the jobs on this VM
+Notes is VMNotes: what agents (and you) set up in this VM, for the next agent. #/vms/<name>?tab=notes opens it
+(the VMs overview's Notes card links there).
 Resources is VMResources: copy files and folders between this computer and the VM (only you; agents can't).
 Settings is VMSettings. Fork (only while stopped) makes a new VM that starts as a copy of this one (ForkVMDialog).
 
 App keeps this page mounted (hidden) after you leave it, and the Overview stays mounted while the
-Resources or Settings tab is open, so the desktop iframe never reloads: coming back is instant, and always to the
+Notes, Resources or Settings tab is open, so the desktop iframe never reloads: coming back is instant, and always to the
 Overview (the tab you were on isn't remembered). The iframe only
 exists while the VM runs; its address comes from GET /api/vms/{name}/viewer, asked again (every 3 s)
 until the VM has one. A VM from a terminal-only image has no desktop: the same area shows its terminal (ttyd).
@@ -33,6 +35,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import ForkVMDialog from "@/ForkVMDialog";
+import VMNotes from "@/VMNotes";
 import VMResources from "@/VMResources";
 import VMSettings from "@/VMSettings";
 import { Badge } from "@/components/ui/badge";
@@ -86,19 +89,24 @@ function formatBytes(bytes: number): string {
 // The internet chart never scales below this, so an idle VM's few packets don't look like a busy line.
 const INTERNET_CHART_MIN = 100_000;
 
-export default function VMPage(props: { name: string; active: boolean }) {
+export default function VMPage(props: { name: string; active: boolean; tab: string | null }) {
   const vms = useLive("vms");
   const loaded = useLoaded("vms");
   const imagesData = useLive("images");
   const agents = useLive("agents");
   const jobs = useLive("jobs");
   const [tab, setTab] = useState("overview");
-  // Leaving the page puts it back on the Overview, so coming back always starts there.
+  // Leaving the page puts it back on the Overview, so coming back always starts there, unless the address names
+  // the Notes tab (#/vms/<name>?tab=notes).
   useEffect(() => {
     if (!props.active) {
       setTab("overview");
+      return;
     }
-  }, [props.active]);
+    if (props.tab === "notes") {
+      setTab("notes");
+    }
+  }, [props.active, props.tab]);
   const [desktopUrl, setDesktopUrl] = useState<string | null>(null);
   // The VM has no desktop (a terminal-only image): desktopUrl is its terminal.
   const [terminalOnly, setTerminalOnly] = useState(false);
@@ -345,6 +353,10 @@ export default function VMPage(props: { name: string; active: boolean }) {
             <TabsTrigger value="overview" className="px-2.5">
               Overview
             </TabsTrigger>
+            <TabsTrigger value="notes" className="px-2.5">
+              Notes
+              {vm.notes.length > 0 && <span className="text-xs text-muted-foreground tabular-nums">{vm.notes.length}</span>}
+            </TabsTrigger>
             <TabsTrigger value="resources" className="px-2.5">
               Resources
             </TabsTrigger>
@@ -355,7 +367,7 @@ export default function VMPage(props: { name: string; active: boolean }) {
         </Tabs>
       </div>
 
-      {/* Hidden, not unmounted, while Settings is open: the desktop keeps its connection.
+      {/* Hidden, not unmounted, while another tab is open: the desktop keeps its connection.
           While a divider is dragged the iframe ignores the pointer, or it would swallow the drag. */}
       <div className={tab === "overview" ? "min-h-0 flex-1 [&:has([data-separator=active])_iframe]:pointer-events-none" : "hidden"}>
         <ResizablePanelGroup orientation="vertical">
@@ -743,6 +755,12 @@ export default function VMPage(props: { name: string; active: boolean }) {
           </ResizablePanel>
         </ResizablePanelGroup>
       </div>
+
+      {tab === "notes" && (
+        <div className="min-h-0 flex-1">
+          <VMNotes name={vm.name} />
+        </div>
+      )}
 
       {tab === "resources" && (
         <div className="min-h-0 flex-1">

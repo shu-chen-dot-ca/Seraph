@@ -1,5 +1,6 @@
 """The VMs pages: create, rename and delete VMs, power, settings, the desktop viewer, a small picture of each VM's
-screen (the VMs overview's Desktop card), each VM's queue, and copying files between this computer and a VM (the
+screen (the VMs overview's Desktop card), each VM's queue, the user's side of its notes (what is set up in it; the
+Notes tab, see sandbox/vms.py), and copying files between this computer and a VM (the
 Resources tab; only the user can, see sandbox/file_transfer.py).
 
 Create, start, stop and restart run in background threads inside
@@ -58,6 +59,10 @@ class EnvRequest(BaseModel):
 
 class AgentRequest(BaseModel):
     agent: str
+
+
+class NoteRequest(BaseModel):
+    text: str
 
 
 @router.get("/vms/options")
@@ -188,6 +193,27 @@ def reset_traffic(name: str) -> dict:
     except VMsError as error:
         raise HTTPException(status_code=404, detail=str(error))
     record.reset_traffic()
+    return {}
+
+
+@router.post("/vms/{name}/notes")
+def add_note(name: str, body: NoteRequest) -> dict:
+    """The user notes something about what is set up in the VM (the Notes tab). The live feed shows it."""
+    try:
+        record = vms.get(name)
+        return record.add_note(body.text, "user")
+    except VMsError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+
+
+@router.delete("/vms/{name}/notes/{note_id}")
+def remove_note(name: str, note_id: str) -> dict:
+    """The user takes a note off, theirs or an agent's."""
+    try:
+        record = vms.get(name)
+    except VMsError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    record.remove_notes([note_id], "user")
     return {}
 
 

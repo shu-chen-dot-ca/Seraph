@@ -6,6 +6,8 @@ size; under it a row of cards, all the same size, side by side (the row scrolls 
   say so instead.
 - Jobs: how many are open, then the latest few on this VM (open ones first), each a link, with the step bar of
   the one being worked on.
+- Notes: what agents (and you) set up in the VM, newest first, one line each (the whole note on hover); it opens
+  the VM page's Notes tab (#/vms/<name>?tab=notes).
 - CPU, Memory and Internet: the number now and a chart of the last minute. Internet also has the total since it
   was last reset (on the VM page).
 - Disk: space used, with a bar that turns amber at 90%.
@@ -34,6 +36,7 @@ import { cn } from "@/lib/utils";
 const SAMPLES = 60;
 const OPEN_JOB = ["queued", "working", "waiting_on_user"];
 const JOBS_SHOWN = 3;
+const NOTES_SHOWN = 3;
 // The internet chart never scales below this, so an idle VM's few packets don't look like a busy line.
 const INTERNET_CHART_MIN = 100_000;
 // How often the Desktop card takes a new picture of the screen.
@@ -330,6 +333,31 @@ export default function VMs(props: { tab: "vms" | "images" | "defaults" }) {
                   {vmJobs.length > JOBS_SHOWN && (
                     <a href={page} className="mt-auto text-xs text-muted-foreground hover:underline">
                       {vmJobs.length - JOBS_SHOWN} more on its page
+                    </a>
+                  )}
+                </div>
+
+                <div className={cn(CARD, "flex min-w-0 flex-col p-2.5")}>
+                  <div className="flex items-baseline gap-2">
+                    <a href={`${page}?tab=notes`} className="text-muted-foreground hover:underline">
+                      Notes
+                    </a>
+                    <span className="ml-auto text-xs text-muted-foreground tabular-nums">{vm.notes.length}</span>
+                  </div>
+                  {vm.notes.length === 0 && <div className="mt-2 text-xs text-muted-foreground">Nothing noted as set up yet.</div>}
+                  <div className="mt-1.5 min-h-0 space-y-1">
+                    {[...vm.notes]
+                      .reverse()
+                      .slice(0, NOTES_SHOWN)
+                      .map((note) => (
+                        <a key={note.id} href={`${page}?tab=notes`} className="block truncate hover:underline" title={note.text}>
+                          {note.text}
+                        </a>
+                      ))}
+                  </div>
+                  {vm.notes.length > NOTES_SHOWN && (
+                    <a href={`${page}?tab=notes`} className="mt-auto text-xs text-muted-foreground hover:underline">
+                      {vm.notes.length - NOTES_SHOWN} more on its page
                     </a>
                   )}
                 </div>

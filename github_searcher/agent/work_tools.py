@@ -43,8 +43,12 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
 - Its name: while it has the automatic one (agent-N), the agent may name itself once (name_yourself);
   a name the user gave is never changed (agents.py, name_by).
 - VMs: the agent sees every VM with what its image has (sandbox/images.py lists each image once) and
-  picks the one that suits its jobs as its target VM (the user can set it too). It can't make VMs.
+  its notes, and picks the one that suits its jobs as its target VM (the user can set it too). It can't make VMs.
   It joins its target VM's queue (sandbox/vm_queue.py) and releases the VM when its jobs there are done.
+  The notes (sandbox/vms.py) say what agents and the user set up in a VM since it was made, so the next
+  agent knows (e.g. that a project is already cloned and built there, and what was added on top). Only the
+  agent holding the VM adds or removes them (vm_note_add, vm_note_remove), never the user's own. They come
+  with the message that a VM is the agent's now (here and in agents.py, on_grant).
 
 Each tool returns its result as text; a bad call returns is_error, so Claude sees it failed.
 A job that is done or cancelled (often by the user, while the agent was busy) can't change
@@ -532,11 +536,27 @@ class WorkTools:
             )(self.evidence_remove),
             tool(
                 "vms_list",
-                "See every VM: whether it runs, CPU, memory and disk, who holds it and how many wait, and what it started "
-                "with: the OS, languages, tools, ready-made Docker images and models of its image. Agents may have installed more "
-                "in a VM since. Use it to pick the VM that suits your jobs (choose_vm). You can't make VMs; only the user can.",
+                "See every VM: whether it runs, CPU, memory and disk, who holds it and how many wait, what it started "
+                "with (the OS, languages, tools, ready-made Docker images and models of its image), and its notes: what agents "
+                "and the user set up in it since (a project cloned and built, a service configured, what was added on top), "
+                "oldest first, each with who wrote it and when. Use it to pick the VM that suits your jobs (choose_vm). "
+                "You can't make VMs; only the user can.",
                 {},
             )(self.vms_list),
+            tool(
+                "vm_note_add",
+                "Add a note to the VM you hold, for the next agent that picks it or works in it: what is set up in it now and "
+                "how it differs from a plain set-up. One thing per note, e.g. 'openclaw in ~/openclaw: pnpm install and build "
+                "done, on main at 3f2a1c9 (Oct 27). Added the matrix plugin and turned on debug logs in ~/.openclaw for issue "
+                "4120.' Facts that stay true, not a diary. Never a secret.",
+                {"text": str},
+            )(self.vm_note_add),
+            tool(
+                "vm_note_remove",
+                "Take notes that are no longer true off the VM you hold, by id (vms_list shows them). Notes the user wrote "
+                "can't be removed.",
+                {"type": "object", "properties": {"ids": names}, "required": ["ids"]},
+            )(self.vm_note_remove),
             tool(
                 "choose_vm",
                 "Make a VM your target VM: the one your jobs that need a VM run in. reason: in a few words why it suits them "
@@ -655,6 +675,10 @@ class WorkTools:
             return "Releasing its VM (or leaving the queue)"
         if name == "vm_queue_status":
             return "Looked at the VM queue"
+        if name == "vm_note_add":
+            return f"Note on its VM: {args.get('text')}"
+        if name == "vm_note_remove":
+            return "Removing notes from its VM: " + ", ".join(args.get("ids") or [])
         # Claude Code's todo list and the GitHub tools, which have no describe() of their own.
         if name == "TodoWrite":
             return "Updated its todo list"
@@ -2310,6 +2334,12 @@ class WorkTools:
                 holder = names.get(holder, holder)
             if holder == self.agent_id or holder == names.get(self.agent_id):
                 holder = "you"
+            notes = []
+            for note in vm_record.notes:
+                by = names.get(note["by"], note["by"])
+                if note["by"] == self.agent_id:
+                    by = "you"
+                notes.append({"id": note["id"], "text": note["text"], "by": by, "at": note["at"][:16]})
             entry = {
                 "name": vm_record.name,
                 "status": vm_record.status,
@@ -2322,6 +2352,7 @@ class WorkTools:
                 "your_target": vm_record.name == self.record["target_vm"],
                 "forked_from": vm_record.forked_from or None,
                 "image": vm_record.image or None,
+                "notes": notes or "none yet",
                 "image_has": "not inspected yet",
             }
             inventory = await asyncio.to_thread(load_inventory, vm_record.image_fingerprint)
@@ -2381,6 +2412,46 @@ class WorkTools:
         text = f"{vm_name} is yours now. Your open jobs for it: {titles}. Do them all, then release_vm."
         if vm_record.status != "running":
             text += f" {vm_name} is {vm_record.status}: start it with vm_start."
+        # Its notes come with it, so the agent always knows what earlier agents left in it.
+        if vm_record.notes:
+            agent_names = {}
+            for agent in self.agents.agents.values():
+                agent_names[agent.id] = agent.name
+            text += "\nIts notes (check what is really there before you rely on them):"
+            for note in vm_record.notes:
+                text += f"\n- {note['id']} by {agent_names.get(note['by'], note['by'])}, {note['at'][:10]}: {note['text']}"
+        else:
+            text += "\nIt has no notes yet: nobody wrote down what is set up in it."
+        return {"content": [{"type": "text", "text": text}]}
+
+    async def vm_note_add(self, args: dict) -> dict:
+        vm_name, place = self.agents.queue.place(self.agent_id)
+        if place != 0:
+            return {"content": [{"type": "text", "text": "You don't hold a VM. Notes go on the VM you hold."}], "is_error": True}
+        if EMOJI.search(args["text"]):
+            return {"content": [{"type": "text", "text": NO_EMOJI + ", ".join(EMOJI.findall(args["text"]))}], "is_error": True}
+        try:
+            vm_record = self.agents.vms.get(vm_name)
+            note = await asyncio.to_thread(vm_record.add_note, args["text"], self.agent_id)
+        except VMsError as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        return {"content": [{"type": "text", "text": f"Noted on {vm_name} as {note['id']}."}]}
+
+    async def vm_note_remove(self, args: dict) -> dict:
+        vm_name, place = self.agents.queue.place(self.agent_id)
+        if place != 0:
+            return {"content": [{"type": "text", "text": "You don't hold a VM. You can only change the notes of the VM you hold."}], "is_error": True}
+        try:
+            vm_record = self.agents.vms.get(vm_name)
+            removed = await asyncio.to_thread(vm_record.remove_notes, args["ids"], self.agent_id)
+        except VMsError as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        user_notes = [note["id"] for note in vm_record.notes if note["by"] == "user"]
+        text = json.dumps({
+            "removed": removed,
+            "the_users_own": [note_id for note_id in args["ids"] if note_id in user_notes],
+            "not_on_vm": [note_id for note_id in args["ids"] if note_id not in removed and note_id not in user_notes],
+        })
         return {"content": [{"type": "text", "text": text}]}
 
     async def release_vm(self, args: dict) -> dict:

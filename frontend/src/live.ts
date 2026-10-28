@@ -542,6 +542,14 @@ export type VMTraffic = {
   since: string;
 };
 
+// A note on what is set up in a VM, for the next agent (and the user) to know.
+export type VMNote = {
+  id: string;
+  text: string;
+  by: string; // an agent id or "user"
+  at: string;
+};
+
 export type VMSummary = {
   name: string;
   incus_name: string;
@@ -562,6 +570,7 @@ export type VMSummary = {
   usage: VMUsage | null;
   samples: { cpu_percent: number | null; memory_used_gb: number | null; net_down_rate: number | null; net_up_rate: number | null }[];
   traffic: VMTraffic;
+  notes: VMNote[]; // what agents and the user set up in it, oldest first
   locked_by: "user" | "agent" | null;
   error: string | null; // why the last create, start or stop failed
 };

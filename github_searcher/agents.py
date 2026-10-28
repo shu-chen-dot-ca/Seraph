@@ -36,7 +36,8 @@ After each turn the worker enforces the VM rule: an agent never holds a VM it ha
   MAX_NUDGES reminders in a row with no change to its jobs, the VM is released for it.
 - In no queue but with queued jobs for a VM: it is reminded to queue_for_vm (MAX_NUDGES times at most).
 The VM queue (sandbox/vm_queue.py) tells Agents when an agent's turn comes (on_grant: a message
-that wakes it, or the VM passes on at once if it has no open jobs there anymore) and when the
+that wakes it, with the VM's notes on what earlier agents set up in it, or the VM passes on at once
+if it has no open jobs there anymore) and when the
 user took the VM or its place away (on_kick: it is interrupted, and what it still ran in that
 VM is killed).
 
@@ -769,7 +770,20 @@ class Agents:
         jobs = [job for job in self.jobs.for_agent(agent_id) if job["status"] in OPEN_STATUSES and job["vm"] == vm_name]
         if jobs:
             titles = ", ".join(f"{job['id']} ({job['title']})" for job in jobs)
-            self.notify(agent_id, f"{vm_name} is yours now. Your open jobs for it: {titles}. Do them all, then release_vm.")
+            text = f"{vm_name} is yours now. Your open jobs for it: {titles}. Do them all, then release_vm."
+            # Its notes come with it, so the agent always knows what earlier agents left in it.
+            try:
+                notes = self.vms.get(vm_name).notes
+            except VMsError:
+                notes = []
+            if notes:
+                text += "\nIts notes (check what is really there before you rely on them):"
+                for note in notes:
+                    by = self.agents[note["by"]].name if note["by"] in self.agents else note["by"]
+                    text += f"\n- {note['id']} by {by}, {note['at'][:10]}: {note['text']}"
+            else:
+                text += "\nIt has no notes yet: nobody wrote down what is set up in it."
+            self.notify(agent_id, text)
             return
         agent.history.append({"type": "system", "text": f"Passed {vm_name} on: no open jobs for it", "time": datetime.now(UTC).isoformat()})
         self.version += 1

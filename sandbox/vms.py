@@ -5,12 +5,20 @@ A VM is a resource, not tied to a repo or an agent. Each one is an Incus VM name
 
     DATA_DIR/vms/<name>.json   {"name", "incus_name", "image", "image_fingerprint", "cpus", "memory_gb",
                                 "disk_gb", "internet", "env", "secrets_in_vm", "autostart", "status",
-                                "created_at", "forked_from", "holder", "queue", "traffic"}
+                                "created_at", "forked_from", "holder", "queue", "traffic", "notes"}
 
 "image" is the name of the image it was made from (sandbox/images.py) and "image_fingerprint" the exact
 build, since an image can be rebuilt or renamed later. A fork (a copy of a stopped VM, see VMs.fork) has its
 source's image and "forked_from" names the source. "secrets_in_vm" are the env variables whose values
 are written in the VM's files right now, so an image is never saved from a VM that still holds them.
+
+"notes" are what is set up in the VM, so the next agent knows before it picks the VM or starts in it (e.g.
+"openclaw cloned in ~/openclaw and built, on main; a plugin added for issue 123"). Oldest first:
+
+    [{"id": "note_a1b2c3", "text", "by": an agent id or "user", "at"}]
+
+The agent holding the VM adds and removes them (work_tools.py), the user on the VM page's Notes tab. Agents can't
+remove the user's. A fork starts with its source's notes, since its disk is a copy.
 
 The env variables for all VMs (set in the Settings dialog) are in DATA_DIR/global_env.json, not in vms/
 (every .json there is a VM's record). Every VM gets them, with its own on top (see VMRecord.write_env).
@@ -48,6 +56,7 @@ VMs.version goes up on every record change and every usage sample, so the live f
 import json
 import os
 import re
+import secrets
 import shlex
 import subprocess
 import threading
@@ -145,6 +154,10 @@ class VMRecord:
         }
         # The watcher adds to traffic while the user may reset it.
         self.traffic_lock = threading.Lock()
+        # Records from before notes were kept have none.
+        self.notes = record.get("notes", [])
+        # The agent holding the VM and the user may change the notes at the same time.
+        self.notes_lock = threading.Lock()
         # Called after every save; VMs bumps its version there.
         self.changed = changed
         # One lifecycle action at a time (create, start, stop, delete, resources).
@@ -197,6 +210,7 @@ class VMRecord:
             "queue": list(self.queue),
             "forked_from": self.forked_from,
             "traffic": dict(self.traffic),
+            "notes": list(self.notes),
         }
 
     def save(self) -> None:
@@ -447,6 +461,32 @@ class VMRecord:
             self.traffic["up"] = 0
             self.traffic["since"] = datetime.now(UTC).isoformat()
         self.save()
+
+    def add_note(self, text: str, by: str) -> dict:
+        """Note what is set up in the VM. by is an agent id or "user"."""
+        text = text.strip()
+        if not text:
+            raise VMsError("The note is empty")
+        note = {"id": f"note_{secrets.token_hex(3)}", "text": text, "by": by, "at": datetime.now(UTC).isoformat()}
+        with self.notes_lock:
+            # A new list, so a reader never sees one half changed.
+            self.notes = self.notes + [note]
+        self.save()
+        return note
+
+    def remove_notes(self, ids: list[str], by: str) -> list[str]:
+        """Take notes off by id, and give back the ones removed. Only the user removes the user's own notes."""
+        removed = []
+        with self.notes_lock:
+            kept = []
+            for note in self.notes:
+                if note["id"] in ids and (by == "user" or note["by"] != "user"):
+                    removed.append(note["id"])
+                else:
+                    kept.append(note)
+            self.notes = kept
+        self.save()
+        return removed
 
     def refresh(self) -> None:
         """Make the status match what Incus says (after a backend restart or a crash)."""
@@ -860,6 +900,8 @@ class VMs:
                     "forked_from": source_name,
                     "holder": None,
                     "queue": [],
+                    # Its disk is a copy, so what was set up in the source is set up in it too.
+                    "notes": list(source.notes),
                 },
                 self.changed,
             )

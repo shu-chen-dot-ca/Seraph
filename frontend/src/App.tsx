@@ -6,7 +6,7 @@ right of every page (Sherpa.tsx).
 
 The page lives in the URL hash, so refresh and back/forward work and switching pages never reloads:
   #/inbox  #/inbox/<draft id>  #/github  #/github?tab=closed|comments|account  #/issues  #/issues?repo=owner/name  #/jobs  #/jobs/<job id>  #/search  #/explore  #/repos  #/tracked
-  #/agents  #/agents/<agent id>  #/vms  #/vms?tab=images  #/vms?tab=defaults  #/vms/<vm name>  #/resource
+  #/agents  #/agents/<agent id>  #/vms  #/vms?tab=images  #/vms?tab=defaults  #/vms/<vm name>  #/vms/<vm name>?tab=notes  #/resource
 Links are plain <a href="#/..."> everywhere; App only reads the hash.
 
 A VM page, once visited, stays mounted (hidden) while you are elsewhere, so its desktop iframe keeps its
@@ -188,7 +188,7 @@ export default function App() {
             {page === "resource" && <Resource />}
             {mountedVMs.map((name) => (
               <div key={name} className={name === openVM ? "h-full" : "hidden"}>
-                <VMPage name={name} active={name === openVM} />
+                <VMPage name={name} active={name === openVM} tab={name === openVM ? query.get("tab") : null} />
               </div>
             ))}
           </main>
