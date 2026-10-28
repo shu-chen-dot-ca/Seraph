@@ -37,8 +37,13 @@ past that a line says how many more are on GitHub), and every job for the issue 
 A job in progress shows in the row as a small progress bar with its step.
 Assign opens AssignDialog; the arrow button next to it (and the #) opens the issue on GitHub in a new tab.
 Only the rows on screen are drawn, so thousands of issues stay fast. Undo / redo like the Repos page.
-Many rows are picked like in a mail app (components/ui/row-selection.tsx): Ctrl-click, Shift-click, dragging a
-rectangle, Ctrl+A; a bar at the bottom then removes them at once, as one undo step (it asks first; Enter confirms).
+Many rows are picked like on the Repos page. Hovering a row shows its box on the left; ticking it picks that issue and
+turns on select mode, like Select (on the right of the bar on top) does: Select stays lit (a click on it ends select
+mode), every row shows its box, and a click picks the row instead of opening it. The box at the top left of the table's
+header picks every row shown (checked when all are, a dash when some are); a click when all are picked unpicks them. Rows are also picked like in a mail app
+(components/ui/row-selection.tsx): Ctrl-click, Shift-click, dragging a rectangle, Ctrl+A, which turns on select mode
+too. A bar at the bottom then removes them at once, as one undo step (it asks first; Enter confirms). Clearing the
+selection (Escape, the bar's x) ends select mode too.
 Active (first in the bar on top) drops down every issue an agent is on now (its latest job queued, working or waiting
 on you), whatever the repo: waiting on you first, then working, then queued. Each shows its title, the agent's
 headline under it, the agent, and the same progress bar as the Status column; a click opens that issue's row (like a
@@ -52,7 +57,7 @@ undo / redo keep it too (the backend checks, for agents as well). Cancel its job
 */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Activity, ArrowDown, ArrowUp, ChevronDown, ExternalLink, Loader2, RefreshCw, Redo2, Tags, Undo2, UserPlus, UserX, X } from "lucide-react";
+import { Activity, ArrowDown, ArrowUp, ChevronDown, ExternalLink, Loader2, RefreshCw, Redo2, SquareCheck, Tags, Undo2, UserPlus, UserX, X } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -72,7 +77,7 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { JobProgressBar, JobSteps } from "@/components/ui/job-progress";
 import { Markdown } from "@/components/ui/markdown";
-import { RowSelection } from "@/components/ui/row-selection";
+import { RowSelection, SelectBox } from "@/components/ui/row-selection";
 import { JOB_LABEL, JOB_TONE, StatusDot } from "@/components/ui/status-dot";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api, useLive, useLoaded, type IssueItem, type Job, type Thread } from "@/live";
@@ -147,6 +152,8 @@ export default function Issues(props: { repo: string | null; open: string | null
   // Selected issues, the last one clicked (where a shift-click range starts), and whether removing them waits for a confirm.
   const [selected, setSelected] = useState<string[]>([]);
   const [anchor, setAnchor] = useState<string | null>(null);
+  // Select mode: every row shows a box and a click picks it. Picking a row any other way shows the boxes too.
+  const [selecting, setSelecting] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [confirmRemoveAssigned, setConfirmRemoveAssigned] = useState(false);
   // The list's order: as listed (none), or by these columns, from left to right as the table shows them, Title and #
@@ -433,15 +440,16 @@ export default function Issues(props: { repo: string | null; open: string | null
   }
 
   // The columns' widths from the sizer (max-content until it has measured), and the grid the header and the rows
-  // share: #, Title (the room left over), the rest, then Assign / Remove. tableWidth is the least they need.
+  // share: the boxes (always there, so a row's box can show on hover without the row moving), #, Title (the room left
+  // over), the rest, then Assign / Remove. tableWidth is the least they need.
   const measured = sizes.length === ISSUE_COLUMNS.length + 1;
-  let tableWidth = 24 + TITLE_MIN + ACTIONS_WIDTH + 16 * (ISSUE_COLUMNS.length + 2);
+  let tableWidth = 24 + 16 + TITLE_MIN + ACTIONS_WIDTH + 16 * (ISSUE_COLUMNS.length + 3);
   const tracks: string[] = [];
   for (let index = 0; index < ISSUE_COLUMNS.length + 1; index++) {
     tracks.push(measured ? `${sizes[index]}px` : "max-content");
     tableWidth += measured ? sizes[index] : 0;
   }
-  const template = `${tracks[0]} minmax(${TITLE_MIN}px,1fr) ${tracks.slice(1).join(" ")} ${ACTIONS_WIDTH}px`;
+  const template = `16px ${tracks[0]} minmax(${TITLE_MIN}px,1fr) ${tracks.slice(1).join(" ")} ${ACTIONS_WIDTH}px`;
 
   // Claude reads one issue again now, a few seconds to a minute; the new tags arrive through the live feed.
   async function tagAgain(id: string) {
@@ -533,6 +541,7 @@ export default function Issues(props: { repo: string | null; open: string | null
     try {
       await api("/api/issues/remove", { method: "POST", body: { ids } });
       setSelected((current) => current.filter((id) => !ids.includes(id)));
+      setSelecting(false);
     } catch (err) {
       toast.error(`Could not remove: ${err instanceof Error ? err.message : err}`);
     }
@@ -557,6 +566,16 @@ export default function Issues(props: { repo: string | null; open: string | null
     setSelected(on ? [...chosen.filter((each) => !ids.includes(each)), ...ids] : chosen.filter((each) => !ids.includes(each)));
     setAnchor(id);
   }
+
+  // Clearing the selection (Escape, the bar's x, a click on the list's empty space) also ends select mode.
+  function onSelect(next: string[]) {
+    setSelected(next);
+    if (next.length === 0) {
+      setSelecting(false);
+    }
+  }
+  const selectMode = selecting || chosen.length > 0;
+  const allPicked = rowIds.length > 0 && rowIds.every((id) => chosen.includes(id));
 
   async function cancelJob(job: Job) {
     try {
@@ -643,9 +662,19 @@ export default function Issues(props: { repo: string | null; open: string | null
             </Button>
           </span>
         )}
+        <span className="ml-auto flex items-center gap-1">
+          <Button
+            variant={selectMode ? "secondary" : "ghost"} size="sm"
+            disabled={!selectMode && rowIds.length === 0}
+            title={selectMode ? "Stop selecting (Esc)" : "Pick rows: every row shows its box, and a click picks it"}
+            onClick={() => (selectMode ? onSelect([]) : setSelecting(true))}
+          >
+            <SquareCheck /> Select
+          </Button>
+        </span>
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button variant="ghost" size="sm" className="ml-auto" disabled={refreshing} onClick={refreshAll}>
+            <Button variant="ghost" size="sm" disabled={refreshing} onClick={refreshAll}>
               <RefreshCw className={cn(refreshing && "animate-spin")} /> Refresh
             </Button>
           </TooltipTrigger>
@@ -681,6 +710,17 @@ export default function Issues(props: { repo: string | null; open: string | null
         <div style={{ minWidth: tableWidth }}>
           <div className="sticky top-0 z-10 border-b bg-background select-none">
             <div className="grid h-7 items-center gap-x-4 bg-muted/40 px-3 text-xs font-medium" style={{ gridTemplateColumns: template }}>
+              {/* Top left: picks every issue shown, or none when all are; a dash when only some are. */}
+              <button
+                type="button"
+                className="flex items-center"
+                aria-label={allPicked ? "Unselect all" : "Select all"}
+                title={allPicked ? "Unselect all" : "Select all (Ctrl+A)"}
+                disabled={rowIds.length === 0}
+                onClick={() => (allPicked ? onSelect([]) : setSelected([...new Set([...chosen, ...rowIds])]))}
+              >
+                <SelectBox checked={allPicked} partial={rowIds.some((id) => chosen.includes(id))} />
+              </button>
               {sortHeader(NUMBER_COLUMN)}
               {sortHeader(TITLE_COLUMN)}
               {ISSUE_COLUMNS.map((column) => sortHeader(column))}
@@ -711,16 +751,29 @@ export default function Issues(props: { repo: string | null; open: string | null
                 <div key={item.key} data-index={item.index} ref={virtualizer.measureElement} className="absolute left-0 w-full border-b" style={{ top: item.start }}>
                   <div
                     data-select-id={issue.id}
-                    className={cn("grid min-h-7 cursor-pointer items-center gap-x-4 px-3 py-0.5 hover:bg-accent/50", isOpen && "bg-accent/40", chosen.includes(issue.id) && "bg-selected hover:bg-selected")}
+                    className={cn("group grid min-h-7 cursor-pointer items-center gap-x-4 px-3 py-0.5 hover:bg-accent/50", isOpen && "bg-accent/40", chosen.includes(issue.id) && "bg-selected hover:bg-selected")}
                     style={{ gridTemplateColumns: template }}
                     onClick={(event) => {
-                      if (event.ctrlKey || event.metaKey || event.shiftKey) {
+                      // In select mode a click picks the row; otherwise Ctrl / Shift-click picks it and a plain click opens it.
+                      if (selectMode || event.ctrlKey || event.metaKey || event.shiftKey) {
                         select(issue.id, event.shiftKey);
                       } else {
                         toggle(issue.id);
                       }
                     }}
                   >
+                    {/* Out of select mode only on hover. Ticking it picks the issue, which turns select mode on. */}
+                    <button
+                      type="button"
+                      className={cn("flex items-center", !selectMode && "invisible group-hover:visible")}
+                      aria-label={`Select ${issue.id}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        select(issue.id, event.shiftKey);
+                      }}
+                    >
+                      <SelectBox checked={chosen.includes(issue.id)} />
+                    </button>
                     <span className="whitespace-nowrap tabular-nums">{issueCell(issue, "number")}</span>
                     {/* The title, then what to know before taking it: closed, PRs open or merged for it (the tags have their columns). */}
                     <span className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -988,7 +1041,7 @@ export default function Issues(props: { repo: string | null; open: string | null
         ))}
       </div>
 
-      <RowSelection listRef={scrollRef} ids={rowIds} selected={chosen} onSelect={setSelected}>
+      <RowSelection listRef={scrollRef} ids={rowIds} selected={chosen} onSelect={onSelect}>
         <Button
           size="xs"
           variant="ghost"

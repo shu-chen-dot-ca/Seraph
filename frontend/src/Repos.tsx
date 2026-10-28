@@ -16,7 +16,7 @@ comes first and takes the room left over, the note under it, so the other column
 wide as its widest cell (header included) over the whole list, not only the rows on screen: a hidden copy of every
 row's cells (the sizer at the bottom) measures them (lib/column-widths.ts). A table wider than the page scrolls
 sideways, the header with it, and the header stays on top while the rows scroll. The columns are remembered in this
-browser. Rows have no arrow: the first column only shows in select mode, for the boxes.
+browser. Rows have no arrow: the first column is for the boxes (see below).
 
 Sorting is by any number of fields at once (SORT_FIELDS): a click on a column header (the Activity column sorts by
 commits a month), or on a field's arrow in the All fields panel (every field, shown as a column or not). Each click on
@@ -33,9 +33,11 @@ fit) is always one of a fixed set, so it ranks in a fixed order (*_RANK below). 
 (green), then No AI policy (a lighter green), AI: disclose, AI: unclear, and No AI last (red); the Explore and Tracked
 pages rank it the same. The sort is remembered in this browser.
 
-Rows have no buttons of their own. Select (top right) turns on select mode: Delete, Track and Untrack show on the
-left of the bar, Select becomes Select all and Cancel, every row shows a box, and a click picks the row instead of
-opening it. Rows are also picked like in a mail app (components/ui/row-selection.tsx): Ctrl-click, Shift-click,
+Rows have no buttons of their own. Hovering a row shows its box on the left; ticking it picks that repo and turns on
+select mode, like Select (top right) does: Delete, Track and Untrack show on the left of the bar, Select stays lit (a
+click on it ends select mode), every row shows its box, and a click picks the row instead of opening it. The box at
+the top left of the table's header picks every row (checked when all are, a dash when some are); a click when all are
+picked unpicks them. Rows are also picked like in a mail app (components/ui/row-selection.tsx): Ctrl-click, Shift-click,
 dragging a rectangle, Ctrl+A, which turns on select mode too; a bar at the bottom says how many. Track tracks the
 picked repos not tracked yet, Untrack stops tracking the tracked ones (each one undo step on the Tracked page); Delete
 deletes them at once, as one undo step (it asks first; Enter confirms). Delete only takes a repo off the list; Explore
@@ -903,17 +905,17 @@ export default function Repos() {
   }
 
   // The columns shown, how wide the sizer made each (max-content until it has measured), and the grid the header and
-  // the rows share: the boxes (select mode only), name (the room left over), the columns, then Track / Untrack. tableWidth
+  // the rows share: the boxes (always there, so a row's box can show on hover without the row moving), name (the room left over), the columns, then Track / Untrack. tableWidth
   // is the least they need, padding and gaps (16px, like the Explore page) too.
   const shownColumns = shown.map((key) => TABLE_COLUMNS.find((column) => column.key === key)!);
   const measured = sizes.length === shownColumns.length;
-  let tableWidth = 24 + NAME_MIN + 16 * shownColumns.length + (selectMode ? 32 : 0) + TRACK_WIDTH + 16;
+  let tableWidth = 24 + NAME_MIN + 16 * shownColumns.length + 32 + TRACK_WIDTH + 16;
   const columnTracks: string[] = [];
   for (let index = 0; index < shownColumns.length; index++) {
     columnTracks.push(measured ? `${sizes[index]}px` : "max-content");
     tableWidth += measured ? sizes[index] : 0;
   }
-  const template = `${selectMode ? "16px " : ""}minmax(${NAME_MIN}px,1fr) ${columnTracks.join(" ")} ${TRACK_WIDTH}px`;
+  const template = `16px minmax(${NAME_MIN}px,1fr) ${columnTracks.join(" ")} ${TRACK_WIDTH}px`;
 
   return (
     <div className="relative flex h-full flex-col">
@@ -975,21 +977,14 @@ export default function Repos() {
           );
         })}
         <span className="ml-auto flex items-center gap-1">
-          {!selectMode && (
-            <Button variant="ghost" size="xs" onClick={() => setSelecting(true)}>
-              <SquareCheck /> Select
-            </Button>
-          )}
-          {selectMode && (
-            <>
-              <Button variant="ghost" size="xs" onClick={() => setSelected(allPicked ? [] : [...new Set([...chosen, ...rowNames])])}>
-                {allPicked ? "Unselect all" : "Select all"}
-              </Button>
-              <Button variant="ghost" size="xs" onClick={() => onSelect([])}>
-                Cancel
-              </Button>
-            </>
-          )}
+          <Button
+            variant={selectMode ? "secondary" : "ghost"} size="xs"
+            disabled={!selectMode && rowNames.length === 0}
+            title={selectMode ? "Stop selecting (Esc)" : "Pick rows: every row shows its box, and a click picks it"}
+            onClick={() => (selectMode ? onSelect([]) : setSelecting(true))}
+          >
+            <SquareCheck /> Select
+          </Button>
           <Button variant={allFields ? "secondary" : "ghost"} size="xs" onClick={() => setAllFields(!allFields)}>
             <ListFilter /> All fields
           </Button>
@@ -1019,7 +1014,17 @@ export default function Repos() {
         <div style={{ minWidth: tableWidth }}>
           <div className="sticky top-0 z-10 border-b bg-background select-none">
             <div className="grid h-7 gap-x-4 bg-muted/40 px-3 text-xs font-medium" style={{ gridTemplateColumns: template }}>
-              {selectMode && <span />}
+              {/* Top left: picks every repo shown, or none when all are; a dash when only some are. */}
+              <button
+                type="button"
+                className="flex items-center"
+                aria-label={allPicked ? "Unselect all" : "Select all"}
+                title={allPicked ? "Unselect all" : "Select all (Ctrl+A)"}
+                disabled={rowNames.length === 0}
+                onClick={() => (allPicked ? onSelect([]) : setSelected([...new Set([...chosen, ...rowNames])]))}
+              >
+                <SelectBox checked={allPicked} partial={chosen.length > 0} />
+              </button>
               <span className="flex min-w-0 items-center">
                 <button
                   type="button"
@@ -1087,7 +1092,7 @@ export default function Repos() {
                 >
                   <div
                     data-select-id={repo.full_name}
-                    className={cn("cursor-pointer px-3 hover:bg-accent/50", isOpen && "bg-accent/40", chosen.includes(repo.full_name) && "bg-selected hover:bg-selected")}
+                    className={cn("group cursor-pointer px-3 hover:bg-accent/50", isOpen && "bg-accent/40", chosen.includes(repo.full_name) && "bg-selected hover:bg-selected")}
                     onClick={(event) => {
                       // In select mode a click picks the row; otherwise Ctrl / Shift-click picks it and a plain click opens it.
                       if (selectMode || event.ctrlKey || event.metaKey || event.shiftKey) {
@@ -1098,11 +1103,18 @@ export default function Repos() {
                     }}
                   >
                     <div className="grid gap-x-4" style={{ gridTemplateColumns: template }}>
-                      {selectMode && (
-                        <span className="flex h-7 items-center">
-                          <SelectBox checked={chosen.includes(repo.full_name)} />
-                        </span>
-                      )}
+                      {/* Out of select mode only on hover. Ticking it picks the repo, which turns select mode on. */}
+                      <button
+                        type="button"
+                        className={cn("flex h-7 items-center", !selectMode && "invisible group-hover:visible")}
+                        aria-label={`Select ${repo.full_name}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          select(repo.full_name, event.shiftKey);
+                        }}
+                      >
+                        <SelectBox checked={chosen.includes(repo.full_name)} />
+                      </button>
                       <div className="flex h-7 min-w-0 items-center gap-1.5">
                           <span className="truncate font-medium">{repo.full_name}</span>
                           <a
@@ -1149,7 +1161,7 @@ export default function Repos() {
                         </Button>
                       </span>
                       {repo.note !== "" && (
-                        <div className="min-w-0 truncate pb-1.5" style={{ gridColumn: `${selectMode ? 2 : 1} / -1` }} title={repo.note}>
+                        <div className="min-w-0 truncate pb-1.5" style={{ gridColumn: "2 / -1" }} title={repo.note}>
                           {repo.note}
                         </div>
                       )}

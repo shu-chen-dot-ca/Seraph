@@ -1,4 +1,4 @@
-import { Check, X } from "lucide-react"
+import { Check, Minus, X } from "lucide-react"
 import { useEffect, useState } from "react"
 
 import { Button } from "@/components/ui/button"
@@ -33,17 +33,20 @@ import { cn } from "@/lib/utils"
 // screen; rows a virtualized list stops drawing keep what they had.
 
 // The box a row shows in select mode, checked when the row is picked. Only a picture: the row's own click picks it.
-export function SelectBox(props: { checked: boolean }) {
+// The box at the top left of a table's header picks every row: checked when all are picked, a dash (partial) when only
+// some are.
+export function SelectBox(props: { checked: boolean; partial?: boolean }) {
   return (
     <span
       role="checkbox"
-      aria-checked={props.checked}
+      aria-checked={props.checked ? true : props.partial ? "mixed" : false}
       className={cn(
         "flex size-4 shrink-0 items-center justify-center rounded-[4px] border border-input bg-background",
-        props.checked && "border-primary bg-primary text-primary-foreground",
+        (props.checked || props.partial) && "border-primary bg-primary text-primary-foreground",
       )}
     >
       {props.checked && <Check className="size-3.5" />}
+      {!props.checked && props.partial && <Minus className="size-3.5" />}
     </span>
   )
 }

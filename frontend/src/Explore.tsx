@@ -39,8 +39,10 @@ newest first among what is still the same; Repo (the name) last of all. Each sor
 first. A click on a row opens it in place: its README, then its files folded at the
 bottom (RepoTree), like on the Repos page.
 The user decides on each: Approve puts it in Repos, Remove takes it off the found list (the two buttons at the end of
-its row). For many at once, Select (top right) turns on select mode, like on the Repos page: it becomes Select all and
-Cancel, every row shows a box, and a click picks the row instead of opening it. Rows are also picked like in a mail
+its row). For many at once, like on the Repos page: hovering a row shows its box on the left, and ticking it picks that
+repo and turns on select mode, like Select (top right) does: Select stays lit (a click on it ends select mode), every
+row shows its box, and a click picks the row instead of opening it. The box at the top left of the table's header
+picks every row (checked when all are, a dash when some are); a click when all are picked unpicks them. Rows are also picked like in a mail
 app (components/ui/row-selection.tsx): Ctrl-click, Shift-click, dragging a rectangle, Ctrl+A. A bar at the bottom then
 approves or removes them at once (removing asks first; Enter confirms). Either takes the rows away at once, before the
 backend answers (they come back if it refuses), and ends select mode; so does clearing the selection (Escape, the
@@ -571,21 +573,14 @@ export default function Explore() {
         </form>
         <GithubLimits />
         <span className="ml-auto flex items-center gap-1">
-          {!selectMode && (
-            <Button variant="ghost" onClick={() => setSelecting(true)} disabled={found.length === 0}>
-              <SquareCheck /> Select
-            </Button>
-          )}
-          {selectMode && (
-            <>
-              <Button variant="ghost" onClick={() => setSelected(allPicked ? [] : foundNames)}>
-                {allPicked ? "Unselect all" : "Select all"}
-              </Button>
-              <Button variant="ghost" onClick={() => onSelect([])}>
-                Cancel
-              </Button>
-            </>
-          )}
+          <Button
+            variant={selectMode ? "secondary" : "ghost"}
+            disabled={!selectMode && foundNames.length === 0}
+            title={selectMode ? "Stop selecting (Esc)" : "Pick rows: every row shows its box, and a click picks it"}
+            onClick={() => (selectMode ? onSelect([]) : setSelecting(true))}
+          >
+            <SquareCheck /> Select
+          </Button>
           <Button variant="ghost" onClick={() => setEditing(true)} disabled={!loaded}>
             <Settings2 /> Profile
           </Button>
@@ -599,10 +594,20 @@ export default function Explore() {
         {found.length > 0 && (
           <div
             className="grid w-max min-w-full gap-x-4 border-b"
-            style={{ gridTemplateColumns: `${selectMode ? "16px " : ""}minmax(160px,1fr) repeat(${FOUND_COLUMNS.length}, max-content) max-content` }}
+            style={{ gridTemplateColumns: `16px minmax(160px,1fr) repeat(${FOUND_COLUMNS.length}, max-content) max-content` }}
           >
             <div className="col-span-full grid h-7 grid-cols-subgrid items-center bg-muted/40 px-3 text-xs font-medium">
-              {selectMode && <span />}
+              {/* Top left: picks every repo shown, or none when all are; a dash when only some are. */}
+              <button
+                type="button"
+                className="flex items-center"
+                aria-label={allPicked ? "Unselect all" : "Select all"}
+                title={allPicked ? "Unselect all" : "Select all (Ctrl+A)"}
+                disabled={foundNames.length === 0}
+                onClick={() => (allPicked ? onSelect([]) : setSelected(foundNames))}
+              >
+                <SelectBox checked={allPicked} partial={chosen.length > 0} />
+              </button>
               <button
                 type="button"
                 className={cn("flex items-center gap-0.5 hover:text-primary", sorts.some((each) => each.key === "name") && "text-primary")}
@@ -631,7 +636,7 @@ export default function Explore() {
                 <div
                   data-select-id={each.name}
                   className={cn(
-                    "col-span-full grid cursor-pointer grid-cols-subgrid px-3 hover:bg-accent/50",
+                    "group col-span-full grid cursor-pointer grid-cols-subgrid px-3 hover:bg-accent/50",
                     open.includes(each.name) && "bg-accent/40",
                     chosen.includes(each.name) && "bg-selected hover:bg-selected",
                   )}
@@ -648,11 +653,16 @@ export default function Explore() {
                     }
                   }}
                 >
-                  {selectMode && (
-                    <span className="flex h-7 items-center">
-                      <SelectBox checked={chosen.includes(each.name)} />
-                    </span>
-                  )}
+                  {/* Always there, so it can show on hover without the row moving. Ticking it picks the repo, which
+                      turns select mode on. */}
+                  <button
+                    type="button"
+                    className={cn("flex h-7 items-center", !selectMode && "invisible group-hover:visible")}
+                    aria-label={`Select ${each.name}`}
+                    onClick={(event) => select(each.name, event.shiftKey)}
+                  >
+                    <SelectBox checked={chosen.includes(each.name)} />
+                  </button>
                   {/* The name opens the row like the rest of it; only the icon goes to GitHub, in a new tab. */}
                   <span className="flex h-7 min-w-0 items-center gap-1.5">
                     <span className="truncate font-medium" title={each.description}>
@@ -683,7 +693,7 @@ export default function Explore() {
                     </Button>
                   </span>
                   {/* Under the name, to the end of the row (always there, for the room under the row). */}
-                  <div className="w-0 min-w-full truncate pb-1.5" style={{ gridColumn: `${selectMode ? 2 : 1} / -1` }} title={each.note}>
+                  <div className="w-0 min-w-full truncate pb-1.5" style={{ gridColumn: "2 / -1" }} title={each.note}>
                     {each.note}
                   </div>
                 </div>

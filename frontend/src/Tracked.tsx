@@ -32,11 +32,16 @@ ones). The issues are a table too, sorted the same way by clicks on its columns'
 repo; Free first, then to its right to the end, then # and Title): ISSUE_HEADERS (Checked: when Claude last read it and its comments and updated its tags). A click on an issue opens it in full in a pop-up, its comments below (IssueDetailsDialog); its # and the
 arrow button at the row's end open it on GitHub in a new tab. An issue goes into the Issues list with one click (its
 repo into Repos too), or links there when it is in already. The list is short (repos the user picked), so every row is drawn; times re-render every minute.
-Many rows are picked like in a mail app (components/ui/row-selection.tsx): Ctrl-click, Shift-click, dragging a rectangle,
-Ctrl+A; a bar at the bottom then stops tracking them at once, as one undo step (it asks first; Enter confirms).
+Many rows are picked like on the Repos page. Hovering a row shows its box on the left; ticking it picks that repo and
+turns on select mode, like Select (top right) does: Select stays lit (a click on it ends select mode), every row shows
+its box, and a click picks the row instead of opening it. The box at the top left of the table's header picks every row
+(checked when all are, a dash when some are); a click when all are picked unpicks them. Rows are also picked like in a mail app (components/ui/row-selection.tsx):
+Ctrl-click, Shift-click, dragging a rectangle, Ctrl+A, which turns on select mode too. A bar at the bottom then stops
+tracking them at once, as one undo step (it asks first; Enter confirms). Clearing the selection (Escape, the bar's x)
+ends select mode too.
 */
 
-import { ArrowDown, ArrowUp, CheckCheck, ChevronsDownUp, ChevronsUpDown, ExternalLink, Loader2, MessageSquare, Plus, RefreshCw, Star, Tags, X } from "lucide-react";
+import { ArrowDown, ArrowUp, CheckCheck, ChevronsDownUp, ChevronsUpDown, ExternalLink, Loader2, MessageSquare, Plus, RefreshCw, SquareCheck, Star, Tags, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -54,7 +59,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { NewcomersTag, PolicyTag, ToneTag } from "@/components/ui/repo-tags";
-import { RowSelection } from "@/components/ui/row-selection";
+import { RowSelection, SelectBox } from "@/components/ui/row-selection";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, useLive, useLoaded, type TrackedIssue, type TrackedRepo } from "@/live";
 import { cn, timeAgo } from "@/lib/utils";
@@ -139,6 +144,8 @@ export default function Tracked() {
   // Selected repos, the last one clicked (where a shift-click range starts), and whether removing them waits for a confirm.
   const [selected, setSelected] = useState<string[]>([]);
   const [anchor, setAnchor] = useState<string | null>(null);
+  // Select mode: every row shows a box and a click picks it. Picking a row any other way shows the boxes too.
+  const [selecting, setSelecting] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [, setTick] = useState(0);
@@ -166,6 +173,7 @@ export default function Tracked() {
     try {
       await api("/api/tracked/remove", { method: "POST", body: { names } });
       setSelected((current) => current.filter((name) => !names.includes(name)));
+      setSelecting(false);
     } catch (err) {
       toast.error(`Could not stop tracking: ${err instanceof Error ? err.message : err}`);
     }
@@ -338,6 +346,16 @@ export default function Tracked() {
     setAnchor(name);
   }
 
+  // Clearing the selection (Escape, the bar's x, a click on the list's empty space) also ends select mode.
+  function onSelect(next: string[]) {
+    setSelected(next);
+    if (next.length === 0) {
+      setSelecting(false);
+    }
+  }
+  const selectMode = selecting || chosen.length > 0;
+  const allPicked = names.length > 0 && names.every((name) => chosen.includes(name));
+
   async function checkNow(full_name: string) {
     setChecking((current) => [...current, full_name]);
     try {
@@ -492,6 +510,16 @@ export default function Tracked() {
             </Button>
           </span>
         )}
+        <span className="ml-auto flex items-center gap-1">
+          <Button
+            variant={selectMode ? "secondary" : "ghost"} size="xs"
+            disabled={!selectMode && names.length === 0}
+            title={selectMode ? "Stop selecting (Esc)" : "Pick rows: every row shows its box, and a click picks it"}
+            onClick={() => (selectMode ? onSelect([]) : setSelecting(true))}
+          >
+            <SquareCheck /> Select
+          </Button>
+        </span>
       </div>
 
       <div ref={listRef} className="min-h-0 flex-1 overflow-auto">
@@ -506,9 +534,20 @@ export default function Tracked() {
         {rows.length > 0 && (
           <div
             className="grid w-max min-w-full gap-x-4 border-b"
-            style={{ gridTemplateColumns: `minmax(160px,max-content) repeat(${TRACKED_COLUMNS.length}, max-content) minmax(0,1fr) max-content` }}
+            style={{ gridTemplateColumns: `16px minmax(160px,max-content) repeat(${TRACKED_COLUMNS.length}, max-content) minmax(0,1fr) max-content` }}
           >
             <div className="col-span-full grid h-7 grid-cols-subgrid items-center bg-muted/40 px-3 text-xs font-medium">
+              {/* Top left: picks every repo shown, or none when all are; a dash when only some are. */}
+              <button
+                type="button"
+                className="flex items-center"
+                aria-label={allPicked ? "Unselect all" : "Select all"}
+                title={allPicked ? "Unselect all" : "Select all (Ctrl+A)"}
+                disabled={names.length === 0}
+                onClick={() => (allPicked ? onSelect([]) : setSelected(names))}
+              >
+                <SelectBox checked={allPicked} partial={chosen.length > 0} />
+              </button>
               {[{ key: "name" as TrackedKey, label: "Name", title: "A to Z" }, ...TRACKED_COLUMNS].map((column) => {
                 const sort = sorts.find((each) => each.key === column.key);
                 return (
@@ -584,18 +623,31 @@ export default function Tracked() {
                   <div
                     data-select-id={repo.full_name}
                     className={cn(
-                      "col-span-full grid cursor-pointer grid-cols-subgrid px-3 hover:bg-accent/50",
+                      "group col-span-full grid cursor-pointer grid-cols-subgrid px-3 hover:bg-accent/50",
                       isOpen && "bg-accent/40",
                       chosen.includes(repo.full_name) && "bg-selected hover:bg-selected",
                     )}
                     onClick={(event) => {
-                      if (event.ctrlKey || event.metaKey || event.shiftKey) {
+                      // In select mode a click picks the row; otherwise Ctrl / Shift-click picks it and a plain click opens it.
+                      if (selectMode || event.ctrlKey || event.metaKey || event.shiftKey) {
                         select(repo.full_name, event.shiftKey);
                       } else {
                         toggle(repo.full_name);
                       }
                     }}
                   >
+                    {/* Out of select mode only on hover. Ticking it picks the repo, which turns select mode on. */}
+                    <button
+                      type="button"
+                      className={cn("flex h-7 items-center", !selectMode && "invisible group-hover:visible")}
+                      aria-label={`Select ${repo.full_name}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        select(repo.full_name, event.shiftKey);
+                      }}
+                    >
+                      <SelectBox checked={chosen.includes(repo.full_name)} />
+                    </button>
                     <span className="flex h-7 min-w-0 items-center">
                       <span className="truncate font-medium">{repo.full_name}</span>
                     </span>
@@ -689,7 +741,7 @@ export default function Tracked() {
                       </Button>
                     </span>
                     {(repo.note !== "" || repo.description !== "") && (
-                      <div className="col-span-full w-0 min-w-full truncate pb-1.5" title={repo.note || repo.description}>
+                      <div className="w-0 min-w-full truncate pb-1.5" style={{ gridColumn: "2 / -1" }} title={repo.note || repo.description}>
                         {repo.note || repo.description}
                       </div>
                     )}
@@ -829,7 +881,7 @@ export default function Tracked() {
           </div>
         )}
       </div>
-      <RowSelection listRef={listRef} ids={names} selected={chosen} onSelect={setSelected}>
+      <RowSelection listRef={listRef} ids={names} selected={chosen} onSelect={onSelect}>
         <Button size="xs" variant="ghost" onClick={() => setConfirmRemove(true)}>
           <X /> Stop tracking
         </Button>
