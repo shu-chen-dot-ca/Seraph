@@ -16,6 +16,11 @@ range is a few hundred to 15k (the user's profile can say otherwise). Before Cla
 where a PR would likely go nowhere: no outside PR merged in 90 days, most outside PRs closed unmerged, or newcomers
 turned away (their first PRs mostly closed unmerged) or left waiting (mostly still open, neither merged nor closed,
 after a month). A slow first reply alone (over a week) doesn't skip a repo. The Skipped line says how many went for each.
+Claude judges each candidate in two steps. First a quick look at its README: is it a code project, which type, how well
+it fits. Only one that isn't a weak fit (and that the Fit filters keep) gets the closer look, so no time goes into a
+repo that clearly doesn't match: Claude reads its open issues, the comments on them and its recent outside PRs on
+GitHub (it may hand batches of them to reader agents that read in parallel and report back), then settles the fit and
+writes the note with what it saw. That takes longer, so a candidate may show as being checked for a minute or two.
 
 Every repo that qualifies joins the found list right away, newest first: a table with a column for each thing known
 about it (FOUND_COLUMNS). The main ones come first: outside PRs merged (of those merged or closed), newcomers' first
