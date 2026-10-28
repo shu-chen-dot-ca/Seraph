@@ -21,6 +21,7 @@ agent controls) or another website, get 403.
 
 import asyncio
 import json
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -40,10 +41,15 @@ from github_searcher.token_balancer import BALANCER
 load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 
 LOCAL_HOSTS = ["localhost", "127.0.0.1"]
+THREADS = 64
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # The threads asyncio.to_thread uses (the agents' VM tools, Explore, the signals, every GitHub call). A GitHub call
+    # can wait up to two minutes for a rate limit (token_balancer.py); with only the default 20 threads, a burst of
+    # those took them all and everything else stalled behind them.
+    asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=THREADS))
     # Agents run on this event loop, so they start here and not at import.
     await agents.start()
     # Sherpa goes on with a turn the restart cut off.
