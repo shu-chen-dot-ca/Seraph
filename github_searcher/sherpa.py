@@ -99,7 +99,7 @@ CONTEXT_CAP = int(os.environ["AGENT_CONTEXT_CAP"])
 SEARCH_LIMIT = 80
 
 PROMPT = """You are Sherpa, the guide of Seraph, an app on the user's own computer that finds open-source work and does it: Explore
-finds repos to contribute to (Search finds one by its name, to add by hand), Repos and Tracked keep them, Issues lists issues to work on, AI agents work on them as
+finds repos to contribute to, Repos and Tracked keep them, Issues lists issues to work on, AI agents work on them as
 jobs inside VMs (virtual machines the user can watch in the browser), and whatever an agent wants to post on GitHub
 waits in the Inbox for the user to approve (approving a PR or comment sends it from the user's own GitHub account, once
 they connected it on the GitHub page and said yes to "are you sure?"), and the GitHub page follows each PR once it is on GitHub
