@@ -1,9 +1,12 @@
-"""The Repos page: remove rows, undo/redo, the repo explorer (file tree, one file, README), and keeping the signals fresh.
+"""The Repos page: add a repo by hand, remove rows, undo/redo, the repo explorer (file tree, one file, README), and keeping the signals fresh.
 
 Agents and Explore fill the list (github_searcher/agent/work_tools.py, github_searcher/explore.py);
 the browser removes rows and steps through the undo history. The list reaches the
 browser through /api/live, each repo with its signals. The explorer reads the default branch
 from GitHub through search.py, which caches every answer, so opening a repo or a file again is instant.
+
+The user adds one by hand (add_repo): a GitHub link or owner/name, from the box on the Repos page. It is looked up
+on GitHub for its own spelling, stars and description, and added by the user as one undo step.
 
 Remove only takes repos off the list: nothing is blocked, so Explore and agents may find and add them again. It takes
 many repos at once (the page's multi-select), as one undo step.
@@ -38,8 +41,44 @@ SIGNALS_RETRY_SECONDS = 60 * 60
 SIGNALS_AT_ONCE = 4
 
 
+class AddRequest(BaseModel):
+    name: str  # "owner/name" or a GitHub link to the repo
+
+
 class NamesRequest(BaseModel):
     names: list[str]
+
+
+@router.post("/repos/add")
+def add_repo(body: AddRequest) -> dict:
+    """Put a repo in Repos by hand. Takes a second: the repo is looked up on GitHub."""
+    name = body.name.strip().removeprefix("https://").removeprefix("http://").removeprefix("www.").removeprefix("github.com/")
+    name = name.removesuffix("/").removesuffix(".git")
+    # A link to a page inside the repo (issues, a file) still names the repo first.
+    name = "/".join(name.split("/")[:2])
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", name):
+        raise HTTPException(status_code=400, detail="Paste the repo's GitHub link, or type it as owner/name.")
+    try:
+        info = get_repository(name.split("/")[0], name.split("/")[1])
+    except httpx.HTTPStatusError as error:
+        if error.response.status_code == 404:
+            raise HTTPException(status_code=404, detail=f"GitHub has no repo {name}.")
+        raise HTTPException(status_code=502, detail=f"GitHub error {error.response.status_code}: {error.response.text[:200]}")
+
+    item = {
+        "full_name": info["full_name"],
+        "description": info["description"] or "",
+        "stars": info["stargazers_count"],
+        "default_branch": info["default_branch"],
+        "html_url": info["html_url"],
+        "note": "",
+        "added_by": "user",
+        "added_at": datetime.now(UTC).isoformat(),
+    }
+    added = repos.add([item])
+    if not added:
+        raise HTTPException(status_code=409, detail=f"{info['full_name']} is already in Repos.")
+    return {"added": added}
 
 
 @router.post("/repos/remove")

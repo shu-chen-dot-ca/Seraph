@@ -1,5 +1,8 @@
 /*
-The Repos list: repos the agents and Explore picked (the user never searches by hand).
+The Repos list: repos the agents and Explore picked, and ones the user added by hand with the box on the left of the
+bar on top (out of select mode): paste a repo's GitHub link (or a link to any page in it) or type owner/name, then
+Enter or Add. It is looked up on GitHub, added at once as one undo step, and a toast says so; one already in Repos,
+or a link GitHub doesn't know, says why instead.
 
 The table reads like the Explore page's: a column for each thing known about a repo, picked in the Columns dialog
 (components/ui/columns-dialog.tsx), in the order picked. The main ones come first by default: outside PRs merged (of
@@ -71,6 +74,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ColumnsDialog } from "@/components/ui/columns-dialog";
 import { ASK_LABEL, FIT_LEVELS, FitTag, NEWCOMER_LABEL, NewcomersTag, POLICY_LABEL, PolicyTag, TONE_LABEL, ToneTag } from "@/components/ui/repo-tags";
+import { Input } from "@/components/ui/input";
 import { RowSelection, SelectBox } from "@/components/ui/row-selection";
 import { api, useLive, useLiveValue, useLoaded, type ListedRepo } from "@/live";
 import { useColumnWidths } from "@/lib/column-widths";
@@ -309,6 +313,9 @@ export default function Repos() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   // Repos whose Track / Untrack is waiting for the backend.
   const [tracking, setTracking] = useState<string[]>([]);
+  // The box on top that adds a repo by its GitHub link, and whether that waits for the backend.
+  const [link, setLink] = useState("");
+  const [addingLink, setAddingLink] = useState(false);
   const [, setTick] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -575,6 +582,20 @@ export default function Repos() {
       await api("/api/repos/redo", { method: "POST" });
     } catch (err) {
       toast.error(`Redo failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  // Add the repo the box on top names (a GitHub link or owner/name). The box empties once it is in.
+  async function addLink() {
+    setAddingLink(true);
+    try {
+      const answer = await api<{ added: string[] }>("/api/repos/add", { method: "POST", body: { name: link.trim() } });
+      setLink("");
+      toast.success(`Added ${answer.added[0]} to Repos`);
+    } catch (err) {
+      toast.error(`Could not add it: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      setAddingLink(false);
     }
   }
 
@@ -919,6 +940,27 @@ export default function Repos() {
   return (
     <div className="relative flex h-full flex-col">
       <div className="flex min-h-8 shrink-0 flex-wrap items-center gap-1.5 border-b px-3 py-1">
+        {/* Out of select mode: a box to add a repo by its GitHub link (Enter or Add). */}
+        {!selectMode && (
+          <form
+            className="flex items-center gap-1.5"
+            onSubmit={(event) => {
+              event.preventDefault();
+              addLink();
+            }}
+          >
+            <Input
+              className="h-6 w-72"
+              placeholder="Paste a GitHub link or owner/name"
+              value={link}
+              disabled={addingLink}
+              onChange={(event) => setLink(event.target.value)}
+            />
+            <Button type="submit" variant="outline" size="xs" disabled={addingLink || link.trim() === ""}>
+              {addingLink && <Loader2 className="animate-spin" />} Add
+            </Button>
+          </form>
+        )}
         {/* What to do with the picked repos, on the left while in select mode. */}
         {selectMode && (
           <>
