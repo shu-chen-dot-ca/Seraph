@@ -183,7 +183,7 @@ class WorkTools:
                 "user, or explore), how many of its issues are in the Issues list, its score (0-100), and its signals: AI policy "
                 "(welcome, disclose, no_ai, unclear, none), outside contributors' merge rate and median days to a first reply "
                 "from a maintainer, stale outside PRs, how many people merged PRs in the last 30 days, how newcomers fare "
-                "(welcomes, ok, wait, few), PRs, issues and commits a month, and the review tone (warm, neutral, strict, curt) with what reviewers "
+                "(welcomes, ok, turned_away, left_waiting, few), PRs, issues and commits a month, and the review tone (warm, neutral, strict, curt) with what reviewers "
                 "often ask for.",
                 {},
             )(self.repos_list),

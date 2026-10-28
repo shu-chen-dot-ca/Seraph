@@ -34,7 +34,6 @@ export const FILTERS: { key: string; section: string; label: string; variant: "o
   { key: "policy:none", section: "AI policy", label: "No AI policy", variant: "secondary", title: "Its contribution files say nothing about AI" },
   { key: "newcomers:welcomes", section: "Newcomers", label: "Welcomes newcomers", variant: "ok", title: "Most newcomers' first PRs get merged, with a first reply within 3 days" },
   { key: "newcomers:ok", section: "Newcomers", label: "Newcomers OK", variant: "secondary", title: "Newcomers' first PRs fare neither clearly well nor badly" },
-  { key: "newcomers:wait", section: "Newcomers", label: "Newcomers wait", variant: "warn", title: "Newcomers' first PRs are mostly closed unmerged, or wait over a week for a reply" },
   { key: "newcomers:few", section: "Newcomers", label: "Few newcomers", variant: "secondary", title: "Too few newcomers lately to tell" },
   { key: "tone:warm", section: "Reviews", label: "Warm reviews", variant: "ok", title: "Maintainers' feedback on outside PRs feels warm" },
   { key: "tone:neutral", section: "Reviews", label: "Neutral reviews", variant: "secondary", title: "Maintainers' feedback on outside PRs feels neutral" },

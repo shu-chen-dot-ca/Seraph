@@ -42,10 +42,11 @@ newcomers: outside authors in that window who never opened a PR there before it 
 contributor" mark changes once a PR is merged, so each author is looked up instead; the NEWCOMER_AUTHORS most
 recent ones). Their first PRs: how many, merged, closed unmerged, the merge rate and the median days to a first
 reply; returned is how many opened a second PR. tag:
-    welcomes  most first PRs merged (MIN_SAMPLE or more finished) and a first reply within 3 days
-    wait      most first PRs closed unmerged, or a first reply takes over a week
-    few       fewer than MIN_NEWCOMERS newcomers: too few to tell (neutral, not a bad sign)
-    ok        anything else
+    welcomes      most first PRs merged (MIN_SAMPLE or more finished) and a first reply within 3 days
+    turned_away   most first PRs closed unmerged (a merge rate under 30%)
+    left_waiting  most first PRs over LEFT_DAYS days old are still open: neither merged nor closed
+    few           fewer than MIN_NEWCOMERS newcomers: too few to tell (neutral, not a bad sign)
+    ok            anything else, also a slow first reply (over a week) when their PRs do get merged
 
 activity: monthly averages over the last 90 days (GitHub's own counts), the last 30 days as they are, and trend
 ("up" / "down" / "flat") when those 30 days are a quarter above or below the average. issue_reply_rate: of
@@ -148,6 +149,8 @@ LINE_CHARS = 300
 MIN_SAMPLE = 3
 MIN_ISSUES = 5
 MIN_NEWCOMERS = 3
+# A newcomer's first PR still open after this many days counts as left waiting.
+LEFT_DAYS = 30
 # Outside authors looked up to tell newcomers (one GitHub search each, all in one call).
 NEWCOMER_AUTHORS = 30
 BEGINNER_ISSUES_KEPT = 30
@@ -372,13 +375,18 @@ class RepoSignals:
             newcomer_rate = round(newcomer_merged / (newcomer_merged + newcomer_closed), 2)
         newcomer_replies = [pull["reply"] for pull in first_prs if pull["reply"] is not None]
         newcomer_reply = round(statistics.median(newcomer_replies), 1) if newcomer_replies else None
+        # Their first PRs old enough to have been decided on, and how many of those are still open.
+        old_first = [pull for pull in first_prs if pull["opened"] < now - timedelta(days=LEFT_DAYS)]
+        still_open = [pull for pull in old_first if not pull["merged"] and not pull["closed"]]
         newcomer_tag = "ok"
         if len(first_prs) < MIN_NEWCOMERS:
             newcomer_tag = "few"
+        elif newcomer_rate is not None and newcomer_rate < 0.3:
+            newcomer_tag = "turned_away"
+        elif len(old_first) >= MIN_SAMPLE and len(still_open) * 2 > len(old_first):
+            newcomer_tag = "left_waiting"
         elif newcomer_rate is not None and newcomer_rate >= 0.5 and newcomer_reply is not None and newcomer_reply <= 3:
             newcomer_tag = "welcomes"
-        elif (newcomer_rate is not None and newcomer_rate < 0.3) or (newcomer_reply is not None and newcomer_reply > 7):
-            newcomer_tag = "wait"
 
         # Outside PRs over a month old that nobody else has answered.
         stale = 0

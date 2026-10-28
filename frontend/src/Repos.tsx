@@ -2,8 +2,9 @@
 The Repos list: repos the agents and Explore picked (the user never searches by hand).
 
 The table reads like the Explore page's: a column for each thing known about a repo, picked in the Columns dialog
-(components/ui/columns-dialog.tsx), in the order picked: its type and fit, score, stars, AI policy, how newcomers fare,
-review tone, PRs, issues and commits a month and the trend, contributors, maintainers, PRs no maintainer answered, reply
+(components/ui/columns-dialog.tsx), in the order picked: its type and fit, score, stars, AI policy, how newcomers fare
+(welcomed, OK, turned away: their first PRs mostly closed, or left waiting: mostly still open after a month), review
+tone, PRs, issues and commits a month and the trend, contributors, maintainers, PRs no maintainer answered, reply
 speed (how fast a maintainer first answers an outside PR; bots, AI reviewers and other outsiders don't count), its
 issues in the Issues list, and more (TABLE_COLUMNS; github_searcher/repo_signals.py, kept fresh by the backend). What
 used to be tags under a row are columns too. Values are plain text in the page's own color: green,
@@ -162,7 +163,7 @@ const SORT_GROUPS = ["Repo", "Outside contributors", "Newcomers", "Activity", "P
 
 // The fixed order of each judged or tagged value, best first being the highest. Values not listed (unknown) go last.
 const POLICY_RANK: Record<string, number> = { welcome: 5, disclose: 4, none: 3, unclear: 2, no_ai: 1 };
-const NEWCOMER_RANK: Record<string, number> = { welcomes: 4, ok: 3, few: 2, wait: 1 };
+const NEWCOMER_RANK: Record<string, number> = { welcomes: 5, ok: 4, few: 3, left_waiting: 2, turned_away: 1 };
 const TONE_RANK: Record<string, number> = { warm: 4, neutral: 3, strict: 2, curt: 1 };
 const TREND_RANK: Record<string, number> = { up: 3, flat: 2, down: 1 };
 
@@ -238,7 +239,7 @@ const COLUMNS_STORAGE = "repos-columns-2";
 // The AI policy, newcomers and tone columns are tags (the Explore page's too): green for good news, amber for "have a
 // look", red for bad, gray for the rest. Other values are plain text, colored only when it means something.
 const POLICY_VARIANT: Record<string, "ok" | "warn" | "bad"> = { welcome: "ok", no_ai: "bad" };
-const NEWCOMER_VARIANT: Record<string, "ok" | "warn" | "bad"> = { welcomes: "ok", wait: "warn" };
+const NEWCOMER_VARIANT: Record<string, "ok" | "warn" | "bad"> = { welcomes: "ok", turned_away: "bad", left_waiting: "bad" };
 const TONE_VARIANT: Record<string, "ok" | "warn" | "bad"> = { warm: "ok", strict: "warn", curt: "bad" };
 const NAME_MIN = 160;
 // The Track / Untrack column at the end, wide enough for its button.
@@ -817,8 +818,8 @@ export default function Repos() {
       }
       return (
         <span
-          className={cn(newcomers.tag === "welcomes" && "text-ok", newcomers.tag === "wait" && "text-warn")}
-          title={`${newcomers.prs} newcomers: ${newcomers.merged} first PRs merged, ${newcomers.closed} closed unmerged`}
+          className={cn(newcomers.tag === "welcomes" && "text-ok", (newcomers.tag === "turned_away" || newcomers.tag === "left_waiting") && "text-destructive")}
+          title={`${newcomers.prs} newcomers' first PRs: ${newcomers.merged} merged, ${newcomers.closed} closed unmerged, ${newcomers.prs - newcomers.merged - newcomers.closed} still open`}
         >
           {Math.round(newcomers.merge_rate * 100)}%
         </span>

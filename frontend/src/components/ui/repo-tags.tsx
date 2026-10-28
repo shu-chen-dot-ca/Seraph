@@ -44,16 +44,18 @@ const POLICY_MEANING: Record<AIPolicyTag, string> = {
 const NEWCOMER_LABEL: Record<NewcomerTag, string> = {
   welcomes: "Welcomes newcomers",
   ok: "Newcomers OK",
-  wait: "Newcomers wait",
+  turned_away: "Turns newcomers away",
+  left_waiting: "Leaves newcomers waiting",
   few: "Few newcomers",
 }
 
-const NEWCOMER_VARIANT: Record<NewcomerTag, TagVariant> = { welcomes: "ok", ok: "secondary", wait: "warn", few: "secondary" }
+const NEWCOMER_VARIANT: Record<NewcomerTag, TagVariant> = { welcomes: "ok", ok: "secondary", turned_away: "bad", left_waiting: "bad", few: "secondary" }
 
 const NEWCOMER_MEANING: Record<NewcomerTag, string> = {
   welcomes: "Most first PRs from newcomers get merged, with a first reply within 3 days",
-  ok: "Newcomers' first PRs fare neither clearly well nor badly",
-  wait: "Newcomers' first PRs are mostly closed unmerged, or wait over a week for a reply",
+  ok: "Newcomers' first PRs fare neither clearly well nor badly; a slow first reply (over a week) is still OK",
+  turned_away: "Newcomers' first PRs are mostly closed unmerged",
+  left_waiting: "Newcomers' first PRs over a month old are mostly still open: neither merged nor closed",
   few: "Too few newcomers lately to tell",
 }
 

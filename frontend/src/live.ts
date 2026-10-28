@@ -82,7 +82,7 @@ export type RepoSignals = {
   ai_policy: AIPolicy;
 };
 
-export type NewcomerTag = "welcomes" | "ok" | "wait" | "few";
+export type NewcomerTag = "welcomes" | "ok" | "turned_away" | "left_waiting" | "few";
 
 // Outside authors who never opened a PR in the repo before the window, and how their first PRs went.
 export type Newcomers = {

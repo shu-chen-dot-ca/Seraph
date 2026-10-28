@@ -127,14 +127,14 @@ const FOUND_COLUMNS: { key: FoundKey; label: string; title: string; better: "hig
 
 // The order of each judged value, best first being the highest. Values not listed (unknown) go last.
 const POLICY_RANK: Record<string, number> = { welcome: 5, disclose: 4, none: 3, unclear: 2, no_ai: 1 };
-const NEWCOMER_RANK: Record<string, number> = { welcomes: 4, ok: 3, few: 2, wait: 1 };
+const NEWCOMER_RANK: Record<string, number> = { welcomes: 5, ok: 4, few: 3, left_waiting: 2, turned_away: 1 };
 const TONE_RANK: Record<string, number> = { warm: 4, neutral: 3, strict: 2, curt: 1 };
 const TREND_RANK: Record<string, number> = { up: 3, flat: 2, down: 1 };
 
 // The AI policy, newcomers and tone columns are tags: green for good news, amber for "have a look", red for bad, gray
 // for the rest.
 const POLICY_VARIANT: Record<string, "ok" | "warn" | "bad"> = { welcome: "ok", no_ai: "bad" };
-const NEWCOMER_VARIANT: Record<string, "ok" | "warn" | "bad"> = { welcomes: "ok", wait: "warn" };
+const NEWCOMER_VARIANT: Record<string, "ok" | "warn" | "bad"> = { welcomes: "ok", turned_away: "bad", left_waiting: "bad" };
 const TONE_VARIANT: Record<string, "ok" | "warn" | "bad"> = { warm: "ok", strict: "warn", curt: "bad" };
 
 export default function Explore() {

@@ -95,7 +95,7 @@ const TRACKED_COLUMNS: { key: TrackedKey; label: string; title: string; better?:
 ];
 // The tags' order for sorting, the friendliest highest (the same as the Repos page's).
 const POLICY_RANK: Record<string, number> = { welcome: 5, disclose: 4, none: 3, unclear: 2, no_ai: 1 };
-const NEWCOMER_RANK: Record<string, number> = { welcomes: 4, ok: 3, few: 2, wait: 1 };
+const NEWCOMER_RANK: Record<string, number> = { welcomes: 5, ok: 4, few: 3, left_waiting: 2, turned_away: 1 };
 const TONE_RANK: Record<string, number> = { warm: 4, neutral: 3, strict: 2, curt: 1 };
 // An open repo's issues: #, Title (the room left over), the tags (Free, Level, Kind), Opened, Updated, Checked (Claude
 // last read it), comments, then GitHub and Add.

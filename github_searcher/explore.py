@@ -170,7 +170,6 @@ FILTERS = {
     "policy:none": "No AI policy",
     "newcomers:welcomes": "Welcomes newcomers",
     "newcomers:ok": "Newcomers OK",
-    "newcomers:wait": "Newcomers wait",
     "newcomers:few": "Few newcomers",
     "tone:warm": "Warm reviews",
     "tone:neutral": "Neutral reviews",
