@@ -374,7 +374,7 @@ class WorkTools:
                 "draft_question",
                 "Ask the user a question through their Inbox when you are blocked and need their decision or information. "
                 "job_id is the job it is about (leave it out if none). The job waits on the user until they answer. "
-                "Not for a secret to fill in (env_var_add, then say so in your message).",
+                "Not for a secret to fill in (env_var_add, then say so in your message), nor to ask whether to go on.",
                 {
                     "type": "object",
                     "properties": {"job_id": {"type": "string"}, "question": {"type": "string"}},

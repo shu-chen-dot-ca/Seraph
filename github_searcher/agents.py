@@ -26,6 +26,9 @@ A message sent while the agent works waits in a queue (the chat shows it as pend
 the user's at most). Each of the user's messages gets a turn of its own, in order, together with the
 app's messages that came before it; interrupting a turn (Esc in the chat) starts the next one. The user can take
 one of their queued messages out before it goes in (cancel_queued); the agent list carries their texts (queued).
+A message from the user while the agent is in the middle of a job (status working) is not a stop: its turn's prompt
+also says to answer, take it in, and carry on with the job in that same turn, unless the user said to stop or change
+course. Only interrupting with nothing queued stops the agent until the user writes again.
 When the user fills in empty env variables an agent added for a secret (env_var_add), that agent is told
 (secrets_filled, from the env endpoints in backend/vms_api.py), so it never asks for them in the Inbox.
 Waiting messages are saved with the record, so a backend restart (it reloads on every code
@@ -34,7 +37,7 @@ with them after the restart; one cut off in the middle of a turn gets one more s
 
 After each turn the worker enforces the VM rule: an agent never holds a VM it has nothing to do in.
 - Holding a VM with no queued or working job for it: the VM is released for it.
-- Holding one with open jobs there: it is reminded to go on, or to release the VM. After
+- Holding one with open jobs there: it is reminded to go on with them now, not to wait for an answer in chat. After
   MAX_NUDGES reminders in a row with no change to its jobs, the VM is released for it.
 - In no queue but with queued jobs for a VM: it is reminded to queue_for_vm (MAX_NUDGES times at most).
 The VM queue (sandbox/vm_queue.py) tells Agents when an agent's turn comes (on_grant: a message
@@ -236,6 +239,17 @@ class Agents:
                     if message["from"] == "User":
                         break
                 prompt = "\n\n".join(f"[{message['from']}] {message['text']}" for message in batch)
+                # The user wrote in the middle of a job (often stopping the turn to get it in): it answers, then goes on
+                # with the job, unless they told it to stop or change course. Only in the prompt, not in the chat.
+                working = [job for job in self.jobs.for_agent(agent.id) if job["status"] == "working"]
+                if batch[-1]["from"] == "User" and working:
+                    titles = ", ".join(f"{job['id']} ({job['title']})" for job in working)
+                    prompt += (
+                        f"\n\n[System] You are in the middle of {titles}. Answer the user and take in what they said, then "
+                        "carry on with that work in this same turn, from where you were. Don't end your turn to ask whether "
+                        "to go on, and don't release the VM to wait for their answer. Stop, wait or change course only when "
+                        "they tell you to."
+                    )
             self.pending[agent.id] = messages[len(batch):]
             if self.pending[agent.id]:
                 self.wake[agent.id].set()
@@ -303,7 +317,10 @@ class Agents:
                 continue
             if place == 0:
                 nudge["count"] += 1
-                text = f"You still hold {vm_name} and have open jobs: {titles}. Continue, or release_vm."
+                text = (
+                    f"You still hold {vm_name} and have open jobs: {titles}. Carry on with them now; don't wait for an answer "
+                    "in chat. release_vm only when they are done, wait on a draft in the Inbox, or the user told you to stop."
+                )
                 self.pending[agent.id].append({"from": "System", "text": text, "shown": False})
                 self.wake[agent.id].set()
                 continue
