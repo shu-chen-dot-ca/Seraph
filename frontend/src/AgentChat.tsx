@@ -18,6 +18,9 @@ picture, without noVNC's page and buttons around it (noVNC's own client draws it
 connection), so it moves as smoothly as the VM page's desktop. View-only: nothing reaches the VM from it. A click opens
 it big in a pop-up on this page (still view-only; the VM's name above it links to the VM page, where you can use it).
 Off, starting, not answering, or a terminal-only image say so instead.
+Under the Desktop, cards for the same VM like the VMs page's: CPU, Memory and Internet (the number now and a chart of
+the last minute; Internet also the data used since its count was last reset) and Disk (space used, a bar that turns
+amber at 90%). They move on their own while the VM runs and say Off while it doesn't.
 
 The conversation is the agent's history (HistoryEntry in live.ts; append-only on the server). The page
 loads the last 200 entries, then fetches only the new part (/history?since=<end>) whenever the live
@@ -107,6 +110,24 @@ const OPEN_STATUSES = ["queued", "working", "waiting_on_user"];
 // The messages that may wait for their turn at once (MAX_QUEUED in agents.py).
 const MAX_QUEUED = 10;
 const NO_VM = "__none__";
+// The backend keeps one usage sample per second for the last minute.
+const SAMPLES = 60;
+// The internet chart never scales below this, so an idle VM's few packets don't look like a busy line.
+const INTERNET_CHART_MIN = 100_000;
+
+// Data in the units a phone's data counter uses: 1 MB = 1,000,000 bytes (the same as the VMs page).
+function formatBytes(bytes: number): string {
+  if (bytes >= 1e9) {
+    return `${(bytes / 1e9).toFixed(2)} GB`;
+  }
+  if (bytes >= 1e6) {
+    return `${(bytes / 1e6).toFixed(1)} MB`;
+  }
+  if (bytes >= 1e3) {
+    return `${Math.round(bytes / 1e3)} KB`;
+  }
+  return `${Math.round(bytes)} B`;
+}
 
 // An icon per tool; anything else gets the wrench.
 const TOOL_ICONS: Record<string, LucideIcon> = {
@@ -238,6 +259,132 @@ function LiveDesktop(props: { url: string; className?: string }) {
     };
   }, [props.url]);
   return <div ref={boxRef} className={props.className} />;
+}
+
+// The cards under the Desktop, like the VMs page's: CPU, Memory and Internet with a chart of the last minute, and
+// Disk. A component of its own because it reads the whole VM list, which changes every second while the VM runs:
+// only these cards re-render with it, not the conversation.
+function VMUsageCards(props: { name: string }) {
+  const vms = useLive("vms");
+  const vm = vms.find((each) => each.name === props.name);
+  if (vm === undefined) {
+    return null;
+  }
+  const on = vm.status === "running";
+  // The usage numbers are null until the first sample after a start (disk until the VM's agent runs).
+  const cpu = vm.usage?.cpu_percent ?? null;
+  const memory = vm.usage?.memory_used_gb ?? null;
+  const disk = vm.usage?.disk_used_gb ?? null;
+  const down = vm.usage?.net_down_rate ?? null;
+  const up = vm.usage?.net_up_rate ?? null;
+
+  // The internet chart shows download and upload together: it is all data used.
+  const internetValues = vm.samples.map((sample) => {
+    if (sample.net_down_rate === null || sample.net_up_rate === null) {
+      return null;
+    }
+    return sample.net_down_rate + sample.net_up_rate;
+  });
+  let internetMax = INTERNET_CHART_MIN;
+  for (const value of internetValues) {
+    if (value !== null && value > internetMax) {
+      internetMax = value;
+    }
+  }
+  const charts = [
+    {
+      key: "cpu",
+      label: "CPU",
+      value: cpu === null ? "–" : `${Math.round(cpu)}%`,
+      detail: `${vm.cpus} CPUs`,
+      values: vm.samples.map((sample) => sample.cpu_percent),
+      max: 100,
+      extra: "",
+    },
+    {
+      key: "memory",
+      label: "Memory",
+      value: memory === null ? "–" : `${memory.toFixed(1)} GB`,
+      detail: `of ${vm.memory_gb} GB`,
+      values: vm.samples.map((sample) => sample.memory_used_gb),
+      max: vm.memory_gb,
+      extra: "",
+    },
+    {
+      key: "internet",
+      label: "Internet",
+      value: down === null || up === null ? "–" : `${formatBytes(down + up)}/s`,
+      detail: vm.internet ? "" : "off",
+      values: internetValues,
+      max: internetMax,
+      extra: `${formatBytes(vm.traffic.down + vm.traffic.up)} since reset`,
+    },
+  ];
+
+  return (
+    // Two cards a row, one when the column is narrow.
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-2 px-2 pb-2">
+      {charts.map((chart) => {
+        // Samples fill the chart from the right: the newest is at the right edge.
+        const offset = SAMPLES - chart.values.length;
+        const points: string[] = [];
+        chart.values.forEach((value, index) => {
+          if (value === null) {
+            return;
+          }
+          const x = ((offset + index) / (SAMPLES - 1)) * 100;
+          const y = 100 - Math.min(value / chart.max, 1) * 100;
+          points.push(`${x.toFixed(2)},${y.toFixed(2)}`);
+        });
+        const first = points.length > 0 ? points[0].split(",")[0] : "0";
+        const last = points.length > 0 ? points[points.length - 1].split(",")[0] : "0";
+        return (
+          <div key={chart.key} className="flex h-32 min-w-0 flex-col rounded-lg border bg-card p-2.5">
+            <div className="text-muted-foreground">{chart.label}</div>
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-lg font-medium tabular-nums">{chart.value}</span>
+              <span className="truncate text-xs text-muted-foreground">{chart.detail}</span>
+            </div>
+            <div className="relative mt-auto h-10 border-b">
+              {points.length === 0 && (
+                <span className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">{on ? "Waiting…" : "Off"}</span>
+              )}
+              {points.length > 0 && (
+                <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="absolute inset-0 size-full overflow-visible text-primary">
+                  <polygon points={`${first},100 ${points.join(" ")} ${last},100`} fill="currentColor" opacity="0.12" />
+                  <polyline
+                    points={points.join(" ")}
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinejoin="round"
+                    strokeLinecap="round"
+                    vectorEffect="non-scaling-stroke"
+                  />
+                </svg>
+              )}
+            </div>
+            {chart.extra !== "" && <div className="mt-1 truncate text-xs text-muted-foreground tabular-nums">{chart.extra}</div>}
+          </div>
+        );
+      })}
+
+      <div className="flex h-32 min-w-0 flex-col rounded-lg border bg-card p-2.5">
+        <div className="text-muted-foreground">Disk</div>
+        <div className="flex items-baseline gap-1.5">
+          <span className="text-lg font-medium tabular-nums">{disk === null ? "–" : `${disk.toFixed(1)} GB`}</span>
+          <span className="truncate text-xs text-muted-foreground">of {vm.disk_gb} GB</span>
+        </div>
+        {/* Gray, amber once the disk is 90% full (the VM starts failing when it fills). */}
+        <div className="mt-auto mb-1 h-1.5 overflow-hidden rounded-full bg-muted">
+          <div
+            className={cn("h-full rounded-full", disk !== null && disk >= vm.disk_gb * 0.9 ? "bg-warn" : "bg-muted-foreground/70")}
+            style={{ width: `${disk === null ? 0 : Math.min((disk / vm.disk_gb) * 100, 100)}%` }}
+          />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function AgentChat(props: { agentId: string }) {
@@ -1080,6 +1227,7 @@ export default function AgentChat(props: { agentId: string }) {
                 )}
               </div>
             </div>
+            {deskVM !== null && <VMUsageCards name={deskVM} />}
 
             <Dialog open={deskBig && deskReady && deskUrl !== null} onOpenChange={setDeskBig}>
               <DialogContent className="flex h-[90vh] flex-col gap-2 sm:max-w-[95vw]">
