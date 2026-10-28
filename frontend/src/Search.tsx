@@ -2,21 +2,29 @@
 The Search page: find a repo on GitHub by a word or two of its name and add it to Repos by hand, without Explore.
 
 Type in the box on top (its name, roughly, owner/name, a GitHub link, or a few words on what it does) and press Enter
-or Search. It searches GitHub like the search box on github.com (backend/search_api.py): best match first, over
-names, descriptions and topics. A single word is also tried as word/word, so openclaw finds openclaw/openclaw first;
-words that find nothing together are tried as any of them. Up to 30 repos, forks left out.
+or Search. Two searches start at once (backend/search_api.py):
+- GitHub's own, shown first (it is quick): like the search box on github.com, best match first, over names,
+  descriptions and topics. A single word is also tried as word/word, so openclaw finds openclaw/openclaw first; words
+  that find nothing together are tried as any of them. Up to 30 repos, forks left out.
+- The search agent's (github_searcher/search_agent.py), a few seconds later: it works out what you mean, the way a
+  person would (ibasync is ib_async, opencraw is openclaw, a nickname, what the project does), searches GitHub itself,
+  and picks the repo you most likely mean and closely related ones (what it was forked from or took over from, its
+  official plugins, the best-known alternatives). A line above the table says what it thinks you are after; while it
+  looks, a spinner and a Stop button that ends it (GitHub's own matches stay). Its picks go on top of the table, each
+  with a line under it: "Likely what you mean" or "Related", and why. GitHub's own matches follow, without the ones
+  it picked. A newer search drops an older one's answer. The page never names the model behind it.
 
-The results are a table like the Explore page's, in GitHub's order: Repo (its description
+The results are a table like the Explore page's, the agent's picks first, then GitHub's order: Repo (its description
 under it; the icon opens it on GitHub in a new tab; archived repos say so in amber), Stars, Language, Last push, then
 Add, which puts it in Repos (added by you; the Repos page's Ctrl+Z takes it out again): a spinner on it until the
 backend answers, then a note at the bottom right, and the row says In Repos, a link to the Repos page (so does a repo
 that was in Repos already). A click on a row opens it in place: its README, then its files folded at the bottom
 (RepoTree), like on Explore and Repos. The last search and its results stay while you are on other pages, until a
-reload.
+reload, the agent's answer too (also one that comes while you are on another page).
 */
 
-import { ExternalLink, Loader2, Search as SearchIcon, Star } from "lucide-react";
-import { useState } from "react";
+import { ExternalLink, Loader2, Search as SearchIcon, Sparkles, Square, Star } from "lucide-react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import RepoTree from "@/RepoTree";
@@ -33,6 +41,9 @@ type FoundRepo = {
   pushed_at: string;
   archived: boolean;
   html_url: string;
+  // Only on the agent's picks: the one you most likely mean, or a related one, and why.
+  kind?: "match" | "related";
+  why?: string;
 };
 
 const STARS = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
@@ -41,6 +52,17 @@ const STARS = new Intl.NumberFormat("en", { notation: "compact", maximumFraction
 let lastText = "";
 let lastSearched = "";
 let lastResults: FoundRepo[] | null = null;
+// The agent's answer to the last search (null until it comes), whether it is still looking, and why it failed. Kept
+// here, not in the page's state, so an answer that comes while the page is closed shows when it opens again.
+let smart: { meant: string; results: FoundRepo[] } | null = null;
+let smartBusy = false;
+let smartError = "";
+// The id the running agent search has on the backend, for Stop.
+let smartId = "";
+// Goes up with every search, so the answer to an older one is dropped.
+let searchNumber = 0;
+// Draws the open page again when the agent's answer comes (null while the page is closed).
+let redraw: (() => void) | null = null;
 
 export default function Search() {
   const repos = useLive("repos");
@@ -52,6 +74,13 @@ export default function Search() {
   // Repos whose Add is waiting for the backend, and the rows open in place.
   const [adding, setAdding] = useState<string[]>([]);
   const [open, setOpen] = useState<string[]>([]);
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    redraw = () => setTick((tick) => tick + 1);
+    return () => {
+      redraw = null;
+    };
+  }, []);
 
   // Names in Repos, without case: those rows say In Repos.
   const inRepos = repos.items.map((each) => each.full_name.toLowerCase());
@@ -61,6 +90,8 @@ export default function Search() {
     if (query === "") {
       return;
     }
+    searchNumber += 1;
+    askAgent(query, searchNumber);
     setBusy(true);
     try {
       const answer = await api<{ results: FoundRepo[] }>(`/api/search?q=${encodeURIComponent(query)}`);
@@ -73,6 +104,45 @@ export default function Search() {
       toast.error(`Could not search: ${err instanceof Error ? err.message : err}`);
     } finally {
       setBusy(false);
+    }
+  }
+
+  // The agent's half (GET /api/search/agent): slower, so GitHub's own matches show first.
+  async function askAgent(query: string, number: number) {
+    smart = null;
+    smartError = "";
+    smartBusy = true;
+    smartId = `${Date.now()}-${number}`;
+    try {
+      const answer = await api<{ meant: string; results: FoundRepo[] }>(`/api/search/agent?q=${encodeURIComponent(query)}&id=${smartId}`);
+      if (number === searchNumber) {
+        smart = answer;
+      }
+    } catch (err) {
+      if (number === searchNumber) {
+        smartError = err instanceof Error ? err.message : String(err);
+      }
+    }
+    if (number === searchNumber) {
+      smartBusy = false;
+      if (redraw !== null) {
+        redraw();
+      }
+    }
+  }
+
+  // Stop: the backend ends the agent search, and its answer (a "Stopped" error) is dropped like an older search's.
+  async function stopAgent() {
+    const id = smartId;
+    searchNumber += 1;
+    smartBusy = false;
+    if (redraw !== null) {
+      redraw();
+    }
+    try {
+      await api("/api/search/agent/stop", { method: "POST", body: { id } });
+    } catch (err) {
+      toast.error(`Could not stop it: ${err instanceof Error ? err.message : err}`);
     }
   }
 
@@ -92,7 +162,18 @@ export default function Search() {
     setOpen(open.includes(name) ? open.filter((each) => each !== name) : [...open, name]);
   }
 
-  const rows = results ?? [];
+  // The agent's picks first, then GitHub's own matches that aren't among them.
+  const rows: FoundRepo[] = [];
+  const picked: string[] = [];
+  for (const each of smart !== null ? smart.results : []) {
+    rows.push(each);
+    picked.push(each.full_name.toLowerCase());
+  }
+  for (const each of results ?? []) {
+    if (!picked.includes(each.full_name.toLowerCase())) {
+      rows.push(each);
+    }
+  }
 
   return (
     <div className="relative flex h-full flex-col">
@@ -121,7 +202,28 @@ export default function Search() {
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
-        {results !== null && rows.length === 0 && <div className="px-3 py-2 text-muted-foreground">Nothing found for "{searched}".</div>}
+        {(smartBusy || smart !== null || smartError !== "") && (
+          <div className="flex min-h-8 items-center gap-2 border-b px-3 py-1">
+            {smartBusy && (
+              <>
+                <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+                <span className="text-muted-foreground">Working out what you mean and looking for related repos…</span>
+                <Button variant="ghost" size="xs" onClick={stopAgent} title="Stop looking; GitHub's own matches stay">
+                  <Square /> Stop
+                </Button>
+              </>
+            )}
+            {!smartBusy && smart !== null && (
+              <>
+                <Sparkles className="size-3.5 shrink-0 text-primary" />
+                <span>{smart.meant}</span>
+              </>
+            )}
+            {!smartBusy && smartError !== "" && <span className="text-muted-foreground">Couldn't look further: {smartError}</span>}
+          </div>
+        )}
+
+        {results !== null && rows.length === 0 && !smartBusy && <div className="px-3 py-2 text-muted-foreground">Nothing found for "{searched}".</div>}
 
         {/* One grid for the whole table, like the Explore page's: the header and each row are subgrids of it, so they
             line up; Repo takes the room left over. The description and the open repo span the row without widening it. */}
@@ -185,8 +287,13 @@ export default function Search() {
                     )}
                   </span>
                   {each.description !== "" && (
-                    <div className="w-0 min-w-full truncate pb-1.5" style={{ gridColumn: "1 / -1" }} title={each.description}>
+                    <div className={cn("w-0 min-w-full truncate", each.why === undefined && "pb-1.5")} style={{ gridColumn: "1 / -1" }} title={each.description}>
                       {each.description}
+                    </div>
+                  )}
+                  {each.why !== undefined && (
+                    <div className="w-0 min-w-full truncate pb-1.5 text-muted-foreground" style={{ gridColumn: "1 / -1" }} title={each.why}>
+                      <span className={cn(each.kind === "match" && "text-primary")}>{each.kind === "match" ? "Likely what you mean" : "Related"}</span> · {each.why}
                     </div>
                   )}
                 </div>
