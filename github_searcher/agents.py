@@ -534,8 +534,8 @@ class Agents:
         # Its very first message: an agent with the automatic name hears it may name itself.
         agent = self.agents[agent_id]
         if agent.record["name_by"] == "auto" and not agent.history and not self.pending[agent_id]:
-            text = f"You have the automatic name {agent.name}. Once you know what the user wants, give yourself a short name for that work with name_yourself."
-            self.pending[agent_id].append({"from": "System", "text": text, "shown": False})
+            hint = f"You have the automatic name {agent.name}. Once you know what the user wants, give yourself a short name for that work with name_yourself."
+            self.pending[agent_id].append({"from": "System", "text": hint, "shown": False})
         self.pending[agent_id].append({"from": "User", "text": text.strip(), "shown": False})
         self.wake[agent_id].set()
         self.version += 1
