@@ -26,7 +26,7 @@ repos already in the found list. Then `workers` candidates at a time (token_bala
    README against the profile (claude_judge.py): is it a project people contribute code to (not a link list,
    tutorial or course), which of the user's types it is, how well it fits (one of FIT_LEVELS, fixed so repos
    rank the same way every time; kept as its number), one line for its note;
-4. found, with its type (its "lane"), fit, note, tags and score, and its signals kept for when it is approved. Its AI
+4. found, with its type (its "lane"), fit, note and tags, and its signals kept for when it is approved. Its AI
    policy, newcomers, activity and atmosphere show as tags; they keep a repo out only when the run's filters say so.
 
 Filters (FILTERS, picked on the page for each run) are every tag a repo can get, the same as the Repos and Tracked
@@ -38,10 +38,11 @@ The numbers' sections are checked in step 2. The AI policy and the reviews need 
 picked (CLAUDE_SECTIONS), they are read before the README, and only a repo that passes gets its README judged (most
 repos don't, and the README judgment is the costly part). The fit is known only after the README judgment.
 
-    found = [{"name", "lane", "description", "stars", "default_branch", "html_url", "fit", "note", "score",
+    found = [{"name", "lane", "description", "stars", "default_branch", "html_url", "fit", "note",
               "ai_policy", "newcomers", "tone", "atmosphere", "prs_month", "issues_month", "commits_month",
               "trend", "found_at", "signals"}, ...]     newest last; summary() leaves "signals" out and adds
-                                                         three of its numbers: contributors, maintainers, unanswered
+                                                         a few of its numbers: merged, newcomer_stats, reply,
+                                                         contributors, maintainers, unanswered
 
 One run at a time. It lives in memory: the counts, the ones being checked now, why others were skipped and
 the errors. The live feed's explore topic carries it with the found list and the profile. version goes up on every
@@ -151,8 +152,8 @@ NETWORK_TRIES = 5
 NETWORK_PAUSE = 30
 UNREACHABLE = (httpx.ConnectError, httpx.ConnectTimeout)
 FULL_NAME = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
-# How well a repo fits the profile: Claude picks a level, and the repo keeps its number (score() uses it; the
-# Repos page shows the level again: the frontend's FIT_LEVELS has the same steps).
+# How well a repo fits the profile: Claude picks a level, and the repo keeps its number (the Repos page shows the
+# level again: the frontend's FIT_LEVELS has the same steps).
 FIT_LEVELS = {"strong": 1.0, "good": 0.75, "some": 0.5, "weak": 0.25}
 MAX_TYPES = 6
 # The tags a run can filter on, "section:value", each with its label on the page (also why a repo is skipped on the
@@ -246,12 +247,17 @@ class Explore:
         self.version += 1
 
     def summary(self) -> dict:
-        # The found list without each repo's signals: those are only for approving, and big. Three numbers from them
-        # stay: who opened PRs lately, who merged them, and outside PRs nobody answered (None when not counted yet).
+        # The found list without each repo's signals: those are only for approving, and big. A few numbers from them
+        # stay: outside PRs merged, how newcomers' first PRs went (their newcomers part, small: counts and merge rate),
+        # how fast a maintainer first replies, who opened PRs lately, who merged them, and outside PRs nobody answered
+        # (None when not counted yet).
         found = []
         for entry in self.found:
             shown = {key: value for key, value in entry.items() if key != "signals"}
             signals = entry.get("signals") or {}
+            shown["merged"] = signals.get("outside_merge_rate")
+            shown["newcomer_stats"] = signals.get("newcomers")
+            shown["reply"] = signals.get("median_days_to_first_reply")
             shown["contributors"] = signals.get("active_contributors")
             shown["maintainers"] = signals.get("active_mergers_30d")
             shown["unanswered"] = signals.get("stale_outside_prs")
@@ -751,7 +757,6 @@ class Explore:
                     "default_branch": info["default_branch"],
                     "html_url": info["html_url"],
                     "fit": fit,
-                    "score": self.repo_signals.score(signals, fit),
                     "ai_policy": signals["ai_policy"]["tag"],
                     "newcomers": signals["newcomers"]["tag"],
                     "tone": signals["atmosphere"]["tone"] if signals["atmosphere"] else None,

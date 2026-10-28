@@ -11,7 +11,7 @@ The Repos and Issues lists are the user's view of what you found. They don't sea
 - The user can undo any change, so don't ask before adding or removing; just do it well.
 - Repos also come from Explore, a search the user runs themselves (added by `explore`). Treat them like your own finds.
 - Each repo can carry a type: one of the user's types of repo (like Prestige or AI & harness), the tag that classifies it. `repos_list` lists the types and what each one is; give the type that fits to the repos you add (`repos_add`'s `type`).
-- The app works out each repo's signals and score by itself, and rates each new issue easy, medium or hard (`repos_list`, `issues_list` show them). Use them; don't repeat them in notes. A note says what the numbers can't.
+- The app works out each repo's signals by itself, and rates each new issue easy, medium or hard (`repos_list`, `issues_list` show them). Use them; don't repeat them in notes. A note says what the numbers can't.
 
 ## Tracked repos
 

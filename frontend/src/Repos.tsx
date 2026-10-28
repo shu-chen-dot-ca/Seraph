@@ -2,12 +2,14 @@
 The Repos list: repos the agents and Explore picked (the user never searches by hand).
 
 The table reads like the Explore page's: a column for each thing known about a repo, picked in the Columns dialog
-(components/ui/columns-dialog.tsx), in the order picked: its type and fit, score, stars, AI policy, how newcomers fare
-(welcomed, OK, turned away: their first PRs mostly closed, or left waiting: mostly still open after a month), review
-tone, PRs, issues and commits a month and the trend, contributors, maintainers, PRs no maintainer answered, reply
-speed (how fast a maintainer first answers an outside PR; bots, AI reviewers and other outsiders don't count), its
-issues in the Issues list, and more (TABLE_COLUMNS; github_searcher/repo_signals.py, kept fresh by the backend). What
-used to be tags under a row are columns too. Values are plain text in the page's own color: green,
+(components/ui/columns-dialog.tsx), in the order picked. The main ones come first by default: outside PRs merged (of
+those merged or closed), newcomers' first PRs merged (New merged; hover for merged, closed and still open), how
+newcomers fare (welcomed, OK, turned away: their first PRs mostly closed, or left waiting: mostly still open after a
+month), the AI policy, and reply speed (how fast a maintainer first answers an outside PR;
+bots, AI reviewers and other outsiders don't count). Then its type and fit, stars, review tone, PRs, issues and commits
+a month and the trend, contributors, maintainers, PRs no maintainer answered, its issues in the Issues list, and more
+(TABLE_COLUMNS; github_searcher/repo_signals.py, kept fresh by the backend). There is no overall score: the numbers
+are shown as they are. What used to be tags under a row are columns too. Values are plain text in the page's own color: green,
 amber or red only where a value means something (the same rules as the Explore page). No lines between columns. Name
 comes first and takes the room left over, the note under it, so the other columns sit on the right. Every column is as
 wide as its widest cell (header included) over the whole list, not only the rows on screen: a hidden copy of every
@@ -79,7 +81,6 @@ const SORT_STORAGE = "repos-sort";
 
 type SortKey =
   | "name"
-  | "score"
   | "stars"
   | "listed"
   | "added"
@@ -123,7 +124,6 @@ type Sort = { key: SortKey; dir: "down" | "up" };
 // or A to Z for text. down and up are the two ways, in words.
 const SORT_FIELDS: { key: SortKey; label: string; group: string; better: "higher" | "lower" | "text"; down: string; up: string }[] = [
   { key: "name", label: "Name", group: "Repo", better: "text", down: "A to Z", up: "Z to A" },
-  { key: "score", label: "Score", group: "Repo", better: "higher", down: "Highest score first", up: "Lowest score first" },
   { key: "stars", label: "Stars", group: "Repo", better: "higher", down: "Most stars first", up: "Fewest stars first" },
   { key: "listed", label: "Listed issues", group: "Repo", better: "higher", down: "Most issues in the Issues list first", up: "Fewest first" },
   { key: "added", label: "Added", group: "Repo", better: "higher", down: "Newest first", up: "Oldest first" },
@@ -178,7 +178,6 @@ type TableColumn = { key: ColumnKey; label: string; name: string; group: string;
 const NAME_COLUMN: TableColumn = { key: "name", label: "Name", name: "Name", group: "Repo", title: "owner/name on GitHub", sort: "name" };
 
 const TABLE_COLUMNS: TableColumn[] = [
-  { key: "score", label: "Score", name: "Score", group: "Repo", title: "0-100 from the merge rate, reply speed, newcomers, fit, stale PRs and open beginner issues", sort: "score" },
   { key: "stars", label: "Stars", name: "Stars", group: "Repo", title: "Stars on GitHub", sort: "stars" },
   { key: "listed", label: "Issues", name: "Listed issues", group: "Repo", title: "Its issues in the Issues list", sort: "listed" },
   { key: "added", label: "Added", name: "Added", group: "Repo", title: "When it was added to the list", sort: "added" },
@@ -197,7 +196,7 @@ const TABLE_COLUMNS: TableColumn[] = [
   { key: "unclaimed", label: "Unclaimed", name: "Unclaimed beginner issues", group: "Outside contributors", title: "Open beginner issues nobody seems to have taken", sort: "unclaimed" },
   { key: "beginner", label: "Beginner", name: "Beginner issues", group: "Outside contributors", title: "Open beginner issues", sort: "beginner" },
   { key: "newcomer_tag", label: "Newcomers", name: "Newcomers (tag)", group: "Newcomers", title: "How newcomers' first PRs fare", sort: "newcomer_tag" },
-  { key: "newcomers", label: "New", name: "Newcomers merged", group: "Newcomers", title: "Newcomers' first PRs merged, of those merged or closed", sort: "newcomers" },
+  { key: "newcomers", label: "New merged", name: "Newcomers merged", group: "Newcomers", title: "Newcomers' first PRs merged, of those merged or closed", sort: "newcomers" },
   { key: "newcomer_reply", label: "New reply", name: "Newcomer reply speed", group: "Newcomers", title: "Median days until newcomers' first PRs get a first reply from a maintainer", sort: "newcomer_reply" },
   { key: "newcomer_prs", label: "New PRs", name: "Newcomer count", group: "Newcomers", title: "Newcomers who opened a first PR in the window", sort: "newcomer_prs" },
   { key: "returned", label: "Came back", name: "Newcomers who came back", group: "Newcomers", title: "Newcomers who opened a second PR", sort: "returned" },
@@ -216,15 +215,19 @@ const TABLE_COLUMNS: TableColumn[] = [
   { key: "asks", label: "Asks", name: "Reviewer asks", group: "Policy and reviews", title: "How many things reviewers ask contributors for (tests, docs, a changelog entry...)", sort: "asks" },
   { key: "community", label: "Community", name: "Community", group: "Policy and reviews", title: "Contributing guide, code of conduct, GitHub Discussions and chat", sort: "community" },
 ];
-// What a row shows until the Columns dialog changes it: much like the Explore page's columns, then reply speed and
-// the repo's issues in the Issues list.
+// What a row shows until the Columns dialog changes it: the main ones first (outside PRs merged, newcomers' first PRs
+// merged, how newcomers fare,
+// the AI policy and how fast a maintainer replies), then much like the Explore page's columns, then the repo's issues
+// in the Issues list.
 const DEFAULT_COLUMNS: ColumnKey[] = [
-  "lane",
-  "score",
-  "stars",
-  "fit",
-  "ai_policy",
+  "merged",
+  "newcomers",
   "newcomer_tag",
+  "ai_policy",
+  "reply",
+  "lane",
+  "fit",
+  "stars",
   "tone",
   "prs",
   "issues",
@@ -233,11 +236,11 @@ const DEFAULT_COLUMNS: ColumnKey[] = [
   "contributors",
   "mergers",
   "stale",
-  "reply",
   "listed",
 ];
-// "-2": saved before the tags under each row became columns; starting from the new defaults once shows them.
-const COLUMNS_STORAGE = "repos-columns-2";
+// "-5": saved before the main columns came first (Score went, newcomers' merge rate joined them); starting from the
+// new defaults once shows them.
+const COLUMNS_STORAGE = "repos-columns-5";
 // The AI policy, newcomers and tone columns are tags (the Explore page's too): green for good news, amber for "have a
 // look", red for bad, gray for the rest. Other values are plain text, colored only when it means something.
 const POLICY_VARIANT: Record<string, "ok" | "fine" | "warn" | "bad"> = { welcome: "ok", none: "fine", no_ai: "bad" };
@@ -351,9 +354,6 @@ export default function Repos() {
     const signals = repo.signals;
     if (key === "name") {
       return repo.full_name.toLowerCase();
-    }
-    if (key === "score") {
-      return repo.score;
     }
     if (key === "stars") {
       return repo.stars;
@@ -709,9 +709,6 @@ export default function Repos() {
   // What a column shows for a repo. Text too long for the column is cut short, tags too.
   function cell(key: ColumnKey, repo: ListedRepo) {
     const signals = repo.signals;
-    if (key === "score") {
-      return <span className="font-medium text-foreground">{repo.score ?? "–"}</span>;
-    }
     if (key === "stars") {
       return (
         <span className="inline-flex items-center gap-1">

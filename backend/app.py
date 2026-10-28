@@ -132,14 +132,13 @@ async def feed(websocket: WebSocket, watch: dict) -> None:
     while True:
         # The version is noted before the data is read: a change in between is sent again next tick, never lost.
         messages = []
-        # Repos carry their signals and score (repo_signals.py).
+        # Repos carry their signals (repo_signals.py).
         if sent["repos"] != (repos.version, repo_signals.version):
             sent["repos"] = (repos.version, repo_signals.version)
             signals = repo_signals.all()
             items = repos.items()
             for item in items:
                 item["signals"] = signals.get(item["full_name"])
-                item["score"] = repo_signals.score(item["signals"], item.get("fit"))
             data = {"items": items, "can_undo": repos.can_undo(), "can_redo": repos.can_redo()}
             messages.append({"topic": "repos", "data": data})
         # Issues carry their facts (issue_facts.py) and tags (issue_tags.py), so the topic changes when any does.

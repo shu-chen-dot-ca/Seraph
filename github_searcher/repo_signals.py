@@ -71,7 +71,6 @@ empty basis, so the next fetch asks again.
 
 fetch() gets the numbers from GitHub; complete() adds Claude's two judgments (policy and atmosphere). fetch() does
 both unless told not to: Explore checks the numbers first and only pays for the judgments of repos it keeps.
-score() turns signals, and for repos Explore found how well they fit the user, into 0..100 for ranking.
 
 Kept apart from the Repos list on purpose, like issue_facts.py: the list's undo/redo should only undo what agents
 and the user did. The backend fetches signals for new repos, and for each again once a day (backend/repos_api.py).
@@ -702,34 +701,3 @@ class RepoSignals:
         signals["ai_policy"] = policy
         signals["atmosphere"] = atmosphere
         return signals
-
-    def score(self, signals: dict | None, fit: float | None) -> int | None:
-        """0..100 for ranking, or None without signals. Weights: merge rate .20, newcomers .15, reply speed .25,
-        fit .20, few stale PRs .10, unclaimed beginner issues .10. Without a fit (repos Explore didn't add), or with
-        too few newcomers to tell, the rest count more. Missing numbers (too few PRs) count as a weak 0.3.
-        The review atmosphere is a judgment call, so it is a tag only.
-        """
-        if signals is None:
-            return None
-        parts = []
-        rate = signals["outside_merge_rate"]
-        parts.append((0.20, rate if rate is not None else 0.3))
-        # A first reply within a day is best; two weeks or more is worst.
-        reply = signals["median_days_to_first_reply"]
-        parts.append((0.25, 0.3 if reply is None else max(0.0, min(1.0, 1 - (reply - 1) / 13))))
-        # Newcomers: how many first PRs got merged and how fast they got a reply, each half.
-        newcomers = signals.get("newcomers")
-        if newcomers is not None and newcomers["tag"] != "few":
-            values = []
-            if newcomers["merge_rate"] is not None:
-                values.append(newcomers["merge_rate"])
-            if newcomers["median_days_to_first_reply"] is not None:
-                values.append(max(0.0, min(1.0, 1 - (newcomers["median_days_to_first_reply"] - 1) / 13)))
-            if values:
-                parts.append((0.15, sum(values) / len(values)))
-        if fit is not None:
-            parts.append((0.20, fit))
-        parts.append((0.10, 1 - min(signals["stale_outside_prs"], 20) / 20))
-        parts.append((0.10, min(signals["unclaimed_beginner_issues"], 10) / 10))
-        total = sum(weight for weight, value in parts)
-        return round(100 * sum(weight * value for weight, value in parts) / total)

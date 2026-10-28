@@ -2,7 +2,7 @@
 
 Agents and Explore fill the list (github_searcher/agent/work_tools.py, github_searcher/explore.py);
 the browser removes rows and steps through the undo history. The list reaches the
-browser through /api/live, each repo with its signals and score. The explorer reads the default branch
+browser through /api/live, each repo with its signals. The explorer reads the default branch
 from GitHub through search.py, which caches every answer, so opening a repo or a file again is instant.
 
 Remove only takes repos off the list: nothing is blocked, so Explore and agents may find and add them again. It takes

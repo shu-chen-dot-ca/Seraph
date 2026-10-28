@@ -180,7 +180,7 @@ class WorkTools:
                 "repos_list",
                 "See the Repos list the user sees, and the user's types of repo (the tags that classify repos, each with what it is). "
                 "Each repo with its stars, description, your note, its type, who added it (an agent id, "
-                "user, or explore), how many of its issues are in the Issues list, its score (0-100), and its signals: AI policy "
+                "user, or explore), how many of its issues are in the Issues list, and its signals: AI policy "
                 "(welcome, disclose, no_ai, unclear, none), outside contributors' merge rate and median days to a first reply "
                 "from a maintainer, stale outside PRs, how many people merged PRs in the last 30 days, how newcomers fare "
                 "(welcomes, ok, turned_away, left_waiting, few), PRs, issues and commits a month, and the review tone (warm, neutral, strict, curt) with what reviewers "
@@ -693,7 +693,6 @@ class WorkTools:
                 "note": item["note"],
                 "added_by": item["added_by"],
                 "issues_in_list": count,
-                "score": self.agents.repo_signals.score(repo_signals, item.get("fit")),
             }
             if item.get("lane"):
                 summary["type"] = type_names.get(item["lane"], item["lane"])

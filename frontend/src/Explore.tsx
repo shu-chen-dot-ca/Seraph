@@ -13,9 +13,12 @@ finds, and skips what is already in Repos, Tracked or the found list. Nothing is
 found list or from Repos may be found again by a later run.
 
 Every repo that qualifies joins the found list right away, newest first: a table with a column for each thing known
-about it (FOUND_COLUMNS): its AI policy, fit, how newcomers fare, its review tone, stars, its type (the one Claude
-classified it under), PRs, issues and commits a month and the trend, how many contributors and maintainers it has, how many
-outside PRs no maintainer answered, and when it was found; its note under the name. Every column is as wide as its widest
+about it (FOUND_COLUMNS). The main ones come first: outside PRs merged (of those merged or closed), newcomers' first
+PRs merged (the same, for people who never opened a PR there before; hover for how many were merged, closed and still
+open), how newcomers fare, its AI policy, and how fast a maintainer first replies to an outside PR (bots, AI reviewers
+and other outsiders don't count). Then its fit, review tone, stars, its type (the one Claude classified it under), PRs, issues and commits a month
+and the trend, how many contributors and maintainers it has, how many outside PRs no maintainer answered, and when it
+was found; its note under the name. There is no overall score: the numbers are shown as they are. Every column is as wide as its widest
 cell (one CSS grid for the whole table, each row a subgrid), and the text is in the page's own color, not gray: green,
 amber or red only where a value means something (the color rules in index.css). A click on a header adds that column
 to the sort, best first (A to Z for text); again the other way round; again takes it out. Many columns sort at once,
@@ -96,8 +99,11 @@ type FoundKey =
   | "type"
   | "stars"
   | "fit"
+  | "merged"
+  | "new_merged"
   | "policy"
   | "newcomers"
+  | "reply"
   | "tone"
   | "prs"
   | "issues"
@@ -108,10 +114,15 @@ type FoundKey =
   | "unanswered"
   | "found";
 
+// The main ones first: outside PRs merged, newcomers' first PRs merged, how newcomers fare, the AI policy and how fast
+// a maintainer replies.
 const FOUND_COLUMNS: { key: FoundKey; label: string; title: string; better: "higher" | "lower" | "text" }[] = [
-  { key: "policy", label: "AI policy", title: "What its contribution files say about AI", better: "higher" },
-  { key: "fit", label: "Fit", title: "How well Claude thinks it fits your Explore profile", better: "higher" },
+  { key: "merged", label: "Merged", title: "Outside contributors' PRs merged, of those merged or closed", better: "higher" },
+  { key: "new_merged", label: "New merged", title: "Newcomers' first PRs merged, of those merged or closed (a newcomer: someone who never opened a PR there before)", better: "higher" },
   { key: "newcomers", label: "Newcomers", title: "How newcomers' first PRs fare", better: "higher" },
+  { key: "policy", label: "AI policy", title: "What its contribution files say about AI", better: "higher" },
+  { key: "reply", label: "Reply", title: "Median days until outside contributors' PRs get a first reply from a maintainer (bots and other outsiders don't count)", better: "lower" },
+  { key: "fit", label: "Fit", title: "How well Claude thinks it fits your Explore profile", better: "higher" },
   { key: "tone", label: "Reviews", title: "How maintainers' feedback on outside PRs feels", better: "higher" },
   { key: "stars", label: "Stars", title: "Stars on GitHub", better: "higher" },
   { key: "type", label: "Type", title: "The type of repo Claude put it under, from your Explore profile", better: "text" },
@@ -262,6 +273,15 @@ export default function Explore() {
     if (key === "fit") {
       return each.fit;
     }
+    if (key === "merged") {
+      return each.merged ?? null;
+    }
+    if (key === "new_merged") {
+      return each.newcomer_stats?.merge_rate ?? null;
+    }
+    if (key === "reply") {
+      return each.reply ?? null;
+    }
     if (key === "policy") {
       return POLICY_RANK[each.ai_policy] ?? null;
     }
@@ -311,6 +331,30 @@ export default function Explore() {
     if (key === "fit") {
       const level = FIT_LEVELS.find((one) => each.fit >= one.from) ?? FIT_LEVELS[FIT_LEVELS.length - 1];
       return <Badge variant={level.variant}>{level.label}</Badge>;
+    }
+    if (key === "merged") {
+      return typeof each.merged === "number" ? `${Math.round(each.merged * 100)}%` : "–";
+    }
+    if (key === "new_merged") {
+      const stats = each.newcomer_stats;
+      if (stats === undefined || stats === null || stats.merge_rate === null) {
+        return "–";
+      }
+      const open = stats.prs - stats.merged - stats.closed;
+      return (
+        <span
+          className={cn(stats.tag === "welcomes" && "text-ok", (stats.tag === "turned_away" || stats.tag === "left_waiting") && "text-destructive")}
+          title={`${stats.prs} newcomers' first PRs: ${stats.merged} merged, ${stats.closed} closed unmerged, ${open} still open`}
+        >
+          {Math.round(stats.merge_rate * 100)}%
+        </span>
+      );
+    }
+    if (key === "reply") {
+      if (typeof each.reply !== "number") {
+        return "–";
+      }
+      return <span className={cn(each.reply <= 2 && "text-ok", each.reply > 7 && "text-warn")}>{each.reply}d</span>;
     }
     if (key === "policy") {
       return <Badge variant={POLICY_VARIANT[each.ai_policy] ?? "secondary"}>{POLICY_LABEL[each.ai_policy] ?? each.ai_policy}</Badge>;

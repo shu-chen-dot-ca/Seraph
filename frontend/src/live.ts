@@ -135,7 +135,6 @@ export type Atmosphere = {
 // A repo in the Repos list, with what the live feed merges in.
 export type ListedRepo = RepoItem & {
   signals: RepoSignals | null; // null until fetched (within seconds of being added)
-  score: number | null; // 0..100
 };
 
 export type IssueItem = {
@@ -245,7 +244,6 @@ export type ExploreFound = {
   default_branch: string;
   html_url: string;
   fit: number;
-  score: number | null;
   ai_policy: AIPolicyTag;
   newcomers: NewcomerTag;
   tone: Tone | null;
@@ -256,8 +254,13 @@ export type ExploreFound = {
   trend: "up" | "down" | "flat";
   note: string;
   found_at: string;
-  // From its signals: who opened PRs lately, who merged PRs in 30 days, outside PRs over 30 days nobody answered.
-  // Null when not counted (found before these were).
+  // From its signals: outside PRs merged (of those merged or closed, 0..1), how newcomers' first PRs went (counts and
+  // their merge rate), median days to a maintainer's first reply on an outside PR, who opened PRs lately, who merged
+  // PRs in 30 days, outside PRs over 30 days nobody answered.
+  // Null when not counted (too few PRs, or found before these were).
+  merged: number | null;
+  newcomer_stats: Newcomers | null;
+  reply: number | null;
   contributors: number | null;
   maintainers: number | null;
   unanswered: number | null;
