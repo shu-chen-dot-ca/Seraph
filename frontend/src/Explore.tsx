@@ -12,7 +12,10 @@ each of the user's types of repo (ExploreProfileDialog; a "lane" in the code), k
 finds, and skips what is already in Repos, Tracked or the found list. Nothing is blocked: a repo removed from the
 found list or from Repos may be found again by a later run.
 It doesn't start from fame: its searches run most recently updated first, not most stars first, and the default star
-range is a few hundred to 15k (the user's profile can say otherwise).
+range is a few hundred to 15k (the user's profile can say otherwise). Before Claude reads anything, it skips a repo
+where a PR would likely go nowhere: no outside PR merged in 90 days, most outside PRs closed unmerged, or newcomers
+turned away (their first PRs mostly closed unmerged) or left waiting (mostly still open, neither merged nor closed,
+after a month). A slow first reply alone (over a week) doesn't skip a repo. The Skipped line says how many went for each.
 
 Every repo that qualifies joins the found list right away, newest first: a table with a column for each thing known
 about it (FOUND_COLUMNS). The main ones come first: outside PRs merged (of those merged or closed), newcomers' first

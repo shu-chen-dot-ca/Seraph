@@ -47,6 +47,7 @@ reply; returned is how many opened a second PR. tag:
     left_waiting  most first PRs over LEFT_DAYS days old are still open: neither merged nor closed
     few           fewer than MIN_NEWCOMERS newcomers: too few to tell (neutral, not a bad sign)
     ok            anything else, also a slow first reply (over a week) when their PRs do get merged
+Explore skips a repo that turns newcomers away or leaves them waiting.
 
 activity: monthly averages over the last 90 days (GitHub's own counts), the last 30 days as they are, and trend
 ("up" / "down" / "flat") when those 30 days are a quarter above or below the average. issue_reply_rate: of

@@ -21,8 +21,10 @@ from fame. The default star range is a few hundred to 15k.
 What it skips before any heavy work: repos it already looked at in this run, repos in Repos or Tracked, and
 repos already in the found list. Then `workers` candidates at a time (token_balancer.py paces GitHub for all of them):
 1. its numbers (repo_signals.py: a few GitHub calls, no Claude yet);
-2. skipped if it is archived or a fork, nothing was committed in 30 days, or no outside contributor's
-   PR was merged in 90 days: nobody would review a PR there;
+2. skipped if it is archived or a fork, nothing was committed in 30 days, no outside contributor's PR was merged
+   in 90 days, most outside PRs are closed unmerged (under MIN_MERGE_RATE), or newcomers' first PRs are turned away
+   or left waiting (repo_signals.py's newcomers tag): a PR of yours would likely go nowhere there. A slow first reply
+   alone (over a week) doesn't skip a repo;
 3. at the same time, Claude reads its AI policy and its review atmosphere (repo_signals.complete), and its
    README against the profile (claude_judge.py): is it a project people contribute code to (not a link list,
    tutorial or course), which of the user's types it is, how well it fits (one of FIT_LEVELS, fixed so repos
@@ -185,6 +187,8 @@ UNREACHABLE = (httpx.ConnectError, httpx.ConnectTimeout)
 # level again: the frontend's FIT_LEVELS has the same steps).
 FIT_LEVELS = {"strong": 1.0, "good": 0.75, "some": 0.5, "weak": 0.25}
 MAX_TYPES = 6
+# Outside PRs merged, of those merged or closed: under this, most are closed unmerged and Explore skips the repo.
+MIN_MERGE_RATE = 0.3
 # The tags a run can filter on, "section:value", each with its label on the page (also why a repo is skipped on the
 # page's Skipped line). The same thresholds as the tags' colors on the page: replies in 2 days are green, over a week
 # amber; one maintainer or none is amber, and so are 5 unanswered PRs or more.
@@ -656,6 +660,12 @@ class Explore:
                 reason = "No commits in 30 days"
             elif signals["outside_merged_90d"] == 0:
                 reason = "No outside PR merged in 90 days"
+            elif signals["outside_merge_rate"] is not None and signals["outside_merge_rate"] < MIN_MERGE_RATE:
+                reason = "Most outside PRs closed unmerged"
+            elif signals["newcomers"]["tag"] == "turned_away":
+                reason = "Turns newcomers away"
+            elif signals["newcomers"]["tag"] == "left_waiting":
+                reason = "Leaves newcomers waiting"
 
             # The repo's tags from its numbers.
             tags = ["newcomers:" + signals["newcomers"]["tag"], "trend:" + signals["activity"]["trend"]]
