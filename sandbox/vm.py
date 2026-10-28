@@ -398,6 +398,55 @@ systemctl set-property systemd-journald.service MemoryMin=64M
         if result.returncode != 0:
             raise VMError(f"Could not set the memory limits of {self.name}: {result.stderr.strip()}")
 
+    def use_host_timezone(self) -> None:
+        """Give the VM this machine's time zone. Safe to run again; it stays set after reboots.
+
+        The VM goes out to the internet through this machine's network, so sites see this machine's address. A
+        browser whose clock says another zone (images start on UTC) looks like a bot to them. Programs already
+        running in the VM (an open browser) see the new zone once they start again.
+        """
+        # /etc/localtime links to /usr/share/zoneinfo/<zone>; without such a link there is nothing to copy.
+        target = os.path.realpath("/etc/localtime")
+        if "/zoneinfo/" not in target:
+            return
+        zone = shlex.quote(target.split("/zoneinfo/")[1])
+        # timedatectl also tells the desktop's clock; without it, the link alone does it. An image without time zone
+        # data keeps its own.
+        script = f"""
+if [ -f /usr/share/zoneinfo/{zone} ]; then
+    timedatectl set-timezone {zone} 2> /dev/null || ln -sf /usr/share/zoneinfo/{zone} /etc/localtime
+fi
+"""
+        result = self.exec_root(script, timeout=30)
+        if result.returncode != 0:
+            raise VMError(f"Could not set the time zone of {self.name}: {result.stderr.strip()}")
+
+    def set_firefox_graphics_name(self) -> None:
+        """Make Firefox tell sites a common graphics card instead of "llvmpipe". Safe to run again.
+
+        The VM has no graphics card, so Firefox draws WebGL in software (llvmpipe), and sites can ask WebGL which card
+        it uses. Bot checks (Tesla's, for one) block a browser that says llvmpipe, which real computers almost never
+        do. Tried on vm1: with these names Tesla's pages load, without them they are blocked. They are Firefox's
+        default settings (a file in its install folder), so about:config can still change them; Firefox reads them
+        when it starts. Mozilla's package is in /usr/lib/firefox, Fedora's in /usr/lib64/firefox, Debian's ESR in
+        /usr/lib/firefox-esr. An image without Firefox (terminal only) has none of them.
+        """
+        script = """
+for dir in /usr/lib/firefox /usr/lib64/firefox /usr/lib/firefox-esr; do
+    if [ -d "$dir" ]; then
+        mkdir -p "$dir/defaults/pref"
+        cat > "$dir/defaults/pref/sandbox-graphics-name.js" << 'EOF'
+// Written by the sandbox app at every VM start (sandbox/vm.py, set_firefox_graphics_name).
+pref("webgl.vendor-string-override", "Intel");
+pref("webgl.renderer-string-override", "Mesa Intel(R) UHD Graphics 620 (KBL GT2)");
+EOF
+    fi
+done
+"""
+        result = self.exec_root(script, timeout=30)
+        if result.returncode != 0:
+            raise VMError(f"Could not set Firefox's graphics card name in {self.name}: {result.stderr.strip()}")
+
     def guard_shadow_stack(self) -> None:
         """Keep shadow stacks from crashing the VM. Safe to run again; it stays set after reboots.
 

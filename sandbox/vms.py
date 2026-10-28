@@ -20,6 +20,11 @@ are written in the VM's files right now, so an image is never saved from a VM th
 The agent holding the VM adds and removes them (work_tools.py), the user on the VM page's Notes tab. Agents can't
 remove the user's. A fork starts with its source's notes, since its disk is a copy.
 
+Every VM gets this machine's time zone when it is made and whenever it starts (VM.use_host_timezone): it goes out
+through this machine's network, and a browser whose clock doesn't match where its address is looks like a bot.
+For the same reason Firefox in every VM names a common graphics card to sites instead of "llvmpipe" (software
+drawing: the VM has no graphics card), also set at every start (VM.set_firefox_graphics_name).
+
 The env variables for all VMs (set in the Settings dialog) are in DATA_DIR/global_env.json, not in vms/
 (every .json there is a VM's record). Every VM gets them, with its own on top (see VMRecord.write_env).
 
@@ -242,6 +247,8 @@ class VMRecord:
             self.vm.wait_ready()
             self.vm.guard_memory()
             self.vm.guard_shadow_stack()
+            self.vm.use_host_timezone()
+            self.vm.set_firefox_graphics_name()
             self.write_env()
             self.status = "running"
             self.save()
@@ -274,6 +281,8 @@ class VMRecord:
             self.vm.wait_ready()
             self.vm.guard_memory()
             self.vm.guard_shadow_stack()
+            self.vm.use_host_timezone()
+            self.vm.set_firefox_graphics_name()
             self.write_env()
             self.status = "running"
             self.save()
@@ -309,6 +318,8 @@ class VMRecord:
             # Also here, so VMs made before these guards existed get them.
             self.vm.guard_memory()
             self.vm.guard_shadow_stack()
+            self.vm.use_host_timezone()
+            self.vm.set_firefox_graphics_name()
             self.write_env()
             self.status = "running"
             self.save()
