@@ -21,7 +21,8 @@ Each issue's tags (free / assigned / waiting, easy / medium / hard, its kind:
 github_searcher/issue_tags.py) are made by keep_tags(), also in the background,
 for the Issues list and the tracked repos' issues alike: new issues get theirs
 within TAGS_CHECK_SECONDS, an issue that changed on GitHub gets them again, and
-a free one every TAGS_FREE_SECONDS anyway (someone may have taken it). The Tag
+a free one every TAGS_FREE_SECONDS anyway (someone may have taken it), and a free one an agent is on (a job on it
+queued, working or waiting on the user) every ACTIVE_TAGS_SECONDS (5 minutes), so a claim on it shows soon. The Tag
 again buttons and the pages' Refresh (Issues: every open issue in the list, after
 its facts; Tracked: every free issue, after the checks) do it at once
 (refresh_tags), and say which ones that were free aren't anymore.
@@ -49,6 +50,8 @@ FACTS_REFRESH_SECONDS = 30 * 60
 ACTIVE_REFRESH_SECONDS = 60
 TAGS_CHECK_SECONDS = 10
 TAGS_FREE_SECONDS = 60 * 60
+# A free issue an agent is on: Claude reads it again this often, to see whether someone else took it.
+ACTIVE_TAGS_SECONDS = 5 * 60
 # An issue that could not be tagged (Claude or GitHub down, the issue gone) is tried again after this long.
 TAGS_RETRY_SECONDS = 30 * 60
 
@@ -222,8 +225,8 @@ async def keep_facts() -> None:
 
 
 async def keep_tags() -> None:
-    """Runs as long as the backend: tags every issue that has no tags yet, changed on GitHub since, was free an hour ago,
-    or has a level from before the level rules.
+    """Runs as long as the backend: tags every issue that has no tags yet, changed on GitHub since, was free an hour ago
+    (5 minutes ago when an agent is on it), or has a level from before the level rules.
 
     Those are the Issues list's issues, then the tracked repos' open issues nobody is assigned to (the page
     shows an assigned one as assigned without asking), newest first. issue_tags.tag batches them.
@@ -253,7 +256,10 @@ async def keep_tags() -> None:
                     candidates.append((f"{item['full_name']}#{issue['number']}", issue.get("updated_at")))
 
         # A free one is looked at again after TAGS_FREE_SECONDS: someone may have claimed it without GitHub showing a change.
+        # One an agent is on (a job queued, working or waiting on the user) after ACTIVE_TAGS_SECONDS.
         free_before = datetime.now(UTC) - timedelta(seconds=TAGS_FREE_SECONDS)
+        active_before = datetime.now(UTC) - timedelta(seconds=ACTIVE_TAGS_SECONDS)
+        active = [job["issue"] for job in jobs.list() if job["status"] in ("queued", "working", "waiting_on_user")]
         todo = []
         for issue_id, updated_at in candidates:
             tags = known.get(issue_id)
@@ -264,6 +270,8 @@ async def keep_tags() -> None:
             elif updated_at is not None and tags["updated_at"] != updated_at:
                 todo.append(issue_id)
             elif tags["status"] == "free" and datetime.fromisoformat(tags["judged_at"]) < free_before:
+                todo.append(issue_id)
+            elif tags["status"] == "free" and issue_id in active and datetime.fromisoformat(tags["judged_at"]) < active_before:
                 todo.append(issue_id)
             elif tags["level"] is not None and "checks" not in tags:
                 # Its level is from before the level rules (issue_tags.CHECKS): once more, by them.
