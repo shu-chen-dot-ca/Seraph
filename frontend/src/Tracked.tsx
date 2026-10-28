@@ -10,7 +10,13 @@ The backend checks each repo's open issues every few minutes (github_searcher/tr
 ones and every good first or help wanted one. An issue is new for three days after it was opened, assigned or not,
 unless Mark all as read saw it; the row shows how many are new, the sidebar the total. Check now asks GitHub at once.
 
-GitHub's labels aren't shown: each issue carries the app's own tags instead, the same as on the Issues page
+Each issue row shows Marked (next to Free), the same as on the Issues page, without opening the issue: what the
+maintainers marked it with on GitHub, from its labels (only maintainers can label an issue), however the repo spells
+them: Good first issue (green: good first issue, first-timers, beginner, starter, newcomer), Help wanted (green: help
+wanted, contributions or PRs welcome, up for grabs, accepting PRs) and Confirmed (accepted, confirmed, approved,
+triaged); "–" when none, and hovering shows all its labels. Sorted, good first issue counts most, then help wanted,
+then confirmed, and one marked more ways goes higher.
+GitHub's labels aren't shown otherwise: each issue carries the app's own tags instead, the same as on the Issues page
 (github_searcher/issue_tags.py, made by Claude in the background): Free or Assigned, Easy / Medium / Hard (how hard
 the fix is for our agent in its VM, by fixed rules, the same as on the Issues page; kept until the issue changes), and
 its kind, each in its own column, the reason on hover. Assigned on GitHub counts as Assigned at once, without waiting
@@ -104,14 +110,15 @@ const TRACKED_COLUMNS: { key: TrackedKey; label: string; title: string; better?:
 const POLICY_RANK: Record<string, number> = { welcome: 5, none: 4, disclose: 3, unclear: 2, no_ai: 1 };
 const NEWCOMER_RANK: Record<string, number> = { welcomes: 5, ok: 4, few: 3, left_waiting: 2, turned_away: 1 };
 const TONE_RANK: Record<string, number> = { warm: 4, neutral: 3, strict: 2, curt: 1 };
-// An open repo's issues: #, Title (the room left over), the tags (Free, Level, Kind), Opened, Updated, Checked (Claude
-// last read it), comments, then GitHub and Add.
-const ISSUE_COLUMNS = "grid grid-cols-[56px_minmax(0,1fr)_72px_64px_72px_150px_80px_80px_36px_120px] items-center gap-2";
-type IssueKey = "number" | "title" | "free" | "level" | "kind" | "opened" | "updated" | "read" | "comments";
+// An open repo's issues: #, Title (the room left over), the tags (Free, Marked, Level, Kind), Opened, Updated, Checked
+// (Claude last read it), comments, then GitHub and Add.
+const ISSUE_COLUMNS = "grid grid-cols-[56px_minmax(0,1fr)_72px_160px_64px_72px_150px_80px_80px_36px_120px] items-center gap-2";
+type IssueKey = "number" | "title" | "free" | "marked" | "level" | "kind" | "opened" | "updated" | "read" | "comments";
 const ISSUE_HEADERS: { key: IssueKey; label: string; title: string }[] = [
   { key: "number", label: "#", title: "Its number on GitHub, newest first" },
   { key: "title", label: "Title", title: "A to Z" },
   { key: "free", label: "Free", title: "Free first (a newcomer can start now), then not ready yet, then assigned" },
+  { key: "marked", label: "Marked", title: "What the maintainers marked it with on GitHub: good first issue, help wanted (they want an outside PR) or confirmed; the most marked first. Hover for all its labels" },
   { key: "level", label: "Level", title: "How hard the fix is for our agent in its VM, by fixed rules: easy (it can write it, see it and prove it there), medium or hard; the hardest first" },
   { key: "kind", label: "Kind", title: "Bug, docs, feature or question: A to Z" },
   { key: "opened", label: "Opened", title: "When it was opened on GitHub, newest first" },
@@ -123,6 +130,11 @@ const ISSUE_HEADERS: { key: IssueKey; label: string; title: string }[] = [
 const FREE_RANK: Record<string, number> = { free: 3, waiting: 2, assigned: 1 };
 const LEVEL_RANK: Record<string, number> = { easy: 1, medium: 2, hard: 3 };
 const LEVEL_COLOR: Record<string, string> = { easy: "text-ok", medium: "text-warn", hard: "text-destructive" };
+// GitHub labels only maintainers can put on an issue, by what they say, for the Marked column (the same as on the Issues
+// page). Confirmed has word edges so "unconfirmed" and "untriaged" don't count.
+const GOOD_FIRST = /good.?first|first.?timer|beginner|starter|newcomer/i;
+const HELP_WANTED = /help.?wanted|contributions?.?welcome|prs?.?welcome|pull.?requests?.?welcome|up.?for.?grabs|accepting.?prs/i;
+const CONFIRMED = /\b(accepted|confirmed|approved|triaged)\b/i;
 
 type IssueTab = "free" | "assigned" | "all";
 
@@ -297,6 +309,20 @@ export default function Tracked() {
         return FREE_RANK.assigned;
       }
       return tags !== null ? FREE_RANK[tags.status] : null;
+    }
+    if (key === "marked") {
+      // Good first issue counts most, then help wanted, then confirmed; an issue marked more than one way adds them up.
+      let rank = 0;
+      if (issue.labels.some((label) => GOOD_FIRST.test(label))) {
+        rank += 4;
+      }
+      if (issue.labels.some((label) => HELP_WANTED.test(label))) {
+        rank += 2;
+      }
+      if (issue.labels.some((label) => CONFIRMED.test(label))) {
+        rank += 1;
+      }
+      return rank;
     }
     if (key === "level") {
       return tags !== null && tags.level !== null ? LEVEL_RANK[tags.level] : null;
@@ -801,6 +827,9 @@ export default function Tracked() {
                             const isNew = new Date(issue.created_at).getTime() > newSince && !(check.read ?? []).includes(issue.number);
                             const tags = issue.tags ?? null;
                             const isAssigned = issue.assignees > 0 || tags?.status === "assigned";
+                            const goodFirst = issue.labels.some((label) => GOOD_FIRST.test(label));
+                            const helpWanted = issue.labels.some((label) => HELP_WANTED.test(label));
+                            const confirmed = issue.labels.some((label) => CONFIRMED.test(label));
                             return (
                               <div
                                 key={issue.number}
@@ -823,13 +852,21 @@ export default function Tracked() {
                                   </span>
                                   {isNew && <Badge>new</Badge>}
                                 </span>
-                                {/* The app's tags, each in its column, the reason on hover; GitHub's own labels aren't shown.
+                                {/* The app's tags, each in its column, the reason on hover; of GitHub's own labels only the Marked ones show.
                                     – is not ready yet (Free) or none (assigned on GitHub isn't read); … is not tagged yet. */}
                                 <span
                                   className={cn("truncate", isAssigned && "text-warn", !isAssigned && tags?.status === "free" && "text-ok")}
                                   title={tags?.reason ?? (isAssigned ? "Assigned on GitHub" : "Claude hasn't tagged it yet")}
                                 >
                                   {isAssigned ? "Assigned" : tags === null ? "…" : tags.status === "free" ? "Free" : "–"}
+                                </span>
+                                <span className="truncate" title={issue.labels.length > 0 ? `Its labels: ${issue.labels.join(", ")}` : "No labels"}>
+                                  {!goodFirst && !helpWanted && !confirmed && "–"}
+                                  {goodFirst && <span className="text-ok">Good first issue</span>}
+                                  {goodFirst && (helpWanted || confirmed) && " · "}
+                                  {helpWanted && <span className="text-ok">Help wanted</span>}
+                                  {helpWanted && confirmed && " · "}
+                                  {confirmed && "Confirmed"}
                                 </span>
                                 <span className={cn("truncate capitalize", tags !== null && tags.level !== null && LEVEL_COLOR[tags.level])} title={tags?.reason}>
                                   {tags !== null ? (tags.level ?? "–") : isAssigned ? "–" : "…"}
