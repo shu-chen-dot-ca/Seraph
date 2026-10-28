@@ -91,7 +91,7 @@ OPEN_STATUSES = ["queued", "working"]
 
 
 class Agents:
-    def __init__(self, repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, rejections, repo_signals, issue_tags, explore, artifacts):
+    def __init__(self, repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, repo_signals, issue_tags, explore, artifacts):
         self.repos = repos
         # Each agent's own folder (github_searcher/artifacts.py). A change in one shows in the agent list (artifacts_stamp).
         self.artifacts = artifacts
@@ -100,9 +100,8 @@ class Agents:
         # The Tracked list (a RepoList) and what each tracked repo's last check found on GitHub.
         self.tracked = tracked
         self.tracked_issues = tracked_issues
-        # Repos the user rejected (agents can't add them back while blocked), each repo's signals
-        # (check_activity works them out the same way) and each issue's tags: free or assigned, level, kind.
-        self.rejections = rejections
+        # Each repo's signals (check_activity works them out the same way) and each issue's tags: free or assigned,
+        # level, kind.
         self.repo_signals = repo_signals
         self.issue_tags = issue_tags
         # Explore, for its profile's types of repo: the tags agents give the repos they add.

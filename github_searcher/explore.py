@@ -1,12 +1,12 @@
-"""Explore: find new repos while the user watches, for them to approve into the Repos list or reject.
+"""Explore: find new repos while the user watches, for them to approve into the Repos list or remove.
 
 The user starts a run on the Explore page and stops it when they like. It also ends by itself after
 finding `count` repos or after `minutes`, whichever comes first (either may be left out), or when every
 search is used up. Each repo that qualifies joins the found list the moment it is found, so the list fills
-while the run goes on. The user decides on each one (or many at once): approve adds it to Repos, reject
-keeps it out for 14 days (rejections.py). What they haven't decided on stays in the found list, also
-through later runs and backend restarts (DATA_DIR/explore_found.json), and later runs don't find it again.
-Explore never changes a repo that is already listed.
+while the run goes on. The user decides on each one (or many at once): approve adds it to Repos, remove
+takes it off the found list (nothing is blocked: a later run may find it again). What they haven't decided on
+stays in the found list, also through later runs and backend restarts (DATA_DIR/explore_found.json), and later
+runs don't find it again. Explore never changes a repo that is already listed.
 
 Where it looks: the profile (DATA_DIR/explore_profile.json) is what the user writes, "about" (who they are,
 what they like), and their types of repo, each a name and a few words on what it is (the default: Prestige,
@@ -17,9 +17,8 @@ lane: when the profile is saved, Claude plans each one's seed repos (looked at f
 candidate comes from the lane furthest below its share. Every search gets SEARCH_SUFFIX (not archived, pushed in
 the last 30 days) and runs most stars first, a page of 100 at a time.
 
-What it skips before any heavy work: repos it already looked at in this run, repos in Repos or Tracked,
-repos already in the found list, and repos the user rejected in the last 14 days (rejections.py). Then `workers` candidates at a time
-(token_balancer.py paces GitHub for all of them):
+What it skips before any heavy work: repos it already looked at in this run, repos in Repos or Tracked, and
+repos already in the found list. Then `workers` candidates at a time (token_balancer.py paces GitHub for all of them):
 1. its numbers (repo_signals.py: a few GitHub calls, no Claude yet);
 2. skipped if it is archived or a fork, nothing was committed in 30 days, or no outside contributor's
    PR was merged in 90 days: nobody would review a PR there;
@@ -45,8 +44,8 @@ repos don't, and the README judgment is the costly part). The fit is known only 
                                                          three of its numbers: contributors, maintainers, unanswered
 
 One run at a time. It lives in memory: the counts, the ones being checked now, why others were skipped and
-the errors. The live feed's explore topic carries it with the found list and the profile (and the backend adds
-the rejections). version goes up on every change, so the page follows along.
+the errors. The live feed's explore topic carries it with the found list and the profile. version goes up on every
+change, so the page follows along.
 
 A run goes on through a reload (the backend restarts whenever the code changes): at shutdown save_for_restart() keeps
 it in DATA_DIR/explore_run.json, with where its searches are and what it looked at (the checks in progress go back to
@@ -212,10 +211,9 @@ PLAN_SCHEMA = {
 
 
 class Explore:
-    def __init__(self, repos, tracked, rejections, repo_signals):
+    def __init__(self, repos, tracked, repo_signals):
         self.repos = repos
         self.tracked = tracked
-        self.rejections = rejections
         self.repo_signals = repo_signals
         self.path = DATA_DIR / "explore_profile.json"
         self.version = 0
@@ -299,16 +297,14 @@ class Explore:
                 await asyncio.to_thread(self.repo_signals.put, entry["name"], entry["signals"])
         return added
 
-    async def reject(self, names: list[str]) -> list[str]:
-        """Take repos off the found list and keep them out for 14 days. Returns the names that were in the list."""
-        rejected = [entry["name"] for entry in self.found if entry["name"] in names]
-        if not rejected:
+    def remove(self, names: list[str]) -> list[str]:
+        """Take repos off the found list (a later run may find them again). Returns the names that were in the list."""
+        removed = [entry["name"] for entry in self.found if entry["name"] in names]
+        if not removed:
             return []
         self.found = [entry for entry in self.found if entry["name"] not in names]
         self.save_found()
-        for name in rejected:
-            await asyncio.to_thread(self.rejections.reject, name)
-        return rejected
+        return removed
 
     async def set_profile(self, about: str, types: list[dict]) -> None:
         """Replace the profile: about, and the types ({"label", "about"} each). Claude plans each type's seeds and
@@ -567,8 +563,6 @@ class Explore:
                     reason = "Tracked"
                 elif name.lower() in [entry["name"].lower() for entry in self.found]:
                     reason = "Found before, waiting for you"
-                elif self.rejections.blocked_until(name) is not None:
-                    reason = "Rejected in the last 14 days"
                 if reason:
                     run["skipped"][reason] = run["skipped"].get(reason, 0) + 1
                     self.changed()

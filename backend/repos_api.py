@@ -1,12 +1,12 @@
-"""The Repos page: remove or reject rows, undo/redo, the repo explorer (file tree, one file, README), and keeping the signals fresh.
+"""The Repos page: remove rows, undo/redo, the repo explorer (file tree, one file, README), and keeping the signals fresh.
 
 Agents and Explore fill the list (github_searcher/agent/work_tools.py, github_searcher/explore.py);
-the browser removes rows, rejects them and steps through the undo history. The list reaches the
+the browser removes rows and steps through the undo history. The list reaches the
 browser through /api/live, each repo with its signals and score. The explorer reads the default branch
 from GitHub through search.py, which caches every answer, so opening a repo or a file again is instant.
 
-Remove only takes repos off the list: Explore may find them again. Reject also blocks them for 14 days
-(github_searcher/rejections.py). Both take many repos at once (the page's multi-select), as one undo step.
+Remove only takes repos off the list: nothing is blocked, so Explore and agents may find and add them again. It takes
+many repos at once (the page's multi-select), as one undo step.
 
 The signals (github_searcher/repo_signals.py) are kept fresh by keep_signals(), which the app runs in
 the background, for the Repos list and the Tracked list alike (the Tracked page shows them as tags under an
@@ -24,7 +24,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.shared import rejections, repo_signals, repos, tracked
+from backend.shared import repo_signals, repos, tracked
 from github_searcher.search import get_contents, get_readme, get_repository, get_tree
 
 router = APIRouter(prefix="/api")
@@ -48,19 +48,6 @@ def remove_repos(body: NamesRequest) -> dict:
     if not removed:
         raise HTTPException(status_code=404, detail="None of them is in the list.")
     return {"removed": removed}
-
-
-@router.post("/repos/reject")
-def reject_repos(body: NamesRequest) -> dict:
-    """Take repos off the list (those that are there) and keep Explore and agents from bringing them back for 14 days."""
-    for name in body.names:
-        if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", name):
-            raise HTTPException(status_code=400, detail=f"{name} is not owner/name.")
-    until = ""
-    for name in body.names:
-        until = rejections.reject(name)["until"]
-    removed = repos.remove(body.names)
-    return {"removed": removed, "until": until}
 
 
 @router.post("/repos/undo")

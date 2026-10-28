@@ -84,7 +84,6 @@ type SortKey =
   | "fit"
   | "language"
   | "pushed"
-  | "rejected"
   | "reply"
   | "merged"
   | "merge_time"
@@ -129,7 +128,6 @@ const SORT_FIELDS: { key: SortKey; label: string; group: string; better: "higher
   { key: "fit", label: "Fit", group: "Repo", better: "higher", down: "Best fit first", up: "Weakest fit first" },
   { key: "language", label: "Language", group: "Repo", better: "text", down: "A to Z", up: "Z to A" },
   { key: "pushed", label: "Last push", group: "Repo", better: "higher", down: "Most recent first", up: "Longest ago first" },
-  { key: "rejected", label: "Rejected before", group: "Repo", better: "lower", down: "Never rejected first", up: "Most rejected first" },
   { key: "reply", label: "Reply speed", group: "Outside contributors", better: "lower", down: "Fastest first reply first", up: "Slowest first" },
   { key: "merged", label: "Outside PRs merged", group: "Outside contributors", better: "higher", down: "Most merged first", up: "Least merged first" },
   { key: "merge_time", label: "Time to merge", group: "Outside contributors", better: "lower", down: "Fastest merges first", up: "Slowest first" },
@@ -185,7 +183,6 @@ const TABLE_COLUMNS: TableColumn[] = [
   { key: "fit", label: "Fit", name: "Fit", group: "Repo", title: "How well Claude thinks it fits your Explore profile", sort: "fit" },
   { key: "language", label: "Language", name: "Language", group: "Repo", title: "Its main language on GitHub", sort: "language" },
   { key: "pushed", label: "Pushed", name: "Last push", group: "Repo", title: "The last push to GitHub", sort: "pushed" },
-  { key: "rejected", label: "Rejected", name: "Rejected before", group: "Repo", title: "How many times you rejected it before", sort: "rejected" },
   { key: "reply", label: "Reply", name: "Reply speed", group: "Outside contributors", title: "Median days until outside contributors' PRs get a first reply", sort: "reply" },
   { key: "merged", label: "Merged", name: "Outside PRs merged", group: "Outside contributors", title: "Outside contributors' PRs merged, of those merged or closed", sort: "merged" },
   { key: "merge_time", label: "To merge", name: "Time to merge", group: "Outside contributors", title: "Median days until outside contributors' PRs are merged", sort: "merge_time" },
@@ -371,9 +368,6 @@ export default function Repos() {
     }
     if (key === "fit") {
       return repo.fit ?? null;
-    }
-    if (key === "rejected") {
-      return repo.rejected_before;
     }
     if (key === "tracked") {
       return trackedNames.includes(repo.full_name.toLowerCase()) ? 1 : 0;
@@ -750,9 +744,6 @@ export default function Repos() {
       const fit = repo.fit;
       const level = FIT_LEVELS.find((each) => fit >= each.from) ?? FIT_LEVELS[FIT_LEVELS.length - 1];
       return <Badge variant={level.variant}>{level.label}</Badge>;
-    }
-    if (key === "rejected") {
-      return repo.rejected_before > 0 ? `${repo.rejected_before}x` : "–";
     }
     if (signals === null) {
       return "–";

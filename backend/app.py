@@ -34,7 +34,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
 from backend import agents_api, artifacts_api, explore_api, github_account_api, images_api, inbox_api, issues_api, github_api, repos_api, sherpa_api, tracked_api, vms_api
-from backend.shared import agents, explore, images, inbox, issue_facts, issue_tags, issues, jobs, pr_tracking, rejections, repo_signals, repos, resource_usage, sherpa, tracked, tracked_issues, vms
+from backend.shared import agents, explore, images, inbox, issue_facts, issue_tags, issues, jobs, pr_tracking, repo_signals, repos, resource_usage, sherpa, tracked, tracked_issues, vms
 from github_searcher.token_balancer import BALANCER
 
 # override: the backend reloads itself on code changes, and .env changes should apply then too.
@@ -132,16 +132,14 @@ async def feed(websocket: WebSocket, watch: dict) -> None:
     while True:
         # The version is noted before the data is read: a change in between is sent again next tick, never lost.
         messages = []
-        # Repos carry their signals and score (repo_signals.py) and how often they were rejected before.
-        if sent["repos"] != (repos.version, repo_signals.version, rejections.version):
-            sent["repos"] = (repos.version, repo_signals.version, rejections.version)
+        # Repos carry their signals and score (repo_signals.py).
+        if sent["repos"] != (repos.version, repo_signals.version):
+            sent["repos"] = (repos.version, repo_signals.version)
             signals = repo_signals.all()
-            rejected = rejections.all()
             items = repos.items()
             for item in items:
                 item["signals"] = signals.get(item["full_name"])
                 item["score"] = repo_signals.score(item["signals"], item.get("fit"))
-                item["rejected_before"] = len(rejected.get(item["full_name"], {}).get("history", []))
             data = {"items": items, "can_undo": repos.can_undo(), "can_redo": repos.can_redo()}
             messages.append({"topic": "repos", "data": data})
         # Issues carry their facts (issue_facts.py) and tags (issue_tags.py), so the topic changes when any does.
@@ -172,12 +170,10 @@ async def feed(websocket: WebSocket, watch: dict) -> None:
                     issue["tags"] = tags.get(f"{item['full_name']}#{issue['number']}")
             data = {"items": items, "can_undo": tracked.can_undo(), "can_redo": tracked.can_redo()}
             messages.append({"topic": "tracked", "data": data})
-        # The run in progress (or the last one), the profile, and the rejected repos.
-        if sent["explore"] != (explore.version, rejections.version):
-            sent["explore"] = (explore.version, rejections.version)
-            data = explore.summary()
-            data["rejections"] = [{"name": name, **record} for name, record in rejections.all().items()]
-            messages.append({"topic": "explore", "data": data})
+        # The run in progress (or the last one), the found list and the profile.
+        if sent["explore"] != explore.version:
+            sent["explore"] = explore.version
+            messages.append({"topic": "explore", "data": explore.summary()})
         # GitHub's rate limits per token (token_balancer.py): changes with every GitHub request, sent at most every tick.
         if sent["github"] != BALANCER.version:
             sent["github"] = BALANCER.version

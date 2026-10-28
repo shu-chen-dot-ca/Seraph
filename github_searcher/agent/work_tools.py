@@ -191,7 +191,7 @@ class WorkTools:
                 "repos_add",
                 "Add repos to the Repos list, by full name (owner/name). note is one short line on why they fit (shown under each repo). "
                 "type is the name of the user's type of repo they are (repos_list lists the types); leave it out when none fits. "
-                "Repos already in the list are skipped, and so are repos the user rejected in the last 14 days. Add only repos you "
+                "Repos already in the list are skipped. Add only repos you "
                 "checked and would recommend.",
                 {
                     "type": "object",
@@ -735,10 +735,6 @@ class WorkTools:
                 continue
             if name.lower() in in_list:
                 report[name] = "already in Repos"
-                continue
-            blocked = self.agents.rejections.blocked_until(name)
-            if blocked is not None:
-                report[name] = f"the user rejected it; it can't be added again before {blocked[:10]}"
                 continue
             try:
                 info = await asyncio.to_thread(get_repository, name.split("/")[0], name.split("/")[1])

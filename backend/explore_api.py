@@ -1,14 +1,15 @@
-"""The Explore page: start and stop a run, approve or reject what it found, edit the profile, and allow a rejected repo again.
+"""The Explore page: start and stop a run, approve or remove what it found, and edit the profile.
 
 The run itself, its live progress, the found list and the profile are in github_searcher/explore.py; they
-reach the browser through /api/live (the explore topic, with the rejections). Explore lives on the event
-loop, so its endpoints are `async def`. Approve and reject take many repos at once (the page's multi-select).
+reach the browser through /api/live (the explore topic). Explore lives on the event loop, so its endpoints are
+`async def`. Approve and remove take many repos at once (the page's multi-select). Remove blocks nothing: a later
+run may find the repo again.
 """
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.shared import explore, rejections
+from backend.shared import explore
 
 router = APIRouter(prefix="/api")
 
@@ -28,10 +29,6 @@ class RepoType(BaseModel):
 class ProfileRequest(BaseModel):
     about: str  # who the user is and what they like
     types: list[RepoType]
-
-
-class NameRequest(BaseModel):
-    name: str
 
 
 class NamesRequest(BaseModel):
@@ -59,10 +56,10 @@ async def approve_found(body: NamesRequest) -> dict:
     return {"added": await explore.approve(body.names)}
 
 
-@router.post("/explore/reject")
-async def reject_found(body: NamesRequest) -> dict:
-    """Take found repos off the list and keep them out for 14 days."""
-    return {"rejected": await explore.reject(body.names)}
+@router.post("/explore/remove")
+async def remove_found(body: NamesRequest) -> dict:
+    """Take found repos off the list. A later run may find them again."""
+    return {"removed": explore.remove(body.names)}
 
 
 @router.put("/explore/profile")
@@ -72,14 +69,4 @@ async def set_explore_profile(body: ProfileRequest) -> dict:
         await explore.set_profile(body.about, [{"label": each.label, "about": each.about} for each in body.types])
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
-    return {}
-
-
-@router.post("/explore/allow")
-def allow_repo(body: NameRequest) -> dict:
-    """End a repo's rejection block early: Explore may find it again. Its rejection history stays."""
-    try:
-        rejections.allow(body.name)
-    except KeyError as error:
-        raise HTTPException(status_code=404, detail=str(error.args[0]))
     return {}

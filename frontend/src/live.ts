@@ -136,7 +136,6 @@ export type Atmosphere = {
 export type ListedRepo = RepoItem & {
   signals: RepoSignals | null; // null until fetched (within seconds of being added)
   score: number | null; // 0..100
-  rejected_before: number; // how many times the user rejected it before
 };
 
 export type IssueItem = {
@@ -220,7 +219,7 @@ export type TrackedCheck = {
 // signals: the same as a Repos row's, null until fetched (within seconds of being tracked).
 export type TrackedRepo = RepoItem & { check: TrackedCheck | null; signals: RepoSignals | null };
 
-// Explore (github_searcher/explore.py): the profile it searches with, the current or last run, and rejected repos.
+// Explore (github_searcher/explore.py): the profile it searches with, the current or last run, and the found list.
 export type ExploreLane = {
   id: string;
   label: string;
@@ -237,7 +236,7 @@ export type ExploreProfile = {
   lanes: ExploreLane[];
 };
 
-// A repo Explore found, waiting for the user to approve it into Repos or reject it. Kept across runs.
+// A repo Explore found, waiting for the user to approve it into Repos or remove it. Kept across runs.
 export type ExploreFound = {
   name: string;
   lane: string;
@@ -281,17 +280,10 @@ export type ExploreRun = {
   errors: { name: string; error: string; at: string }[];
 };
 
-export type Rejection = {
-  name: string;
-  until: string; // blocked until then
-  history: { at: string }[];
-};
-
 export type ExploreData = {
   profile: ExploreProfile;
   run: ExploreRun | null;
   found: ExploreFound[]; // waiting for a decision, oldest first
-  rejections: Rejection[];
 };
 
 // GitHub's rate limits (github_searcher/token_balancer.py), per kind of request and token. remaining and limit are
@@ -811,7 +803,7 @@ const store = {
     repos: { items: [], can_undo: false, can_redo: false },
     issues: { items: [], can_undo: false, can_redo: false },
     tracked: { items: [], can_undo: false, can_redo: false },
-    explore: { profile: { about: "", lanes: [] }, run: null, found: [], rejections: [] },
+    explore: { profile: { about: "", lanes: [] }, run: null, found: [] },
     github: null,
     jobs: [],
     inbox: [],

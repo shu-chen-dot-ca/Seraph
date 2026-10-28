@@ -9,7 +9,8 @@ excluded tag always skips a repo. The bar doesn't list the
 picked ones, the pop-up is where to check them. They are remembered in this browser; while a run goes the pop-up
 shows the run's own and can't change them. It searches for
 each of the user's types of repo (ExploreProfileDialog; a "lane" in the code), keeping each near its share of the
-finds, and skips what is already in Repos, Tracked or the found list, and what was rejected in the last 14 days.
+finds, and skips what is already in Repos, Tracked or the found list. Nothing is blocked: a repo removed from the
+found list or from Repos may be found again by a later run.
 
 Every repo that qualifies joins the found list right away, newest first: a table with a column for each thing known
 about it (FOUND_COLUMNS): its AI policy, fit, how newcomers fare, its review tone, stars, its type (the one Claude
@@ -22,11 +23,11 @@ from left to right: the leftmost sorted column first, then the next among the sa
 newest first among what is still the same; Repo (the name) last of all. Each sorted header is blue with an arrow. With none, it is back to newest
 first. A click on a row opens it in place: its README, then its files folded at the
 bottom (RepoTree), like on the Repos page.
-The user decides on each: Approve puts it in Repos, Reject keeps it out for 14 days (the two buttons at the end of its
-row). For many at once, Select (top right) turns on select mode, like on the Repos page: it becomes Select all and
+The user decides on each: Approve puts it in Repos, Remove takes it off the found list (the two buttons at the end of
+its row). For many at once, Select (top right) turns on select mode, like on the Repos page: it becomes Select all and
 Cancel, every row shows a box, and a click picks the row instead of opening it. Rows are also picked like in a mail
 app (components/ui/row-selection.tsx): Ctrl-click, Shift-click, dragging a rectangle, Ctrl+A. A bar at the bottom then
-approves or rejects them at once (rejecting asks first; Enter confirms). Either takes the rows away at once, before the
+approves or removes them at once (removing asks first; Enter confirms). Either takes the rows away at once, before the
 backend answers (they come back if it refuses), and ends select mode; so does clearing the selection (Escape, the
 bar's x). What isn't decided stays in the list, through later runs and restarts.
 
@@ -34,13 +35,12 @@ One bar on top: the run controls on the left, then GithubLimits (how much of eac
 tokens, live), and Profile on the right.
 Empty parts of the page show nothing (no "nothing yet" lines), so it stays quiet until there is something to see.
 
-The page also shows what is being checked right now, then two folded sections, closed until clicked: Skipped (why the
+The page also shows what is being checked right now, then a folded section, closed until clicked: Skipped (why the
 others were skipped, how many in all on the fold; a repo that failed counts as an error there, the errors themselves
-aren't shown) and Rejected (the rejected repos, how many on the fold; Allow again ends a block early; the history
-stays). Each shows only when it has something. The clock ticks every second while a run goes.
+aren't shown). It shows only when it has something. The clock ticks every second while a run goes.
 */
 
-import { ArrowDown, ArrowUp, Ban, Check, ExternalLink, ListFilter, Loader2, Play, Settings2, Square, SquareCheck, Star } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ExternalLink, ListFilter, Loader2, Play, Settings2, Square, SquareCheck, Star, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -149,7 +149,7 @@ export default function Explore() {
   // The found list's order: by these columns, from left to right as the table shows them, the name last (none: newest
   // first); best is the way a column's first click sorts, or not.
   const [sorts, setSorts] = useState<{ key: FoundKey; best: boolean }[]>([]);
-  // Rows open in place, and the ones approved or rejected here that the live feed still lists (hidden meanwhile).
+  // Rows open in place, and the ones approved or removed here that the live feed still lists (hidden meanwhile).
   const [open, setOpen] = useState<string[]>([]);
   const [leaving, setLeaving] = useState<string[]>([]);
   // Selected found repos, and the last one clicked (where a shift-click range starts).
@@ -158,7 +158,7 @@ export default function Explore() {
   // Select mode: every row shows a box and a click picks it. Picking a row any other way shows the boxes too.
   const [selecting, setSelecting] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
-  const [confirmReject, setConfirmReject] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const [, setTick] = useState(0);
   const run = explore.run;
   const running = run !== null && run.status === "running";
@@ -184,8 +184,6 @@ export default function Explore() {
     setLeaving((current) => current.filter((name) => explore.found.some((each) => each.name === name)));
   }, [explore.found]);
 
-  const now = new Date().toISOString();
-  const blocked = new Set(explore.rejections.filter((rejection) => rejection.until > now).map((rejection) => rejection.name));
   const laneLabels: Record<string, string> = {};
   for (const lane of explore.profile.lanes) {
     laneLabels[lane.id] = lane.label;
@@ -238,23 +236,15 @@ export default function Explore() {
     }
   }
 
-  async function reject(names: string[]) {
+  async function remove(names: string[]) {
     setLeaving((current) => [...current, ...names]);
     setSelected((current) => current.filter((name) => !names.includes(name)));
     setSelecting(false);
     try {
-      await api("/api/explore/reject", { method: "POST", body: { names } });
+      await api("/api/explore/remove", { method: "POST", body: { names } });
     } catch (err) {
       setLeaving((current) => current.filter((name) => !names.includes(name)));
-      toast.error(`Could not reject: ${err instanceof Error ? err.message : err}`);
-    }
-  }
-
-  async function allow(name: string) {
-    try {
-      await api("/api/explore/allow", { method: "POST", body: { name } });
-    } catch (err) {
-      toast.error(`Could not allow ${name}: ${err instanceof Error ? err.message : err}`);
+      toast.error(`Could not remove: ${err instanceof Error ? err.message : err}`);
     }
   }
 
@@ -467,7 +457,6 @@ export default function Explore() {
   for (const [, number] of skipped) {
     skippedTotal += number;
   }
-  const rejections = [...explore.rejections].sort((a, b) => (b.history.at(-1)?.at ?? "").localeCompare(a.history.at(-1)?.at ?? ""));
 
   return (
     <div className="relative flex h-full flex-col">
@@ -626,8 +615,8 @@ export default function Explore() {
                     <Button variant="outline" size="xs" title="Add it to Repos" onClick={() => approve([each.name])}>
                       <Check /> Approve
                     </Button>
-                    <Button variant="ghost" size="xs" title="Keep it out for 14 days" onClick={() => reject([each.name])}>
-                      <Ban /> Reject
+                    <Button variant="ghost" size="xs" title="Take it off the found list" onClick={() => remove([each.name])}>
+                      <X /> Remove
                     </Button>
                   </span>
                   {/* Under the name, to the end of the row (always there, for the room under the row). */}
@@ -697,44 +686,14 @@ export default function Explore() {
           </>
         )}
 
-        {rejections.length > 0 && (
-          <details className="px-3 py-2">
-            <summary className="mb-1 cursor-pointer text-xs font-medium text-muted-foreground">Rejected ({rejections.length})</summary>
-            {rejections.map((rejection) => {
-              const isBlocked = blocked.has(rejection.name);
-              const last = rejection.history.at(-1)?.at;
-              return (
-                <div key={rejection.name} className="grid h-7 grid-cols-[minmax(0,1fr)_200px_180px_96px] items-center gap-2 border-t">
-                  <a href={`https://github.com/${rejection.name}`} target="_blank" rel="noreferrer" className="truncate hover:underline">
-                    {rejection.name}
-                  </a>
-                  <span className={isBlocked ? undefined : "text-muted-foreground"}>
-                    {isBlocked ? `Kept out until ${new Date(rejection.until).toLocaleDateString()}` : "May be found again"}
-                  </span>
-                  <span className="text-muted-foreground">
-                    Rejected {rejection.history.length > 1 ? `${rejection.history.length}x, last ` : ""}
-                    {last !== undefined ? timeAgo(last) : ""}
-                  </span>
-                  <span className="flex justify-end">
-                    {isBlocked && (
-                      <Button variant="ghost" size="xs" onClick={() => allow(rejection.name)}>
-                        Allow again
-                      </Button>
-                    )}
-                  </span>
-                </div>
-              );
-            })}
-          </details>
-        )}
       </div>
 
       <RowSelection listRef={listRef} ids={foundNames} selected={chosen} onSelect={onSelect}>
         <Button size="xs" variant="ghost" onClick={() => approve(chosen)}>
           <Check /> Approve
         </Button>
-        <Button size="xs" variant="ghost" onClick={() => setConfirmReject(true)}>
-          <Ban /> Reject
+        <Button size="xs" variant="ghost" onClick={() => setConfirmRemove(true)}>
+          <X /> Remove
         </Button>
       </RowSelection>
 
@@ -749,20 +708,20 @@ export default function Explore() {
         />
       )}
 
-      <AlertDialog open={confirmReject} onOpenChange={setConfirmReject}>
+      <AlertDialog open={confirmRemove} onOpenChange={setConfirmRemove}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Reject {chosen.length} {chosen.length === 1 ? "repo" : "repos"}?
+              Remove {chosen.length} {chosen.length === 1 ? "repo" : "repos"}?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              They leave the found list, and Explore and agents keep them out for 14 days. Allow again below brings one back early.
+              They leave the found list. Nothing is blocked: a later run may find them again.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={() => reject(chosen)}>
-              Reject
+            <AlertDialogAction variant="destructive" onClick={() => remove(chosen)}>
+              Remove
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

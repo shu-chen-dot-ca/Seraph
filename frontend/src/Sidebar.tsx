@@ -1,6 +1,6 @@
 /*
 The left tree, like Proxmox's resource tree. Every line is a link to a page, in the order the work flows, in three parts:
-- finding work: Explore (the search for new repos; shows how many found repos wait for the user's approve or reject,
+- finding work: Explore (the search for new repos; shows how many found repos wait for the user's approve or remove,
   with a green dot while a run goes), Repos, Tracked (new issues in the repos the user keeps an eye on), Issues
   (one child per issue an agent is on now: its latest job queued, working or waiting on you, waiting on you first;
   each with the issue's number and the job's progress bar and step, like the Issues page's Status column; hover for
@@ -207,7 +207,7 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
         <a
           href="#/explore"
           className={cn(row, "pl-6", props.page === "explore" && selected)}
-          title={`${exploreWaiting} found repos wait for your approve or reject${exploreRunning ? "; Explore is running" : ""}`}
+          title={`${exploreWaiting} found repos wait for your approve or remove${exploreRunning ? "; Explore is running" : ""}`}
         >
           <Compass className="size-4 text-muted-foreground" />
           Explore
