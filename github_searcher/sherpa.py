@@ -22,7 +22,8 @@ numbers (check_activity, the same as the Repos page). It never writes anything o
 
 How an action reaches the browser: the tool puts it in `pending`, the browser (which asks GET /api/sherpa every half
 second while a turn runs) does it and posts what happened (POST /api/sherpa/result), which the tool waits for, up to
-ACTION_TIMEOUT seconds.
+ACTION_TIMEOUT seconds. The browser remembers the ids of the actions it did, so it never does one twice; the ids count
+on from the time the backend started, so they don't start over after a restart (the browser would skip those).
 
 Chats are kept, one file each, for the panel's history (the newest first; open one to go on with it, or delete it):
 
@@ -173,7 +174,8 @@ class Sherpa:
         # The page action the browser should do now, or None: {"id", "tab", "action"}; and what waits for its answer.
         self.pending = None
         self.waiter = None
-        self.action_id = 0
+        # From the time in milliseconds, so the ids never start over after a restart: the browser skips ids it did already.
+        self.action_id = int(datetime.now(UTC).timestamp() * 1000)
         # The page Sherpa saw last, for naming the element in a click, fill or point ("[12] button "Save"").
         self.last_page = ""
 
