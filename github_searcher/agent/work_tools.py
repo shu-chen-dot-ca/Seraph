@@ -309,7 +309,7 @@ class WorkTools:
                 "job_progress",
                 "Show the user where one of your jobs stands. They watch this to follow your work, and they don't know the project's "
                 "code. step: the step you are on now, one of the job's steps (my_jobs lists them; for fix_issue: understand, set_up, "
-                "reproduce, fix, test, draft). Going back is fine, e.g. from test to fix when tests fail. headline: one sentence in "
+                "reproduce, fix, test, draft; for set_up_repo: understand, set_up, show, introduce). Going back is fine, e.g. from test to fix when tests fail. headline: one sentence in "
                 "everyday words on what you are doing and how it is going, for someone who doesn't know the code (no file, function or "
                 "test names, no jargon). detail: the same in technical terms (files, tests, errors), shown when they look closer. "
                 "about: what the job is about, in everyday words; set it once, when you understand the issue. Call this at every new "

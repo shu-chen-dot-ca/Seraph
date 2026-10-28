@@ -45,8 +45,13 @@ picked repos not tracked yet, Untrack stops tracking the tracked ones (each one 
 deletes them at once, as one undo step (it asks first; Enter confirms). Delete only takes a repo off the list; Explore
 may find it again. Clearing the selection (Escape, the bar's x) ends select mode too.
 
-The last column, always there, tracks the repo (the Tracked page then keeps an eye on its new issues) or stops tracking
-it: Track or Untrack, with a spinner while the backend looks the repo up on GitHub.
+The last column, always there, has two buttons. Set up opens AssignDialog: pick an agent (or a new one), the VM and
+optional instructions, and Add job gives the repo to the agent as a set_up_repo job. The agent reads the README and
+docs; an app with a clear frontend (a web page or a window people use) it sets up the way they say and leaves running
+on the VM's desktop (watch it on the VM's page), while a library or other low-level repo it clones and opens in VS Code
+there and reads through. Either way it ends with a short introduction to the repo, in its chat and in the job's notes
+(the Jobs page). Track tracks the repo (the Tracked page then keeps an eye on its new issues) or stops tracking it:
+Track or Untrack, with a spinner while the backend looks the repo up on GitHub.
 
 Each row opens in place: the signals in full, then RepoTree (the README, with its files folded at the bottom). Only
 the rows on screen are drawn (react-virtual measures each row, so open rows of any height work), plus every open row
@@ -55,10 +60,11 @@ wherever it is: its RepoTree keeps what it loaded and what is unfolded while you
 */
 
 import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ArrowUp, Columns3, ExternalLink, Eye, EyeOff, ListFilter, Loader2, SquareCheck, Star, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Columns3, ExternalLink, Eye, EyeOff, ListFilter, Loader2, SquareCheck, Star, Trash2, Wrench } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import AssignDialog from "@/AssignDialog";
 import RepoTree from "@/RepoTree";
 import {
   AlertDialog,
@@ -250,8 +256,8 @@ const POLICY_VARIANT: Record<string, "ok" | "fine" | "warn" | "bad"> = { welcome
 const NEWCOMER_VARIANT: Record<string, "ok" | "warn" | "bad"> = { welcomes: "ok", turned_away: "bad", left_waiting: "bad" };
 const TONE_VARIANT: Record<string, "ok" | "warn" | "bad"> = { warm: "ok", strict: "warn", curt: "bad" };
 const NAME_MIN = 160;
-// The Track / Untrack column at the end, wide enough for its button.
-const TRACK_WIDTH = 88;
+// The column at the end, wide enough for its Set up and Track / Untrack buttons.
+const ACTIONS_WIDTH = 156;
 
 // The sorts this browser used last, the ones still known. Storage can be blocked (private window): then it starts
 // unsorted.
@@ -313,6 +319,8 @@ export default function Repos() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   // Repos whose Track / Untrack is waiting for the backend.
   const [tracking, setTracking] = useState<string[]>([]);
+  // The repo whose Set up dialog is open.
+  const [settingUp, setSettingUp] = useState<ListedRepo | null>(null);
   // The box on top that adds a repo by its GitHub link, and whether that waits for the backend.
   const [link, setLink] = useState("");
   const [addingLink, setAddingLink] = useState(false);
@@ -925,17 +933,17 @@ export default function Repos() {
   }
 
   // The columns shown, how wide the sizer made each (max-content until it has measured), and the grid the header and
-  // the rows share: the boxes (always there, so a row's box can show on hover without the row moving), name (the room left over), the columns, then Track / Untrack. tableWidth
+  // the rows share: the boxes (always there, so a row's box can show on hover without the row moving), name (the room left over), the columns, then Set up and Track. tableWidth
   // is the least they need, padding and gaps (16px, like the Explore page) too.
   const shownColumns = shown.map((key) => TABLE_COLUMNS.find((column) => column.key === key)!);
   const measured = sizes.length === shownColumns.length;
-  let tableWidth = 24 + NAME_MIN + 16 * shownColumns.length + 32 + TRACK_WIDTH + 16;
+  let tableWidth = 24 + NAME_MIN + 16 * shownColumns.length + 32 + ACTIONS_WIDTH + 16;
   const columnTracks: string[] = [];
   for (let index = 0; index < shownColumns.length; index++) {
     columnTracks.push(measured ? `${sizes[index]}px` : "max-content");
     tableWidth += measured ? sizes[index] : 0;
   }
-  const template = `16px minmax(${NAME_MIN}px,1fr) ${columnTracks.join(" ")} ${TRACK_WIDTH}px`;
+  const template = `16px minmax(${NAME_MIN}px,1fr) ${columnTracks.join(" ")} ${ACTIONS_WIDTH}px`;
 
   return (
     <div className="relative flex h-full flex-col">
@@ -1146,7 +1154,18 @@ export default function Repos() {
                           {cell(column.key, repo)}
                         </span>
                       ))}
-                      <span className="flex h-7 items-center justify-end">
+                      <span className="flex h-7 items-center justify-end gap-0.5">
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          title="Give it to an agent to set up in a VM: running if it has a frontend, else opened in VS Code, then a short introduction"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setSettingUp(repo);
+                          }}
+                        >
+                          <Wrench /> Set up
+                        </Button>
                         <Button
                           variant={trackedNames.includes(repo.full_name.toLowerCase()) ? "ghost" : "outline"}
                           size="xs"
@@ -1375,6 +1394,8 @@ export default function Repos() {
 
       {/* Only the count and Select all: Track and Delete are in the bar on top. */}
       <RowSelection listRef={scrollRef} ids={rowNames} selected={chosen} onSelect={onSelect} />
+
+      {settingUp !== null && <AssignDialog key={settingUp.full_name} repo={settingUp} onClose={() => setSettingUp(null)} />}
 
       <ColumnsDialog
         open={choosing}

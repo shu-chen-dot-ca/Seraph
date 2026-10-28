@@ -16,6 +16,10 @@ The signals (github_searcher/repo_signals.py) are kept fresh by keep_signals(), 
 the background, for the Repos list and the Tracked list alike (the Tracked page shows them as tags under an
 open repo): a new repo gets them within SIGNALS_CHECK_SECONDS, and each is fetched again once it is
 SIGNALS_REFRESH_SECONDS old (they change slowly).
+
+Set up (a button on each row) gives a repo to an agent as a set_up_repo job (Agents.set_up_repo): the agent sets
+it up in its VM, running when it has a clear frontend, else cloned and opened in VS Code, and ends with a short
+introduction to the repo. It wakes the agent, so that endpoint runs on the event loop (`async def`).
 """
 
 import asyncio
@@ -28,8 +32,9 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.shared import repo_signals, repos, tracked
+from backend.shared import agents, repo_signals, repos, tracked
 from github_searcher.search import get_contents, get_readme, get_repository, get_tree
+from sandbox.vms import VMsError
 
 router = APIRouter(prefix="/api")
 
@@ -48,6 +53,13 @@ class AddRequest(BaseModel):
 
 class NamesRequest(BaseModel):
     names: list[str]
+
+
+class SetUpRequest(BaseModel):
+    repo: str
+    agent: str | None = None  # None: a new agent is made for it.
+    vm: str | None = None  # None: the agent keeps its target VM.
+    instructions: str = ""
 
 
 @router.post("/repos/add")
@@ -88,6 +100,20 @@ def remove_repos(body: NamesRequest) -> dict:
     if not removed:
         raise HTTPException(status_code=404, detail="None of them is in the list.")
     return {"removed": removed}
+
+
+@router.post("/repos/set_up")
+async def set_up_repo(body: SetUpRequest) -> dict:
+    """Makes a set_up_repo job for a repo in the list and gives it to an agent; returns the job."""
+    try:
+        return agents.set_up_repo(body.repo, body.agent, body.vm, body.instructions.strip())
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error.args[0]))
+    except VMsError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    except ValueError as error:
+        # An unknown VM, or a different VM for an agent that is already queued for or holding its target VM.
+        raise HTTPException(status_code=409, detail=str(error))
 
 
 @router.post("/repos/undo")

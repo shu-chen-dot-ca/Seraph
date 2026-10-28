@@ -1,9 +1,10 @@
 """Jobs: the smallest unit of work. One agent has many jobs; a job has exactly one agent.
 
-The user makes a job by assigning an issue to an agent; an agent can make jobs for itself.
+The user makes a job by assigning an issue to an agent, or a repo to set up (Set up on the Repos page);
+an agent can make jobs for itself.
 Each job is one JSON file, DATA_DIR/jobs/<id>.json:
 
-    {"id": "job_a1b2c3", "kind": "fix_issue" | "task" | ..., "title", "agent": "<agent id>",
+    {"id": "job_a1b2c3", "kind": "fix_issue" | "set_up_repo" | "task" | ..., "title", "agent": "<agent id>",
      "issue": "owner/name#n" | null, "repo": "owner/name" | null, "vm": "vm1" | null,
      "status": "queued" | "working" | "waiting_on_user" | "done" | "cancelled",
      "instructions": "extra text from the user", "notes": "the agent's progress notes",
@@ -80,6 +81,9 @@ UPDATABLE = ["status", "notes", "vm", "drafts", "title", "instructions", "step",
 # The steps each kind of job goes through, in order. Kinds not listed use "task".
 STEPS = {
     "fix_issue": ["understand", "set_up", "reproduce", "fix", "test", "draft"],
+    # Set up a repo in the VM: an app left running on the desktop, or a library cloned and opened in VS Code
+    # (show), then a short introduction to it (introduce).
+    "set_up_repo": ["understand", "set_up", "show", "introduce"],
     "task": ["understand", "work", "check", "report"],
 }
 

@@ -41,8 +41,13 @@ if it has no open jobs there anymore) and when the
 user took the VM or its place away (on_kick: it is interrupted, and what it still ran in that
 VM is killed).
 
-The user's side: assign() turns an issue into a job for an agent, decide() passes the user's
-decision on a draft back to its agent (with the link, when Approve sent it to GitHub).
+The user's side: assign() turns an issue into a job for an agent, set_up_repo() a repo from the
+Repos list (its Set up button) into a set_up_repo job: the agent reads the README and docs, sets an
+app with a clear frontend up and leaves it running on the VM's desktop (a server in the VM's demo
+service, so it outlives the agent's turn and VM restarts), or clones a library or other low-level
+repo and opens it in VS Code there, then writes a short introduction to the repo in its chat and
+the job's notes. decide() passes the user's decision on a draft back to its agent (with the link,
+when Approve sent it to GitHub).
 
 When an issue an agent has a job for goes from free to assigned (someone else is on it now: the
 tags say so, backend/issues_api.py), issue_taken() asks the user in the Inbox ("taken", one pending
@@ -86,6 +91,8 @@ DATA_DIR = PROJECT_ROOT / os.environ["DATA_DIR"]
 MAX_NUDGES = 2
 # The user's messages that may wait for their turn at once.
 MAX_QUEUED = 10
+# The VM's demo service (sandbox/image/base_layer.sh) runs DEMO_DIR/run.sh and keeps it running, also after a restart.
+DEMO_DIR = os.environ["SANDBOX_VM_DEMO_DIR"]
 # While an agent works, its record is saved this often (and after every turn).
 SAVE_SECONDS = 5
 OPEN_STATUSES = ["queued", "working"]
@@ -664,6 +671,45 @@ class Agents:
             text += "\nYou have no target VM. If the job needs one, pick the one that suits it with vms_list and choose_vm."
         else:
             text += f"\nYour VM is {vm_name}. If the job needs it, use queue_for_vm when ready; if it doesn't, just do it and mark it done."
+        self.notify(agent_id, text)
+        return job
+
+    def set_up_repo(self, repo: str, agent_id: str | None, vm_name: str | None, instructions: str = "") -> dict:
+        """The user gives a repo from the Repos list to an agent (a new one when agent_id is None) to set up in a VM: a
+        set_up_repo job (see "Setting up a repo" in agent/prompt.md)."""
+        if repo not in [item["full_name"] for item in self.repos.items()]:
+            raise KeyError(f"{repo} is not in the Repos list")
+        if vm_name is not None and vm_name not in [vm_record.name for vm_record in self.vms.list()]:
+            raise ValueError(f"No VM named {vm_name}")
+        if agent_id is None:
+            agent_id = self.create()["id"]
+        if agent_id not in self.agents:
+            raise KeyError(f"No agent {agent_id}")
+        agent = self.agents[agent_id]
+        # Raises ValueError while the agent waits for or holds another VM.
+        if vm_name is not None:
+            self.set_target_vm(agent_id, vm_name)
+        self.unarchive(agent_id)
+
+        title = f"Set up {repo}"
+        vm_name = agent.record["target_vm"]
+        job = self.jobs.create("set_up_repo", title, agent_id, "user", repo=repo, vm=vm_name, instructions=instructions)
+        text = f"New job {job['id']}: {title}"
+        text += (
+            "\nRead its README and docs first. If it has a clear frontend, set it up the way they say and leave it running on "
+            "the desktop; if it is a library or other low-level building block, clone it and open it in VS Code. Either way, "
+            "end with a short introduction to the repo (see Setting up a repo)."
+            f"\nA server you leave running goes in the VM's demo service: its start command in {DEMO_DIR}/run.sh, then "
+            "`sudo systemctl enable demo` and `sudo systemctl restart demo` (logs: `journalctl -u demo`)."
+        )
+        if instructions:
+            text += f"\nInstructions from the user: {instructions}"
+        if agent.record["name_by"] == "auto":
+            text += f"\nYou still have the automatic name {agent.name}: give yourself a short name for your work with name_yourself."
+        if vm_name is None:
+            text += "\nYou have no target VM: pick the VM that suits the job with vms_list and choose_vm, then queue_for_vm when ready."
+        else:
+            text += f"\nIt is for {vm_name}. Use queue_for_vm when ready."
         self.notify(agent_id, text)
         return job
 

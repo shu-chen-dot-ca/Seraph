@@ -1,6 +1,10 @@
 /*
-Give an issue to an agent: pick the agent (or a new one), the VM it should work on, and optional instructions.
-"Add job" posts /api/issues/assign, which creates a fix_issue job and wakes the agent.
+Give an issue or a repo to an agent: pick the agent (or a new one), the VM it should work on, and optional
+instructions. For an issue (Assign on the Issues page), "Add job" posts /api/issues/assign, which creates a fix_issue
+job and wakes the agent. For a repo (Set up on the Repos page), it posts /api/repos/set_up, which creates a
+set_up_repo job: the agent reads the README and docs, sets an app with a clear frontend up and leaves it running on
+the VM's desktop, or clones a library or other low-level repo and opens it in VS Code there, and ends with a short
+introduction to the repo (in its chat and the job's notes on the Jobs page).
 
 An agent that is queued for or holding a VM can't switch VMs, so while such an agent is picked the VM
 select is locked to that VM. Picking an agent with a target VM preselects that VM. "Let the agent choose" is
@@ -16,12 +20,13 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AGENT_TONE, StatusDot, VM_TONE } from "@/components/ui/status-dot";
 import { Textarea } from "@/components/ui/textarea";
-import { api, useLive, type IssueItem, type Job } from "@/live";
+import { api, useLive, type IssueItem, type Job, type RepoItem } from "@/live";
 
 const NEW_AGENT = "__new__";
 const NO_VM = "__none__";
 
-export default function AssignDialog(props: { issue: IssueItem; onClose: () => void }) {
+// Pass issue (Assign) or repo (Set up).
+export default function AssignDialog(props: { issue?: IssueItem; repo?: RepoItem; onClose: () => void }) {
   // Archived agents aren't offered (the Agents page brings them back).
   const agents = useLive("agents").filter((agent) => agent.archived_at === null);
   const vms = useLive("vms");
@@ -53,15 +58,28 @@ export default function AssignDialog(props: { issue: IssueItem; onClose: () => v
     setBusy(true);
     setError("");
     try {
-      const job = await api<Job>("/api/issues/assign", {
-        method: "POST",
-        body: {
-          issue: props.issue.id,
-          agent: agentId === NEW_AGENT ? null : agentId,
-          vm: chosenVM === NO_VM ? null : chosenVM,
-          instructions: instructions.trim(),
-        },
-      });
+      let job: Job;
+      if (props.issue !== undefined) {
+        job = await api<Job>("/api/issues/assign", {
+          method: "POST",
+          body: {
+            issue: props.issue.id,
+            agent: agentId === NEW_AGENT ? null : agentId,
+            vm: chosenVM === NO_VM ? null : chosenVM,
+            instructions: instructions.trim(),
+          },
+        });
+      } else {
+        job = await api<Job>("/api/repos/set_up", {
+          method: "POST",
+          body: {
+            repo: props.repo!.full_name,
+            agent: agentId === NEW_AGENT ? null : agentId,
+            vm: chosenVM === NO_VM ? null : chosenVM,
+            instructions: instructions.trim(),
+          },
+        });
+      }
       toast.success(`Added ${job.id} for ${agentNames[job.agent] ?? "a new agent"}`);
       props.onClose();
     } catch (err) {
@@ -83,9 +101,9 @@ export default function AssignDialog(props: { issue: IssueItem; onClose: () => v
         {/* min-w-0 lets the truncated title shrink; without it a long issue title widens the dialog's grid past its box */}
         <DialogHeader className="min-w-0">
           <DialogTitle>
-            Assign {props.issue.repo}#{props.issue.number}
+            {props.issue !== undefined ? `Assign ${props.issue.repo}#${props.issue.number}` : `Set up ${props.repo!.full_name}`}
           </DialogTitle>
-          <DialogDescription className="truncate">{props.issue.title}</DialogDescription>
+          <DialogDescription className="truncate">{props.issue !== undefined ? props.issue.title : props.repo!.description}</DialogDescription>
         </DialogHeader>
 
         <div className="grid grid-cols-[88px_minmax(0,1fr)] items-center gap-x-3 gap-y-2">
@@ -141,7 +159,7 @@ export default function AssignDialog(props: { issue: IssueItem; onClose: () => v
 
           <label className="self-start pt-1.5 text-muted-foreground">Instructions</label>
           <Textarea
-            placeholder="Optional, e.g. keep the change small"
+            placeholder={props.issue !== undefined ? "Optional, e.g. keep the change small" : "Optional, e.g. only the web app, not the docs site"}
             value={instructions}
             onChange={(event) => setInstructions(event.target.value)}
             onKeyDown={(event) => {

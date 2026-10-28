@@ -1,8 +1,9 @@
 /*
 The Jobs list: every job of every agent, and the place to make new ones.
 
-A job comes from Assign on the Issues page (kind fix_issue), from New job here (kind task), or from an
-agent itself (job_create). Tabs filter by status; "Open" is everything not done or cancelled, the most
+A job comes from Assign on the Issues page (kind fix_issue), from Set up on the Repos page (kind set_up_repo:
+the repo running on the VM's desktop or opened in VS Code there, and the agent's short introduction to it in its
+notes), from New job here (kind task), or from an agent itself (job_create). Tabs filter by status; "Open" is everything not done or cancelled, the most
 recently changed first. Each row shows its progress (the step the agent is on) and, under the title, the
 agent's headline in everyday words. Rows open in place: every step, what the job is about, the technical
 detail, the project's test suite runs (before and with the change), what the agent is doing right now, the instructions, the agent's notes and the drafts it made,
