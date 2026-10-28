@@ -17,7 +17,9 @@ about it (FOUND_COLUMNS). The main ones come first: outside PRs merged (of those
 PRs merged (the same, for people who never opened a PR there before; hover for how many were merged, closed and still
 open), how newcomers fare, its AI policy, and how fast a maintainer first replies to an outside PR (bots, AI reviewers
 and other outsiders don't count). Then its fit, review tone, stars, its type (the one Claude classified it under), PRs, issues and commits a month
-and the trend, how many contributors and maintainers it has, how many outside PRs no maintainer answered, and when it
+and the trend, how many new contributors it had lately (people whose first PR there was recent, shown as "16 in 6
+days": the days its 100 newest PRs cover; people who contributed before don't count; it sorts by new contributors a
+day), how many maintainers it has, how many outside PRs no maintainer answered, and when it
 was found; its note under the name. There is no overall score: the numbers are shown as they are. Every column is as wide as its widest
 cell (one CSS grid for the whole table, each row a subgrid), and the text is in the page's own color, not gray: green,
 amber or red only where a value means something (the color rules in index.css). A click on a header adds that column
@@ -109,7 +111,7 @@ type FoundKey =
   | "issues"
   | "commits"
   | "trend"
-  | "contributors"
+  | "new_contributors"
   | "maintainers"
   | "unanswered"
   | "found";
@@ -130,7 +132,7 @@ const FOUND_COLUMNS: { key: FoundKey; label: string; title: string; better: "hig
   { key: "issues", label: "Issues/mo", title: "Issues opened a month, on average over 90 days", better: "higher" },
   { key: "commits", label: "Commits/mo", title: "Commits a month, on average over 90 days", better: "higher" },
   { key: "trend", label: "Trend", title: "The last 30 days against the 90-day average", better: "higher" },
-  { key: "contributors", label: "Contributors", title: "People who opened a PR lately (the newest 100 PRs, at most 90 days; bots not counted)", better: "higher" },
+  { key: "new_contributors", label: "New contributors", title: "People whose first PR there came in the time shown: its 100 newest PRs, at most 90 days, among the 30 most recent outside authors. People who contributed before don't count, nor do maintainers or bots", better: "higher" },
   { key: "maintainers", label: "Maintainers", title: "People who merged a PR in the last 30 days (bots not counted)", better: "higher" },
   { key: "unanswered", label: "Unanswered", title: "Outside contributors' PRs open over 30 days that no maintainer answered", better: "lower" },
   { key: "found", label: "Found", title: "When it was found", better: "higher" },
@@ -303,8 +305,12 @@ export default function Explore() {
     if (key === "trend") {
       return each.trend !== undefined ? (TREND_RANK[each.trend] ?? null) : null;
     }
-    if (key === "contributors") {
-      return each.contributors ?? null;
+    if (key === "new_contributors") {
+      // Per day, so a repo whose newest PRs cover a week compares fairly with one whose cover three months.
+      if (typeof each.window_days !== "number" || each.newcomer_stats === undefined || each.newcomer_stats === null) {
+        return null;
+      }
+      return each.newcomer_stats.prs / each.window_days;
     }
     if (key === "maintainers") {
       return each.maintainers ?? null;
@@ -390,8 +396,11 @@ export default function Explore() {
       }
       return each.trend === "down" ? "↓ quieter" : "steady";
     }
-    if (key === "contributors") {
-      return each.contributors ?? "–";
+    if (key === "new_contributors") {
+      if (typeof each.window_days !== "number" || each.newcomer_stats === undefined || each.newcomer_stats === null) {
+        return "–";
+      }
+      return `${each.newcomer_stats.prs} in ${each.window_days} day${each.window_days === 1 ? "" : "s"}`;
     }
     if (key === "maintainers") {
       if (typeof each.maintainers !== "number") {

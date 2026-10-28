@@ -7,7 +7,8 @@ those merged or closed), newcomers' first PRs merged (New merged; hover for merg
 newcomers fare (welcomed, OK, turned away: their first PRs mostly closed, or left waiting: mostly still open after a
 month), the AI policy, and reply speed (how fast a maintainer first answers an outside PR;
 bots, AI reviewers and other outsiders don't count). Then its type and fit, stars, review tone, PRs, issues and commits
-a month and the trend, contributors, maintainers, PRs no maintainer answered, its issues in the Issues list, and more
+a month and the trend, new contributors (people whose first PR there was recent, as "16 in 6 days": the days its 100
+newest PRs cover; people who contributed before don't count; it sorts by new contributors a day), maintainers, PRs no maintainer answered, its issues in the Issues list, and more
 (TABLE_COLUMNS; github_searcher/repo_signals.py, kept fresh by the backend). There is no overall score: the numbers
 are shown as they are. What used to be tags under a row are columns too. Values are plain text in the page's own color: green,
 amber or red only where a value means something (the same rules as the Explore page). No lines between columns. Name
@@ -95,7 +96,6 @@ type SortKey =
   | "outside_prs"
   | "stale"
   | "mergers"
-  | "contributors"
   | "unclaimed"
   | "beginner"
   | "newcomer_tag"
@@ -138,13 +138,12 @@ const SORT_FIELDS: { key: SortKey; label: string; group: string; better: "higher
   { key: "outside_prs", label: "Outside PRs", group: "Outside contributors", better: "higher", down: "Most outside PRs first", up: "Fewest first" },
   { key: "stale", label: "Unanswered PRs", group: "Outside contributors", better: "lower", down: "Fewest unanswered PRs first", up: "Most first" },
   { key: "mergers", label: "Maintainers", group: "Outside contributors", better: "higher", down: "Most maintainers first", up: "Fewest first" },
-  { key: "contributors", label: "Contributors", group: "Outside contributors", better: "higher", down: "Most contributors first", up: "Fewest first" },
   { key: "unclaimed", label: "Unclaimed beginner issues", group: "Outside contributors", better: "higher", down: "Most first", up: "Fewest first" },
   { key: "beginner", label: "Beginner issues", group: "Outside contributors", better: "higher", down: "Most first", up: "Fewest first" },
   { key: "newcomer_tag", label: "Welcomes newcomers", group: "Newcomers", better: "higher", down: "Most welcoming first", up: "Least welcoming first" },
   { key: "newcomers", label: "Newcomers merged", group: "Newcomers", better: "higher", down: "Most first PRs merged first", up: "Least first" },
   { key: "newcomer_reply", label: "Newcomer reply speed", group: "Newcomers", better: "lower", down: "Fastest first", up: "Slowest first" },
-  { key: "newcomer_prs", label: "Newcomer count", group: "Newcomers", better: "higher", down: "Most newcomers first", up: "Fewest first" },
+  { key: "newcomer_prs", label: "New contributors", group: "Newcomers", better: "higher", down: "Most new contributors a day first", up: "Fewest first" },
   { key: "returned", label: "Newcomers who came back", group: "Newcomers", better: "higher", down: "Most first", up: "Fewest first" },
   { key: "prs", label: "PRs a month", group: "Activity", better: "higher", down: "Most first", up: "Fewest first" },
   { key: "prs_merged", label: "PRs merged a month", group: "Activity", better: "higher", down: "Most first", up: "Fewest first" },
@@ -192,13 +191,12 @@ const TABLE_COLUMNS: TableColumn[] = [
   { key: "outside_prs", label: "Outside PRs", name: "Outside PRs", group: "Outside contributors", title: "PRs outside contributors opened in the window (at most 90 days)", sort: "outside_prs" },
   { key: "stale", label: "Unanswered", name: "Unanswered PRs", group: "Outside contributors", title: "Outside contributors' PRs open over 30 days that no maintainer answered", sort: "stale" },
   { key: "mergers", label: "Maintainers", name: "Maintainers", group: "Outside contributors", title: "People who merged a PR in the last 30 days", sort: "mergers" },
-  { key: "contributors", label: "Contributors", name: "Contributors", group: "Outside contributors", title: "People who opened a PR lately (the newest 100 PRs, at most 90 days; bots not counted)", sort: "contributors" },
   { key: "unclaimed", label: "Unclaimed", name: "Unclaimed beginner issues", group: "Outside contributors", title: "Open beginner issues nobody seems to have taken", sort: "unclaimed" },
   { key: "beginner", label: "Beginner", name: "Beginner issues", group: "Outside contributors", title: "Open beginner issues", sort: "beginner" },
   { key: "newcomer_tag", label: "Newcomers", name: "Newcomers (tag)", group: "Newcomers", title: "How newcomers' first PRs fare", sort: "newcomer_tag" },
   { key: "newcomers", label: "New merged", name: "Newcomers merged", group: "Newcomers", title: "Newcomers' first PRs merged, of those merged or closed", sort: "newcomers" },
   { key: "newcomer_reply", label: "New reply", name: "Newcomer reply speed", group: "Newcomers", title: "Median days until newcomers' first PRs get a first reply from a maintainer", sort: "newcomer_reply" },
-  { key: "newcomer_prs", label: "New PRs", name: "Newcomer count", group: "Newcomers", title: "Newcomers who opened a first PR in the window", sort: "newcomer_prs" },
+  { key: "newcomer_prs", label: "New contributors", name: "New contributors", group: "Newcomers", title: "People whose first PR there came in the time shown: its 100 newest PRs, at most 90 days, among the 30 most recent outside authors. People who contributed before don't count, nor do maintainers or bots", sort: "newcomer_prs" },
   { key: "returned", label: "Came back", name: "Newcomers who came back", group: "Newcomers", title: "Newcomers who opened a second PR", sort: "returned" },
   { key: "activity", label: "Activity", name: "Activity (tag)", group: "Activity", title: "PRs, issues and commits a month (90-day average); sorts by commits a month", sort: "commits" },
   { key: "prs", label: "PRs/mo", name: "PRs a month", group: "Activity", title: "PRs opened a month, on average over 90 days", sort: "prs" },
@@ -233,13 +231,13 @@ const DEFAULT_COLUMNS: ColumnKey[] = [
   "issues",
   "commits",
   "trend",
-  "contributors",
+  "newcomer_prs",
   "mergers",
   "stale",
   "listed",
 ];
-// "-5": saved before the main columns came first (Score went, newcomers' merge rate joined them); starting from the
-// new defaults once shows them.
+// "-5": saved before the main columns came first (Score went, newcomers' merge rate joined them, new contributors took
+// all recent PR authors' place); starting from the new defaults once shows them.
 const COLUMNS_STORAGE = "repos-columns-5";
 // The AI policy, newcomers and tone columns are tags (the Explore page's too): green for good news, amber for "have a
 // look", red for bad, gray for the rest. Other values are plain text, colored only when it means something.
@@ -403,9 +401,6 @@ export default function Repos() {
     if (key === "mergers") {
       return signals.active_mergers_30d;
     }
-    if (key === "contributors") {
-      return signals.active_contributors ?? null;
-    }
     if (key === "unclaimed") {
       return signals.unclaimed_beginner_issues;
     }
@@ -429,7 +424,11 @@ export default function Repos() {
       return newcomers?.median_days_to_first_reply ?? null;
     }
     if (key === "newcomer_prs") {
-      return newcomers?.prs ?? null;
+      // Per day, so a repo whose newest PRs cover a week compares fairly with one whose cover three months.
+      if (newcomers === undefined || signals.pr_window_days === undefined) {
+        return null;
+      }
+      return newcomers.prs / signals.pr_window_days;
     }
     if (key === "returned") {
       return newcomers?.returned ?? null;
@@ -777,9 +776,6 @@ export default function Repos() {
     if (key === "mergers") {
       return <span className={cn(signals.active_mergers_30d <= 1 && "text-warn")}>{signals.active_mergers_30d}</span>;
     }
-    if (key === "contributors") {
-      return signals.active_contributors ?? "–";
-    }
     if (key === "unclaimed") {
       return signals.unclaimed_beginner_issues;
     }
@@ -829,7 +825,10 @@ export default function Repos() {
       return days === null ? "–" : `${days}d`;
     }
     if (key === "newcomer_prs") {
-      return newcomers?.prs ?? "–";
+      if (newcomers === undefined || signals.pr_window_days === undefined) {
+        return "–";
+      }
+      return `${newcomers.prs} in ${signals.pr_window_days} day${signals.pr_window_days === 1 ? "" : "s"}`;
     }
     if (key === "returned") {
       return newcomers?.returned ?? "–";

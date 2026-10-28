@@ -255,13 +255,14 @@ export type ExploreFound = {
   note: string;
   found_at: string;
   // From its signals: outside PRs merged (of those merged or closed, 0..1), how newcomers' first PRs went (counts and
-  // their merge rate), median days to a maintainer's first reply on an outside PR, who opened PRs lately, who merged
-  // PRs in 30 days, outside PRs over 30 days nobody answered.
+  // their merge rate; prs is how many new contributors it had in window_days), median days to a maintainer's first
+  // reply on an outside PR, how many days its 100 newest PRs cover, who merged PRs in 30 days, outside PRs over 30
+  // days nobody answered.
   // Null when not counted (too few PRs, or found before these were).
   merged: number | null;
   newcomer_stats: Newcomers | null;
   reply: number | null;
-  contributors: number | null;
+  window_days: number | null;
   maintainers: number | null;
   unanswered: number | null;
 };

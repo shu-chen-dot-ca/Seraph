@@ -18,7 +18,8 @@ for the tags. Tag again (on the repo's row) has Claude read all its unassigned i
 
 The list is a table like the Explore page's: Name and its description under it, then TRACKED_COLUMNS: first the
 repo's tags (its signals, the same as the Repos page's columns: AI policy, newcomers, reply speed, review tone,
-activity, contributors, maintainers, unanswered PRs; hover a tag for what it means), then its issues' numbers. Every
+activity, new contributors (people whose first PR there was recent, as "16 in 6 days"; people who contributed before
+don't count), maintainers, unanswered PRs; hover a tag for what it means), then its issues' numbers. Every
 column is as wide as its widest cell (one CSS grid, each row a subgrid) and all of them sit on the left, the room left
 over going before the row's buttons. The text is in the page's own color (blue for new issues, green for free ones,
 red for a failed check; the tags' own colors). A click on a header adds that column to the sort, the best first (the
@@ -68,7 +69,7 @@ type TrackedKey =
   | "reply"
   | "reviews"
   | "activity"
-  | "contributors"
+  | "new_contributors"
   | "maintainers"
   | "unanswered"
   | "stars"
@@ -83,7 +84,7 @@ const TRACKED_COLUMNS: { key: TrackedKey; label: string; title: string; better?:
   { key: "reply", label: "Reply", title: "Median days until outside contributors' PRs get a first reply from a maintainer (bots and other outsiders don't count): the fastest first", better: "lower" },
   { key: "reviews", label: "Reviews", title: "How maintainers' feedback on outside PRs feels: the warmest first" },
   { key: "activity", label: "Activity", title: "PRs, issues and commits a month (90-day average); sorts by commits a month" },
-  { key: "contributors", label: "Contributors", title: "People who opened a PR lately (the newest 100 PRs, at most 90 days; bots not counted)" },
+  { key: "new_contributors", label: "New contributors", title: "People whose first PR there came in the time shown: its 100 newest PRs, at most 90 days, among the 30 most recent outside authors. People who contributed before don't count, nor do maintainers or bots: the most a day first" },
   { key: "maintainers", label: "Maintainers", title: "People who merged a PR in the last 30 days" },
   { key: "unanswered", label: "Unanswered", title: "Outside contributors' PRs open over 30 days that no maintainer answered" },
   { key: "stars", label: "Stars", title: "Stars on GitHub" },
@@ -195,8 +196,12 @@ export default function Tracked() {
     if (key === "activity") {
       return signals !== null && signals.activity !== undefined ? signals.activity.commits_month : null;
     }
-    if (key === "contributors") {
-      return signals !== null ? (signals.active_contributors ?? null) : null;
+    if (key === "new_contributors") {
+      // Per day, so a repo whose newest PRs cover a week compares fairly with one whose cover three months.
+      if (signals === null || signals.newcomers === undefined || signals.pr_window_days === undefined) {
+        return null;
+      }
+      return signals.newcomers.prs / signals.pr_window_days;
     }
     if (key === "maintainers") {
       return signals !== null ? signals.active_mergers_30d : null;
@@ -625,7 +630,11 @@ export default function Tracked() {
                         ? `${COMPACT.format(signals.activity.prs_opened_month)} PRs · ${COMPACT.format(signals.activity.issues_opened_month)} issues · ${COMPACT.format(signals.activity.commits_month)} commits /mo${signals.activity.trend === "up" ? " ↑" : signals.activity.trend === "down" ? " ↓" : ""}`
                         : "–"}
                     </span>
-                    <span className="flex h-7 items-center tabular-nums">{signals !== null ? (signals.active_contributors ?? "–") : "–"}</span>
+                    <span className="flex h-7 items-center whitespace-nowrap tabular-nums">
+                      {signals !== null && signals.newcomers !== undefined && signals.pr_window_days !== undefined
+                        ? `${signals.newcomers.prs} in ${signals.pr_window_days} day${signals.pr_window_days === 1 ? "" : "s"}`
+                        : "–"}
+                    </span>
                     <span className={cn("flex h-7 items-center tabular-nums", signals !== null && signals.active_mergers_30d <= 1 && "text-warn")}>
                       {signals !== null ? signals.active_mergers_30d : "–"}
                     </span>
