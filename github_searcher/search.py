@@ -1,6 +1,7 @@
 """Reads from GitHub: repos, files, READMEs, PR and issue activity, threads, merged PRs, issue facts, issue and code search,
 how your sent PRs stand (their checks and GitHub Actions runs), and everything the GitHub page's
-thread pop-up shows of one PR or issue (backend/github_api.py): its whole timeline, commits, checks and files changed.
+thread pop-up shows of one PR or issue (backend/github_api.py): its whole timeline, commits, checks and files changed,
+and one comment (whose it is, before you delete it).
 
 Every request goes through token_balancer.py, which spreads them over the team's tokens, paces
 them and waits out rate limits. Errors come back as httpx.HTTPStatusError, as before.
@@ -653,7 +654,7 @@ def get_action_runs(owner: str, repo: str, sha: str) -> list[dict]:
 
 
 # A PR or issue as the GitHub page's thread pop-up shows it (backend/github_api.py): the description, labels, assignees,
-# and its newest 100 timeline items, oldest first: comments, reviews with their
+# and its newest 100 timeline items, oldest first: comments (databaseId is the id to delete one by), reviews with their
 # code comments, commits, and the events the pop-up shows. totalCount says how many there are in all, so the pop-up can
 # say how many earlier ones it leaves out. A PR also has its branch (headRef is null once the branch is deleted), the
 # branch it goes into, and its last 100 commits, each with its checks.
@@ -758,5 +759,12 @@ def get_commit_statuses(owner: str, repo: str, sha: str) -> list[dict]:
 def get_pr_files(owner: str, repo: str, number: int) -> list[dict]:
     # A PR's files changed, the first 100, each with its patch (missing for a binary or very big file). Never cached.
     response = BALANCER.request("GET", f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}/files", params={"per_page": 100})
+    response.raise_for_status()
+    return response.json()
+
+
+def get_issue_comment(owner: str, repo: str, comment_id: int) -> dict:
+    # One comment on an issue or PR, by its id. Never cached: it is read to see whose it is before deleting it.
+    response = BALANCER.request("GET", f"https://api.github.com/repos/{owner}/{repo}/issues/comments/{comment_id}")
     response.raise_for_status()
     return response.json()

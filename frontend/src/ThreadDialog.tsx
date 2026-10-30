@@ -11,12 +11,14 @@ Tabs (an issue has only Conversation):
 - Conversation: the description, then everything after it, oldest first: comments (tagged Maintainer or bot),
   reviews (Approved, Requested changes, Commented) with their code comments, each under its file and line with the
   lines it is about, commits, and events as one gray line ("closed this", "added the label bug"). A very long thread
-  leaves its earliest items on GitHub (a line says how many).
+  leaves its earliest items on GitHub (a line says how many). Your own comments have Delete.
 - Commits: each commit, who made it and whether its checks passed.
 - Checks: the newest commit's checks (passed, failed, running, waiting, skipped), each with its summary and Details
   on GitHub.
 - Files changed: the diff per file, folding open, with +/- counts and line numbers (a big file starts folded).
 For a PR you opened, the bar has Close PR (open), Reopen PR and Delete branch (closed), Delete branch (merged).
+The bottom bar: Leave a comment and Comment, posted as you (needs your account connected: Account on the GitHub page;
+until then a "connect your GitHub account" link to it).
 Every button that changes something on GitHub asks "are you sure?" first (Enter confirms), then acts as you.
 */
 
@@ -33,6 +35,8 @@ import {
   GitPullRequestDraft,
   Loader2,
   RefreshCw,
+  Send,
+  Trash2,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -53,12 +57,13 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Markdown } from "@/components/ui/markdown";
 import { StatusDot, type Tone } from "@/components/ui/status-dot";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api, useLive } from "@/live";
+import { Textarea } from "@/components/ui/textarea";
+import { api, useLive, type GithubAccountStatus } from "@/live";
 import { cn, timeAgo } from "@/lib/utils";
 
 // The thread as GET /api/github/thread gives it, fresh from GitHub. role is GitHub's word for the person
 // (MEMBER, COLLABORATOR, OWNER, CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR, NONE).
-type ThreadComment = { type: "comment"; id: number; login: string; bot: boolean; role: string; at: string; body: string; url: string };
+type ThreadComment = { type: "comment"; id: number; login: string; bot: boolean; role: string; at: string; body: string; url: string; mine: boolean };
 
 type ReviewComment = { path: string; line: number | null; hunk: string; body: string; login: string; at: string; url: string };
 
@@ -126,12 +131,14 @@ type ThreadDetail = {
   commits: ThreadCommit[]; // PR; [] for issues
   checks: ThreadCheck[]; // PR, the newest commit's
   files: ThreadFile[]; // PR
+  you: string | null;
 };
 
 type DiffLine = { kind: "hunk" | "add" | "del" | "context" | "note"; text: string; oldNo: number | null; newNo: number | null };
 
-// What a button does, waiting for its "are you sure?": POST to path (close, reopen, delete branch).
-type Confirm = { title: string; text: string; label: string; destructive: boolean; path: string };
+// What a button does, waiting for its "are you sure?": post your own comment, or POST to path (close, reopen, delete
+// branch, delete a comment).
+type Confirm = { title: string; text: string; label: string; destructive: boolean; action: "comment" | "path"; path: string };
 
 // GitHub's role for someone in the project, in plain words. Other roles get no tag.
 const ROLE_LABEL: Record<string, string> = { OWNER: "Maintainer", MEMBER: "Maintainer", COLLABORATOR: "Maintainer" };
@@ -178,7 +185,11 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
   const [tab, setTab] = useState("conversation");
   // Files folded open or shut by hand, by "thread id:path"; others follow BIG_FILE_LINES.
   const [fileOpen, setFileOpen] = useState<Record<string, boolean>>({});
+  // Per thread: your own comment being written.
+  const [comments, setComments] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState("");
+  // Your GitHub account: who Comment posts as (null until known).
+  const [account, setAccount] = useState<GithubAccountStatus | null>(null);
   // The last button clicked stays set while its "are you sure?" fades out, so the text doesn't blank.
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -219,6 +230,18 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
     };
   }, [props.id, reload]);
 
+  // Who the GitHub account is: at first, and again when you connect or disconnect it on the GitHub page's Account tab.
+  useEffect(() => {
+    function load() {
+      api<GithubAccountStatus>("/api/github_account")
+        .then(setAccount)
+        .catch(() => setAccount({ connected: false }));
+    }
+    load();
+    window.addEventListener("github-account", load);
+    return () => window.removeEventListener("github-account", load);
+  }, []);
+
   // Each file's patch split into lines, with their line numbers counted from its @@ hunks. Parsed once per thread.
   const files = useMemo(() => {
     const result: { file: ThreadFile; lines: DiffLine[] }[] = [];
@@ -255,7 +278,7 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
     return result;
   }, [thread]);
 
-  // The diff's rows, kept as they are when the rest of the pop-up changes (a big PR has thousands of them).
+  // The diff's rows, kept as they are while you type a comment (a big PR has thousands of them).
   const filesView = useMemo(
     () => (
       <div>
@@ -327,6 +350,9 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
   // The thread in the GitHub page's live list (one of your PRs); undefined when it isn't there.
   const pr = prs.items.find((each) => each.id === props.id);
 
+  const comment = props.id !== null ? (comments[props.id] ?? "") : "";
+  const connected = account !== null && account.connected;
+
   // Only a PR has the other tabs.
   let shownTab = tab;
   if (thread === null || thread.kind === "issue") {
@@ -372,8 +398,50 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
     setConfirmOpen(true);
   }
 
+  // Your own comment, posted as you (after the "are you sure?").
+  async function postComment() {
+    if (props.id === null) {
+      return;
+    }
+    const target = props.id;
+    const body = (comments[target] ?? "").trim();
+    if (body === "") {
+      return;
+    }
+    setBusy("comment");
+    try {
+      const result = await api<{ url: string; id: number }>("/api/github/comment", { method: "POST", body: { target: target, body: body } });
+      setComments((current) => ({ ...current, [target]: "" }));
+      toast.success(`Comment posted on ${target}`, {
+        action: { label: "Open", onClick: () => window.open(result.url, "_blank", "noopener,noreferrer") },
+      });
+      setReload((count) => count + 1);
+    } catch (err) {
+      toast.error(`Could not post it: ${err instanceof Error ? err.message : err}`);
+    }
+    setBusy("");
+  }
+
+  function askComment() {
+    if (comment.trim() === "" || busy !== "" || account === null || !account.connected) {
+      return;
+    }
+    ask({
+      title: `Post this comment as @${account.login}?`,
+      text: `It is posted on ${props.id}, with the text you wrote. Anyone can see it. You can edit or delete it on GitHub later.`,
+      label: "Post comment",
+      destructive: false,
+      action: "comment",
+      path: "",
+    });
+  }
+
   async function act() {
     if (confirm === null) {
+      return;
+    }
+    if (confirm.action === "comment") {
+      postComment();
       return;
     }
     const title = confirm.title;
@@ -422,7 +490,7 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
                     {thread.repo} #{thread.number} <ExternalLink className="size-3" />
                   </a>
                   <span title={new Date(thread.created_at).toLocaleString()}>
-                    opened {timeAgo(thread.created_at)} by {thread.author}
+                    opened {timeAgo(thread.created_at)} by {thread.author === thread.you ? "you" : thread.author}
                   </span>
                   {/* The Inbox draft it was sent from, and its job: they go to that page, which closes the pop-up. */}
                   {pr !== undefined && pr.draft_id !== null && (
@@ -502,6 +570,7 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
                         text: "It closes on GitHub, as you, without merging. Its branch stays, so you can reopen it.",
                         label: "Close PR",
                         destructive: true,
+                        action: "path",
                         path: `/api/github/prs/${thread.repo}/${thread.number}/close`,
                       })
                     }
@@ -520,6 +589,7 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
                         text: "It opens again on GitHub, as you, and the project's people are told.",
                         label: "Reopen PR",
                         destructive: false,
+                        action: "path",
                         path: `/api/github/prs/${thread.repo}/${thread.number}/reopen`,
                       })
                     }
@@ -538,6 +608,7 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
                         text: "Its branch is deleted from your fork, for good. The PR stays on GitHub, but it can't be reopened after.",
                         label: "Delete branch",
                         destructive: true,
+                        action: "path",
                         path: `/api/github/prs/${thread.repo}/${thread.number}/delete_branch`,
                       })
                     }
@@ -601,6 +672,26 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
                             <a href={item.url} target="_blank" rel="noreferrer" className="hover:text-foreground" title="Open on GitHub">
                               <ExternalLink className="size-3" />
                             </a>
+                            {item.mine && (
+                              <Button
+                                variant="ghost"
+                                size="xs"
+                                className="ml-auto"
+                                disabled={busy !== ""}
+                                onClick={() =>
+                                  ask({
+                                    title: `Delete your comment on ${thread.repo} #${thread.number}?`,
+                                    text: "It is deleted from GitHub, for good. People who were notified may still have it in their email.",
+                                    label: "Delete comment",
+                                    destructive: true,
+                                    action: "path",
+                                    path: `/api/github/comments/${thread.repo}/${item.id}/delete`,
+                                  })
+                                }
+                              >
+                                <Trash2 /> Delete
+                              </Button>
+                            )}
                           </div>
                           <Markdown text={item.body} repo={thread.repo} issueRefs />
                         </div>
@@ -717,6 +808,43 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
 
               {shownTab === "files" && files.length === 0 && <div className="px-4 py-3 text-muted-foreground">No files changed.</div>}
               {shownTab === "files" && filesView}
+            </div>
+
+            <div className="shrink-0 space-y-2 border-t bg-muted/30 px-4 py-2">
+              {account !== null && !account.connected && (
+                <div className="text-xs text-muted-foreground">
+                  To comment here as you,{" "}
+                  <a href="#/github?tab=account" className="text-primary hover:underline">
+                    connect your GitHub account
+                  </a>
+                  .
+                </div>
+              )}
+              {connected && (
+                <>
+                  <Textarea
+                    placeholder="Leave a comment. Ctrl+Enter posts it, after you confirm."
+                    className="max-h-40 min-h-14 bg-background"
+                    value={comment}
+                    onChange={(event) => {
+                      const target = props.id ?? "";
+                      setComments((current) => ({ ...current, [target]: event.target.value }));
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                        event.preventDefault();
+                        askComment();
+                      }
+                    }}
+                  />
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">Posted on GitHub as @{account?.login}, after you confirm. Markdown works, like on GitHub.</span>
+                    <Button size="sm" className="ml-auto" disabled={busy !== "" || comment.trim() === ""} onClick={askComment}>
+                      {busy === "comment" ? <Loader2 className="animate-spin" /> : <Send />} Comment
+                    </Button>
+                  </div>
+                </>
+              )}
             </div>
 
             <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>

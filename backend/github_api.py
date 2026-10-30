@@ -1,18 +1,21 @@
 """The GitHub page: your PRs on GitHub and how each one stands (github_searcher/pr_tracking.py), each one's
-whole thread for the thread pop-up, the comments the app posted for you, and changes you make to them, as you
+whole thread for the thread pop-up, and the changes you make there, as you
 (github_searcher/github_account.py). Its Account tab connects the account itself (backend/github_account_api.py).
 
 GET /api/github/thread?id=owner/name%23n is one PR or issue as GitHub has it now, read with the search tokens: the
 description, the newest 100 timeline items (comments, reviews with their code comments, commits, and events in plain
 words; "hidden" says how many earlier ones are left out), and for a PR its branch, commits, the newest commit's checks
-(with GitHub Actions runs that wait for a maintainer to approve them) and files changed.
+(with GitHub Actions runs that wait for a maintainer to approve them) and files changed. "you" is your connected login,
+and "mine" marks your comments.
 
 keep_prs(), which the app runs in the background, reads the PRs again every PRS_REFRESH_SECONDS, and at once
-when Approve just sent a PR that isn't followed yet. Check now (POST /api/github/refresh) reads them at once.
-The buttons (each asks "are you sure?" in the browser first): close or reopen one of your PRs, delete a closed
-or merged PR's branch from your fork, delete a comment the app posted (the draft then says when). After a change
-to a PR, the PRs are read again. The PRs reach the browser through /api/live (topic "prs"), the comments with
-the Inbox's drafts (topic "inbox").
+when Approve just sent a PR that isn't followed yet.
+
+The buttons (each asks "are you sure?" in the browser first): post a comment as you, delete one of your comments
+(refused when it isn't yours; a draft that posted it keeps when it was deleted), close or reopen one of your PRs,
+delete a closed or merged PR's branch from your fork. After a change to a PR, the PRs are read again. Check now
+(POST /api/github/refresh) reads them all at once. The PRs reach the browser through /api/live (topic
+"prs"), the drafts with the Inbox (topic "inbox").
 """
 
 import asyncio
@@ -22,11 +25,12 @@ from datetime import UTC, datetime
 
 import httpx
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from backend.shared import github_account, inbox, pr_tracking
 from github_searcher.github_account import SendError
 from github_searcher.pr_tracking import ROLLUP
-from github_searcher.search import get_action_runs, get_check_runs, get_commit_statuses, get_full_thread, get_pr_files
+from github_searcher.search import get_action_runs, get_check_runs, get_commit_statuses, get_full_thread, get_issue_comment, get_pr_files
 
 router = APIRouter(prefix="/api")
 
@@ -34,6 +38,7 @@ PRS_CHECK_SECONDS = 15
 PRS_REFRESH_SECONDS = 5 * 60
 PR_ACTIONS = ["close", "reopen", "delete_branch"]
 THREAD_ID = r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)#(\d+)"
+NAME = r"[A-Za-z0-9_.-]+"
 # A finished check run's conclusion, and a commit status, in the pop-up's words.
 CONCLUSIONS = {
     "success": "passed",
@@ -51,6 +56,11 @@ STATUSES = {"success": "passed", "failure": "failed", "error": "failed", "pendin
 CLOSE_REASONS = {"COMPLETED": " as completed", "NOT_PLANNED": " as not planned", "DUPLICATE": " as a duplicate"}
 # How much of a check's summary is kept.
 SUMMARY_CHARS = 300
+
+
+class CommentRequest(BaseModel):
+    target: str
+    body: str
 
 
 @router.post("/github/refresh")
@@ -77,6 +87,10 @@ async def thread_details(id: str) -> dict:
     if thread is None:
         raise HTTPException(status_code=404, detail=f"GitHub has no {id}.")
 
+    you = None
+    account = github_account.status()
+    if account["connected"]:
+        you = account["login"]
     kind = "issue"
     if thread["__typename"] == "PullRequest":
         kind = "pr"
@@ -185,6 +199,7 @@ async def thread_details(id: str) -> dict:
                 "at": item["createdAt"],
                 "body": item["body"],
                 "url": item["url"],
+                "mine": you is not None and login == you,
             })
             continue
         # A pending review is only its author's own, not shown to anyone else.
@@ -286,7 +301,22 @@ async def thread_details(id: str) -> dict:
         "commits": commits,
         "checks": checks,
         "files": files,
+        "you": you,
     }
+
+
+@router.post("/github/comment")
+async def post_comment(request: CommentRequest) -> dict:
+    """Your own comment on a PR or issue, as you (the browser asked "are you sure?"). Returns {"url", "id"}."""
+    if re.fullmatch(THREAD_ID, request.target) is None:
+        raise HTTPException(status_code=400, detail="The target must be owner/name#number.")
+    if request.body.strip() == "":
+        raise HTTPException(status_code=400, detail="Write the comment first.")
+    try:
+        posted = await asyncio.to_thread(github_account.comment, request.target, request.body)
+    except SendError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    return posted
 
 
 @router.post("/github/prs/{owner}/{name}/{number}/{action}")
@@ -302,21 +332,43 @@ async def change_pr(owner: str, name: str, number: int, action: str) -> dict:
     return {"done": done}
 
 
-@router.post("/github/comments/{draft_id}/delete")
-async def delete_comment(draft_id: str) -> dict:
-    """Delete a comment the app posted for you, from its draft. The draft keeps that it was deleted, and when."""
+@router.post("/github/comments/{owner}/{name}/{comment_id}/delete")
+async def delete_comment(owner: str, name: str, comment_id: int) -> dict:
+    """Delete one of your comments on GitHub, as you. Refused when it isn't yours. A draft that posted it keeps that
+    it was deleted, and when."""
+    if re.fullmatch(NAME, owner) is None or re.fullmatch(NAME, name) is None:
+        raise HTTPException(status_code=400, detail="That isn't a GitHub repo.")
+    account = github_account.status()
+    if not account["connected"]:
+        raise HTTPException(status_code=400, detail="Connect your GitHub account first: the GitHub page, Account.")
+    # Whose it is, read with the search tokens first: GitHub deletes by id alone, and your token may delete other
+    # people's comments on a repo you maintain.
+    comment = None
     try:
-        draft = inbox.get(draft_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"No draft {draft_id}.")
-    sent = draft["sent"]
-    if sent is None or sent["kind"] != "comment":
-        raise HTTPException(status_code=400, detail="That draft didn't post a comment.")
-    try:
-        done = await asyncio.to_thread(github_account.manage, "delete_comment", sent["repo"], sent["id"])
-    except SendError as error:
-        raise HTTPException(status_code=400, detail=str(error))
-    inbox.mark_sent(draft_id, {**sent, "deleted_at": datetime.now(UTC).isoformat()})
+        comment = await asyncio.to_thread(get_issue_comment, owner, name, comment_id)
+    except httpx.HTTPStatusError as error:
+        if error.response.status_code != 404:
+            raise
+    login = "ghost"
+    if comment is not None and comment["user"] is not None:
+        login = comment["user"]["login"]
+    if comment is not None and login.lower() != account["login"].lower():
+        raise HTTPException(status_code=400, detail=f"That comment is by {login}, not you.")
+    done = "The comment is gone already."
+    if comment is not None:
+        try:
+            done = await asyncio.to_thread(github_account.manage, "delete_comment", f"{owner}/{name}", comment_id)
+        except SendError as error:
+            raise HTTPException(status_code=400, detail=str(error))
+
+    now = datetime.now(UTC).isoformat()
+    for draft in inbox.list():
+        sent = draft["sent"]
+        if sent is None or sent["kind"] != "comment" or sent.get("id") != comment_id:
+            continue
+        if sent["repo"].lower() != f"{owner}/{name}".lower():
+            continue
+        inbox.mark_sent(draft["id"], {**sent, "deleted_at": now})
     return {"done": done}
 
 

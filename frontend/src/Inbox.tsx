@@ -36,8 +36,8 @@ arrow keys scroll the pop-up.
 Delete: a decided item's bar has Delete, and many are picked like in a mail app (components/ui/row-selection.tsx):
 Ctrl-click, Shift-click, dragging a rectangle, Ctrl+A; the bar at the bottom of the list then deletes them at once. It
 asks first (Enter confirms), and it is for good. Only decided items can be deleted: a pending one waits for your
-decision, since its agent waits for the answer. Their agents aren't told, and what was sent to GitHub stays there. A
-posted comment also leaves the GitHub page's Comments tab, so it can't be deleted from the app anymore (the pop-up says so).
+decision, since its agent waits for the answer. Their agents aren't told, and what was sent to GitHub stays there (a
+comment you posted can still be deleted from its pop-up on the GitHub page).
 */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -614,9 +614,6 @@ export default function Inbox(props: { selected: string | null }) {
               {deleting !== null && deleting.ids.length === 1
                 ? "It is gone from the Inbox for good, with your decision and note. Its agent isn't told, and what was sent to GitHub stays there."
                 : "They are gone from the Inbox for good, with your decisions and notes. Their agents aren't told, and what was sent to GitHub stays there."}
-              {deleting !== null &&
-                inbox.some((each) => deleting.ids.includes(each.id) && each.sent !== null && each.sent.kind === "comment") &&
-                " A comment the app posted also leaves the GitHub page, so you can't delete it on GitHub from the app anymore."}
               {deleting !== null && deleting.pending > 0 && ` ${deleting.pending} pending ${deleting.pending === 1 ? "one stays" : "ones stay"}: decide ${deleting.pending === 1 ? "it" : "them"} first.`}
             </AlertDialogDescription>
           </AlertDialogHeader>

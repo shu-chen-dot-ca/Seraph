@@ -11,8 +11,7 @@ wakes the agent, so those endpoints run on the event loop (`async def`). The
 drafts themselves reach the browser through /api/live.
 
 POST /inbox/delete deletes decided drafts for good (pending ones stay: their agents wait for an answer). Their
-agents aren't told, and what was sent to GitHub stays there (a posted comment then leaves the GitHub page's
-Comments tab, which lists drafts, backend/github_api.py).
+agents aren't told, and what was sent to GitHub stays there.
 
 A draft's evidence (screenshots, images, command output) is files in EVIDENCE_DIR,
 served by name. Names are only ever ones the agent tools made (ev_<hex>.<ext>), so

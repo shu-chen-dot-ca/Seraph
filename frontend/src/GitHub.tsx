@@ -1,5 +1,5 @@
 /*
-The GitHub page (#/github, #/github?tab=closed|comments|account): your GitHub things in one place. Tabs:
+The GitHub page (#/github, #/github?tab=closed|account): your GitHub things in one place. Tabs:
 - Open PRs / Closed PRs (merged ones too): your PRs on GitHub and how each one stands
   (github_searcher/pr_tracking.py): every PR the Inbox's Approve sent, and your other PRs on other people's
   projects (the ones you sent by hand, found with your account), the newest change first. The header says when
@@ -11,43 +11,29 @@ The GitHub page (#/github, #/github?tab=closed|comments|account): your GitHub th
   - Review: approved, changes asked for, reviewed with comments, or not reviewed yet.
   - How many comments and who wrote the latest (a maintainer, a bot, you), and the issue it fixes, open or closed.
   A click opens it in a pop-up (ThreadDialog.tsx; the address gets open=owner/name%23n, keeping the tab): all of it
-  as on GitHub. The X, Esc or a click outside closes it, back to the list.
-- Comments: the comments the app posted for you (approved comment drafts), newest first: where (repo and number),
-  the start of the text, when. A click opens it: the whole text, links (on GitHub, its draft), and Delete comment.
-- Account: your GitHub account, the one Approve in the Inbox sends PRs and comments as and these buttons act as
+  as on GitHub, where you comment. The X, Esc or a click outside closes it, back to the list.
+- Account: your GitHub account, the one Approve in the Inbox sends PRs and comments as, and Comment in the pop-up
   (github_searcher/github_account.py). Paste a classic token with the public_repo scope and Connect: the backend
   checks it with GitHub (a fine-grained token, or one without that scope, is turned down with why) and keeps it on
   this computer. It never comes back to the browser: GET /api/github_account says only who it is (Connected as
   @login) and the token's scopes. Change token pastes a new one; Disconnect forgets it, and Approve then sends
   nothing again. "make one" opens GitHub's new-token page with public_repo ticked. Both tell the Inbox (a
   "github-account" window event), which shows who it sends as. Below: your forks the app sends PRs from.
-Every button that changes something on GitHub asks "are you sure?" first (Enter confirms), then acts as you.
 */
 
-import { ChevronRight, ExternalLink, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Loader2, RefreshCw } from "lucide-react";
+import { ExternalLink, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Loader2, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import ThreadDialog from "@/ThreadDialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { since, useNow } from "@/components/ui/job-progress";
-import { Markdown } from "@/components/ui/markdown";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, useLive, useLoaded, type GithubAccountStatus, type TrackedPR } from "@/live";
 import { cn } from "@/lib/utils";
 
-const TABS = ["open", "closed", "comments", "account"];
+const TABS = ["open", "closed", "account"];
 
 const CHECKS_TEXT: Record<string, string> = {
   waiting: "Waiting for a maintainer to approve the checks",
@@ -65,9 +51,6 @@ const REVIEW_TEXT: Record<string, string> = {
   none: "Not reviewed yet",
 };
 const REVIEW_COLOR: Record<string, string> = { approved: "text-ok", changes_requested: "text-warn", commented: "", none: "" };
-
-// What a button does, waiting for its "are you sure?".
-type Confirm = { title: string; text: string; label: string; path: string };
 
 // Who someone is, in plain words, from GitHub's role for them.
 function who(login: string, role: string, pr: TrackedPR): string {
@@ -88,11 +71,6 @@ export default function GitHub(props: { tab: string | null; open: string | null 
   const inbox = useLive("inbox");
   const loaded = useLoaded("prs");
   const [tab, setTab] = useState(props.tab !== null && TABS.includes(props.tab) ? props.tab : "open");
-  const [open, setOpen] = useState<string[]>([]);
-  // The last button clicked stays set while its "are you sure?" fades out, so the text doesn't blank.
-  const [confirm, setConfirm] = useState<Confirm | null>(null);
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
   const [account, setAccount] = useState<GithubAccountStatus | null>(null);
   const [token, setToken] = useState("");
   const [changingToken, setChangingToken] = useState(false);
@@ -126,7 +104,6 @@ export default function GitHub(props: { tab: string | null; open: string | null 
 
   const openPRs = prs.items.filter((pr) => pr.state === "open");
   const closedPRs = prs.items.filter((pr) => pr.state !== "open");
-  const comments = inbox.filter((draft) => draft.sent !== null && draft.sent.kind === "comment").sort((a, b) => (b.sent?.at ?? "").localeCompare(a.sent?.at ?? ""));
   // The forks Approve sent PRs from, once each.
   const forks: string[] = [];
   for (const draft of inbox) {
@@ -139,40 +116,12 @@ export default function GitHub(props: { tab: string | null; open: string | null 
   const listHash = tab === "open" ? "#/github" : `#/github?tab=${tab}`;
   const openPrefix = tab === "open" ? `${listHash}?open=` : `${listHash}&open=`;
 
-  function toggle(id: string) {
-    if (open.includes(id)) {
-      setOpen(open.filter((other) => other !== id));
-      return;
-    }
-    setOpen([...open, id]);
-  }
-
   async function checkNow() {
     try {
       await api("/api/github/refresh", { method: "POST" });
     } catch (err) {
       toast.error(`Could not check the PRs: ${err instanceof Error ? err.message : err}`);
     }
-  }
-
-  function ask(next: Confirm) {
-    setConfirm(next);
-    setConfirmOpen(true);
-  }
-
-  async function act() {
-    if (confirm === null) {
-      return;
-    }
-    const title = confirm.title;
-    setBusy(true);
-    try {
-      const result = await api<{ done: string }>(confirm.path, { method: "POST" });
-      toast.success(result.done);
-    } catch (err) {
-      toast.error(`${title.replace("?", "")}: ${err instanceof Error ? err.message : err}`);
-    }
-    setBusy(false);
   }
 
   async function connectAccount() {
@@ -213,9 +162,6 @@ export default function GitHub(props: { tab: string | null; open: string | null 
             </TabsTrigger>
             <TabsTrigger value="closed" className="px-2.5">
               Closed PRs <span className="text-xs text-muted-foreground tabular-nums">{closedPRs.length}</span>
-            </TabsTrigger>
-            <TabsTrigger value="comments" className="px-2.5">
-              Comments <span className="text-xs text-muted-foreground tabular-nums">{comments.length}</span>
             </TabsTrigger>
             <TabsTrigger value="account" className="px-2.5">
               Account
@@ -296,67 +242,6 @@ export default function GitHub(props: { tab: string | null; open: string | null 
             );
           })}
 
-        {tab === "comments" && comments.length === 0 && (
-          <div className="px-3 py-2 text-muted-foreground">No comments yet. A comment you approve in the Inbox shows here once it is on GitHub.</div>
-        )}
-        {tab === "comments" &&
-          comments.map((draft) => {
-            const sent = draft.sent!;
-            const isOpen = open.includes(draft.id);
-            const deleted = sent.deleted_at !== undefined;
-            return (
-              <div key={draft.id} className="border-b">
-                <div className={cn("flex cursor-pointer items-start gap-2 px-3 py-1.5 hover:bg-accent/50", isOpen && "bg-accent/40")} onClick={() => toggle(draft.id)}>
-                  <ChevronRight className={cn("mt-0.5 size-3.5 shrink-0 text-muted-foreground transition-transform", isOpen && "rotate-90")} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex min-w-0 items-baseline gap-2">
-                      <span className={cn("truncate", deleted && "text-muted-foreground line-through")}>{draft.body.split("\n")[0]}</span>
-                      <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                        {deleted ? `deleted ${since(sent.deleted_at ?? null, now)} ago` : `posted ${since(sent.at, now)} ago`}
-                      </span>
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      on {sent.repo} #{sent.number}
-                    </div>
-                  </div>
-                </div>
-                {isOpen && (
-                  <div className="space-y-2 px-3 pb-3 pl-[30px] text-xs">
-                    <Markdown text={draft.body} repo={sent.repo} githubImagesOnly issueRefs />
-                    <div className="flex flex-wrap items-center gap-3">
-                      {!deleted && (
-                        <a href={sent.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 hover:underline">
-                          Open on GitHub <ExternalLink className="size-3" />
-                        </a>
-                      )}
-                      <a href={`#/inbox/${draft.id}`} className="hover:underline">
-                        Its draft
-                      </a>
-                      {!deleted && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="ml-auto"
-                          disabled={busy}
-                          onClick={() =>
-                            ask({
-                              title: `Delete your comment on ${sent.repo} #${sent.number}?`,
-                              text: "It is deleted from GitHub, for good. People who were notified may still have it in their email.",
-                              label: "Delete comment",
-                              path: `/api/github/comments/${draft.id}/delete`,
-                            })
-                          }
-                        >
-                          Delete comment
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-
         {tab === "account" && (
           <div className="max-w-xl space-y-4 p-4">
             <section>
@@ -427,7 +312,7 @@ export default function GitHub(props: { tab: string | null; open: string | null 
                 <p className="mt-1 text-xs text-muted-foreground">This token can also write to your private repos; public_repo alone is enough.</p>
               )}
               <p className="mt-2 text-xs text-muted-foreground">
-                Approve in the Inbox sends PRs and comments as this account, after you confirm, and the buttons on this page act as it. It needs a
+                Approve in the Inbox sends PRs and comments as this account, after you confirm, and so does Comment on a pull request. It needs a
                 classic token with the public_repo scope (
                 <a
                   href="https://github.com/settings/tokens/new?scopes=public_repo&description=Seraph"
@@ -460,21 +345,6 @@ export default function GitHub(props: { tab: string | null; open: string | null 
 
       {/* The PR a click opened (open= in the address); closing it goes back to the list. */}
       <ThreadDialog id={props.open} onClose={() => (window.location.hash = listHash)} />
-
-      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{confirm?.title}</AlertDialogTitle>
-            <AlertDialogDescription>{confirm?.text}</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={act}>
-              {confirm?.label}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   );
 }

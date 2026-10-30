@@ -1,5 +1,5 @@
 """Your GitHub account: the one token that sends what you approve in the Inbox, as you, and that
-the GitHub page uses to manage what you sent.
+the GitHub page uses to manage what you sent and to post your own comments.
 
 The GitHub page's Account tab (frontend/src/GitHub.tsx) takes the token. connect() checks it with GitHub
 and keeps it in DATA_DIR/github_account.json, a file only this computer's user may read. The browser only
@@ -38,8 +38,12 @@ What was sent is kept on the draft as "sent" (Inbox.mark_sent):
               "commit", "as": "<your login>", "at"}
     comment: {"kind": "comment", "url", "id", "repo", "number", "as", "at", "deleted_at" once deleted from the GitHub page}
 
+comment(target, body) posts your own comment, as you, on a PR or issue: the comment box of the GitHub page's
+thread pop-up (backend/github_api.py), after its "are you sure?". No agent and no draft is involved.
+
 manage(action, repo, number) is one change you make from the GitHub page, as you: close or reopen one
-of your PRs, delete a closed PR's branch from your fork, or delete a comment the app posted for you. It
+of your PRs, delete a closed PR's branch from your fork, or delete one of your comments (in a PR's or
+issue's conversation in the thread pop-up). It
 checks first that the PR is yours and the branch is in your fork. Following your PRs is pr_tracking.py.
 
 Later (not built yet): the agent's next version pushed onto the same PR. "sent" has what that needs:
@@ -475,6 +479,46 @@ class GithubAccount:
             "as": account["login"],
             "at": datetime.now(UTC).isoformat(),
         }
+
+    def comment(self, target: str, body: str) -> dict:
+        """Posts your own comment, as you, on a PR or issue (target "owner/name#n"): the comment box on the GitHub page.
+        Returns {"url", "id"}; SendError says why it didn't. Runs in a thread."""
+        account = self.load()
+        if account is None:
+            raise SendError("Connect your GitHub account first: the GitHub page, Account.")
+        repo, _, number = target.rpartition("#")
+        if repo.count("/") != 1 or not number.isdigit():
+            raise SendError(f"{target} isn't a PR or issue (owner/name#number).")
+        if body.strip() == "":
+            raise SendError("The comment is empty.")
+        headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {account['token']}", "X-GitHub-Api-Version": "2022-11-28"}
+        try:
+            with httpx.Client(base_url=API, headers=headers, timeout=60) as client:
+                response = client.post(f"/repos/{repo}/issues/{number}/comments", json={"body": body})
+                response.raise_for_status()
+                comment = response.json()
+        except httpx.HTTPStatusError as error:
+            response = error.response
+            try:
+                data = response.json()
+            except ValueError:
+                data = {}
+            message = data.get("message") or f"{response.status_code} {response.reason_phrase}"
+            # A 422's reasons are in "errors", as texts or as objects.
+            details = []
+            for each in data.get("errors", []):
+                if isinstance(each, str):
+                    details.append(each)
+                elif isinstance(each, dict):
+                    details.append(each.get("message") or each.get("code", ""))
+            if details:
+                message += ": " + "; ".join(details)
+            if response.status_code == 401:
+                message += ". Connect your account again (the GitHub page, Account), with a new token."
+            raise SendError(f"GitHub refused: {message}") from None
+        except httpx.HTTPError as error:
+            raise SendError(f"Could not reach GitHub: {error}") from None
+        return {"url": comment["html_url"], "id": comment["id"]}
 
     def manage(self, action: str, repo: str, number: int) -> str:
         """One change on GitHub from the GitHub page, as you. action: "close" or "reopen" your PR repo#number,
