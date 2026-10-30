@@ -24,17 +24,20 @@ repository, or it touches politics: activist or politically sensitive, or agains
 its kind, each in its own column, the reason on hover. Assigned on GitHub counts as Assigned at once, without waiting
 for the tags. Tag again (on the repo's row) has Claude read all its unassigned issues again now.
 
-The list is a table like the Explore page's: Name and its description under it, then TRACKED_COLUMNS: first the
-repo's tags (its signals, the same as the Repos page's columns: AI policy, newcomers, reply speed, review tone,
-activity, new contributors (people whose first PR there was recent, as "16 in 6 days"; people who contributed before
-don't count), maintainers, unanswered PRs; hover a tag for what it means), then its issues' numbers. Every
-column is as wide as its widest cell (one CSS grid, each row a subgrid) and all of them sit on the left, the room left
-over going before the row's buttons. The text is in the page's own color (blue for new issues, green for free ones,
-red for a failed check; the tags' own colors). A click on a header adds that column to the sort, the best first (the
-most, the latest check, the fastest reply, the friendliest tag; A to Z for the name); again the other way round; again
-takes it out. Many columns sort at once, like on the Explore page: from left to right, the leftmost sorted column
-first, then the next among the same (say AI policy, then Free); Name last of all, and the list's order among what is
-still the same. With none, it is the list's order. Every sorted header is blue with an arrow.
+The list is a table like the Explore page's: Name, then the repo's fields in two lines, so a row isn't too long, and
+its description under them, from the name on. The header has two lines of names to match: each column holds a
+first-line field over a second-line one. The first line (FIRST_LINE) is how outside contributors fare, from the repo's
+signals (the same as the Repos page's columns): AI policy, newcomers, reply speed, review tone, unanswered PRs and
+maintainers; hover a tag for what it means. The second (SECOND_LINE): stars, its issues' numbers (New, Free, Easy,
+Open, Checked), new contributors (people whose first PR there was recent, as "16 in 6 days"; people who contributed
+before don't count) and activity. Every column is as wide as its widest cell (one CSS grid, each row a subgrid) and
+all of them sit on the left, the room left over going before the row's buttons. The text is in the page's own color
+(blue for new issues, green for free ones, red for a failed check; the tags' own colors). A click on a field's name in
+the header adds it to the sort, the best first (the most, the latest check, the fastest reply, the friendliest tag; A
+to Z for the name); again the other way round; again takes it out. Many fields sort at once, like on the Explore page:
+in the order they come, the first line from left to right, then the second (say AI policy, then Free); Name last of
+all, and the list's order among what is still the same. With none, it is the list's order. Every sorted name is blue
+with an arrow.
 
 Each row opens in place to its issues, newest first, with tabs Free (a newcomer can start on it now) / Assigned (someone is on it) / All (Free when there are free
 ones). The issues are a table too, sorted the same way by clicks on its columns' headers (one order for every open
@@ -92,22 +95,31 @@ type TrackedKey =
   | "easy"
   | "open"
   | "checked";
-const TRACKED_COLUMNS: { key: TrackedKey; label: string; title: string; better?: "lower" }[] = [
+type TrackedColumn = { key: TrackedKey; label: string; title: string; better?: "lower" };
+// Each row has two lines, so it isn't too long. The first: how outside contributors fare.
+const FIRST_LINE: TrackedColumn[] = [
   { key: "ai_policy", label: "AI policy", title: "What its contribution files say about AI: the most open first" },
   { key: "newcomers", label: "Newcomers", title: "How newcomers' first PRs fare: the most welcoming first" },
   { key: "reply", label: "Reply", title: "Median days until outside contributors' PRs get a first reply from a maintainer (bots and other outsiders don't count): the fastest first", better: "lower" },
   { key: "reviews", label: "Reviews", title: "How maintainers' feedback on outside PRs feels: the warmest first" },
-  { key: "activity", label: "Activity", title: "PRs, issues and commits a month (90-day average); sorts by commits a month" },
-  { key: "new_contributors", label: "New contributors", title: "People whose first PR there came in the time shown: its 100 newest PRs, at most 90 days, among the 30 most recent outside authors. People who contributed before don't count, nor do maintainers or bots: the most a day first" },
-  { key: "maintainers", label: "Maintainers", title: "People who merged a PR in the last 30 days" },
   { key: "unanswered", label: "Unanswered", title: "Outside contributors' PRs open over 30 days that no maintainer answered" },
+  { key: "maintainers", label: "Maintainers", title: "People who merged a PR in the last 30 days" },
+];
+// The second, under the first: stars, its issues' numbers, and how busy it is (the wide ones last).
+const SECOND_LINE: TrackedColumn[] = [
   { key: "stars", label: "Stars", title: "Stars on GitHub" },
   { key: "new", label: "New", title: "Open issues opened in the last 3 days and not marked read, assigned or not" },
   { key: "free", label: "Free", title: "Open issues a newcomer can start on now: nobody is on it and the maintainers want it done" },
   { key: "easy", label: "Easy", title: "Free issues that are easy: our agent can write the fix, see it and prove it in its VM" },
   { key: "open", label: "Open", title: "Open issues its last check found" },
   { key: "checked", label: "Checked", title: "When the backend last asked GitHub" },
+  { key: "new_contributors", label: "New contributors", title: "People whose first PR there came in the time shown: its 100 newest PRs, at most 90 days, among the 30 most recent outside authors. People who contributed before don't count, nor do maintainers or bots: the most a day first" },
+  { key: "activity", label: "Activity", title: "PRs, issues and commits a month (90-day average); sorts by commits a month" },
 ];
+// Every column in sort order (the first line from left to right, then the second), and the table's columns after
+// Name: each holds a first-line field over a second-line one.
+const TRACKED_COLUMNS = [...FIRST_LINE, ...SECOND_LINE];
+const SLOTS = Array.from({ length: Math.max(FIRST_LINE.length, SECOND_LINE.length) }, (_, index) => index);
 // The tags' order for sorting, the friendliest highest (the same as the Repos page's).
 const POLICY_RANK: Record<string, number> = { welcome: 5, none: 4, disclose: 3, unclear: 2, no_ai: 1 };
 const NEWCOMER_RANK: Record<string, number> = { welcomes: 5, ok: 4, few: 3, left_waiting: 2, turned_away: 1 };
@@ -154,7 +166,7 @@ export default function Tracked() {
   const [details, setDetails] = useState<{ repo: string; number: number } | null>(null);
   // The open repos' issues' order: newest first (none), or by these columns, like the list's.
   const [issueSorts, setIssueSorts] = useState<{ key: IssueKey; best: boolean }[]>([]);
-  // The list's order: as tracked (none), or by these columns, from left to right as the table shows them, Name last;
+  // The list's order: as tracked (none), or by these fields, in TRACKED_COLUMNS' order, Name last;
   // best is the way a column's first click sorts, or not.
   const [sorts, setSorts] = useState<{ key: TrackedKey; best: boolean }[]>([]);
   // Selected repos, the last one clicked (where a shift-click range starts), and whether removing them waits for a confirm.
@@ -254,7 +266,7 @@ export default function Tracked() {
   const rows = [...tracked.items];
   if (sorts.length > 0) {
     rows.sort((a, b) => {
-      // Like the Explore page: the leftmost sorted column that tells them apart decides, Name last; when none does, the
+      // Like the Explore page: the first sorted field (in TRACKED_COLUMNS' order) that tells them apart decides, Name last; when none does, the
       // list's order stays (a stable sort).
       for (const key of [...TRACKED_COLUMNS.map((column) => column.key), "name" as TrackedKey]) {
         const sort = sorts.find((each) => each.key === key);
@@ -562,13 +574,13 @@ export default function Tracked() {
         {rows.length > 0 && (
           <div
             className="grid w-max min-w-full gap-x-4 border-b"
-            style={{ gridTemplateColumns: `16px minmax(160px,max-content) repeat(${TRACKED_COLUMNS.length}, max-content) minmax(0,1fr) max-content` }}
+            style={{ gridTemplateColumns: `16px minmax(160px,max-content) repeat(${SLOTS.length}, max-content) minmax(0,1fr) max-content` }}
           >
-            <div className="col-span-full grid h-7 grid-cols-subgrid items-center bg-muted/40 px-3 text-xs font-medium">
+            <div className="col-span-full grid grid-cols-subgrid items-center bg-muted/40 px-3 py-0.5 text-xs font-medium">
               {/* Top left: picks every repo shown, or none when all are; a dash when only some are. */}
               <button
                 type="button"
-                className="flex items-center"
+                className="flex h-5 items-center self-start"
                 aria-label={allPicked ? "Unselect all" : "Select all"}
                 title={allPicked ? "Unselect all" : "Select all (Ctrl+A)"}
                 disabled={names.length === 0}
@@ -576,21 +588,39 @@ export default function Tracked() {
               >
                 <SelectBox checked={allPicked} partial={chosen.length > 0} />
               </button>
-              {[{ key: "name" as TrackedKey, label: "Name", title: "A to Z" }, ...TRACKED_COLUMNS].map((column) => {
-                const sort = sorts.find((each) => each.key === column.key);
-                return (
-                  <button
-                    key={column.key}
-                    type="button"
-                    className={cn("flex items-center gap-0.5 hover:text-primary", sort !== undefined && "text-primary")}
-                    title={column.title}
-                    onClick={() => clickSort(column.key)}
-                  >
-                    {column.label}
-                    {sort !== undefined && (sort.best ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />)}
-                  </button>
-                );
-              })}
+              <button
+                type="button"
+                className={cn("flex h-5 items-center gap-0.5 self-start hover:text-primary", sorts.some((each) => each.key === "name") && "text-primary")}
+                title="A to Z"
+                onClick={() => clickSort("name")}
+              >
+                Name
+                {sorts.find((each) => each.key === "name")?.best === true && <ArrowDown className="size-3" />}
+                {sorts.find((each) => each.key === "name")?.best === false && <ArrowUp className="size-3" />}
+              </button>
+              {/* Two lines, like the rows: each column's first-line field over its second-line one. */}
+              {SLOTS.map((index) => (
+                <span key={index} className="flex flex-col">
+                  {[FIRST_LINE[index], SECOND_LINE[index]].map((column, line) => {
+                    if (column === undefined) {
+                      return <span key={line} className="h-5" />;
+                    }
+                    const sort = sorts.find((each) => each.key === column.key);
+                    return (
+                      <button
+                        key={column.key}
+                        type="button"
+                        className={cn("flex h-5 items-center gap-0.5 hover:text-primary", sort !== undefined && "text-primary")}
+                        title={column.title}
+                        onClick={() => clickSort(column.key)}
+                      >
+                        {column.label}
+                        {sort !== undefined && (sort.best ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />)}
+                      </button>
+                    );
+                  })}
+                </span>
+              ))}
               <span />
               <span />
             </div>
@@ -650,7 +680,7 @@ export default function Tracked() {
                   <div
                     data-select-id={repo.full_name}
                     className={cn(
-                      "group col-span-full grid cursor-pointer grid-cols-subgrid px-3 hover:bg-accent/50",
+                      "group col-span-full grid cursor-pointer grid-cols-subgrid px-3 py-2 hover:bg-accent/50",
                       isOpen && "bg-accent/40",
                       chosen.includes(repo.full_name) && "bg-selected hover:bg-selected",
                     )}
@@ -678,7 +708,8 @@ export default function Tracked() {
                     <span className="flex h-7 min-w-0 items-center">
                       <span className="truncate font-medium">{repo.full_name}</span>
                     </span>
-                    {/* The repo's tags, from its signals; – until they are fetched (seconds after it is tracked). */}
+                    {/* The first line: the repo's tags, from its signals; – until they are fetched (seconds after it is
+                        tracked). Then an empty column, the room left over and the buttons. */}
                     <span className="flex h-7 items-center">
                       {signals !== null ? <PolicyTag tag={signals.ai_policy.tag} quote={signals.ai_policy.quote} file={signals.ai_policy.file} /> : "–"}
                     </span>
@@ -704,43 +735,14 @@ export default function Tracked() {
                     <span className="flex h-7 items-center">
                       {signals !== null && signals.atmosphere ? <ToneTag tone={signals.atmosphere.tone} summary={signals.atmosphere.summary} /> : "–"}
                     </span>
-                    <span className="flex h-7 items-center whitespace-nowrap tabular-nums" title="A month on average over 90 days; the arrow: the last 30 days were busier or quieter">
-                      {signals !== null && signals.activity !== undefined
-                        ? `${COMPACT.format(signals.activity.prs_opened_month)} PRs · ${COMPACT.format(signals.activity.issues_opened_month)} issues · ${COMPACT.format(signals.activity.commits_month)} commits /mo${signals.activity.trend === "up" ? " ↑" : signals.activity.trend === "down" ? " ↓" : ""}`
-                        : "–"}
-                    </span>
-                    <span className="flex h-7 items-center whitespace-nowrap tabular-nums">
-                      {signals !== null && signals.newcomers !== undefined && signals.pr_window_days !== undefined
-                        ? `${signals.newcomers.prs} in ${signals.pr_window_days} day${signals.pr_window_days === 1 ? "" : "s"}`
-                        : "–"}
+                    <span className={cn("flex h-7 items-center tabular-nums", signals !== null && signals.stale_outside_prs >= 5 && "text-warn")}>
+                      {signals !== null ? signals.stale_outside_prs : "–"}
                     </span>
                     <span className={cn("flex h-7 items-center tabular-nums", signals !== null && signals.active_mergers_30d <= 1 && "text-warn")}>
                       {signals !== null ? signals.active_mergers_30d : "–"}
                     </span>
-                    <span className={cn("flex h-7 items-center tabular-nums", signals !== null && signals.stale_outside_prs >= 5 && "text-warn")}>
-                      {signals !== null ? signals.stale_outside_prs : "–"}
-                    </span>
-                    <span className="flex h-7 items-center gap-1 tabular-nums">
-                      <Star className="size-3.5" />
-                      {COMPACT.format(check !== null && check.stars !== null ? check.stars : repo.stars)}
-                    </span>
-                    <span className={cn("flex h-7 items-center tabular-nums", fresh > 0 && "font-medium text-primary")}>{check !== null ? fresh : "–"}</span>
-                    <span className={cn("flex h-7 items-center tabular-nums", free > 0 && "text-ok")}>{check !== null ? free : "–"}</span>
-                    <span className={cn("flex h-7 items-center tabular-nums", easy > 0 && "text-ok")}>{check !== null ? easy : "–"}</span>
-                    <span className="flex h-7 items-center tabular-nums">{check !== null ? check.issues.length : "–"}</span>
-                    <span className="flex h-7 items-center gap-1 whitespace-nowrap tabular-nums">
-                      {check === null && (
-                        <>
-                          <Loader2 className="size-3.5 animate-spin" /> checking
-                        </>
-                      )}
-                      {check !== null && check.error !== null && (
-                        <span className="text-destructive" title={check.error}>
-                          failed
-                        </span>
-                      )}
-                      {check !== null && check.error === null && <span title={new Date(check.checked_at).toLocaleString()}>{timeAgo(check.checked_at)}</span>}
-                    </span>
+                    <span />
+                    <span />
                     <span />
                     <span className="flex h-7 items-center justify-end gap-0.5" onClick={(event) => event.stopPropagation()}>
                       <Button
@@ -767,8 +769,44 @@ export default function Tracked() {
                         <X />
                       </Button>
                     </span>
+                    {/* The second line, under the first one's columns: nothing under the box and the name. */}
+                    <span />
+                    <span />
+                    <span className="flex h-6 items-center gap-1 tabular-nums">
+                      <Star className="size-3.5" />
+                      {COMPACT.format(check !== null && check.stars !== null ? check.stars : repo.stars)}
+                    </span>
+                    <span className={cn("flex h-6 items-center tabular-nums", fresh > 0 && "font-medium text-primary")}>{check !== null ? fresh : "–"}</span>
+                    <span className={cn("flex h-6 items-center tabular-nums", free > 0 && "text-ok")}>{check !== null ? free : "–"}</span>
+                    <span className={cn("flex h-6 items-center tabular-nums", easy > 0 && "text-ok")}>{check !== null ? easy : "–"}</span>
+                    <span className="flex h-6 items-center tabular-nums">{check !== null ? check.issues.length : "–"}</span>
+                    <span className="flex h-6 items-center gap-1 whitespace-nowrap tabular-nums">
+                      {check === null && (
+                        <>
+                          <Loader2 className="size-3.5 animate-spin" /> checking
+                        </>
+                      )}
+                      {check !== null && check.error !== null && (
+                        <span className="text-destructive" title={check.error}>
+                          failed
+                        </span>
+                      )}
+                      {check !== null && check.error === null && <span title={new Date(check.checked_at).toLocaleString()}>{timeAgo(check.checked_at)}</span>}
+                    </span>
+                    <span className="flex h-6 items-center whitespace-nowrap tabular-nums">
+                      {signals !== null && signals.newcomers !== undefined && signals.pr_window_days !== undefined
+                        ? `${signals.newcomers.prs} in ${signals.pr_window_days} day${signals.pr_window_days === 1 ? "" : "s"}`
+                        : "–"}
+                    </span>
+                    <span className="flex h-6 items-center whitespace-nowrap tabular-nums" title="A month on average over 90 days; the arrow: the last 30 days were busier or quieter">
+                      {signals !== null && signals.activity !== undefined
+                        ? `${COMPACT.format(signals.activity.prs_opened_month)} PRs · ${COMPACT.format(signals.activity.issues_opened_month)} issues · ${COMPACT.format(signals.activity.commits_month)} commits /mo${signals.activity.trend === "up" ? " ↑" : signals.activity.trend === "down" ? " ↓" : ""}`
+                        : "–"}
+                    </span>
+                    <span />
+                    <span />
                     {(repo.note !== "" || repo.description !== "") && (
-                      <div className="w-0 min-w-full truncate pb-1.5" style={{ gridColumn: "2 / -1" }} title={repo.note || repo.description}>
+                      <div className="w-0 min-w-full truncate pt-0.5" style={{ gridColumn: "2 / -1" }} title={repo.note || repo.description}>
                         {repo.note || repo.description}
                       </div>
                     )}
