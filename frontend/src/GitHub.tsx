@@ -10,10 +10,8 @@ The GitHub page (#/github, #/github?tab=closed|comments|account): your GitHub th
     PR until a maintainer clicks approve, so this is normal and only needs waiting), running, passed, failed, or none.
   - Review: approved, changes asked for, reviewed with comments, or not reviewed yet.
   - How many comments and who wrote the latest (a maintainer, a bot, you), and the issue it fixes, open or closed.
-  A click opens the row in place: each reviewer's latest review, the latest comment's text, the labels, the issues
-  it fixes with who they are assigned to, why the last read failed (if it did), links (the PR on GitHub, the draft
-  it was sent from in the Inbox, its job), and what you can do: Close PR on an open one; Reopen PR and Delete
-  branch (from your fork) on a closed one; Delete branch on a merged one.
+  A click opens it in a pop-up (ThreadDialog.tsx; the address gets open=owner/name%23n, keeping the tab): all of it
+  as on GitHub. The X, Esc or a click outside closes it, back to the list.
 - Comments: the comments the app posted for you (approved comment drafts), newest first: where (repo and number),
   the start of the text, when. A click opens it: the whole text, links (on GitHub, its draft), and Delete comment.
 - Account: your GitHub account, the one Approve in the Inbox sends PRs and comments as and these buttons act as
@@ -30,6 +28,7 @@ import { ChevronRight, ExternalLink, GitMerge, GitPullRequest, GitPullRequestClo
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
+import ThreadDialog from "@/ThreadDialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -40,7 +39,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { since, useNow } from "@/components/ui/job-progress";
@@ -68,13 +66,6 @@ const REVIEW_TEXT: Record<string, string> = {
 };
 const REVIEW_COLOR: Record<string, string> = { approved: "text-ok", changes_requested: "text-warn", commented: "", none: "" };
 
-const REVIEW_STATE: Record<string, string> = {
-  approved: "approved",
-  changes_requested: "asked for changes",
-  commented: "commented",
-  dismissed: "review dismissed",
-};
-
 // What a button does, waiting for its "are you sure?".
 type Confirm = { title: string; text: string; label: string; path: string };
 
@@ -92,7 +83,7 @@ function who(login: string, role: string, pr: TrackedPR): string {
   return login;
 }
 
-export default function GitHub(props: { tab: string | null }) {
+export default function GitHub(props: { tab: string | null; open: string | null }) {
   const prs = useLive("prs");
   const inbox = useLive("inbox");
   const loaded = useLoaded("prs");
@@ -144,6 +135,9 @@ export default function GitHub(props: { tab: string | null }) {
     }
   }
   const rows = tab === "open" ? openPRs : closedPRs;
+  // Addresses: this tab's list, and the same with one PR open in its pop-up.
+  const listHash = tab === "open" ? "#/github" : `#/github?tab=${tab}`;
+  const openPrefix = tab === "open" ? `${listHash}?open=` : `${listHash}&open=`;
 
   function toggle(id: string) {
     if (open.includes(id)) {
@@ -256,7 +250,6 @@ export default function GitHub(props: { tab: string | null }) {
 
         {(tab === "open" || tab === "closed") &&
           rows.map((pr) => {
-            const isOpen = open.includes(pr.id);
             let icon = <GitPullRequest className="size-4 shrink-0 text-ok" />;
             if (pr.state === "open" && pr.draft) {
               icon = <GitPullRequestDraft className="size-4 shrink-0 text-muted-foreground" />;
@@ -265,164 +258,40 @@ export default function GitHub(props: { tab: string | null }) {
             } else if (pr.state === "closed") {
               icon = <GitPullRequestClosed className="size-4 shrink-0 text-destructive" />;
             }
-            const path = `/api/github/prs/${pr.repo}/${pr.number}`;
             return (
-              <div key={pr.id} className="border-b">
-                <div className={cn("flex cursor-pointer items-start gap-2 px-3 py-1.5 hover:bg-accent/50", isOpen && "bg-accent/40")} onClick={() => toggle(pr.id)}>
-                  <ChevronRight className={cn("mt-0.5 size-3.5 shrink-0 text-muted-foreground transition-transform", isOpen && "rotate-90")} />
-                  <span className="mt-px">{icon}</span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex min-w-0 items-baseline gap-2">
-                      <span className="truncate font-medium">{pr.title}</span>
-                      <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                        {pr.state === "merged" && pr.closed_at !== null ? `merged ${since(pr.closed_at, now)} ago` : `updated ${since(pr.updated_at, now)} ago`}
+              <div
+                key={pr.id}
+                className={cn("flex cursor-pointer items-start gap-2 border-b px-3 py-1.5 hover:bg-accent/50", pr.id === props.open && "bg-selected hover:bg-selected")}
+                onClick={() => (window.location.hash = openPrefix + encodeURIComponent(pr.id))}
+              >
+                <span className="mt-px">{icon}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="truncate font-medium">{pr.title}</span>
+                    <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                      {pr.state === "merged" && pr.closed_at !== null ? `merged ${since(pr.closed_at, now)} ago` : `updated ${since(pr.updated_at, now)} ago`}
+                    </span>
+                  </div>
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                    <span className="text-foreground">
+                      {pr.repo} #{pr.number}
+                    </span>
+                    {pr.state === "open" && <span className={CHECKS_COLOR[pr.checks]}>{CHECKS_TEXT[pr.checks]}</span>}
+                    {pr.state === "open" && <span className={REVIEW_COLOR[pr.review]}>{REVIEW_TEXT[pr.review]}</span>}
+                    {pr.state === "merged" && pr.merged_by !== null && <span className="text-ok">Merged by {pr.merged_by}</span>}
+                    {pr.state === "closed" && <span className="text-destructive">Closed without merging</span>}
+                    <span>
+                      {pr.comments === 1 ? "1 comment" : `${pr.comments} comments`}
+                      {pr.last_comment !== null && `, the latest by ${who(pr.last_comment.login, pr.last_comment.role, pr)} ${since(pr.last_comment.at, now)} ago`}
+                    </span>
+                    {pr.issues.map((issue) => (
+                      <span key={issue.number}>
+                        Fixes #{issue.number}, {issue.state === "open" ? "still open" : "closed"}
                       </span>
-                    </div>
-                    <div className="flex min-w-0 flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
-                      <span className="text-foreground">
-                        {pr.repo} #{pr.number}
-                      </span>
-                      {pr.state === "open" && <span className={CHECKS_COLOR[pr.checks]}>{CHECKS_TEXT[pr.checks]}</span>}
-                      {pr.state === "open" && <span className={REVIEW_COLOR[pr.review]}>{REVIEW_TEXT[pr.review]}</span>}
-                      {pr.state === "merged" && pr.merged_by !== null && <span className="text-ok">Merged by {pr.merged_by}</span>}
-                      {pr.state === "closed" && <span className="text-destructive">Closed without merging</span>}
-                      <span>
-                        {pr.comments === 1 ? "1 comment" : `${pr.comments} comments`}
-                        {pr.last_comment !== null && `, the latest by ${who(pr.last_comment.login, pr.last_comment.role, pr)} ${since(pr.last_comment.at, now)} ago`}
-                      </span>
-                      {pr.issues.map((issue) => (
-                        <span key={issue.number}>
-                          Fixes #{issue.number}, {issue.state === "open" ? "still open" : "closed"}
-                        </span>
-                      ))}
-                      {pr.error !== null && <span className="text-destructive">Last check failed</span>}
-                    </div>
+                    ))}
+                    {pr.error !== null && <span className="text-destructive">Last check failed</span>}
                   </div>
                 </div>
-
-                {isOpen && (
-                  <div className="space-y-2 px-3 pb-3 pl-[52px] text-xs">
-                    {pr.labels.length > 0 && (
-                      <div className="flex flex-wrap gap-1">
-                        {pr.labels.map((label) => (
-                          <Badge key={label} variant="outline">
-                            {label}
-                          </Badge>
-                        ))}
-                      </div>
-                    )}
-                    {pr.state === "open" && pr.checks === "waiting" && (
-                      <div className="text-muted-foreground">
-                        GitHub doesn't run a project's checks on a first-time contributor's PR until a maintainer approves them ({pr.waiting_runs}{" "}
-                        {pr.waiting_runs === 1 ? "run waits" : "runs wait"}). Nothing is wrong: it waits for a maintainer. Once one of your PRs is merged
-                        there, your next ones run right away.
-                      </div>
-                    )}
-                    <div>
-                      <div className="font-medium">Reviews</div>
-                      {pr.reviewers.length === 0 && <div className="text-muted-foreground">Nobody reviewed it yet.</div>}
-                      {pr.reviewers.map((reviewer) => (
-                        <div key={reviewer.login}>
-                          {who(reviewer.login, reviewer.role, pr)}: {REVIEW_STATE[reviewer.state] ?? reviewer.state}, {since(reviewer.at, now)} ago
-                        </div>
-                      ))}
-                    </div>
-                    {pr.last_comment !== null && (
-                      <div>
-                        <div className="font-medium">
-                          Latest comment, by {who(pr.last_comment.login, pr.last_comment.role, pr)}, {since(pr.last_comment.at, now)} ago
-                        </div>
-                        <div className="text-muted-foreground">{pr.last_comment.text}</div>
-                      </div>
-                    )}
-                    {pr.issues.length > 0 && (
-                      <div>
-                        <div className="font-medium">Fixes</div>
-                        {pr.issues.map((issue) => (
-                          <div key={issue.number}>
-                            <a href={issue.url} target="_blank" rel="noreferrer" className="hover:underline">
-                              #{issue.number} {issue.title}
-                            </a>
-                            <span className="text-muted-foreground">
-                              {" "}
-                              ({issue.state === "open" ? "open" : issue.reason === "not_planned" ? "closed as not planned" : "closed"}
-                              {issue.assignees.length > 0 && `, assigned to ${issue.assignees.join(", ")}`})
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {pr.error !== null && <div className="text-destructive">The last check failed: {pr.error}</div>}
-                    <div className="flex flex-wrap items-center gap-3">
-                      <a href={pr.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 hover:underline">
-                        Open on GitHub <ExternalLink className="size-3" />
-                      </a>
-                      {pr.draft_id !== null && (
-                        <a href={`#/inbox/${pr.draft_id}`} className="hover:underline">
-                          Its draft
-                        </a>
-                      )}
-                      {pr.job !== null && (
-                        <a href={`#/jobs/${pr.job}`} className="hover:underline">
-                          Its job
-                        </a>
-                      )}
-                      <span className="ml-auto flex gap-1.5">
-                        {pr.state === "open" && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={busy}
-                            onClick={() =>
-                              ask({
-                                title: `Close ${pr.repo} #${pr.number}?`,
-                                text: "It closes on GitHub, as you, without merging. Its branch stays, so you can reopen it.",
-                                label: "Close PR",
-                                path: `${path}/close`,
-                              })
-                            }
-                          >
-                            Close PR
-                          </Button>
-                        )}
-                        {pr.state === "closed" && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={busy}
-                            onClick={() =>
-                              ask({
-                                title: `Reopen ${pr.repo} #${pr.number}?`,
-                                text: "It opens again on GitHub, as you, and the project's people are told.",
-                                label: "Reopen PR",
-                                path: `${path}/reopen`,
-                              })
-                            }
-                          >
-                            Reopen PR
-                          </Button>
-                        )}
-                        {pr.state !== "open" && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            disabled={busy}
-                            onClick={() =>
-                              ask({
-                                title: `Delete the branch of ${pr.repo} #${pr.number}?`,
-                                text: "Its branch is deleted from your fork, for good. The PR stays on GitHub, but it can't be reopened after.",
-                                label: "Delete branch",
-                                path: `${path}/delete_branch`,
-                              })
-                            }
-                          >
-                            Delete branch
-                          </Button>
-                        )}
-                      </span>
-                    </div>
-                  </div>
-                )}
               </div>
             );
           })}
@@ -589,6 +458,9 @@ export default function GitHub(props: { tab: string | null }) {
         )}
       </div>
 
+      {/* The PR a click opened (open= in the address); closing it goes back to the list. */}
+      <ThreadDialog id={props.open} onClose={() => (window.location.hash = listHash)} />
+
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -597,7 +469,7 @@ export default function GitHub(props: { tab: string | null }) {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant={confirm?.label === "Reopen PR" ? "default" : "destructive"} onClick={act}>
+            <AlertDialogAction variant="destructive" onClick={act}>
               {confirm?.label}
             </AlertDialogAction>
           </AlertDialogFooter>

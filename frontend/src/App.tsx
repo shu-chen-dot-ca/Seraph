@@ -6,7 +6,7 @@ found from git's origin remote (vite.config.ts), so no account name is written h
 page (Sherpa.tsx).
 
 The page lives in the URL hash, so refresh and back/forward work and switching pages never reloads:
-  #/inbox  #/inbox/<draft id>  #/github  #/github?tab=closed|comments|account
+  #/inbox  #/inbox/<draft id>  #/github  #/github?tab=closed|comments|account  #/github?open=owner/name%23n (that PR in its pop-up)
   #/issues  #/issues?repo=owner/name  #/issues?open=<issue id>  #/jobs  #/jobs/<job id>  #/explore  #/repos  #/tracked
   #/agents  #/agents/<agent id>  #/vms  #/vms?tab=images  #/vms?tab=defaults  #/vms/<vm name>  #/vms/<vm name>?tab=notes  #/resource
 Links are plain <a href="#/..."> everywhere; App only reads the hash.
@@ -163,7 +163,7 @@ export default function App() {
           <Sidebar page={page} id={id} onOpenSettings={() => setSettingsOpen(true)} />
           <main className="relative min-w-0 flex-1 overflow-hidden">
             {page === "inbox" && <Inbox selected={id} />}
-            {page === "github" && <GitHub key={query.get("tab") ?? ""} tab={query.get("tab")} />}
+            {page === "github" && <GitHub key={query.get("tab") ?? ""} tab={query.get("tab")} open={query.get("open")} />}
             {page === "issues" && <Issues repo={query.get("repo")} open={query.get("open")} />}
             {page === "jobs" && <Jobs selected={id} />}
             {page === "explore" && <Explore />}

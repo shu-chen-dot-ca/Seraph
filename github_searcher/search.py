@@ -1,5 +1,6 @@
 """Reads from GitHub: repos, files, READMEs, PR and issue activity, threads, merged PRs, issue facts, issue and code search,
-and how your sent PRs stand (their checks and GitHub Actions runs).
+how your sent PRs stand (their checks and GitHub Actions runs), and everything the GitHub page's
+thread pop-up shows of one PR or issue (backend/github_api.py): its whole timeline, commits, checks and files changed.
 
 Every request goes through token_balancer.py, which spreads them over the team's tokens, paces
 them and waits out rate limits. Errors come back as httpx.HTTPStatusError, as before.
@@ -649,3 +650,113 @@ def get_action_runs(owner: str, repo: str, sha: str) -> list[dict]:
     response = BALANCER.request("GET", f"https://api.github.com/repos/{owner}/{repo}/actions/runs", params={"head_sha": sha, "per_page": 100})
     response.raise_for_status()
     return response.json()["workflow_runs"]
+
+
+# A PR or issue as the GitHub page's thread pop-up shows it (backend/github_api.py): the description, labels, assignees,
+# and its newest 100 timeline items, oldest first: comments, reviews with their
+# code comments, commits, and the events the pop-up shows. totalCount says how many there are in all, so the pop-up can
+# say how many earlier ones it leaves out. A PR also has its branch (headRef is null once the branch is deleted), the
+# branch it goes into, and its last 100 commits, each with its checks.
+FULL_THREAD_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issueOrPullRequest(number: $number) {
+      __typename
+      ... on Issue {
+        number title url body state stateReason createdAt authorAssociation author { login __typename }
+        labels(first: 30) { nodes { name color } }
+        assignees(first: 10) { nodes { login } }
+        timelineItems(last: 100, itemTypes: [ISSUE_COMMENT, LABELED_EVENT, UNLABELED_EVENT, CLOSED_EVENT, REOPENED_EVENT,
+                      ASSIGNED_EVENT, UNASSIGNED_EVENT, CROSS_REFERENCED_EVENT, RENAMED_TITLE_EVENT]) {
+          totalCount
+          nodes {
+            __typename
+            ...CommentItem ...LabeledItem ...UnlabeledItem ...ClosedItem ...ReopenedItem ...AssignedItem ...UnassignedItem
+            ...CrossReferencedItem ...RenamedItem
+          }
+        }
+      }
+      ... on PullRequest {
+        number title url body state isDraft createdAt authorAssociation author { login __typename }
+        baseRefName headRefName headRefOid headRepository { nameWithOwner } headRef { name }
+        labels(first: 30) { nodes { name color } }
+        assignees(first: 10) { nodes { login } }
+        commits(last: 100) { nodes { commit { oid message committedDate author { name user { login } } statusCheckRollup { state } } } }
+        timelineItems(last: 100, itemTypes: [ISSUE_COMMENT, PULL_REQUEST_REVIEW, PULL_REQUEST_COMMIT, LABELED_EVENT,
+                      UNLABELED_EVENT, CLOSED_EVENT, REOPENED_EVENT, MERGED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT,
+                      CROSS_REFERENCED_EVENT, RENAMED_TITLE_EVENT, HEAD_REF_FORCE_PUSHED_EVENT, READY_FOR_REVIEW_EVENT,
+                      CONVERT_TO_DRAFT_EVENT, REVIEW_REQUESTED_EVENT]) {
+          totalCount
+          nodes {
+            __typename
+            ...CommentItem ...LabeledItem ...UnlabeledItem ...ClosedItem ...ReopenedItem ...AssignedItem ...UnassignedItem
+            ...CrossReferencedItem ...RenamedItem ...ReviewItem ...CommitItem ...MergedItem ...ForcePushedItem
+            ...ReadyForReviewItem ...ConvertToDraftItem ...ReviewRequestedItem
+          }
+        }
+      }
+    }
+  }
+}
+fragment CommentItem on IssueComment { databaseId body createdAt url authorAssociation author { login __typename } }
+fragment LabeledItem on LabeledEvent { createdAt actor { login } label { name } }
+fragment UnlabeledItem on UnlabeledEvent { createdAt actor { login } label { name } }
+fragment ClosedItem on ClosedEvent { createdAt actor { login } stateReason }
+fragment ReopenedItem on ReopenedEvent { createdAt actor { login } }
+fragment AssignedItem on AssignedEvent { createdAt actor { login } assignee { ... on Actor { login } } }
+fragment UnassignedItem on UnassignedEvent { createdAt actor { login } assignee { ... on Actor { login } } }
+fragment CrossReferencedItem on CrossReferencedEvent {
+  createdAt actor { login }
+  source { ... on Issue { number repository { nameWithOwner } } ... on PullRequest { number repository { nameWithOwner } } }
+}
+fragment RenamedItem on RenamedTitleEvent { createdAt actor { login } previousTitle currentTitle }
+fragment ReviewItem on PullRequestReview {
+  body state submittedAt createdAt url authorAssociation author { login __typename }
+  comments(first: 50) { nodes { path line originalLine diffHunk body createdAt url author { login } } }
+}
+fragment CommitItem on PullRequestCommit { commit { oid message committedDate author { name user { login } } } }
+fragment MergedItem on MergedEvent { createdAt actor { login } mergeRefName }
+fragment ForcePushedItem on HeadRefForcePushedEvent { createdAt actor { login } }
+fragment ReadyForReviewItem on ReadyForReviewEvent { createdAt actor { login } }
+fragment ConvertToDraftItem on ConvertToDraftEvent { createdAt actor { login } }
+fragment ReviewRequestedItem on ReviewRequestedEvent { createdAt actor { login } requestedReviewer { ... on Actor { login } ... on Team { name } } }
+"""
+
+
+def get_full_thread(owner: str, repo: str, number: int) -> dict | None:
+    # Never cached: the pop-up shows it as it is now. Returns the issue or PR node (__typename says which), None when
+    # GitHub has no such repo or number.
+    response = BALANCER.request(
+        "POST",
+        "https://api.github.com/graphql",
+        json={"query": FULL_THREAD_QUERY, "variables": {"owner": owner, "name": repo, "number": number}},
+        timeout=60,
+    )
+    response.raise_for_status()
+    data = response.json()
+    if data.get("errors"):
+        if data["errors"][0].get("type") == "NOT_FOUND":
+            return None
+        raise ValueError(data["errors"][0]["message"])
+    return data["data"]["repository"]["issueOrPullRequest"]
+
+
+def get_check_runs(owner: str, repo: str, sha: str) -> list[dict]:
+    # One commit's check runs (GitHub Actions jobs and other apps' checks), the first 100. Never cached.
+    response = BALANCER.request("GET", f"https://api.github.com/repos/{owner}/{repo}/commits/{sha}/check-runs", params={"per_page": 100})
+    response.raise_for_status()
+    return response.json()["check_runs"]
+
+
+def get_commit_statuses(owner: str, repo: str, sha: str) -> list[dict]:
+    # One commit's statuses, the older kind of check that outside services set: the latest of each. Never cached.
+    response = BALANCER.request("GET", f"https://api.github.com/repos/{owner}/{repo}/commits/{sha}/status", params={"per_page": 100})
+    response.raise_for_status()
+    return response.json()["statuses"]
+
+
+def get_pr_files(owner: str, repo: str, number: int) -> list[dict]:
+    # A PR's files changed, the first 100, each with its patch (missing for a binary or very big file). Never cached.
+    response = BALANCER.request("GET", f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}/files", params={"per_page": 100})
+    response.raise_for_status()
+    return response.json()
