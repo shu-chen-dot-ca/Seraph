@@ -1,6 +1,9 @@
 /*
 The Settings dialog, opened from the bottom of the sidebar: the theme (Light, Dark or System), the accent color,
-and the env vars for all VMs. Your GitHub account is on the GitHub page (GitHub.tsx, its Account tab).
+Reset view, and the env vars for all VMs. Your GitHub account is on the GitHub page (GitHub.tsx, its Account tab).
+
+Reset view puts every panel, fold, sort and column back to its default: it forgets the Repos page's sort and columns
+and reloads the page (App's resetView). Theme, accent and the env vars stay.
 
 App owns the theme and accent: it applies them to <html> (class "dark" and data-accent) and keeps them in localStorage,
 so a pick shows on the whole app at once, behind the dialog. index.html applies the saved ones before the first paint.
@@ -16,7 +19,7 @@ Running VMs get them at once, stopped ones when
 they start. A VM's own env var with the same name (its Settings tab) wins, unless it is empty.
 */
 
-import { Check, Eye, EyeOff, Loader2, Moon, Plus, Sun, SunMoon, X, type LucideIcon } from "lucide-react";
+import { Check, Eye, EyeOff, Loader2, Moon, Plus, RotateCcw, Sun, SunMoon, X, type LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -55,6 +58,7 @@ export default function SettingsDialog(props: {
   onTheme: (theme: ThemeMode) => void;
   accent: string;
   onAccent: (accent: string) => void;
+  onResetView: () => void;
 }) {
   const accentName = ACCENTS.find((each) => each.id === props.accent)?.name ?? "";
   const [rows, setRows] = useState<EnvRow[]>([]);
@@ -203,6 +207,13 @@ export default function SettingsDialog(props: {
               );
             })}
           </div>
+        </section>
+
+        <section className="flex items-center gap-3">
+          <Button variant="outline" size="sm" onClick={props.onResetView}>
+            <RotateCcw /> Reset view
+          </Button>
+          <span className="text-xs text-muted-foreground">Puts every panel, fold, sort and column back to its default. The page reloads.</span>
         </section>
 
         <section>

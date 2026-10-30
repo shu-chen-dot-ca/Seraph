@@ -1,9 +1,9 @@
 /*
 The whole app: a 36px header, the sidebar tree on the left, and one page on the right.
-The header starts with a View menu; Reset view puts every panel, fold, sort and column back to its default.
-On its right: this repo on GitHub (a new tab, so the app stays open),
-found from git's origin remote (vite.config.ts), so no account name is written here; none when it isn't on GitHub. Sherpa's round button sits at the bottom
-right of every page (Sherpa.tsx).
+On the header's right: this repo on GitHub (a new tab, so the app stays open),
+found from git's origin remote (vite.config.ts), so no account name is written here; none when it isn't on GitHub. Reset view is in Settings
+(SettingsDialog), opened from the bottom of the sidebar. Sherpa's round button sits at the bottom right of every
+page (Sherpa.tsx).
 
 The page lives in the URL hash, so refresh and back/forward work and switching pages never reloads:
   #/inbox  #/inbox/<draft id>  #/github  #/github?tab=closed|comments|account  #/issues  #/issues?repo=owner/name  #/jobs  #/jobs/<job id>  #/explore  #/repos  #/tracked
@@ -14,7 +14,7 @@ A VM page, once visited, stays mounted (hidden) while you are elsewhere, so its 
 connection and coming back is instant. It is dropped when that VM no longer exists.
 */
 
-import { RotateCcw, WifiOff } from "lucide-react";
+import { WifiOff } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import AgentChat from "@/AgentChat";
@@ -32,8 +32,6 @@ import Sidebar from "@/Sidebar";
 import Tracked from "@/Tracked";
 import VMPage from "@/VMPage";
 import VMs from "@/VMs";
-import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Toaster } from "@/components/ui/sonner";
 import TitleTooltips from "@/components/ui/title-tooltips";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -136,18 +134,6 @@ export default function App() {
     <TooltipProvider>
       <div className="flex h-full flex-col">
         <header className="flex h-9 shrink-0 items-center gap-3 border-b bg-sidebar px-3">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm">
-                View
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              <DropdownMenuItem onSelect={resetView}>
-                <RotateCcw /> Reset view
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
           <div className="ml-auto flex items-center gap-1">
             {!connected && (
               <span className="mr-2 flex items-center gap-1.5 text-destructive">
@@ -203,6 +189,7 @@ export default function App() {
         onTheme={changeTheme}
         accent={accent}
         onAccent={changeAccent}
+        onResetView={resetView}
       />
       {/* Toasts sit above Sherpa's round button. */}
       <Toaster theme={theme} position="bottom-right" offset={{ bottom: 72 }} />
