@@ -10,7 +10,7 @@ newcomers fare (welcomed, OK, turned away: their first PRs mostly closed, or lef
 month), the AI policy, and reply speed (how fast a maintainer first answers an outside PR;
 bots, AI reviewers and other outsiders don't count). Then its type and fit, stars, review tone, Reviewed by (who
 reviews outside PRs: Agent only when most get a review or comment only from an AI reviewer, a bot like CodeRabbit or
-Copilot; Agent and human; Human only; Few reviews when too few to tell; hover for the counts, an open row says them
+Copilot; Agent and human; Human only; Few reviews when too few to tell; hover for the counts, the pop-up says them
 too; CI and other bots don't count), PRs, issues and commits
 a month and the trend, new contributors (people whose first PR there was recent, as "16 in 6 days": the days its 100
 newest PRs cover; people who contributed before don't count; it sorts by new contributors a day), maintainers, PRs no maintainer answered, its issues in the Issues list, and more
@@ -43,7 +43,7 @@ pages rank it the same. The sort is remembered in this browser.
 
 Rows have no buttons of their own. Hovering a row shows its box on the left; ticking it picks that repo and turns on
 select mode, like Select (top right) does: Delete, Track and Untrack show on the left of the bar, Select stays lit (a
-click on it ends select mode), every row shows its box, and a click picks the row instead of opening it. The box at
+click on it ends select mode), every row shows its box, and a click picks the row instead of opening its pop-up. The box at
 the top left of the table's header picks every row (checked when all are, a dash when some are); a click when all are
 picked unpicks them. Rows are also picked like in a mail app (components/ui/row-selection.tsx): Ctrl-click, Shift-click,
 dragging a rectangle, Ctrl+A, which turns on select mode too; a bar at the bottom says how many. Track tracks the
@@ -59,13 +59,16 @@ there and reads through. Either way it ends with a short introduction to the rep
 (the Jobs page). Track tracks the repo (the Tracked page then keeps an eye on its new issues) or stops tracking it:
 Track or Untrack, with a spinner while the backend looks the repo up on GitHub.
 
-Each row opens in place: the signals in full, then RepoTree (the README, with its files folded at the bottom). Only
-the rows on screen are drawn (react-virtual measures each row, so open rows of any height work), plus every open row
-wherever it is: its RepoTree keeps what it loaded and what is unfolded while you scroll away and back. Undo / redo are Ctrl+Z / Ctrl+Y
-(when the cursor is not in a text field) and go through the backend, so they also undo what an agent or Explore changed.
+A click on a row opens that repo in a pop-up, one repo at a time. Its header has the name with its GitHub link, its
+issues in the Issues list, Set up and Track / Untrack (the same as the row's), and the note under them; below that,
+scrolling, the signals in full, then RepoTree (the README, with its files folded at the bottom). The X, Esc or a click
+outside it closes it, back to the list; it also closes when the repo leaves the list (deleted, an undo). Set up's
+dialog opens on top of it. Only the rows on screen are drawn (react-virtual measures each row: one with a note is
+taller). Undo / redo are Ctrl+Z / Ctrl+Y (when the cursor is not in a text field) and go through the backend, so they
+also undo what an agent or Explore changed.
 */
 
-import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, ArrowUp, Columns3, ExternalLink, Eye, EyeOff, ListFilter, Loader2, SquareCheck, Star, Trash2, Wrench } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -85,6 +88,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ColumnsDialog } from "@/components/ui/columns-dialog";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { ASK_LABEL, FIT_LEVELS, FitTag, NEWCOMER_LABEL, NewcomersTag, POLICY_LABEL, PolicyTag, ReviewersTag, TONE_LABEL, ToneTag } from "@/components/ui/repo-tags";
 import { Input } from "@/components/ui/input";
 import { RowSelection, SelectBox } from "@/components/ui/row-selection";
@@ -93,7 +97,7 @@ import { useColumnWidths } from "@/lib/column-widths";
 import { cn, timeAgo } from "@/lib/utils";
 
 const COUNT = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
-// Beginner issues shown in an open row; the rest are on GitHub.
+// Beginner issues shown in the pop-up; the rest are on GitHub.
 const BEGINNER_SHOWN = 6;
 const SORT_STORAGE = "repos-sort";
 
@@ -316,7 +320,8 @@ export default function Repos() {
   const loaded = useLoaded("repos");
   // "prestige=Prestige\nai=AI & harness": a string, so a busy Explore run doesn't redraw this page.
   const lanesText = useLiveValue((topics) => topics.explore.profile.lanes.map((lane) => `${lane.id}=${lane.label}`).join("\n"));
-  const [open, setOpen] = useState<string[]>([]);
+  // The repo open in the pop-up, by name, so the pop-up shows it as the live list has it now.
+  const [openName, setOpenName] = useState<string | null>(null);
   // The fields the list sorts by, in any order: which counts first comes from the columns (priority below).
   const [sorts, setSorts] = useState<Sort[]>(savedSorts);
   const [allFields, setAllFields] = useState(false);
@@ -569,24 +574,12 @@ export default function Repos() {
     });
   }
 
-  const openIndexes: number[] = [];
-  rows.forEach((repo, index) => {
-    if (open.includes(repo.full_name)) {
-      openIndexes.push(index);
-    }
-  });
-
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 88,
     overscan: 10,
     getItemKey: (index) => rows[index].full_name,
-    // The rows on screen, and every open row even far off screen, so it is never unmounted.
-    rangeExtractor: (range) => {
-      const indexes = new Set([...defaultRangeExtractor(range), ...openIndexes]);
-      return [...indexes].sort((a, b) => a - b);
-    },
   });
 
   // One click, one step: add the field to the sort (the best first), turn it round, then take it out.
@@ -708,9 +701,21 @@ export default function Repos() {
   const selectMode = selecting || chosen.length > 0;
   const allPicked = rowNames.length > 0 && rowNames.every((name) => chosen.includes(name));
 
-  function toggle(name: string) {
-    setOpen((current) => (current.includes(name) ? current.filter((n) => n !== name) : [...current, name]));
-  }
+  // The open repo left the list (deleted here or elsewhere, an undo): its pop-up closes, and stays closed if it comes back.
+  useEffect(() => {
+    if (openName !== null && !listed.includes(openName)) {
+      setOpenName(null);
+    }
+  });
+
+  // The repo in the pop-up as the list has it now (null when none is open), and what the pop-up shows of it.
+  const openRepo = repos.items.find((each) => each.full_name === openName) ?? null;
+  const openTracked = openRepo !== null && trackedNames.includes(openRepo.full_name.toLowerCase());
+  const openSignals = openRepo !== null ? openRepo.signals : null;
+  const openNewcomers = openSignals?.newcomers;
+  const openActivity = openSignals?.activity;
+  const openCommunity = openSignals?.community;
+  const openAtmosphere = openSignals?.atmosphere ?? null;
 
   // Ctrl+Z / Ctrl+Y (and Ctrl+Shift+Z), unless typing in a field. Re-registered every render, so it sees fresh state.
   useEffect(() => {
@@ -1129,12 +1134,7 @@ export default function Repos() {
           <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
             {virtualizer.getVirtualItems().map((item) => {
               const repo = rows[item.index];
-              const isOpen = open.includes(repo.full_name);
               const signals = repo.signals;
-              const newcomers = signals?.newcomers;
-              const activity = signals?.activity;
-              const community = signals?.community;
-              const atmosphere = signals?.atmosphere ?? null;
               return (
                 <div
                   key={item.key}
@@ -1145,13 +1145,13 @@ export default function Repos() {
                 >
                   <div
                     data-select-id={repo.full_name}
-                    className={cn("group cursor-pointer px-3 py-2 hover:bg-accent/50", isOpen && "bg-accent/40", chosen.includes(repo.full_name) && "bg-selected hover:bg-selected")}
+                    className={cn("group cursor-pointer px-3 py-2 hover:bg-accent/50", chosen.includes(repo.full_name) && "bg-selected hover:bg-selected")}
                     onClick={(event) => {
-                      // In select mode a click picks the row; otherwise Ctrl / Shift-click picks it and a plain click opens it.
+                      // In select mode a click picks the row; otherwise Ctrl / Shift-click picks it and a plain click opens its pop-up.
                       if (selectMode || event.ctrlKey || event.metaKey || event.shiftKey) {
                         select(repo.full_name, event.shiftKey);
                       } else {
-                        toggle(repo.full_name);
+                        setOpenName(repo.full_name);
                       }
                     }}
                   >
@@ -1240,184 +1240,6 @@ export default function Repos() {
                       )}
                     </div>
                   </div>
-                  {isOpen && (
-                    <div className="border-t bg-muted/30">
-                      {signals !== null && (
-                        <div className="grid grid-cols-[130px_minmax(0,1fr)] gap-x-3 gap-y-1 border-b px-9 py-3">
-                          <span className="text-muted-foreground">Outside PRs</span>
-                          <span>
-                            {signals.outside_prs_90d} opened in {signals.pr_window_days ?? 90} days · {signals.outside_merged_90d} merged ·{" "}
-                            {signals.outside_closed_90d} closed unmerged
-                            {signals.outside_merge_rate !== null && (
-                              <span className="text-muted-foreground"> · {Math.round(signals.outside_merge_rate * 100)}% merged</span>
-                            )}
-                          </span>
-
-                          <span className="text-muted-foreground">Speed</span>
-                          <span>
-                            {signals.median_days_to_first_reply === null ? "No replies to go on" : `First reply in ${signals.median_days_to_first_reply} days`}
-                            {signals.median_days_to_merge !== null && ` · merged in ${signals.median_days_to_merge} days`}
-                            <span className="text-muted-foreground"> (medians)</span>
-                          </span>
-
-                          <span className="text-muted-foreground">Stale PRs</span>
-                          <span className={signals.stale_outside_prs >= 5 ? "text-warn" : undefined}>
-                            {signals.stale_outside_prs} open over 30 days that nobody answered
-                          </span>
-
-                          <span className="text-muted-foreground">Maintainers</span>
-                          <span className={signals.active_mergers_30d <= 1 ? "text-warn" : undefined}>
-                            {signals.active_mergers_30d} {signals.active_mergers_30d === 1 ? "person" : "people"} merged PRs this month
-                          </span>
-
-                          {newcomers !== undefined && (
-                            <>
-                              <span className="text-muted-foreground">Newcomers</span>
-                              <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                                <NewcomersTag tag={newcomers.tag} />
-                                <span>
-                                  {newcomers.prs} first PRs in {signals.pr_window_days ?? 90} days · {newcomers.merged} merged · {newcomers.closed} closed unmerged
-                                  {newcomers.median_days_to_first_reply !== null && ` · first reply in ${newcomers.median_days_to_first_reply} days`}
-                                  {newcomers.returned > 0 && ` · ${newcomers.returned} came back for a second PR`}
-                                </span>
-                              </span>
-                            </>
-                          )}
-
-                          {activity !== undefined && (
-                            <>
-                              <span className="text-muted-foreground">Activity</span>
-                              <span>
-                                A month: {COUNT.format(activity.prs_opened_month)} PRs opened, {COUNT.format(activity.prs_merged_month)} merged ·{" "}
-                                {COUNT.format(activity.issues_opened_month)} issues opened, {COUNT.format(activity.issues_closed_month)} closed ·{" "}
-                                {COUNT.format(activity.commits_month)} commits
-                                <span className="text-muted-foreground">
-                                  {" "}
-                                  (90-day average
-                                  {activity.trend === "up" ? "; the last 30 days were busier" : activity.trend === "down" ? "; the last 30 days were quieter" : ""})
-                                </span>
-                                <span className="block text-muted-foreground">
-                                  {activity.last_release_at !== null ? `Last release ${activity.last_release} ${timeAgo(activity.last_release_at)}` : "No GitHub releases"}
-                                  {activity.issue_reply_rate !== null &&
-                                    ` · ${Math.round(activity.issue_reply_rate * 100)}% of new issues answered by a maintainer within a week`}
-                                </span>
-                              </span>
-                            </>
-                          )}
-
-                          {atmosphere !== null && (
-                            <>
-                              <span className="text-muted-foreground">Atmosphere</span>
-                              <span className="flex min-w-0 flex-col gap-1">
-                                <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                                  <ToneTag tone={atmosphere.tone} />
-                                  <span>{atmosphere.summary}</span>
-                                </span>
-                                {atmosphere.asks_for.length > 0 && (
-                                  <span className="text-muted-foreground">
-                                    Reviewers ask for: {atmosphere.asks_for.map((ask) => ASK_LABEL[ask] ?? ask).join(", ")}
-                                  </span>
-                                )}
-                                <span className="text-xs text-muted-foreground">
-                                  From maintainers' feedback on {atmosphere.prs} recent PRs, read {timeAgo(atmosphere.judged_at)}
-                                </span>
-                              </span>
-                            </>
-                          )}
-
-                          {signals.reviewers !== undefined && (
-                            <>
-                              <span className="text-muted-foreground">Reviewed by</span>
-                              <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                                <ReviewersTag reviewers={signals.reviewers} />
-                                <span>
-                                  Of {signals.reviewers.agent + signals.reviewers.both + signals.reviewers.human} reviewed outside PRs:{" "}
-                                  {signals.reviewers.agent} only by an AI reviewer, {signals.reviewers.both} by both, {signals.reviewers.human} only
-                                  by maintainers
-                                </span>
-                              </span>
-                            </>
-                          )}
-
-                          {community !== undefined && (
-                            <>
-                              <span className="text-muted-foreground">Community</span>
-                              <span className={cn(!community.contributing && !community.code_of_conduct && !community.discussions && community.channels.length === 0 && "text-muted-foreground")}>
-                                {[
-                                  community.contributing ? "Contributing guide" : "",
-                                  community.code_of_conduct ? "Code of conduct" : "",
-                                  community.discussions ? "GitHub Discussions" : "",
-                                  ...community.channels,
-                                ]
-                                  .filter((part) => part !== "")
-                                  .join(" · ") || "No contributing guide, code of conduct or chat found"}
-                              </span>
-                            </>
-                          )}
-
-                          <span className="text-muted-foreground">AI policy</span>
-                          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                            <PolicyTag tag={signals.ai_policy.tag} />
-                            {signals.ai_policy.quote !== "" && (
-                              <span className="min-w-0">
-                                "{signals.ai_policy.quote}" <span className="text-muted-foreground">({signals.ai_policy.file})</span>
-                              </span>
-                            )}
-                          </span>
-
-                          {repo.fit !== undefined && (
-                            <>
-                              <span className="text-muted-foreground">Fit</span>
-                              <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                                <FitTag fit={repo.fit} />
-                                <span>
-                                  for your profile
-                                  {repo.lane !== undefined && <span className="text-muted-foreground"> · found for {laneLabels[repo.lane] ?? repo.lane}</span>}
-                                </span>
-                              </span>
-                            </>
-                          )}
-
-                          <span className="text-muted-foreground">Beginner issues</span>
-                          <span>
-                            {signals.unclaimed_beginner_issues} look unclaimed of {signals.beginner_issues.length} open
-                            {signals.beginner_issues.length > 0 && (
-                              <span className="mt-1 block space-y-0.5">
-                                {signals.beginner_issues.slice(0, BEGINNER_SHOWN).map((issue) => {
-                                  const taken = issue.assignees > 0 || issue.cross_references > 0;
-                                  return (
-                                    <a
-                                      key={issue.number}
-                                      href={`https://github.com/${repo.full_name}/issues/${issue.number}`}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                      className="group flex min-w-0 items-center gap-2"
-                                      title={issue.labels.join(", ")}
-                                    >
-                                      <span className="shrink-0 text-muted-foreground tabular-nums">#{issue.number}</span>
-                                      <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-                                        <span className={cn("truncate group-hover:underline", taken && "text-muted-foreground")}>{issue.title}</span>
-                                        {taken && <Badge variant="warn">maybe taken</Badge>}
-                                      </span>
-                                      <span className="shrink-0 text-xs text-muted-foreground">{timeAgo(issue.created_at)}</span>
-                                    </a>
-                                  );
-                                })}
-                              </span>
-                            )}
-                          </span>
-
-                          <span className="col-span-2 flex items-center gap-3 text-xs text-muted-foreground">
-                            From GitHub {timeAgo(signals.fetched_at)}
-                            <a href={repo.html_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 hover:text-foreground">
-                              GitHub <ExternalLink className="size-3" />
-                            </a>
-                          </span>
-                        </div>
-                      )}
-                      <RepoTree repo={repo} />
-                    </div>
-                  )}
                 </div>
               );
             })}
@@ -1459,6 +1281,240 @@ export default function Repos() {
 
       {/* Only the count and Select all: Track and Delete are in the bar on top. */}
       <RowSelection listRef={scrollRef} ids={rowNames} selected={chosen} onSelect={onSelect} />
+
+      {/* The open repo. Its header stays on top with the row's own links and buttons; the signals and RepoTree scroll. */}
+      <Dialog
+        open={openRepo !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setOpenName(null);
+          }
+        }}
+      >
+        <DialogContent aria-describedby={undefined} className="flex h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
+          {openRepo !== null && (
+            <>
+              {/* pr-10 keeps the buttons clear of the X in the top right corner. */}
+              <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b py-2 pr-10 pl-4">
+                <DialogTitle className="min-w-0 truncate leading-normal">{openRepo.full_name}</DialogTitle>
+                <a
+                  href={openRepo.html_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="shrink-0 text-primary hover:text-foreground"
+                  aria-label={`Open ${openRepo.full_name} on GitHub`}
+                  title="Open on GitHub in a new tab"
+                >
+                  <ExternalLink className="size-3.5" />
+                </a>
+                {openSignals === null && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-label="Fetching from GitHub" />}
+                <span className="ml-2 shrink-0" title="Its issues in the Issues list">
+                  {cell("listed", openRepo)}
+                </span>
+                <span className="ml-auto flex shrink-0 items-center gap-0.5">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    title="Give it to an agent to set up in a VM: running if it has a frontend, else opened in VS Code, then a short introduction"
+                    onClick={() => setSettingUp(openRepo)}
+                  >
+                    <Wrench /> Set up
+                  </Button>
+                  <Button
+                    variant={openTracked ? "ghost" : "outline"}
+                    size="xs"
+                    disabled={tracking.includes(openRepo.full_name)}
+                    title={openTracked ? "Stop tracking it on the Tracked page" : "Track it: the Tracked page keeps an eye on its new issues"}
+                    onClick={() => toggleTracked(openRepo.full_name)}
+                  >
+                    {tracking.includes(openRepo.full_name) ? <Loader2 className="animate-spin" /> : openTracked ? <EyeOff /> : <Eye />}
+                    {openTracked ? "Untrack" : "Track"}
+                  </Button>
+                </span>
+                {openRepo.note !== "" && <div className="min-w-0 basis-full text-muted-foreground">{openRepo.note}</div>}
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-auto">
+                {openSignals !== null && (
+                  <div className="grid grid-cols-[130px_minmax(0,1fr)] gap-x-3 gap-y-1 border-b px-4 py-3">
+                    <span className="text-muted-foreground">Outside PRs</span>
+                    <span>
+                      {openSignals.outside_prs_90d} opened in {openSignals.pr_window_days ?? 90} days · {openSignals.outside_merged_90d} merged ·{" "}
+                      {openSignals.outside_closed_90d} closed unmerged
+                      {openSignals.outside_merge_rate !== null && (
+                        <span className="text-muted-foreground"> · {Math.round(openSignals.outside_merge_rate * 100)}% merged</span>
+                      )}
+                    </span>
+
+                    <span className="text-muted-foreground">Speed</span>
+                    <span>
+                      {openSignals.median_days_to_first_reply === null ? "No replies to go on" : `First reply in ${openSignals.median_days_to_first_reply} days`}
+                      {openSignals.median_days_to_merge !== null && ` · merged in ${openSignals.median_days_to_merge} days`}
+                      <span className="text-muted-foreground"> (medians)</span>
+                    </span>
+
+                    <span className="text-muted-foreground">Stale PRs</span>
+                    <span className={openSignals.stale_outside_prs >= 5 ? "text-warn" : undefined}>
+                      {openSignals.stale_outside_prs} open over 30 days that nobody answered
+                    </span>
+
+                    <span className="text-muted-foreground">Maintainers</span>
+                    <span className={openSignals.active_mergers_30d <= 1 ? "text-warn" : undefined}>
+                      {openSignals.active_mergers_30d} {openSignals.active_mergers_30d === 1 ? "person" : "people"} merged PRs this month
+                    </span>
+
+                    {openNewcomers !== undefined && (
+                      <>
+                        <span className="text-muted-foreground">Newcomers</span>
+                        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                          <NewcomersTag tag={openNewcomers.tag} />
+                          <span>
+                            {openNewcomers.prs} first PRs in {openSignals.pr_window_days ?? 90} days · {openNewcomers.merged} merged · {openNewcomers.closed} closed unmerged
+                            {openNewcomers.median_days_to_first_reply !== null && ` · first reply in ${openNewcomers.median_days_to_first_reply} days`}
+                            {openNewcomers.returned > 0 && ` · ${openNewcomers.returned} came back for a second PR`}
+                          </span>
+                        </span>
+                      </>
+                    )}
+
+                    {openActivity !== undefined && (
+                      <>
+                        <span className="text-muted-foreground">Activity</span>
+                        <span>
+                          A month: {COUNT.format(openActivity.prs_opened_month)} PRs opened, {COUNT.format(openActivity.prs_merged_month)} merged ·{" "}
+                          {COUNT.format(openActivity.issues_opened_month)} issues opened, {COUNT.format(openActivity.issues_closed_month)} closed ·{" "}
+                          {COUNT.format(openActivity.commits_month)} commits
+                          <span className="text-muted-foreground">
+                            {" "}
+                            (90-day average
+                            {openActivity.trend === "up" ? "; the last 30 days were busier" : openActivity.trend === "down" ? "; the last 30 days were quieter" : ""})
+                          </span>
+                          <span className="block text-muted-foreground">
+                            {openActivity.last_release_at !== null ? `Last release ${openActivity.last_release} ${timeAgo(openActivity.last_release_at)}` : "No GitHub releases"}
+                            {openActivity.issue_reply_rate !== null &&
+                              ` · ${Math.round(openActivity.issue_reply_rate * 100)}% of new issues answered by a maintainer within a week`}
+                          </span>
+                        </span>
+                      </>
+                    )}
+
+                    {openAtmosphere !== null && (
+                      <>
+                        <span className="text-muted-foreground">Atmosphere</span>
+                        <span className="flex min-w-0 flex-col gap-1">
+                          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                            <ToneTag tone={openAtmosphere.tone} />
+                            <span>{openAtmosphere.summary}</span>
+                          </span>
+                          {openAtmosphere.asks_for.length > 0 && (
+                            <span className="text-muted-foreground">
+                              Reviewers ask for: {openAtmosphere.asks_for.map((ask) => ASK_LABEL[ask] ?? ask).join(", ")}
+                            </span>
+                          )}
+                          <span className="text-xs text-muted-foreground">
+                            From maintainers' feedback on {openAtmosphere.prs} recent PRs, read {timeAgo(openAtmosphere.judged_at)}
+                          </span>
+                        </span>
+                      </>
+                    )}
+
+                    {openSignals.reviewers !== undefined && (
+                      <>
+                        <span className="text-muted-foreground">Reviewed by</span>
+                        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                          <ReviewersTag reviewers={openSignals.reviewers} />
+                          <span>
+                            Of {openSignals.reviewers.agent + openSignals.reviewers.both + openSignals.reviewers.human} reviewed outside PRs:{" "}
+                            {openSignals.reviewers.agent} only by an AI reviewer, {openSignals.reviewers.both} by both, {openSignals.reviewers.human} only
+                            by maintainers
+                          </span>
+                        </span>
+                      </>
+                    )}
+
+                    {openCommunity !== undefined && (
+                      <>
+                        <span className="text-muted-foreground">Community</span>
+                        <span className={cn(!openCommunity.contributing && !openCommunity.code_of_conduct && !openCommunity.discussions && openCommunity.channels.length === 0 && "text-muted-foreground")}>
+                          {[
+                            openCommunity.contributing ? "Contributing guide" : "",
+                            openCommunity.code_of_conduct ? "Code of conduct" : "",
+                            openCommunity.discussions ? "GitHub Discussions" : "",
+                            ...openCommunity.channels,
+                          ]
+                            .filter((part) => part !== "")
+                            .join(" · ") || "No contributing guide, code of conduct or chat found"}
+                        </span>
+                      </>
+                    )}
+
+                    <span className="text-muted-foreground">AI policy</span>
+                    <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                      <PolicyTag tag={openSignals.ai_policy.tag} />
+                      {openSignals.ai_policy.quote !== "" && (
+                        <span className="min-w-0">
+                          "{openSignals.ai_policy.quote}" <span className="text-muted-foreground">({openSignals.ai_policy.file})</span>
+                        </span>
+                      )}
+                    </span>
+
+                    {openRepo.fit !== undefined && (
+                      <>
+                        <span className="text-muted-foreground">Fit</span>
+                        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                          <FitTag fit={openRepo.fit} />
+                          <span>
+                            for your profile
+                            {openRepo.lane !== undefined && <span className="text-muted-foreground"> · found for {laneLabels[openRepo.lane] ?? openRepo.lane}</span>}
+                          </span>
+                        </span>
+                      </>
+                    )}
+
+                    <span className="text-muted-foreground">Beginner issues</span>
+                    <span>
+                      {openSignals.unclaimed_beginner_issues} look unclaimed of {openSignals.beginner_issues.length} open
+                      {openSignals.beginner_issues.length > 0 && (
+                        <span className="mt-1 block space-y-0.5">
+                          {openSignals.beginner_issues.slice(0, BEGINNER_SHOWN).map((issue) => {
+                            const taken = issue.assignees > 0 || issue.cross_references > 0;
+                            return (
+                              <a
+                                key={issue.number}
+                                href={`https://github.com/${openRepo.full_name}/issues/${issue.number}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="group flex min-w-0 items-center gap-2"
+                                title={issue.labels.join(", ")}
+                              >
+                                <span className="shrink-0 text-muted-foreground tabular-nums">#{issue.number}</span>
+                                <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+                                  <span className={cn("truncate group-hover:underline", taken && "text-muted-foreground")}>{issue.title}</span>
+                                  {taken && <Badge variant="warn">maybe taken</Badge>}
+                                </span>
+                                <span className="shrink-0 text-xs text-muted-foreground">{timeAgo(issue.created_at)}</span>
+                              </a>
+                            );
+                          })}
+                        </span>
+                      )}
+                    </span>
+
+                    <span className="col-span-2 flex items-center gap-3 text-xs text-muted-foreground">
+                      From GitHub {timeAgo(openSignals.fetched_at)}
+                      <a href={openRepo.html_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 hover:text-foreground">
+                        GitHub <ExternalLink className="size-3" />
+                      </a>
+                    </span>
+                  </div>
+                )}
+                {/* A new key for each repo, so nothing it loaded for one shows for the next. */}
+                <RepoTree key={openRepo.full_name} repo={openRepo} />
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {settingUp !== null && <AssignDialog key={settingUp.full_name} repo={settingUp} onClose={() => setSettingUp(null)} />}
 

@@ -1,8 +1,8 @@
 /*
-One repo, shown in place under its row on the Repos and Explore pages: its README first, rendered, then at the bottom
-its files, folded until clicked, like the VS Code explorer.
+One repo, shown in the pop-up a click on its row opens on the Repos and Explore pages: its README first, rendered,
+then at the bottom its files, folded until clicked, like the VS Code explorer.
 
-The README loads as soon as the row opens. The file list loads the first time the files are unfolded; the backend
+The README loads as soon as the pop-up opens. The file list loads the first time the files are unfolded; the backend
 sends it all at once (GitHub's recursive tree), so folders open without another request. Clicking a file opens it
 inline below its line: code with line numbers, or rendered markdown for .md files.
 */
@@ -29,7 +29,7 @@ export default function RepoTree(props: { repo: { full_name: string; description
   const [fileData, setFileData] = useState<Record<string, RepoFile>>({});
   const [fileErrors, setFileErrors] = useState<Record<string, string>>({});
 
-  // Load the README once when the row opens.
+  // Load the README once when the pop-up opens.
   useEffect(() => {
     let cancelled = false;
     api<Readme>(`/api/repos/readme?name=${encodeURIComponent(name)}`)
