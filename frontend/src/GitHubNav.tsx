@@ -3,13 +3,13 @@ The GitHub tab's left list: App shows it instead of the sidebar tree on the GitH
 with the same look as the sidebar (Sidebar.tsx). Every line is a link to a page; the open one is marked:
 - Inbox (Inbox.tsx): drafts the agents want to send, with how many wait for your decision (a filled pill, like
   unread mail).
-- Pull requests (GitHub.tsx): your PRs on other people's projects, with how many are open.
+- Pull requests and Issues (GitHub.tsx): your PRs and issues on other people's projects, each with how many are open.
 - Account, pinned at the bottom: your GitHub account, the one Approve sends as (GitHub.tsx's Account), with who it
   is connected as, or "Not connected".
 Counts come straight from the live store, so the list updates itself.
 */
 
-import { CircleUser, GitPullRequest, Inbox } from "lucide-react";
+import { CircleDot, CircleUser, GitPullRequest, Inbox } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { api, useLive, type GithubAccountStatus } from "@/live";
@@ -44,6 +44,7 @@ export default function GitHubNav(props: { page: string; section: string; repo: 
 
   const pending = inbox.filter((draft) => draft.status === "pending").length;
   const openPRs = prs.items.filter((pr) => pr.state === "open").length;
+  const openIssues = prs.issues.filter((issue) => issue.state === "open").length;
 
   // The same rows as the sidebar's (Sidebar.tsx).
   const row = "flex h-8 items-center gap-2 rounded-md px-2 font-medium hover:bg-sidebar-accent hover:text-foreground";
@@ -70,6 +71,12 @@ export default function GitHubNav(props: { page: string; section: string; repo: 
           <GitPullRequest className="size-4 text-muted-foreground" />
           Pull requests
           <span className="ml-auto text-muted-foreground tabular-nums">{openPRs}</span>
+        </a>
+
+        <a href="#/github/issues" className={cn(row, "pl-6", props.page === "github" && props.section === "issues" && props.repo === null && selected)}>
+          <CircleDot className="size-4 text-muted-foreground" />
+          Issues
+          <span className="ml-auto text-muted-foreground tabular-nums">{openIssues}</span>
         </a>
       </div>
 

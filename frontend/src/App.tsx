@@ -2,7 +2,7 @@
 The whole app: a 36px header, a left list and one page on the right.
 The header's left has two tabs, the open one in full color with the accent under it:
 - Home: finding and doing the work, with the sidebar tree (Sidebar.tsx) on the left.
-- GitHub: your work on GitHub, with its own left list (GitHubNav.tsx: Inbox, Pull requests,
+- GitHub: your work on GitHub, with its own left list (GitHubNav.tsx: Inbox, Pull requests, Issues,
   Account). The tab shows how many drafts wait in the Inbox for your decision.
 Each tab goes back to the last page you had open under it (Home starts at Issues, GitHub at the Inbox); a reload
 forgets that. On its right: this repo on GitHub (a new tab, so the app stays open),
@@ -13,9 +13,9 @@ page (Sherpa.tsx).
 The page lives in the URL hash, so refresh and back/forward work and switching pages never reloads:
   Home:  #/issues  #/issues?repo=owner/name  #/issues?open=<issue id>  #/jobs  #/jobs/<job id>  #/explore  #/repos  #/tracked
          #/agents  #/agents/<agent id>  #/vms  #/vms?tab=images  #/vms?tab=defaults  #/vms/<vm name>  #/vms/<vm name>?tab=notes  #/resource
-  GitHub: #/inbox  #/inbox/<draft id>  #/github (= #/github/pulls)  #/github/account
-         Pull requests takes ?repo=owner/name (only that repo), state=closed (the Closed tab) and
-         open=owner/name%23n (that PR in its pop-up), e.g. #/github/pulls?repo=owner/name&open=owner/name%2312
+  GitHub: #/inbox  #/inbox/<draft id>  #/github (= #/github/pulls)  #/github/issues  #/github/account
+         Pull requests and Issues take ?repo=owner/name (only that repo), state=closed (the Closed tab) and
+         open=owner/name%23n (that PR or issue in its pop-up), e.g. #/github/issues?repo=owner/name&open=owner/name%2312
 Anything else opens Issues. Links are plain <a href="#/..."> everywhere; App only reads the hash.
 
 A VM page, once visited, stays mounted (hidden) while you are elsewhere, so its desktop iframe keeps its
@@ -92,9 +92,9 @@ export default function App() {
   const page = PAGES.includes(parts[0]) ? parts[0] : "issues";
   const id = parts.length > 1 && parts[1] !== "" ? decodeURIComponent(parts.slice(1).join("/")) : null;
   const query = new URLSearchParams(queryPart ?? "");
-  // The GitHub tab's pages; everything else is on Home. GitHub's section: "#/github/account" → "account", "#/github" → "pulls".
+  // The GitHub tab's pages; everything else is on Home. GitHub's section: "#/github/issues" → "issues", "#/github" → "pulls".
   const onGitHub = page === "inbox" || page === "github";
-  const section = id === "account" ? id : "pulls";
+  const section = id === "issues" || id === "account" ? id : "pulls";
 
   // Keep the address for its tab (setting state while rendering, like visitedVMs below). No hash at all is Issues.
   if (onGitHub && hash !== lastGitHub) {

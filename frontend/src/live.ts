@@ -468,14 +468,38 @@ export type TrackedPR = {
   draft_id: string | null; // the Inbox draft it was sent from
   job: string | null;
   agent: string | null;
+  relation: "author" | "commented"; // you opened it, or only commented on it
   checked_at: string;
   error: string | null; // why the last read failed (the status before stays)
 };
 
+// One of your issues on GitHub (pr_tracking.py): ones you opened and ones you commented on, on other people's projects.
+export type GithubIssue = {
+  id: string; // "owner/name#number"
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  author: string;
+  state: "open" | "closed";
+  reason: string | null; // closed: completed, not_planned or duplicate
+  opened_at: string;
+  updated_at: string;
+  closed_at: string | null;
+  labels: string[];
+  assignees: string[];
+  comments: number;
+  last_comment: { login: string; role: string; at: string; text: string } | null;
+  relation: "author" | "commented";
+  checked_at: string;
+  error: string | null;
+};
+
 export type PRsData = {
   items: TrackedPR[]; // the newest change first
+  issues: GithubIssue[]; // the newest change first
   checked_at: string | null;
-  error: string | null; // why the search for your PRs failed
+  error: string | null; // why the search for your PRs or issues failed
   refreshing: boolean;
 };
 
@@ -828,7 +852,7 @@ const store = {
     github: null,
     jobs: [],
     inbox: [],
-    prs: { items: [], checked_at: null, error: null, refreshing: false },
+    prs: { items: [], issues: [], checked_at: null, error: null, refreshing: false },
     agents: [],
     vms: [],
     images: { images: [], unbuilt: [], default: "", tasks: [] },

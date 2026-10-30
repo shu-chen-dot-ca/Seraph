@@ -1,6 +1,6 @@
 /*
-The thread pop-up: one of your PRs on GitHub in full, the way GitHub shows it
-(#/github/pulls?open=owner/name%23n). A click on a row of the GitHub tab opens it; the X,
+The thread pop-up: one of your PRs or issues on GitHub in full, the way GitHub shows it
+(#/github/pulls?open=owner/name%23n or #/github/issues?open=...). A click on a row of the GitHub tab opens it; the X,
 Esc or a click outside closes it (the address drops open). It is read fresh from GitHub each time it opens
 (GET /api/github/thread); Refresh reads it again.
 Top: the state (Open, Draft, Merged, Closed), the repo and number (opens it on GitHub), who opened it and when, for a
@@ -347,7 +347,7 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
     [files, fileOpen, props.id],
   );
 
-  // The thread in the GitHub tab's live list (one of your PRs); undefined when it isn't there.
+  // The thread in the GitHub tab's live list (whether you opened it); undefined when it isn't there.
   const pr = prs.items.find((each) => each.id === props.id);
 
   const comment = props.id !== null ? (comments[props.id] ?? "") : "";
@@ -359,7 +359,7 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
     shownTab = "conversation";
   }
   // Close, reopen and delete the branch only on a PR you opened.
-  const isMine = thread !== null && thread.kind === "pr" && pr !== undefined;
+  const isMine = thread !== null && thread.kind === "pr" && pr !== undefined && pr.relation === "author";
   let totalAdded = 0;
   let totalRemoved = 0;
   for (const each of files) {

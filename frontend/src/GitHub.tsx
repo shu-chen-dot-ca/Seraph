@@ -1,11 +1,12 @@
 /*
-The GitHub tab's Pull requests and Account pages (#/github/pulls, #/github/account; #/github is Pull requests). Its
-left list is GitHubNav.tsx.
+The GitHub tab's Pull requests, Issues and Account pages (#/github/pulls, #/github/issues, #/github/account; #/github
+is Pull requests). Its left list is GitHubNav.tsx.
 
-Pull requests: your PRs on other people's projects, as GitHub lists them (github_searcher/pr_tracking.py), the newest
-change first: every PR the Inbox's Approve sent, and the other PRs you opened. They are read from GitHub every few
-minutes on their own (and right after Approve sends one); the ones from outside the app need your account connected
-(Account), so the app knows who you are.
+Pull requests and Issues: your PRs and issues on other people's projects, as GitHub lists them
+(github_searcher/pr_tracking.py), the newest change first. PRs: every PR the Inbox's Approve sent, the other PRs you
+opened, and PRs you commented on. Issues: the ones you opened and the ones you commented on. Both are read from GitHub
+every few minutes on their own (and right after Approve sends a PR); the ones from outside the app need your account
+connected (Account), so the app knows who you are.
 The bar on top: tabs Open and Closed (merged PRs are under Closed) with how many; when one repo is shown
 (#/github/pulls?repo=owner/name), a chip with its name and an X to show every repo again; a box that
 filters by title, repo and number; on the right when they were last read from GitHub and Check now. A line under it
@@ -16,6 +17,9 @@ last changed, and in plain words where it stands:
   PR until a maintainer clicks approve, so this is normal and only needs waiting), running, passed, failed, or none.
 - Review: approved, changes asked for, reviewed with comments, or not reviewed yet.
 - How many comments and who wrote the latest (a maintainer, a bot, you), and the issue it fixes, open or closed.
+  "You commented" when it is someone else's PR you commented on.
+Each issue row: the state (open, closed as completed, closed as not planned), the title, the repo and number, its
+labels, "You opened it" or "You commented", how many comments and who wrote the latest, and when it last changed.
 A click on a row opens it in a pop-up (ThreadDialog.tsx; the address gets open=owner/name%23n, keeping the repo and
 tab): all of it as on GitHub, where you comment. The X, Esc or a click outside closes it, back to the list.
 
@@ -28,16 +32,17 @@ nothing again. "make one" opens GitHub's new-token page with public_repo ticked.
 list (a "github-account" window event), which show who it sends as. Below: your forks the app sends PRs from.
 */
 
-import { ExternalLink, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Loader2, RefreshCw, X } from "lucide-react";
+import { CircleCheck, CircleDot, CircleSlash, ExternalLink, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Loader2, RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import ThreadDialog from "@/ThreadDialog";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { since, useNow } from "@/components/ui/job-progress";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api, useLive, useLoaded, type GithubAccountStatus, type TrackedPR } from "@/live";
+import { api, useLive, useLoaded, type GithubAccountStatus, type GithubIssue, type TrackedPR } from "@/live";
 import { cn } from "@/lib/utils";
 
 const CHECKS_TEXT: Record<string, string> = {
@@ -57,9 +62,9 @@ const REVIEW_TEXT: Record<string, string> = {
 };
 const REVIEW_COLOR: Record<string, string> = { approved: "text-ok", changes_requested: "text-warn", commented: "", none: "" };
 
-// Who someone is, in plain words, from GitHub's role for them.
-function who(login: string, role: string, pr: TrackedPR): string {
-  if (login === pr.author) {
+// Who someone is, in plain words, from GitHub's role for them. you: your login ("" until the account is known).
+function who(login: string, role: string, item: TrackedPR | GithubIssue, you: string): string {
+  if (login === you || (item.relation === "author" && login === item.author)) {
     return "you";
   }
   if (role === "BOT") {
@@ -107,6 +112,7 @@ export default function GitHub(props: { section: string; repo: string | null; st
     };
   }, []);
 
+  const you = account?.login ?? "";
   // The forks Approve sent PRs from, once each.
   const forks: string[] = [];
   for (const draft of inbox) {
@@ -115,14 +121,22 @@ export default function GitHub(props: { section: string; repo: string | null; st
     }
   }
 
-  // This section's PRs, of the one repo when it shows one. The tabs count those; the rows are the tab's ones (Closed
-  // has the merged PRs too) that match the filter.
+  // This section's PRs or issues, of the one repo when it shows one. The tabs count those; the rows are the tab's
+  // ones (Closed has the merged PRs too) that match the filter.
   const repoPRs = prs.items.filter((pr) => props.repo === null || pr.repo === props.repo);
-  const openCount = repoPRs.filter((pr) => pr.state === "open").length;
-  const closedCount = repoPRs.length - openCount;
+  const repoIssues = prs.issues.filter((issue) => props.repo === null || issue.repo === props.repo);
+  let openCount = repoPRs.filter((pr) => pr.state === "open").length;
+  let closedCount = repoPRs.length - openCount;
+  if (props.section === "issues") {
+    openCount = repoIssues.filter((issue) => issue.state === "open").length;
+    closedCount = repoIssues.length - openCount;
+  }
   const needle = filter.trim().toLowerCase();
   const prRows = repoPRs.filter((pr) => (pr.state === "open") === (props.state === "open") && `${pr.id} ${pr.title}`.toLowerCase().includes(needle));
-  const isList = props.section === "pulls";
+  const issueRows = repoIssues.filter((issue) => (issue.state === "open") === (props.state === "open") && `${issue.id} ${issue.title}`.toLowerCase().includes(needle));
+  const isList = props.section === "pulls" || props.section === "issues";
+  const total = props.section === "pulls" ? prs.items.length : prs.issues.length;
+  const shown = props.section === "pulls" ? prRows.length : issueRows.length;
 
   // Addresses: this section's list (with its repo and the Closed tab when they are on), and the same with one change.
   const sectionHash = `#/github/${props.section}`;
@@ -139,7 +153,7 @@ export default function GitHub(props: { section: string; repo: string | null; st
     try {
       await api("/api/github/refresh", { method: "POST" });
     } catch (err) {
-      toast.error(`Could not check the PRs: ${err instanceof Error ? err.message : err}`);
+      toast.error(`Could not check GitHub: ${err instanceof Error ? err.message : err}`);
     }
   }
 
@@ -153,7 +167,7 @@ export default function GitHub(props: { section: string; repo: string | null; st
       setChangingToken(false);
       window.dispatchEvent(new Event("github-account"));
       toast.success(`Connected as @${data.login}. Approve in the Inbox now sends PRs and comments as this account.`);
-      // Your PRs sent by hand show up now too.
+      // Your PRs and issues from outside the app show up now too.
       api("/api/github/refresh", { method: "POST" }).catch(() => {});
     } catch (err) {
       setAccountError(err instanceof Error ? err.message : String(err));
@@ -193,7 +207,12 @@ export default function GitHub(props: { section: string; repo: string | null; st
               </Button>
             </span>
           )}
-          <Input className="w-52" placeholder="Filter pull requests" value={filter} onChange={(event) => setFilter(event.target.value)} />
+          <Input
+            className="w-52"
+            placeholder={props.section === "pulls" ? "Filter pull requests" : "Filter issues"}
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+          />
           <span className="ml-auto text-xs text-muted-foreground">{prs.checked_at !== null ? `Checked ${since(prs.checked_at, now)} ago` : ""}</span>
           <Button size="sm" variant="outline" disabled={prs.refreshing} onClick={checkNow}>
             {prs.refreshing ? <Loader2 className="animate-spin" /> : <RefreshCw />} Check now
@@ -201,18 +220,21 @@ export default function GitHub(props: { section: string; repo: string | null; st
         </div>
       )}
       {isList && prs.error !== null && (
-        <div className="shrink-0 border-b bg-destructive/10 px-3 py-1.5 text-destructive">Could not search GitHub for your pull requests: {prs.error}</div>
+        <div className="shrink-0 border-b bg-destructive/10 px-3 py-1.5 text-destructive">Could not search GitHub for your pull requests and issues: {prs.error}</div>
       )}
 
       <div className="min-h-0 flex-1 overflow-auto">
         {isList && !loaded && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
-        {props.section === "pulls" && loaded && prs.items.length === 0 && (
+        {props.section === "pulls" && loaded && total === 0 && (
           <div className="px-3 py-2 text-muted-foreground">
             No pull requests yet. A PR you approve in the Inbox shows here once it is on GitHub; with your account connected (Account), so do the
-            ones you opened by hand.
+            ones you opened or commented on by hand.
           </div>
         )}
-        {isList && loaded && prs.items.length > 0 && prRows.length === 0 && (
+        {props.section === "issues" && loaded && total === 0 && (
+          <div className="px-3 py-2 text-muted-foreground">No issues yet. With your account connected (Account), the issues you opened or commented on show here.</div>
+        )}
+        {isList && loaded && total > 0 && shown === 0 && (
           <div className="px-3 py-2 text-muted-foreground">{needle !== "" ? "Nothing matches the filter." : "None here."}</div>
         )}
 
@@ -244,13 +266,14 @@ export default function GitHub(props: { section: string; repo: string | null; st
                     <span className="text-foreground">
                       {pr.repo} #{pr.number}
                     </span>
+                    {pr.relation === "commented" && <span>You commented</span>}
                     {pr.state === "open" && <span className={CHECKS_COLOR[pr.checks]}>{CHECKS_TEXT[pr.checks]}</span>}
                     {pr.state === "open" && <span className={REVIEW_COLOR[pr.review]}>{REVIEW_TEXT[pr.review]}</span>}
                     {pr.state === "merged" && pr.merged_by !== null && <span className="text-ok">Merged by {pr.merged_by}</span>}
                     {pr.state === "closed" && <span className="text-destructive">Closed without merging</span>}
                     <span>
                       {pr.comments === 1 ? "1 comment" : `${pr.comments} comments`}
-                      {pr.last_comment !== null && `, the latest by ${who(pr.last_comment.login, pr.last_comment.role, pr)} ${since(pr.last_comment.at, now)} ago`}
+                      {pr.last_comment !== null && `, the latest by ${who(pr.last_comment.login, pr.last_comment.role, pr, you)} ${since(pr.last_comment.at, now)} ago`}
                     </span>
                     {pr.issues.map((issue) => (
                       <span key={issue.number}>
@@ -258,6 +281,54 @@ export default function GitHub(props: { section: string; repo: string | null; st
                       </span>
                     ))}
                     {pr.error !== null && <span className="text-destructive">Last check failed</span>}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+
+        {props.section === "issues" &&
+          issueRows.map((issue) => {
+            let icon = <CircleDot className="size-4 shrink-0 text-ok" />;
+            let stateText = "Open";
+            if (issue.state === "closed" && (issue.reason === "not_planned" || issue.reason === "duplicate")) {
+              icon = <CircleSlash className="size-4 shrink-0 text-muted-foreground" />;
+              stateText = issue.reason === "duplicate" ? "Closed as a duplicate" : "Closed as not planned";
+            } else if (issue.state === "closed") {
+              icon = <CircleCheck className="size-4 shrink-0 text-violet-500" />;
+              stateText = "Closed as completed";
+            }
+            return (
+              <div
+                key={issue.id}
+                className={cn("flex cursor-pointer items-start gap-2 border-b px-3 py-1.5 hover:bg-accent/50", issue.id === props.open && "bg-selected hover:bg-selected")}
+                onClick={() => (window.location.hash = openPrefix + encodeURIComponent(issue.id))}
+              >
+                <span className="mt-px" title={stateText}>
+                  {icon}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="truncate font-medium">{issue.title}</span>
+                    <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                      {issue.state === "closed" && issue.closed_at !== null ? `closed ${since(issue.closed_at, now)} ago` : `updated ${since(issue.updated_at, now)} ago`}
+                    </span>
+                  </div>
+                  <div className="flex min-w-0 flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                    <span className="text-foreground">
+                      {issue.repo} #{issue.number}
+                    </span>
+                    {issue.labels.map((label) => (
+                      <Badge key={label} variant="secondary" className="py-0">
+                        {label}
+                      </Badge>
+                    ))}
+                    <span>{issue.relation === "author" ? "You opened it" : "You commented"}</span>
+                    <span>
+                      {issue.comments === 1 ? "1 comment" : `${issue.comments} comments`}
+                      {issue.last_comment !== null && `, the latest by ${who(issue.last_comment.login, issue.last_comment.role, issue, you)} ${since(issue.last_comment.at, now)} ago`}
+                    </span>
+                    {issue.error !== null && <span className="text-destructive">Last check failed</span>}
                   </div>
                 </div>
               </div>
@@ -334,8 +405,8 @@ export default function GitHub(props: { section: string; repo: string | null; st
                 <p className="mt-1 text-xs text-muted-foreground">This token can also write to your private repos; public_repo alone is enough.</p>
               )}
               <p className="mt-2 text-xs text-muted-foreground">
-                Approve in the Inbox sends PRs and comments as this account, after you confirm, and so does Comment on a pull request. It needs a
-                classic token with the public_repo scope (
+                Approve in the Inbox sends PRs and comments as this account, after you confirm, and so does Comment on a pull request or issue. It
+                needs a classic token with the public_repo scope (
                 <a
                   href="https://github.com/settings/tokens/new?scopes=public_repo&description=Seraph"
                   target="_blank"
@@ -365,7 +436,7 @@ export default function GitHub(props: { section: string; repo: string | null; st
         )}
       </div>
 
-      {/* The PR a click opened (open= in the address); closing it goes back to the list. */}
+      {/* The PR or issue a click opened (open= in the address); closing it goes back to the list. */}
       <ThreadDialog id={props.open} onClose={() => (window.location.hash = listHash)} />
     </div>
   );

@@ -1,4 +1,4 @@
-"""The GitHub tab: your PRs on GitHub and how each one stands (github_searcher/pr_tracking.py), each one's
+"""The GitHub tab: your PRs and issues on GitHub and how each one stands (github_searcher/pr_tracking.py), each one's
 whole thread for the thread pop-up, and the changes you make there, as you
 (github_searcher/github_account.py). Its Account page connects the account itself (backend/github_account_api.py).
 
@@ -65,7 +65,7 @@ class CommentRequest(BaseModel):
 
 @router.post("/github/refresh")
 async def refresh_prs() -> dict:
-    """Read every PR again now. Takes a few seconds per PR."""
+    """Read every PR and issue again now. Takes a few seconds per open one."""
     await asyncio.to_thread(pr_tracking.refresh)
     return {"ok": True}
 

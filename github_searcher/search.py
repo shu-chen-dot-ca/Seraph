@@ -1,5 +1,5 @@
 """Reads from GitHub: repos, files, READMEs, PR and issue activity, threads, merged PRs, issue facts, issue and code search,
-how your sent PRs stand (their checks and GitHub Actions runs), and everything the GitHub tab's
+how your PRs and issues stand (their checks and GitHub Actions runs, pr_tracking.py), and everything the GitHub tab's
 thread pop-up shows of one PR or issue (backend/github_api.py): its whole timeline, commits, checks and files changed,
 and one comment (whose it is, before you delete it).
 
@@ -147,11 +147,16 @@ def search_code(q: str) -> dict:
     return response.json()
 
 
-def search_issues(q: str) -> dict:
+def search_issues(q: str, sort: str = "") -> dict:
+    # sort "updated": the most recently updated first (pr_tracking.py); else GitHub's best match.
+    params = {"q": q, "per_page": 50}
+    if sort != "":
+        params["sort"] = sort
+        params["order"] = "desc"
     response = BALANCER.request(
         "GET",
         "https://api.github.com/search/issues",
-        params={"q": q, "per_page": 50},
+        params=params,
     )
     response.raise_for_status()
     return response.json()
@@ -651,6 +656,38 @@ def get_action_runs(owner: str, repo: str, sha: str) -> list[dict]:
     response = BALANCER.request("GET", f"https://api.github.com/repos/{owner}/{repo}/actions/runs", params={"head_sha": sha, "per_page": 100})
     response.raise_for_status()
     return response.json()["workflow_runs"]
+
+
+# One issue as it stands, for the GitHub tab (pr_tracking.py), like PR_STATUS_QUERY: its state (stateReason: completed,
+# not_planned or duplicate once closed), labels, assignees and the latest comment.
+ISSUE_STATUS_QUERY = """
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      number title url state stateReason createdAt updatedAt closedAt
+      author { login }
+      labels(first: 20) { nodes { name } }
+      assignees(first: 10) { nodes { login } }
+      comments(last: 1) { totalCount nodes { createdAt authorAssociation body author { login __typename } } }
+    }
+  }
+}
+"""
+
+
+def get_issue_status(owner: str, repo: str, number: int) -> dict | None:
+    # Never cached: it is asked for to see what changed. None when the issue is gone.
+    response = BALANCER.request(
+        "POST",
+        "https://api.github.com/graphql",
+        json={"query": ISSUE_STATUS_QUERY, "variables": {"owner": owner, "name": repo, "number": number}},
+        timeout=60,
+    )
+    response.raise_for_status()
+    data = response.json()
+    if data.get("errors"):
+        raise ValueError(data["errors"][0]["message"])
+    return data["data"]["repository"]["issue"]
 
 
 # A PR or issue as the GitHub tab's thread pop-up shows it (backend/github_api.py): the description, labels, assignees,
