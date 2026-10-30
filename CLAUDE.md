@@ -4,6 +4,8 @@
 - Keep most tasks short and do not run anything. Never keep me waiting and you go to run a long check or test without me saying doing that. Only run things for long periods of time if i say "build the whole thing", or "build until it's working"
 - Don't create __init__.py if not nessasary, if its nessasary do not create it with content. Only if it is a must or break then __init__.py can be filled.
 
+- Name things the way an established product would: plain, common names people already know (Inbox, Pull requests, Issues, Settings, Account, Open, Closed, Approve, Reject). No made-up or cute labels like "Needs you" or "Everything". This goes for pages, tabs, buttons, sections and messages.
+
 - Core folders are github_searcher/ and sandbox/. Do not change that without my knowledge. If we are working on something outside of those folders andn you have to change it, ask me first.
 
 - Sherpa is the app's built-in helper agent: the round bot button at the bottom right of every page (frontend/src/Sherpa.tsx, github_searcher/sherpa.py, backend/sherpa_api.py). It explains the app, sees the page the user is on, and can click and fill things in it.
