@@ -5,7 +5,9 @@ The header's left has two tabs, the open one in full color with the accent under
 - GitHub: your work on GitHub, with its own left list (GitHubNav.tsx: Inbox, Pull requests, Issues,
   Account). The tab shows how many drafts wait in the Inbox for your decision.
 Each tab goes back to the last page you had open under it (Home starts at Issues, GitHub at the Inbox); a reload
-forgets that. On its right: this repo on GitHub (a new tab, so the app stays open),
+forgets that. On its right: Sign in while you aren't signed in to GitHub (straight to GitHub's sign-in page once sign in is
+set up, else the GitHub tab's Account page, which walks you through setting it up), or, signed in, your GitHub picture
+and @login, a link to Account (GitHub.tsx), where Sign out is. Then this repo on GitHub (a new tab, so the app stays open),
 found from git's origin remote (vite.config.ts), so no account name is written here; none when it isn't on GitHub. Reset view is in Settings
 (SettingsDialog), opened from the bottom of Home's sidebar. Sherpa's round button sits at the bottom right of every
 page (Sherpa.tsx).
@@ -24,6 +26,7 @@ connection and coming back is instant. It is dropped when that VM no longer exis
 
 import { WifiOff } from "lucide-react";
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 
 import AgentChat from "@/AgentChat";
 import Agents from "@/Agents";
@@ -41,10 +44,11 @@ import Sidebar from "@/Sidebar";
 import Tracked from "@/Tracked";
 import VMPage from "@/VMPage";
 import VMs from "@/VMs";
+import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import TitleTooltips from "@/components/ui/title-tooltips";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { useConnected, useLiveValue, useLoaded } from "@/live";
+import { api, useConnected, useLiveValue, useLoaded, type GithubAccountStatus } from "@/live";
 import { cn } from "@/lib/utils";
 
 const PAGES = ["inbox", "github", "issues", "jobs", "explore", "repos", "tracked", "agents", "vms", "resource"];
@@ -77,6 +81,33 @@ export default function App() {
   const pending = useLiveValue((topics) => topics.inbox.filter((draft) => draft.status === "pending").length);
   const vmsLoaded = useLoaded("vms");
   const connected = useConnected();
+  // Who you are signed in to GitHub as, for the header's right. The Account page (GitHub.tsx) signs you in and out.
+  const [account, setAccount] = useState<GithubAccountStatus | null>(null);
+
+  useEffect(() => {
+    function load() {
+      api<GithubAccountStatus>("/api/github_account")
+        .then(setAccount)
+        .catch(() => {});
+    }
+    load();
+    window.addEventListener("github-account", load);
+    return () => window.removeEventListener("github-account", load);
+  }, []);
+
+  // The header's Sign in: straight to GitHub's sign-in page when sign in is set up, else the Account page to set it up.
+  async function signIn() {
+    if (account === null || !account.can_sign_in) {
+      window.location.hash = "#/github/account";
+      return;
+    }
+    try {
+      const data = await api<{ url: string }>("/api/github_account/sign_in", { method: "POST" });
+      window.location.href = data.url;
+    } catch (err) {
+      toast.error(`Could not sign in: ${err instanceof Error ? err.message : err}`);
+    }
+  }
 
   useEffect(() => {
     function onHashChange() {
@@ -189,6 +220,20 @@ export default function App() {
               <span className="mr-2 flex items-center gap-1.5 text-destructive">
                 <WifiOff className="size-3.5" /> Offline, reconnecting
               </span>
+            )}
+            {account !== null && !account.connected && (
+              <Button size="xs" variant="outline" className="mr-1" onClick={signIn}>
+                Sign in
+              </Button>
+            )}
+            {account !== null && account.connected && (
+              <a
+                href="#/github/account"
+                className="mr-1 flex h-7 items-center gap-1.5 rounded-sm px-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+                title="Your GitHub account"
+              >
+                <img src={`https://github.com/${account.login}.png?size=40`} alt="" className="size-5 rounded-full" />@{account.login}
+              </a>
             )}
             {__REPO_URL__ !== "" && (
               <a

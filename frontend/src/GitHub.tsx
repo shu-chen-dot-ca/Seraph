@@ -5,8 +5,8 @@ is Pull requests). Its left list is GitHubNav.tsx.
 Pull requests and Issues: your PRs and issues on other people's projects, as GitHub lists them
 (github_searcher/pr_tracking.py), the newest change first. PRs: every PR the Inbox's Approve sent, the other PRs you
 opened, and PRs you commented on. Issues: the ones you opened and the ones you commented on. Both are read from GitHub
-every few minutes on their own (and right after Approve sends a PR); the ones from outside the app need your account
-connected (Account), so the app knows who you are.
+every few minutes on their own (and right after Approve sends a PR); the ones from outside the app need you signed in
+(Account), so the app knows who you are.
 The bar on top: tabs Open and Closed (merged PRs are under Closed) with how many; when one repo is shown
 (#/github/pulls?repo=owner/name), a chip with its name and an X to show every repo again; a box that
 filters by title, repo and number; on the right when they were last read from GitHub and Check now. A line under it
@@ -24,12 +24,18 @@ A click on a row opens it in a pop-up (ThreadDialog.tsx; the address gets open=o
 tab): all of it as on GitHub, where you comment. The X, Esc or a click outside closes it, back to the list.
 
 Account: your GitHub account, the one Approve in the Inbox sends PRs and comments as, and Comment in the pop-up
-(github_searcher/github_account.py). Paste a classic token with the public_repo scope and Connect: the backend
-checks it with GitHub (a fine-grained token, or one without that scope, is turned down with why) and keeps it on
-this computer. It never comes back to the browser: GET /api/github_account says only who it is (Connected as
-@login) and the token's scopes. Change token pastes a new one; Disconnect forgets it, and Approve then sends
-nothing again. "make one" opens GitHub's new-token page with public_repo ticked. Both tell the Inbox and the left
-list (a "github-account" window event), which show who it sends as. Below: your forks the app sends PRs from.
+(github_searcher/github_account.py). Sign in with GitHub, like on any website: this tab goes to GitHub's page, which
+asks whether Seraph may act as you (about all you can do on github.com: your repos, public and private, workflows,
+organizations, gists, notifications, your profile), and after Authorize comes back here signed in, with a message
+"Signed in as @login" (or, in red on top, why not, e.g. after Cancel there). With more than one account on
+github.com, GitHub asks which one first. Signed in: "Signed in as @login", what it may do, and Sign out, which forgets
+it (Approve then sends nothing again). Nothing about the sign-in ever comes back to the browser but who it is.
+The first time, the page shows how to register the app on GitHub, once: a link to GitHub's form for a new OAuth app,
+the three values to fill in (name, homepage, callback address; click one to select it), then the Client ID and client
+secret to paste here and Save. Change app settings shows that again. Use a token instead (both views) takes a
+classic token pasted by hand, with Sign in and Cancel, for an organization that blocks apps it hasn't approved;
+"make one" opens GitHub's new-token page with the same permissions ticked. Signing in or out (and saving the app
+settings) tells the header, the Inbox and the left list (a "github-account" window event), which show who it sends as. Below: your forks the app sends PRs from.
 */
 
 import { CircleCheck, CircleDot, CircleSlash, ExternalLink, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Loader2, RefreshCw, X } from "lucide-react";
@@ -83,8 +89,13 @@ export default function GitHub(props: { section: string; repo: string | null; st
   const [filter, setFilter] = useState("");
   const [account, setAccount] = useState<GithubAccountStatus | null>(null);
   const [token, setToken] = useState("");
-  const [changingToken, setChangingToken] = useState(false);
+  const [useToken, setUseToken] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
+  const [settingUp, setSettingUp] = useState(false);
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [savingApp, setSavingApp] = useState(false);
   const [accountError, setAccountError] = useState("");
   const now = useNow();
 
@@ -110,6 +121,25 @@ export default function GitHub(props: { section: string; repo: string | null; st
       stopped = true;
       window.removeEventListener("github-account", load);
     };
+  }, []);
+
+  // Back from GitHub's sign-in page (the callback in backend/github_account_api.py): what came of it, said once.
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
+    const signedIn = query.get("signed_in");
+    const error = query.get("error");
+    if (signedIn === null && error === null) {
+      return;
+    }
+    if (signedIn !== null) {
+      toast.success(`Signed in as @${signedIn}. Approve in the Inbox now sends PRs and comments as this account.`);
+      // Your PRs and issues from outside the app show up now too.
+      api("/api/github/refresh", { method: "POST" }).catch(() => {});
+    }
+    if (error !== null) {
+      setAccountError(error);
+    }
+    window.location.replace("#/github/account");
   }, []);
 
   const you = account?.login ?? "";
@@ -164,15 +194,45 @@ export default function GitHub(props: { section: string; repo: string | null; st
       const data = await api<GithubAccountStatus>("/api/github_account", { method: "PUT", body: { token: token } });
       setAccount(data);
       setToken("");
-      setChangingToken(false);
+      setUseToken(false);
       window.dispatchEvent(new Event("github-account"));
-      toast.success(`Connected as @${data.login}. Approve in the Inbox now sends PRs and comments as this account.`);
+      toast.success(`Signed in as @${data.login}. Approve in the Inbox now sends PRs and comments as this account.`);
       // Your PRs and issues from outside the app show up now too.
       api("/api/github/refresh", { method: "POST" }).catch(() => {});
     } catch (err) {
       setAccountError(err instanceof Error ? err.message : String(err));
     }
     setConnecting(false);
+  }
+
+  async function signIn() {
+    setSigningIn(true);
+    setAccountError("");
+    try {
+      const data = await api<{ url: string }>("/api/github_account/sign_in", { method: "POST" });
+      // GitHub's page, in this tab. It comes back to this page when you are done there.
+      window.location.href = data.url;
+    } catch (err) {
+      setAccountError(err instanceof Error ? err.message : String(err));
+      setSigningIn(false);
+    }
+  }
+
+  async function saveApp() {
+    setSavingApp(true);
+    setAccountError("");
+    try {
+      setAccount(await api<GithubAccountStatus>("/api/github_account/app", { method: "PUT", body: { client_id: clientId, client_secret: clientSecret } }));
+      setClientId("");
+      setClientSecret("");
+      setSettingUp(false);
+      // The header's Sign in goes straight to GitHub now.
+      window.dispatchEvent(new Event("github-account"));
+      toast.success("Saved. Now sign in with GitHub.");
+    } catch (err) {
+      setAccountError(err instanceof Error ? err.message : String(err));
+    }
+    setSavingApp(false);
   }
 
   async function disconnectAccount() {
@@ -227,12 +287,12 @@ export default function GitHub(props: { section: string; repo: string | null; st
         {isList && !loaded && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
         {props.section === "pulls" && loaded && total === 0 && (
           <div className="px-3 py-2 text-muted-foreground">
-            No pull requests yet. A PR you approve in the Inbox shows here once it is on GitHub; with your account connected (Account), so do the
+            No pull requests yet. A PR you approve in the Inbox shows here once it is on GitHub; signed in with GitHub (Account), so do the
             ones you opened or commented on by hand.
           </div>
         )}
         {props.section === "issues" && loaded && total === 0 && (
-          <div className="px-3 py-2 text-muted-foreground">No issues yet. With your account connected (Account), the issues you opened or commented on show here.</div>
+          <div className="px-3 py-2 text-muted-foreground">No issues yet. Signed in with GitHub (Account), the issues you opened or commented on show here.</div>
         )}
         {isList && loaded && total > 0 && shown === 0 && (
           <div className="px-3 py-2 text-muted-foreground">{needle !== "" ? "Nothing matches the filter." : "None here."}</div>
@@ -345,78 +405,167 @@ export default function GitHub(props: { section: string; repo: string | null; st
                   <Loader2 className="size-3.5 animate-spin" /> Loading…
                 </div>
               )}
-              {account !== null && account.connected && !changingToken && (
+              {account !== null && account.connected && (
                 <div className="flex items-center gap-2">
                   <span>
-                    Connected as{" "}
+                    Signed in as{" "}
                     <a href={`https://github.com/${account.login}`} target="_blank" rel="noreferrer" className="font-medium hover:underline">
                       @{account.login}
                     </a>
                   </span>
                   <span className="text-xs text-muted-foreground">{(account.scopes ?? []).join(", ")}</span>
-                  <div className="ml-auto flex items-center gap-1.5">
-                    <Button variant="outline" size="sm" onClick={() => setChangingToken(true)}>
-                      Change token
-                    </Button>
-                    <Button variant="ghost" size="sm" onClick={disconnectAccount}>
-                      Disconnect
+                  <div className="ml-auto">
+                    <Button variant="outline" size="sm" onClick={disconnectAccount}>
+                      Sign out
                     </Button>
                   </div>
                 </div>
               )}
-              {account !== null && (!account.connected || changingToken) && (
-                <div className="flex items-center gap-1.5">
-                  <Input
-                    className="min-w-0 flex-1 font-mono text-xs"
-                    placeholder="ghp_…"
-                    type="password"
-                    // Sherpa never reads it.
-                    data-secret
-                    autoComplete="off"
-                    spellCheck={false}
-                    value={token}
-                    onChange={(event) => setToken(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && token.trim() !== "" && !connecting) {
-                        event.preventDefault();
-                        connectAccount();
-                      }
-                    }}
-                  />
-                  <Button size="sm" onClick={connectAccount} disabled={token.trim() === "" || connecting}>
-                    {connecting && <Loader2 className="animate-spin" />}
-                    Connect
+              {account !== null && !account.connected && account.can_sign_in && !settingUp && !useToken && (
+                <div className="space-y-2">
+                  <Button onClick={signIn} disabled={signingIn}>
+                    {signingIn && <Loader2 className="animate-spin" />}
+                    {!signingIn && (
+                      // GitHub's mark (lucide has no brand icons).
+                      <svg viewBox="0 0 16 16" className="size-4" fill="currentColor" aria-hidden="true">
+                        <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
+                      </svg>
+                    )}
+                    Sign in with GitHub
                   </Button>
-                  {changingToken && (
+                  <div className="flex items-center gap-3 text-xs">
+                    <button type="button" className="text-primary hover:underline" onClick={() => setUseToken(true)}>
+                      Use a token instead
+                    </button>
+                    <button type="button" className="text-primary hover:underline" onClick={() => setSettingUp(true)}>
+                      Change app settings
+                    </button>
+                  </div>
+                </div>
+              )}
+              {account !== null && !account.connected && (!account.can_sign_in || settingUp) && !useToken && (
+                <div className="space-y-3">
+                  <p>To sign in with GitHub, register this app on GitHub once:</p>
+                  <ol className="list-decimal space-y-2 pl-5">
+                    <li>
+                      Open{" "}
+                      <a href="https://github.com/settings/applications/new" target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                        GitHub's form for a new OAuth app
+                      </a>
+                      , fill it in with these and click Register application:
+                      <div className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
+                        <span className="text-muted-foreground">Application name</span>
+                        <span className="font-mono select-all">Seraph</span>
+                        <span className="text-muted-foreground">Homepage URL</span>
+                        <span className="font-mono break-all select-all">{window.location.origin}</span>
+                        <span className="text-muted-foreground">Authorization callback URL</span>
+                        <span className="font-mono break-all select-all">{`${window.location.origin}/api/github_account/callback`}</span>
+                      </div>
+                    </li>
+                    <li>On the app's page, copy the Client ID. Then click Generate a new client secret and copy that too.</li>
+                    <li>Paste both here and Save.</li>
+                  </ol>
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      className="min-w-0 flex-1 font-mono text-xs"
+                      placeholder="Client ID"
+                      autoComplete="off"
+                      spellCheck={false}
+                      value={clientId}
+                      onChange={(event) => setClientId(event.target.value)}
+                    />
+                    <Input
+                      className="min-w-0 flex-1 font-mono text-xs"
+                      placeholder="Client secret"
+                      type="password"
+                      // Sherpa never reads it.
+                      data-secret
+                      autoComplete="off"
+                      spellCheck={false}
+                      value={clientSecret}
+                      onChange={(event) => setClientSecret(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && clientId.trim() !== "" && clientSecret.trim() !== "" && !savingApp) {
+                          event.preventDefault();
+                          saveApp();
+                        }
+                      }}
+                    />
+                    <Button size="sm" onClick={saveApp} disabled={clientId.trim() === "" || clientSecret.trim() === "" || savingApp}>
+                      {savingApp && <Loader2 className="animate-spin" />}
+                      Save
+                    </Button>
+                    {settingUp && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setSettingUp(false);
+                          setClientId("");
+                          setClientSecret("");
+                        }}
+                      >
+                        Cancel
+                      </Button>
+                    )}
+                  </div>
+                  <button type="button" className="text-xs text-primary hover:underline" onClick={() => setUseToken(true)}>
+                    Use a token instead
+                  </button>
+                </div>
+              )}
+              {account !== null && !account.connected && useToken && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      className="min-w-0 flex-1 font-mono text-xs"
+                      placeholder="ghp_…"
+                      type="password"
+                      // Sherpa never reads it.
+                      data-secret
+                      autoComplete="off"
+                      spellCheck={false}
+                      value={token}
+                      onChange={(event) => setToken(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && token.trim() !== "" && !connecting) {
+                          event.preventDefault();
+                          connectAccount();
+                        }
+                      }}
+                    />
+                    <Button size="sm" onClick={connectAccount} disabled={token.trim() === "" || connecting}>
+                      {connecting && <Loader2 className="animate-spin" />}
+                      Sign in
+                    </Button>
                     <Button
                       variant="ghost"
                       size="sm"
                       onClick={() => {
-                        setChangingToken(false);
+                        setUseToken(false);
                         setToken("");
                       }}
                     >
                       Cancel
                     </Button>
-                  )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    For an organization that blocks apps it hasn't approved. Paste a classic token (
+                    <a
+                      href="https://github.com/settings/tokens/new?scopes=repo,workflow,read:org,gist,notifications,user&description=Seraph"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      make one
+                    </a>
+                    ): fine-grained tokens can't open PRs on projects you don't own.
+                  </p>
                 </div>
-              )}
-              {account !== null && account.connected && !changingToken && (account.scopes ?? []).includes("repo") && (
-                <p className="mt-1 text-xs text-muted-foreground">This token can also write to your private repos; public_repo alone is enough.</p>
               )}
               <p className="mt-2 text-xs text-muted-foreground">
                 Approve in the Inbox sends PRs and comments as this account, after you confirm, and so does Comment on a pull request or issue. It
-                needs a classic token with the public_repo scope (
-                <a
-                  href="https://github.com/settings/tokens/new?scopes=public_repo&description=Seraph"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-primary hover:underline"
-                >
-                  make one
-                </a>
-                ): fine-grained tokens can't open PRs on projects you don't own. The token stays on this computer; agents, Sherpa and searches never
-                use it.
+                stays on this computer: agents, Sherpa and searches never use it.
               </p>
             </section>
             {forks.length > 0 && (

@@ -26,8 +26,8 @@ With your GitHub account connected (Account on the GitHub tab), Approve on a PR 
 comment), then sends it to GitHub as you (github_searcher/github_account.py): a PR from a new branch in your fork,
 its pictures uploaded there. If GitHub refuses, nothing is decided and the error shows. Without an account nothing is
 sent; you send it yourself. A sent item's bar links to it on GitHub. One approved but not sent (approved before you
-connected) has Send to GitHub, with the same question; while no account is connected, its bar says in amber it isn't on
-GitHub yet, with a link to Account on the GitHub tab to connect one. The bar says who Approve sends as.
+signed in) has Send to GitHub, with the same question; while you aren't signed in, its bar says in amber it isn't on
+GitHub yet, with a link to Account on the GitHub tab to sign in with GitHub. The bar says who Approve sends as.
 A decided item's bar says what you decided, and has a box to message its agent about it: the message goes into the
 agent's chat (its page, #/agents/<id>, which Open chat opens), saying which item it is about. An archived agent comes
 back for it; a deleted one can't get messages.
@@ -916,7 +916,7 @@ export default function Inbox(props: { selected: string | null }) {
                       <span className="text-xs text-warn">
                         Not on GitHub yet:{" "}
                         <a href="#/github/account" className="underline hover:text-foreground">
-                          connect your GitHub account
+                          sign in with GitHub
                         </a>{" "}
                         to send it from here.
                       </span>

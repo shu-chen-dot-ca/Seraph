@@ -507,6 +507,8 @@ export type PRsData = {
 // and that the GitHub tab's buttons act as. Never the token.
 export type GithubAccountStatus = {
   connected: boolean;
+  // Whether Sign in with GitHub is set up (the app registered on GitHub, its client ID and secret saved).
+  can_sign_in?: boolean;
   login?: string;
   name?: string;
   scopes?: string[];

@@ -4,8 +4,8 @@ with the same look as the sidebar (Sidebar.tsx). Every line is a link to a page;
 - Inbox (Inbox.tsx): drafts the agents want to send, with how many wait for your decision (a filled pill, like
   unread mail).
 - Pull requests and Issues (GitHub.tsx): your PRs and issues on other people's projects, each with how many are open.
-- Account, pinned at the bottom: your GitHub account, the one Approve sends as (GitHub.tsx's Account), with who it
-  is connected as, or "Not connected".
+- Account, pinned at the bottom: your GitHub account, the one Approve sends as (GitHub.tsx's Account), with who you
+  are signed in as, or "Not signed in".
 Counts come straight from the live store, so the list updates itself.
 */
 
@@ -20,7 +20,7 @@ export default function GitHubNav(props: { page: string; section: string; repo: 
   const prs = useLive("prs");
   const [account, setAccount] = useState<GithubAccountStatus | null>(null);
 
-  // Who the account is: at first, and again when it is connected or disconnected (the Account page tells).
+  // Who the account is: at first, and again when you sign in or out (the Account page tells).
   useEffect(() => {
     let stopped = false;
     function load() {
@@ -85,7 +85,7 @@ export default function GitHubNav(props: { page: string; section: string; repo: 
           <CircleUser className="size-4 shrink-0 text-muted-foreground" />
           Account
           <span className="ml-auto truncate text-muted-foreground">
-            {account === null ? "" : account.connected ? `@${account.login}` : "Not connected"}
+            {account === null ? "" : account.connected ? `@${account.login}` : "Not signed in"}
           </span>
         </a>
       </div>

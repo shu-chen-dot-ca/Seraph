@@ -1,15 +1,26 @@
-"""Your GitHub account: the one token that sends what you approve in the Inbox, as you, and that
-the GitHub tab uses to manage what you sent and to post your own comments.
+"""Your GitHub account: the one you sign in with, whose token sends what you approve in the Inbox, as you, and
+that the GitHub tab uses to manage what you sent and to post your own comments.
 
-The GitHub tab's Account page (#/github/account, in its left list) takes the token. connect() checks it with GitHub
-and keeps it in DATA_DIR/github_account.json, a file only this computer's user may read. The browser only
-ever gets status(): who it is connected as and what the token may do, never the token. Agents, Sherpa and
-the VMs never get it either; only the Inbox's Approve and Send to GitHub (backend/inbox_api.py) and the
-GitHub tab's buttons (backend/github_api.py) use it. It is kept apart from the search tokens in .env
-(token_balancer.py), which only read.
+Sign in works like "Sign in with GitHub" on any website. The GitHub tab's Account page (#/github/account, in its left
+list) asks sign_in_url() for GitHub's own page, which asks you whether Seraph may act as you. Once you click Authorize
+there, GitHub sends the browser back to the callback (backend/github_account_api.py), and finish_sign_in() trades the
+code it brings for your token, with the app's client secret. SCOPES is what it asks for: about all you can do on
+github.com yourself (your repos, public and private, workflow files, the organizations you are in, gists,
+notifications, your profile). Signing in again later skips GitHub's question; it shows who to sign in as when you
+have more than one account on github.com.
 
-It must be a classic token with the public_repo scope: GitHub's fine-grained tokens can't open a PR
-or post a comment on a project you don't own.
+For that the app is registered on GitHub as an OAuth App, once, by you (the Account page walks you through it).
+save_app() keeps its client ID and secret in DATA_DIR/github_app.json, not .env. An OAuth App, not a GitHub App:
+signing in with a GitHub App only works on the repos it is installed on, so it couldn't open PRs on other people's
+projects (fine-grained tokens can't either). An organization may block OAuth Apps it hasn't approved; for those,
+connect() also takes a classic token pasted by hand (Use a token instead).
+
+connect() checks the token with GitHub and keeps it in DATA_DIR/github_account.json, a file only this computer's user
+may read. Sign out (disconnect()) deletes it. The browser only ever gets status(): who you are signed in as, what the
+token may do and whether sign in is set up, never the token or the secret. Agents, Sherpa and the VMs never get them
+either; only the Inbox's Approve and Send to GitHub (backend/inbox_api.py) and the GitHub tab's buttons
+(backend/github_api.py) use the token. It is kept apart from the search tokens in .env (token_balancer.py), which only
+read.
 
 send(draft_id) sends a PR or comment draft once, as it was shown in the Inbox. A PR:
 1. Your fork of the project, made the first time (GitHub keeps it). Your own repo is its own fork.
@@ -56,12 +67,14 @@ with what GitHub said and at which step; nothing is kept on the draft then.
 import base64
 import json
 import os
+import secrets
 import subprocess
 import tempfile
 import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlencode
 
 import httpx
 from dotenv import load_dotenv
@@ -74,6 +87,8 @@ load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 DATA_DIR = PROJECT_ROOT / os.environ["DATA_DIR"]
 API = "https://api.github.com"
+# What signing in asks GitHub for (module docstring).
+SCOPES = "repo workflow read:org gist notifications user"
 PICTURES_BRANCH = "pr-pictures"
 # Seconds a new fork may take before its branches can be used.
 FORK_WAIT = 120
@@ -89,6 +104,11 @@ class GithubAccount:
     def __init__(self, inbox):
         self.inbox = inbox
         self.path = DATA_DIR / "github_account.json"
+        # The OAuth App sign in goes through (module docstring): {"client_id", "client_secret"}.
+        self.app_path = DATA_DIR / "github_app.json"
+        # The state the last sign in went to GitHub with: the callback must bring it back, so only a sign in
+        # started here can sign you in. One at a time; a newer one replaces it.
+        self.sign_in_state = None
         self.send_lock = threading.Lock()
         # The step a send is at, for its error message. Only changed with send_lock held.
         self.step = ""
@@ -99,11 +119,68 @@ class GithubAccount:
         return json.loads(self.path.read_text())
 
     def status(self) -> dict:
-        """What the browser may know: who it is and what the token may do. Never the token."""
+        """What the browser may know: who it is, what the token may do and whether sign in is set up. Never the token."""
         account = self.load()
+        can_sign_in = self.app_path.is_file()
         if account is None:
-            return {"connected": False}
-        return {"connected": True, "login": account["login"], "name": account["name"], "scopes": account["scopes"], "connected_at": account["connected_at"]}
+            return {"connected": False, "can_sign_in": can_sign_in}
+        return {
+            "connected": True,
+            "can_sign_in": can_sign_in,
+            "login": account["login"],
+            "name": account["name"],
+            "scopes": account["scopes"],
+            "connected_at": account["connected_at"],
+        }
+
+    def save_app(self, client_id: str, client_secret: str) -> None:
+        """Keeps the OAuth App's client ID and secret (from its page on GitHub). ValueError says why they won't do."""
+        client_id = client_id.strip()
+        client_secret = client_secret.strip()
+        if client_id == "" or client_secret == "":
+            raise ValueError("Paste both the Client ID and the client secret.")
+        # A GitHub App's client ID starts with Iv: signing in with one couldn't open PRs on other people's projects.
+        if client_id.startswith("Iv"):
+            raise ValueError("That is a GitHub App's Client ID. Register an OAuth App instead (step 1).")
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        # Made readable by this computer's user only, before the secret goes in. Write, then rename.
+        temporary = self.app_path.with_name("github_app.json.tmp")
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.chmod(temporary, 0o600)
+        with os.fdopen(descriptor, "w") as file:
+            file.write(json.dumps({"client_id": client_id, "client_secret": client_secret}, indent=2))
+        temporary.replace(self.app_path)
+
+    def sign_in_url(self) -> str:
+        """GitHub's page that asks you to let the app act as you. ValueError when sign in isn't set up."""
+        if not self.app_path.is_file():
+            raise ValueError("Sign in isn't set up yet: register the app on GitHub first (the steps on this page).")
+        app = json.loads(self.app_path.read_text())
+        self.sign_in_state = secrets.token_urlsafe(32)
+        # prompt=select_account: with more than one account on github.com, GitHub asks which one.
+        query = {"client_id": app["client_id"], "scope": SCOPES, "state": self.sign_in_state, "prompt": "select_account"}
+        return "https://github.com/login/oauth/authorize?" + urlencode(query)
+
+    def finish_sign_in(self, code: str, state: str) -> dict:
+        """The callback's half: trades GitHub's code for your token and keeps it (connect). ValueError says why not."""
+        if self.sign_in_state is None or state != self.sign_in_state:
+            raise ValueError("That sign in didn't start here, or is too old. Click Sign in with GitHub again.")
+        self.sign_in_state = None
+        app = json.loads(self.app_path.read_text())
+        form = {"client_id": app["client_id"], "client_secret": app["client_secret"], "code": code}
+        try:
+            response = httpx.post("https://github.com/login/oauth/access_token", data=form, headers={"Accept": "application/json"}, timeout=30)
+        except httpx.HTTPError as error:
+            raise ValueError(f"Could not reach GitHub: {error}")
+        if response.status_code != 200:
+            raise ValueError(f"GitHub answered {response.status_code}: {response.text[:200]}")
+        # GitHub says what went wrong in the answer, still with 200.
+        answer = response.json()
+        if answer.get("error") == "incorrect_client_credentials":
+            raise ValueError("GitHub doesn't accept the app's client secret. Change app settings, then sign in again.")
+        if "access_token" not in answer:
+            raise ValueError(answer.get("error_description") or answer.get("error") or "GitHub sent no token back.")
+        return self.connect(answer["access_token"])
 
     def connect(self, token: str) -> dict:
         """Checks the token with GitHub and keeps it. ValueError says why a token won't do."""
@@ -154,7 +231,7 @@ class GithubAccount:
         """Sends a PR or comment draft to GitHub as you, once. Returns the draft with "sent". Runs in a thread."""
         account = self.load()
         if account is None:
-            raise SendError("Connect your GitHub account first: the GitHub tab, Account.")
+            raise SendError("Sign in with GitHub first: the GitHub tab, Account.")
         headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {account['token']}", "X-GitHub-Api-Version": "2022-11-28"}
         with self.send_lock:
             draft = self.inbox.get(draft_id)
@@ -186,7 +263,7 @@ class GithubAccount:
                 if details:
                     message += ": " + "; ".join(details)
                 if response.status_code == 401:
-                    message += ". Connect your account again (the GitHub tab, Account), with a new token."
+                    message += ". Sign in with GitHub again: the GitHub tab, Account."
                 raise SendError(f"GitHub refused while {self.step}: {message}") from None
             except httpx.HTTPError as error:
                 raise SendError(f"Could not reach GitHub while {self.step}: {error}") from None
@@ -485,7 +562,7 @@ class GithubAccount:
         Returns {"url", "id"}; SendError says why it didn't. Runs in a thread."""
         account = self.load()
         if account is None:
-            raise SendError("Connect your GitHub account first: the GitHub tab, Account.")
+            raise SendError("Sign in with GitHub first: the GitHub tab, Account.")
         repo, _, number = target.rpartition("#")
         if repo.count("/") != 1 or not number.isdigit():
             raise SendError(f"{target} isn't a PR or issue (owner/name#number).")
@@ -514,7 +591,7 @@ class GithubAccount:
             if details:
                 message += ": " + "; ".join(details)
             if response.status_code == 401:
-                message += ". Connect your account again (the GitHub tab, Account), with a new token."
+                message += ". Sign in with GitHub again: the GitHub tab, Account."
             raise SendError(f"GitHub refused: {message}") from None
         except httpx.HTTPError as error:
             raise SendError(f"Could not reach GitHub: {error}") from None
@@ -526,7 +603,7 @@ class GithubAccount:
         id on GitHub). Returns what happened, in words; SendError says why it didn't. Runs in a thread."""
         account = self.load()
         if account is None:
-            raise SendError("Connect your GitHub account first: the GitHub tab, Account.")
+            raise SendError("Sign in with GitHub first: the GitHub tab, Account.")
         headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {account['token']}", "X-GitHub-Api-Version": "2022-11-28"}
         try:
             with httpx.Client(base_url=API, headers=headers, timeout=60) as client:
@@ -575,7 +652,7 @@ class GithubAccount:
                 data = {}
             message = data.get("message") or f"{response.status_code} {response.reason_phrase}"
             if response.status_code == 401:
-                message += ". Connect your account again (the GitHub tab, Account), with a new token."
+                message += ". Sign in with GitHub again: the GitHub tab, Account."
             raise SendError(f"GitHub refused: {message}") from None
         except httpx.HTTPError as error:
             raise SendError(f"Could not reach GitHub: {error}") from None

@@ -17,8 +17,8 @@ Tabs (an issue has only Conversation):
   on GitHub.
 - Files changed: the diff per file, folding open, with +/- counts and line numbers (a big file starts folded).
 For a PR you opened, the bar has Close PR (open), Reopen PR and Delete branch (closed), Delete branch (merged).
-The bottom bar: Leave a comment and Comment, posted as you (needs your account connected: Account on the GitHub tab;
-until then a "connect your GitHub account" link to it).
+The bottom bar: Leave a comment and Comment, posted as you (needs you signed in: Account on the GitHub tab;
+until then a "sign in with GitHub" link to it).
 Every button that changes something on GitHub asks "are you sure?" first (Enter confirms), then acts as you.
 */
 
@@ -230,7 +230,7 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
     };
   }, [props.id, reload]);
 
-  // Who the GitHub account is: at first, and again when you connect or disconnect it on the Account page.
+  // Who the GitHub account is: at first, and again when you sign in or out on the Account page.
   useEffect(() => {
     function load() {
       api<GithubAccountStatus>("/api/github_account")
@@ -815,7 +815,7 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
                 <div className="text-xs text-muted-foreground">
                   To comment here as you,{" "}
                   <a href="#/github/account" className="text-primary hover:underline">
-                    connect your GitHub account
+                    sign in with GitHub
                   </a>
                   .
                 </div>
