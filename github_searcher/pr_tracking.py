@@ -1,4 +1,5 @@
-"""Your PRs and issues on GitHub and how each one stands, for the GitHub tab (frontend/src/GitHub.tsx).
+"""Your PRs and issues on GitHub, how each one stands, and which agent follows each one, for the GitHub tab
+(frontend/src/GitHub.tsx).
 
 Which ones: every PR the Inbox's Approve sent (a draft's "sent", github_account.py), and, with your GitHub account
 connected, four searches on other people's projects, the 50 most recently updated of each: PRs you opened (author:<you>),
@@ -18,7 +19,10 @@ It keeps, in DATA_DIR/pr_tracking.json, by "owner/name#number", each PR in "prs"
      "comments": int, "last_comment": {"login", "role", "at", "text"} | None,
      "issues": [{"number", "title", "url", "state": "open" | "closed", "reason", "assignees"}, ...],
      "relation": "author" | "commented",
-     "draft_id": "draft_..." | None, "job": "job_..." | None, "agent": "<agent id>" | None,
+     "head": {"repo": "you/name", "branch", "sha"} | None,
+     "last_activity": {"login", "at", "what": "comment" | "review"} | None, "your_last_at": str | None,
+     "draft_id": "draft_..." | None, "job": "job_..." | None,
+     "agent": "<agent id>" | None, "agent_mode": "drafts" | "off",
      "checked_at", "error": str | None}
 
 and each issue in "issues":
@@ -26,7 +30,7 @@ and each issue in "issues":
     {"id", "repo", "number", "title", "url", "author", "state": "open" | "closed",
      "reason": "completed" | "not_planned" | "duplicate" | None (closed only),
      "opened_at", "updated_at", "closed_at", "labels", "assignees": [login, ...],
-     "comments", "last_comment", "relation",
+     "comments", "last_comment", "relation", "last_activity", "your_last_at", "agent", "agent_mode",
      "checked_at", "error"}
 
 checks is the newest commit's checks: waiting when any of the project's GitHub Actions runs on it waits for a
@@ -35,12 +39,26 @@ Approve, and the checks list shows nothing), else running, passed or failed, or 
 checks. review weighs each reviewer's latest review: approved (and nobody asks for changes), changes_requested,
 commented, or none. issues are the issues the PR says it fixes. role is GitHub's word for the person (MEMBER,
 COLLABORATOR, OWNER, CONTRIBUTOR, NONE, or BOT). relation: author (you opened it) or commented (you only commented).
-draft_id, job and agent link a PR the app sent to its draft.
+head is the PR's branch and newest commit, None once the branch is deleted. last_activity is the newest comment or
+review there by someone other than you, your_last_at your newest; bots never count (GitHub's Bot accounts, or logins
+ending in [bot]). draft_id and job link a PR the app sent to its draft.
+
+Agents: each PR or issue has two modes. drafts: its agent drafts a reply or a fix when someone else writes there or
+(your PR) its checks fail, and you approve each in the Inbox; off: no drafts. Nothing goes to GitHub without your
+approval. "agent_settings" keeps, by id, {"mode": "drafts" | "off" | None, "agent", "answered_at", "failed_sha"}:
+mode and agent are what you picked (set_agent, the thread pop-up's Agent setting; None: you never did), answered_at
+the last activity an agent was already given, failed_sha the newest commit whose failed checks it was given. agent and
+agent_mode on each record are what holds: your pick, else drafts with the agent of the first draft that went there
+(a PR Approve sent, or a comment the app posted on it), else off.
+
+needs_reply() lists the open threads in drafts mode with an agent where someone else wrote after you and after
+answered_at, or (your PR) the checks failed on a newest commit no agent was given yet; backend/github_api.py gives each
+to its agent as a follow_up job, then calls mark_answered(). A closed or merged thread never needs a reply.
 
 refresh() reads them all again, one GraphQL query each (and one Actions call per PR); a merged or closed one whose
-updated_at in the search didn't change isn't read again. The backend calls it every few minutes and at once when a PR
-was just sent (backend/github_api.py). One that fails to read keeps its last status, with the error. error at the top
-is why a search failed. version goes up on every change.
+updated_at in the search didn't change isn't read again. The backend calls it every few minutes, soon after something
+was sent or you commented, and on Check now (backend/github_api.py). One that fails to read keeps its last status,
+with the error. error at the top is why a search failed. version goes up on every change.
 """
 
 import copy
@@ -62,6 +80,7 @@ DATA_DIR = PROJECT_ROOT / os.environ["DATA_DIR"]
 # How much of the latest comment is kept.
 COMMENT_CHARS = 300
 ROLLUP = {"SUCCESS": "passed", "FAILURE": "failed", "ERROR": "failed", "PENDING": "running", "EXPECTED": "running"}
+AGENT_MODES = ["drafts", "off"]
 
 
 class PRTracking:
@@ -73,15 +92,22 @@ class PRTracking:
         # One refresh at a time: Check now and the background one.
         self.refresh_lock = threading.Lock()
         self.refreshing = False
+        # Something changed on GitHub here (you commented): backend/github_api.py reads them all again soon.
+        self.wanted = False
         self.version = 0
-        self.data = {"prs": {}, "issues": {}, "checked_at": None, "error": None}
+        self.data = {"prs": {}, "issues": {}, "agent_settings": {}, "checked_at": None, "error": None}
         if self.path.exists():
             self.data = json.loads(self.path.read_text())
-        # Files from before issues.
+        # Files from before issues and agent settings.
         self.data.setdefault("issues", {})
-        # PRs read before relation was kept have it from their next read on.
+        self.data.setdefault("agent_settings", {})
+        # PRs read before these were kept have them from their next read on.
         for pr in self.data["prs"].values():
             pr.setdefault("relation", "author")
+            pr.setdefault("head", None)
+            pr.setdefault("last_activity", None)
+            pr.setdefault("your_last_at", None)
+            pr.setdefault("agent_mode", "drafts" if pr["agent"] is not None else "off")
 
     def save(self) -> None:
         """Write to disk. Called with the lock held, after every change."""
@@ -105,6 +131,104 @@ class PRTracking:
                 "refreshing": self.refreshing,
             }
 
+    def set_agent(self, thread_id: str, mode: str, agent_id: str | None) -> dict:
+        """Your pick for one PR or issue: "drafts" with agent_id, or "off" (no agent then). Returns {"mode", "agent"}."""
+        if mode not in AGENT_MODES:
+            raise ValueError(f"Unknown mode {mode!r}, use drafts or off")
+        agent = agent_id
+        if mode == "off":
+            agent = None
+        with self.lock:
+            empty = {"mode": None, "agent": None, "answered_at": None, "failed_sha": None}
+            setting = self.data["agent_settings"].setdefault(thread_id, empty)
+            setting["mode"] = mode
+            setting["agent"] = agent
+            if thread_id in self.data["prs"]:
+                self.data["prs"][thread_id]["agent"] = agent
+                self.data["prs"][thread_id]["agent_mode"] = mode
+            if thread_id in self.data["issues"]:
+                self.data["issues"][thread_id]["agent"] = agent
+                self.data["issues"][thread_id]["agent_mode"] = mode
+            self.save()
+        return {"mode": mode, "agent": agent}
+
+    def needs_reply(self) -> list[dict]:
+        """The open threads whose agent should follow up now: drafts mode with an agent, and someone else wrote after
+        you and after what an agent was given already, or (your PR) its checks failed on a newest commit no agent was
+        given yet. Each: {"id", "kind": "pr" | "issue", "relation": "author" | "commented", "title", "url", "agent",
+        "reason", "at": activity time | None, "failed_sha": sha | None, "head": {"repo", "branch", "sha"} | None}."""
+        threads = []
+        with self.lock:
+            for pr in self.data["prs"].values():
+                threads.append(("pr", copy.deepcopy(pr)))
+            for issue in self.data["issues"].values():
+                threads.append(("issue", copy.deepcopy(issue)))
+            settings = copy.deepcopy(self.data["agent_settings"])
+
+        entries = []
+        for kind, record in threads:
+            if record["state"] != "open" or record["agent_mode"] != "drafts" or record["agent"] is None:
+                continue
+            setting = settings.get(record["id"], {})
+            answered_at = setting.get("answered_at")
+            activity = record["last_activity"]
+            reasons = []
+
+            # Someone else wrote last, and no agent was given it yet.
+            at = None
+            if activity is not None and (record["your_last_at"] is None or activity["at"] > record["your_last_at"]):
+                at = activity["at"]
+            if at is not None and answered_at is not None and at <= answered_at:
+                at = None
+            if at is not None and activity["what"] == "comment":
+                reasons.append(f"@{activity['login']} commented")
+            if at is not None and activity["what"] == "review":
+                # That reviewer's latest review is this one.
+                states = {reviewer["login"]: reviewer["state"] for reviewer in record.get("reviewers", [])}
+                what = f"@{activity['login']} reviewed it"
+                if states.get(activity["login"]) == "changes_requested":
+                    what += " (changes requested)"
+                if states.get(activity["login"]) == "approved":
+                    what += " (approved)"
+                reasons.append(what)
+
+            # Your PR's checks failed on its newest commit, and no agent was given that commit yet.
+            failed_sha = None
+            if kind == "pr" and record["relation"] == "author" and record["checks"] == "failed" and record["head"] is not None:
+                failed_sha = record["head"]["sha"]
+            if failed_sha is not None and failed_sha == setting.get("failed_sha"):
+                failed_sha = None
+            if failed_sha is not None:
+                reasons.append("its checks failed")
+
+            if not reasons:
+                continue
+            entries.append({
+                "id": record["id"],
+                "kind": kind,
+                "relation": record["relation"],
+                "title": record["title"],
+                "url": record["url"],
+                "agent": record["agent"],
+                "reason": " and ".join(reasons),
+                "at": at,
+                "failed_sha": failed_sha,
+                "head": record.get("head"),
+            })
+        return entries
+
+    def mark_answered(self, thread_id: str, at: str | None, failed_sha: str | None) -> None:
+        """An agent was given the thread's activity up to at, and the failed checks of the commit failed_sha (None: not
+        given that part)."""
+        with self.lock:
+            empty = {"mode": None, "agent": None, "answered_at": None, "failed_sha": None}
+            setting = self.data["agent_settings"].setdefault(thread_id, empty)
+            if at is not None:
+                setting["answered_at"] = at
+            if failed_sha is not None:
+                setting["failed_sha"] = failed_sha
+            self.save()
+
     def refresh(self) -> None:
         """Read every PR and issue to follow from GitHub again. Runs in a thread; a second call waits for the first."""
         with self.refresh_lock:
@@ -119,13 +243,20 @@ class PRTracking:
                     self.version += 1
 
     def read_all(self) -> None:
-        # The PRs the app sent, with their drafts.
+        # The PRs the app sent, with their drafts, and the agents of the comments it posted. inbox.list() is newest
+        # first, so the first draft that went to a thread is the one that stays.
         follow_prs = {}
         follow_issues = {}
+        commented_by = {}
         for draft in self.inbox.list():
             sent = draft["sent"]
-            if sent is not None and sent["kind"] == "pr":
-                follow_prs[f"{sent['repo']}#{sent['number']}"] = {"relation": "author", "updated": None, "draft_id": draft["id"], "job": draft["job"], "agent": draft["agent"]}
+            if sent is None:
+                continue
+            thread_id = f"{sent['repo']}#{sent['number']}"
+            if sent["kind"] == "pr":
+                follow_prs[thread_id] = {"relation": "author", "updated": None, "draft_id": draft["id"], "job": draft["job"], "agent": draft["agent"]}
+            if sent["kind"] == "comment":
+                commented_by[thread_id] = draft["agent"]
 
         # Yours on other people's projects, also the ones sent by hand: the ones you opened first, then the ones you
         # only commented on.
@@ -157,7 +288,7 @@ class PRTracking:
                 if thread_id in follow:
                     follow[thread_id]["updated"] = item["updated_at"]
                     continue
-                follow[thread_id] = {"relation": relation, "updated": item["updated_at"], "draft_id": None, "job": None, "agent": None}
+                follow[thread_id] = {"relation": relation, "updated": item["updated_at"], "draft_id": None, "job": None, "agent": commented_by.get(thread_id)}
 
         for pr_id, link in follow_prs.items():
             repo = pr_id.split("#")[0]
@@ -166,9 +297,18 @@ class PRTracking:
             number = int(pr_id.split("#")[1])
             now = datetime.now(UTC).isoformat()
 
-            # A merged or closed PR that didn't change since it was last read isn't read again.
-            known = {"relation": link["relation"], "draft_id": link["draft_id"], "job": link["job"], "agent": link["agent"]}
+            # Who follows it: the agent you picked for it, else the one whose draft went there.
+            agent = link["agent"]
+            agent_mode = "off"
+            if agent is not None:
+                agent_mode = "drafts"
             with self.lock:
+                setting = self.data["agent_settings"].get(pr_id)
+                if setting is not None and setting["mode"] is not None:
+                    agent = setting["agent"]
+                    agent_mode = setting["mode"]
+                known = {"relation": link["relation"], "draft_id": link["draft_id"], "job": link["job"], "agent": agent, "agent_mode": agent_mode}
+                # A merged or closed PR that didn't change since it was last read isn't read again.
                 old = self.data["prs"].get(pr_id)
                 unchanged = old is not None and old["state"] != "open" and old["error"] is None and old["updated_at"] == link["updated"]
                 if unchanged:
@@ -204,12 +344,13 @@ class PRTracking:
                 checks = "waiting"
 
             # Each reviewer's latest review, not the PR's author's own.
+            author = pull["author"]["login"] if pull["author"] else "ghost"
             latest = {}
             for review in pull["reviews"]["nodes"]:
                 if review["author"] is None or review["state"] == "PENDING":
                     continue
                 login = review["author"]["login"]
-                if pull["author"] is not None and login == pull["author"]["login"]:
+                if login == author:
                     continue
                 role = review["authorAssociation"]
                 if review["author"]["__typename"] == "Bot":
@@ -224,9 +365,10 @@ class PRTracking:
             elif pull["reviewDecision"] == "APPROVED" or "approved" in states:
                 review = "approved"
 
+            # The comments come oldest first: the newest is the last.
             last_comment = None
             if pull["comments"]["nodes"]:
-                comment = pull["comments"]["nodes"][0]
+                comment = pull["comments"]["nodes"][-1]
                 login = comment["author"]["login"] if comment["author"] else "ghost"
                 role = comment["authorAssociation"]
                 if comment["author"] is not None and comment["author"]["__typename"] == "Bot":
@@ -235,6 +377,39 @@ class PRTracking:
                 if len(text) > COMMENT_CHARS:
                     text = text[:COMMENT_CHARS - 1] + "…"
                 last_comment = {"login": login, "role": role, "at": comment["createdAt"], "text": text}
+
+            # The newest comment or review by someone other than you, and your newest. Bots never count. Without
+            # your account connected, only the PRs the app sent are here: you are their author.
+            me = you
+            if me is None:
+                me = author
+            last_activity = None
+            your_last_at = None
+            for comment in pull["comments"]["nodes"]:
+                if comment["author"] is None or comment["author"]["__typename"] == "Bot" or comment["author"]["login"].endswith("[bot]"):
+                    continue
+                login = comment["author"]["login"]
+                at = comment["createdAt"]
+                if login == me and (your_last_at is None or at > your_last_at):
+                    your_last_at = at
+                if login != me and (last_activity is None or at > last_activity["at"]):
+                    last_activity = {"login": login, "at": at, "what": "comment"}
+            for each in pull["reviews"]["nodes"]:
+                if each["author"] is None or each["state"] == "PENDING":
+                    continue
+                if each["author"]["__typename"] == "Bot" or each["author"]["login"].endswith("[bot]"):
+                    continue
+                login = each["author"]["login"]
+                at = each["submittedAt"]
+                if login == me and (your_last_at is None or at > your_last_at):
+                    your_last_at = at
+                if login != me and (last_activity is None or at > last_activity["at"]):
+                    last_activity = {"login": login, "at": at, "what": "review"}
+
+            # Its branch, for an agent's fix to go on top of. Gone once the branch is deleted.
+            head = None
+            if pull["headRepository"] is not None and pull["headRef"] is not None:
+                head = {"repo": pull["headRepository"]["nameWithOwner"], "branch": pull["headRefName"], "sha": pull["headRefOid"]}
 
             issues = []
             for issue in pull["closingIssuesReferences"]["nodes"]:
@@ -256,7 +431,7 @@ class PRTracking:
                 "number": number,
                 "title": pull["title"],
                 "url": pull["url"],
-                "author": pull["author"]["login"] if pull["author"] else "ghost",
+                "author": author,
                 "state": pull["state"].lower(),
                 "draft": pull["isDraft"],
                 "opened_at": pull["createdAt"],
@@ -272,9 +447,13 @@ class PRTracking:
                 "last_comment": last_comment,
                 "issues": issues,
                 "relation": link["relation"],
+                "head": head,
+                "last_activity": last_activity,
+                "your_last_at": your_last_at,
                 "draft_id": link["draft_id"],
                 "job": link["job"],
-                "agent": link["agent"],
+                "agent": agent,
+                "agent_mode": agent_mode,
                 "checked_at": now,
                 "error": None,
             }
@@ -289,9 +468,18 @@ class PRTracking:
             number = int(issue_id.split("#")[1])
             now = datetime.now(UTC).isoformat()
 
-            # A closed issue that didn't change since it was last read isn't read again.
-            known = {"relation": link["relation"]}
+            # Who follows it: the agent you picked for it, else the one whose comment the app posted there.
+            agent = link["agent"]
+            agent_mode = "off"
+            if agent is not None:
+                agent_mode = "drafts"
             with self.lock:
+                setting = self.data["agent_settings"].get(issue_id)
+                if setting is not None and setting["mode"] is not None:
+                    agent = setting["agent"]
+                    agent_mode = setting["mode"]
+                known = {"relation": link["relation"], "agent": agent, "agent_mode": agent_mode}
+                # A closed issue that didn't change since it was last read isn't read again.
                 old = self.data["issues"].get(issue_id)
                 unchanged = old is not None and old["state"] != "open" and old["error"] is None and old["updated_at"] == link["updated"]
                 if unchanged:
@@ -312,9 +500,10 @@ class PRTracking:
                         self.save()
                 continue
 
+            # The comments come oldest first: the newest is the last.
             last_comment = None
             if issue["comments"]["nodes"]:
-                comment = issue["comments"]["nodes"][0]
+                comment = issue["comments"]["nodes"][-1]
                 login = comment["author"]["login"] if comment["author"] else "ghost"
                 role = comment["authorAssociation"]
                 if comment["author"] is not None and comment["author"]["__typename"] == "Bot":
@@ -323,6 +512,19 @@ class PRTracking:
                 if len(text) > COMMENT_CHARS:
                     text = text[:COMMENT_CHARS - 1] + "…"
                 last_comment = {"login": login, "role": role, "at": comment["createdAt"], "text": text}
+
+            # The newest comment by someone other than you, and your newest. Bots never count.
+            last_activity = None
+            your_last_at = None
+            for comment in issue["comments"]["nodes"]:
+                if comment["author"] is None or comment["author"]["__typename"] == "Bot" or comment["author"]["login"].endswith("[bot]"):
+                    continue
+                login = comment["author"]["login"]
+                at = comment["createdAt"]
+                if login == you and (your_last_at is None or at > your_last_at):
+                    your_last_at = at
+                if login != you and (last_activity is None or at > last_activity["at"]):
+                    last_activity = {"login": login, "at": at, "what": "comment"}
 
             # Why it was closed: completed, not_planned or duplicate. GitHub also says reopened on a reopened one.
             reason = None
@@ -346,6 +548,10 @@ class PRTracking:
                 "comments": issue["comments"]["totalCount"],
                 "last_comment": last_comment,
                 "relation": link["relation"],
+                "last_activity": last_activity,
+                "your_last_at": your_last_at,
+                "agent": agent,
+                "agent_mode": agent_mode,
                 "checked_at": now,
                 "error": None,
             }

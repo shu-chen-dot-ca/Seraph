@@ -1,5 +1,5 @@
 """The GitHub tab: your PRs and issues on GitHub and how each one stands (github_searcher/pr_tracking.py), each one's
-whole thread for the thread pop-up, and the changes you make there, as you
+whole thread for the thread pop-up, which agent follows each one, and the changes you make there, as you
 (github_searcher/github_account.py). Its Account page signs you in (backend/github_account_api.py).
 
 GET /api/github/thread?id=owner/name%23n is one PR or issue as GitHub has it now, read with the search tokens: the
@@ -8,13 +8,17 @@ words; "hidden" says how many earlier ones are left out), and for a PR its branc
 (with GitHub Actions runs that wait for a maintainer to approve them) and files changed. "you" is your signed-in login,
 and "mine" marks your comments.
 
-keep_prs(), which the app runs in the background, reads the PRs again every PRS_REFRESH_SECONDS, and at once
-when Approve just sent a PR that isn't followed yet.
+POST /api/github/agent sets one followed PR's or issue's agent: drafts (with an agent; none makes a new one) or off.
+Turning drafts on checks the thread at once. keep_prs(), which the app runs in the background, reads the PRs and
+issues again every PRS_REFRESH_SECONDS, at once when Approve just sent something, and soon after you comment or delete
+a comment here. After every read (Check now's too), each thread pr_tracking.needs_reply() lists (someone else wrote
+there, or your PR's checks failed) goes to its agent as a follow_up job (agents.follow_up); what the agent drafts then
+waits for you in the Inbox.
 
 The buttons (each asks "are you sure?" in the browser first): post a comment as you, delete one of your comments
 (refused when it isn't yours; a draft that posted it keeps when it was deleted), close or reopen one of your PRs,
 delete a closed or merged PR's branch from your fork. After a change to a PR, the PRs are read again. Check now
-(POST /api/github/refresh) reads them all at once. The PRs reach the browser through /api/live (topic
+(POST /api/github/refresh) reads them all at once. The PRs and issues reach the browser through /api/live (topic
 "prs"), the drafts with the Inbox (topic "inbox").
 """
 
@@ -27,9 +31,9 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.shared import github_account, inbox, pr_tracking
+from backend.shared import agents, github_account, inbox, pr_tracking
 from github_searcher.github_account import SendError
-from github_searcher.pr_tracking import ROLLUP
+from github_searcher.pr_tracking import AGENT_MODES, ROLLUP
 from github_searcher.search import get_action_runs, get_check_runs, get_commit_statuses, get_full_thread, get_issue_comment, get_pr_files
 
 router = APIRouter(prefix="/api")
@@ -56,6 +60,12 @@ STATUSES = {"success": "passed", "failure": "failed", "error": "failed", "pendin
 CLOSE_REASONS = {"COMPLETED": " as completed", "NOT_PLANNED": " as not planned", "DUPLICATE": " as a duplicate"}
 # How much of a check's summary is kept.
 SUMMARY_CHARS = 300
+
+
+class AgentRequest(BaseModel):
+    id: str
+    mode: str
+    agent: str | None = None  # drafts without one: a new agent is made for it.
 
 
 class CommentRequest(BaseModel):
@@ -305,6 +315,36 @@ async def thread_details(id: str) -> dict:
     }
 
 
+@router.post("/github/agent")
+async def set_agent(body: AgentRequest) -> dict:
+    """Drafts or off for one PR or issue the GitHub tab follows. Drafts without an agent makes a new one. On the event
+    loop: making an agent and giving it a job happen there."""
+    if body.mode not in AGENT_MODES:
+        raise HTTPException(status_code=400, detail=f"Unknown mode {body.mode}: drafts or off.")
+    followed = pr_tracking.summary()
+    ids = [item["id"] for item in followed["items"]] + [issue["id"] for issue in followed["issues"]]
+    if body.id not in ids:
+        raise HTTPException(status_code=404, detail=f"The GitHub tab doesn't follow {body.id}.")
+    agent_id = None
+    if body.mode == "drafts":
+        agent_id = body.agent
+    if agent_id is not None and agent_id not in agents.agents:
+        raise HTTPException(status_code=404, detail=f"No agent {agent_id}.")
+    if body.mode == "drafts" and agent_id is None:
+        agent_id = agents.create()["id"]
+    setting = pr_tracking.set_agent(body.id, body.mode, agent_id)
+
+    # Drafts on: when someone else wrote last (or your PR's checks failed) and no agent was given it yet, the agent
+    # gets a follow_up job now.
+    for entry in pr_tracking.needs_reply():
+        if entry["id"] != body.id:
+            continue
+        job = agents.follow_up(entry)
+        if job is not None:
+            pr_tracking.mark_answered(entry["id"], entry["at"], entry["failed_sha"])
+    return setting
+
+
 @router.post("/github/comment")
 async def post_comment(request: CommentRequest) -> dict:
     """Your own comment on a PR or issue, as you (the browser asked "are you sure?"). Returns {"url", "id"}."""
@@ -316,6 +356,8 @@ async def post_comment(request: CommentRequest) -> dict:
         posted = await asyncio.to_thread(github_account.comment, request.target, request.body)
     except SendError as error:
         raise HTTPException(status_code=400, detail=str(error))
+    # Read again soon: your comment is your newest there, so its agent doesn't answer what you answered.
+    pr_tracking.wanted = True
     return posted
 
 
@@ -369,25 +411,41 @@ async def delete_comment(owner: str, name: str, comment_id: int) -> dict:
         if sent["repo"].lower() != f"{owner}/{name}".lower():
             continue
         inbox.mark_sent(draft["id"], {**sent, "deleted_at": now})
+    pr_tracking.wanted = True
     return {"done": done}
 
 
 async def keep_prs() -> None:
-    """Runs as long as the backend. A PR that fails to read shows its error and is tried again next round."""
+    """Runs as long as the backend. One that fails to read shows its error and is tried again next round. After every
+    read, the threads that need their agent go to it; one that fails to is tried again after the next read."""
     last = None
-    # The sent PRs a refresh has already tried to read.
+    # The sent drafts a refresh has already seen.
     tried = set()
+    # The read the follow-ups last ran after (pr_tracking's checked_at).
+    followed_up = None
     while True:
-        sent = []
-        for draft in inbox.list():
-            if draft["sent"] is not None and draft["sent"]["kind"] == "pr":
-                sent.append(f"{draft['sent']['repo']}#{draft['sent']['number']}")
-        new = [pr_id for pr_id in sent if pr_id not in tried]
-        if new or last is None or time.monotonic() - last > PRS_REFRESH_SECONDS:
+        sent = [draft["id"] for draft in inbox.list() if draft["sent"] is not None]
+        new = [draft_id for draft_id in sent if draft_id not in tried]
+        if new or pr_tracking.wanted or last is None or time.monotonic() - last > PRS_REFRESH_SECONDS:
             last = time.monotonic()
             tried.update(sent)
+            pr_tracking.wanted = False
             try:
                 await asyncio.to_thread(pr_tracking.refresh)
             except Exception:
                 pass
+
+        # After every read, also Check now's: called here, on the event loop, like everything else in agents.
+        entries = []
+        if pr_tracking.data["checked_at"] != followed_up:
+            followed_up = pr_tracking.data["checked_at"]
+            entries = pr_tracking.needs_reply()
+        for entry in entries:
+            job = None
+            try:
+                job = agents.follow_up(entry)
+            except Exception as error:
+                print(f"[github] could not give {entry['id']} to its agent: {error}")
+            if job is not None:
+                pr_tracking.mark_answered(entry["id"], entry["at"], entry["failed_sha"])
         await asyncio.sleep(PRS_CHECK_SECONDS)

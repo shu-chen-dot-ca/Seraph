@@ -9,6 +9,10 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
 - Jobs: the smallest unit of work (github_searcher/jobs.py). The user makes them by assigning an
   issue; the agent can make its own and keeps their status and notes up to date, and their
   progress (job_progress: the step it is on and a headline in everyday words) for the user to follow.
+  The app makes follow_up jobs (agents.py, follow_up): someone else wrote on a PR or issue of the user's that
+  the agent follows, or the PR's checks failed. my_jobs shows that PR or issue as the job's thread; the agent
+  answers with draft_comment (target: the thread), draft_pr with pr (a new version of the user's own PR), or by
+  marking the job done when nothing needs an answer. A question it drafts for the job is about the thread.
 - Drafts: nothing goes to GitHub from here. A PR, an issue comment or a question becomes a draft
   in the user's Inbox and its job waits on the user. A PR draft's diff is read from the repo
   folder in the VM, so only the agent holding the VM can make one, with the commit it starts from
@@ -26,19 +30,25 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   and draft_pr refuses until the agent read both for that repo. The job's before and
   after pictures go in the PR body as ![before](evidence:ev_...): the Inbox shows them in place,
   and sending uploads them to the user's fork (or the user does, sending by hand).
+  draft_pr with pr ("owner/name#n") is the next version of the user's own open PR instead: base must be that PR's
+  newest commit on GitHub (checked when drafting, and again when sending), the title is the commit message's
+  subject and the body the comment posted on the PR with the push (the draft's update_of, inbox.py). The rules
+  (contributing_guide), the tests and the checks on the diff and commits apply as for a new PR; the PR template
+  and pr_examples don't, and a follow_up job's change needs no before and after pair (its test runs show it works).
 - Evidence: what the user looks at to decide on a draft. Real screenshots of the project running on
   the VM's desktop (its window, or a terminal running it), screen recordings (GIF) and command runs
   (a test failing, then passing), each "before" or "after" the agent's change, under a topic that
   pairs them. Never pictures the agent drew: an image made with matplotlib is refused. It is kept on
-  the job (jobs.py), and each draft gets a copy. A PR draft needs at least one before and one after.
+  the job (jobs.py), and each draft gets a copy. A PR draft needs at least one before and one after (except a
+  follow_up job's).
 - Tests: run_tests runs the project's tests in the VM on the unchanged code (before), then on the
   change (after), with the same command, live in a terminal window on the VM's desktop for the user.
   Two scopes: focused, the basic checks (the tests that cover the change, when the rules ask for no
   more), and full, the project's official checks (what its rules ask to run before a PR), run however
   long they take (up to TEST_TIMEOUT). It refuses until the agent read the rules (contributing_guide).
   A passing before is needed to go past set_up and an after for a PR draft; an official before of
-  another job on the same repo and VM counts too (job_progress carries it over), so a project
-  already set up isn't set up again.
+  another job on the same repo and VM counts too (job_progress carries it over; for a follow_up job at its
+  test step), so a project already set up isn't set up again.
 - Artifacts: the agent's own folder on this computer (github_searcher/artifacts.py), the Artifacts tab of its page.
   It lists it, looks at its pictures and text (artifact_view: a picture comes back as a picture), keeps
   screenshots of its VM there, and copies files between it and the VM it holds; never anywhere else on this
@@ -80,7 +90,7 @@ from claude_agent_sdk import tool
 
 from github_searcher.artifacts import ArtifactsError
 from github_searcher.jobs import EVIDENCE_DIR
-from github_searcher.search import get_contents, get_merged_prs, get_readme, get_repository, get_thread, get_tree
+from github_searcher.search import get_contents, get_merged_prs, get_pr_status, get_readme, get_repository, get_thread, get_tree
 from sandbox.agent.computer_use import WATCH, Computer, ComputerError
 from sandbox.agent.tools import HIDE_MIN_LENGTH
 from sandbox.file_transfer import FileTransferError, to_vm
@@ -274,8 +284,8 @@ class WorkTools:
             )(self.tracked_issues),
             tool(
                 "my_jobs",
-                "See your jobs: open ones in full (kind, title, issue, repo, VM, status, the user's instructions, your notes, "
-                "drafts and their decisions), finished ones (done, cancelled) by id and title only.",
+                "See your jobs: open ones in full (kind, title, issue, thread (a follow_up's PR or issue), repo, VM, status, "
+                "the user's instructions, your notes, drafts and their decisions), finished ones (done, cancelled) by id and title only.",
                 {},
             )(self.my_jobs),
             tool(
@@ -312,7 +322,8 @@ class WorkTools:
                 "job_progress",
                 "Show the user where one of your jobs stands. They watch this to follow your work, and they don't know the project's "
                 "code. step: the step you are on now, one of the job's steps (my_jobs lists them; for fix_issue: understand, set_up, "
-                "reproduce, fix, test, draft; for set_up_repo: understand, set_up, show, introduce). Going back is fine, e.g. from test to fix when tests fail. headline: one sentence in "
+                "reproduce, fix, test, draft; for set_up_repo: understand, set_up, show, introduce; for follow_up: understand, work, "
+                "test, draft). Going back is fine, e.g. from test to fix when tests fail. headline: one sentence in "
                 "everyday words on what you are doing and how it is going, for someone who doesn't know the code (no file, function or "
                 "test names, no jargon). detail: the same in technical terms (files, tests, errors), shown when they look closer. "
                 "about: what the job is about, in everyday words; set it once, when you understand the issue. Call this at every new "
@@ -357,7 +368,8 @@ class WorkTools:
             )(self.run_tests),
             tool(
                 "draft_comment",
-                "Draft a comment on an issue or PR (target: owner/name#number) for the user's Inbox, e.g. \"I'd like to work on this\". "
+                "Draft a comment on an issue or PR (target: owner/name#number) for the user's Inbox, e.g. \"I'd like to work on this\", "
+                "or a follow_up job's reply (target: its thread). "
                 "Nothing is posted: the user decides, and you get a message with their decision. The job waits on the user meanwhile. "
                 "body is the comment as it would be posted. project, problem and why are only for the user, in the Inbox's overview. " + PLAIN,
                 {
@@ -469,7 +481,14 @@ class WorkTools:
                 "Read both first. The user's instructions on the form win. No emoji anywhere. Your before and after pictures "
                 "go in the body as ![before](evidence:ev_...) (a Before / After table); they are uploaded with the PR. You push and send "
                 "nothing: the user reviews it, approving sends it from their account, and you get a message with their decision. project, problem, cause, fix and "
-                "risks are only for the user, who reads them first to understand and judge the PR. " + PLAIN,
+                "risks are only for the user, who reads them first to understand and judge the PR. " + PLAIN + " "
+                "pr: only for the next version of the user's own open PR (owner/name#number; a follow_up job: a reviewer asked "
+                "for changes, or its checks failed). Then base is the PR's newest commit (the sha the follow-up message gave), "
+                "and your work is on top of it; approving pushes your commits onto the PR's branch instead of opening a new PR. "
+                "title is then the commit message's subject (one more commit has it when you didn't commit everything), and "
+                "body the comment posted on the PR with the push: what changed, in a line or two. The project's rules "
+                "(contributing_guide) and the tests apply as for any PR; the PR template and pr_examples don't. problem is then "
+                "what the reviewer asked for or what failed.",
                 {
                     "type": "object",
                     "properties": {
@@ -478,6 +497,7 @@ class WorkTools:
                         "base": {"type": "string"},
                         "title": {"type": "string"},
                         "body": {"type": "string"},
+                        "pr": {"type": "string", "description": "owner/name#number of the user's open PR this is the next version of; leave it out for a new PR."},
                         "project": {"type": "string", "description": "One line: what the project is, e.g. 'matplotlib: a Python library that draws charts'."},
                         "problem": {
                             "type": "string",
@@ -645,6 +665,8 @@ class WorkTools:
             return f"Drafting a comment on {args.get('target')}"
         if name == "draft_question":
             return "Asking: " + (args.get("question") or "").split("\n")[0][:120]
+        if name == "draft_pr" and args.get("pr"):
+            return f"Drafting a new version of {args['pr']}: {args.get('title')}"
         if name == "draft_pr":
             return f"Drafting a PR: {args.get('title')}"
         if name == "artifacts_list":
@@ -1067,6 +1089,7 @@ class WorkTools:
                     "kind": job["kind"],
                     "title": job["title"],
                     "issue": job["issue"],
+                    "thread": job["thread"],
                     "repo": job["repo"],
                     "vm": job["vm"],
                     "status": job["status"],
@@ -1150,7 +1173,11 @@ class WorkTools:
         # already got the official checks passing on this VM, the project is set up there: that run counts for this job too.
         before = job["tests"]["before"]
         reused = None
-        if job["kind"] == "fix_issue" and step in STEPS_AFTER_SETUP and before is None:
+        carry = job["kind"] == "fix_issue" and step in STEPS_AFTER_SETUP
+        # A follow-up that changes its PR's code (its test step) takes such a run over too.
+        if job["kind"] == "follow_up" and step == "test":
+            carry = True
+        if carry and before is None:
             for other in self.agents.jobs.list():
                 run = other["tests"]["before"]
                 if other["id"] == job["id"] or other["repo"] != job["repo"] or other["vm"] != self.record["target_vm"]:
@@ -1260,7 +1287,9 @@ class WorkTools:
             text = "Your question is in the user's Inbox. You'll get a message with their answer."
             return {"content": [{"type": "text", "text": text}]}
 
-        draft = self.agents.inbox.create("question", self.agent_id, title, question, job=job["id"], repo=job["repo"], target=job["issue"], evidence=job["evidence"])
+        # A follow-up's question is about its PR or issue.
+        target = job["thread"] or job["issue"]
+        draft = self.agents.inbox.create("question", self.agent_id, title, question, job=job["id"], repo=job["repo"], target=target, evidence=job["evidence"])
         self.agents.jobs.update(job["id"], status="waiting_on_user", drafts=job["drafts"] + [draft["id"]])
         text = f"Your question is in the user's Inbox. {job['id']} waits on the user now; move on to your next job. You'll get a message with their answer."
         return {"content": [{"type": "text", "text": text}]}
@@ -1644,6 +1673,14 @@ class WorkTools:
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         if not args["title"].strip():
             return {"content": [{"type": "text", "text": "The PR needs a title."}], "is_error": True}
+        # The next version of the user's open PR (a follow-up: a reviewer asked for changes, or its checks failed): approving
+        # pushes it onto that PR's branch and posts the body there as a comment (github_account.py). The repo is the PR's.
+        pr = (args.get("pr") or "").strip() or None
+        repo = job["repo"]
+        if pr is not None and ("#" not in pr or pr.split("#")[0].count("/") != 1 or not pr.split("#")[-1].isdigit()):
+            return {"content": [{"type": "text", "text": "pr must be owner/name#number: the user's open PR this is the next version of."}], "is_error": True}
+        if pr is not None:
+            repo = pr.split("#")[0]
         # The user reads the overview first: it must be there, and short.
         overview = {
             "project": (args.get("project") or "").strip(),
@@ -1671,11 +1708,12 @@ class WorkTools:
         if found:
             return {"content": [{"type": "text", "text": NO_EMOJI + " ".join(sorted(set(found)))}], "is_error": True}
         # Written from the project's rules and the way its own people write their PRs: the agent has to have read both.
-        if job["repo"] is not None and job["repo"].lower() not in self.guides_read:
-            text = f"First read {job['repo']}'s rules for contributors (contributing_guide), then write the PR the way they say."
+        # A new version of an open PR keeps that PR's description, so only the rules (its commits follow them too).
+        if repo is not None and repo.lower() not in self.guides_read:
+            text = f"First read {repo}'s rules for contributors (contributing_guide), then write the PR the way they say."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
-        if job["repo"] is not None and job["repo"].lower() not in self.pr_examples_read:
-            text = f"First read how {job['repo']}'s own people write their PRs (pr_examples), then write yours the same way."
+        if pr is None and repo is not None and repo.lower() not in self.pr_examples_read:
+            text = f"First read how {repo}'s own people write their PRs (pr_examples), then write yours the same way."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         # The job's pictures go in the body, as ![what](evidence:ev_...): the Inbox shows them there, and sending
         # uploads them to the user's fork (github_account.py).
@@ -1685,7 +1723,8 @@ class WorkTools:
         if unknown:
             text = f"The body shows {', '.join(unknown)}, which aren't pictures of {job['id']}: use the ids evidence_add gave your screenshots and images."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
-        if pictures and not shown:
+        # A new version's comment shows its pictures when it has new ones to show; the PR already shows the old ones.
+        if pictures and not shown and pr is None:
             text = (
                 "Put your before and after pictures in the body, where the project's template asks for screenshots (else in a "
                 "short Screenshots section at the end), as a table:\n| Before | After |\n| --- | --- |\n"
@@ -1694,8 +1733,10 @@ class WorkTools:
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         # The user decides on evidence, not on the agent's word: no PR without a before and an after
         # of the problem itself (the test suite's runs are kept apart: they show nothing about the issue).
+        # A follow-up's change is often one nobody can see (a rename a reviewer asked for): its test runs are its proof,
+        # and it adds a before and after when there is something to show.
         stages = [item["stage"] for item in job["evidence"] if item["topic"] not in TESTS_TOPICS.values()]
-        if "before" not in stages or "after" not in stages:
+        if job["kind"] != "follow_up" and ("before" not in stages or "after" not in stages):
             text = (
                 "A PR draft needs evidence the user can judge it by: at least one 'before' (the problem without your change) "
                 "and one 'after' (the same thing with your change), under the same topic, added with evidence_add. "
@@ -1760,6 +1801,10 @@ class WorkTools:
                     "when the user asked for another form or the project's merged PRs don't use the template; otherwise draft again in its form."
                 )
                 template = None
+        # A new version of an open PR has no description of its own: its body is a comment, so no template.
+        if pr is not None:
+            template = None
+            left_out = ""
 
         # -N marks new files as "intent to add", so git diff shows them too. head stops a huge diff
         # inside the VM (one byte over the limit is enough to tell), so it never fills this machine's memory.
@@ -1847,6 +1892,27 @@ class WorkTools:
         if result.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", base_sha) is None:
             return {"content": [{"type": "text", "text": f"{args['base']} is not a commit in {args['path']}."}], "is_error": True}
 
+        # A new version goes on top of the open PR's newest commit, so that it can be pushed onto its branch as it is.
+        if pr is not None:
+            try:
+                pull = await asyncio.to_thread(get_pr_status, repo.split("/")[0], repo.split("/")[1], int(pr.split("#")[1]))
+            except (httpx.HTTPError, ValueError) as error:
+                return {"content": [{"type": "text", "text": f"Could not read {pr}: {error}"}], "is_error": True}
+            if pull is None:
+                return {"content": [{"type": "text", "text": f"{pr} is not a PR on GitHub."}], "is_error": True}
+            if pull["state"] != "OPEN":
+                text = f"{pr} is {pull['state'].lower()}: only an open PR takes a new version. Tell the user in a draft_comment or draft_question instead."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+            newest = ""
+            if pull["commits"]["nodes"]:
+                newest = pull["commits"]["nodes"][0]["commit"]["oid"]
+            if newest != base_sha:
+                text = (
+                    f"base must be {pr}'s newest commit, {newest}, and {args['base']} is {base_sha}. Fetch its branch again, put "
+                    "your work on top of that commit, run the tests again (when: after, base that commit), then draft."
+                )
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+
         # Every commit must be the agent's own, by the VM's git address: never someone else's fix cherry-picked in, and no
         # co-authors (the user's rule). The first line printed is that address, possibly empty; the second how many
         # Co-authored-by lines the commit messages have; then each commit.
@@ -1929,14 +1995,17 @@ class WorkTools:
             text = f"{job['id']} is {job['status']} now (the user may have cancelled it): no draft was made. Move on."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
 
+        target = job["issue"]
+        if pr is not None:
+            target = pr
         draft = self.agents.inbox.create(
             "pr",
             self.agent_id,
             args["title"].strip(),
             args["body"],
             job=job["id"],
-            repo=job["repo"],
-            target=job["issue"],
+            repo=repo,
+            target=target,
             diff=diff,
             branch=branch,
             base=args["base"].strip(),
@@ -1947,6 +2016,7 @@ class WorkTools:
             evidence=job["evidence"],
             overview=overview,
             template=template,
+            update_of=pr,
         )
         fields = {"status": "waiting_on_user", "drafts": job["drafts"] + [draft["id"]]}
         # A PR draft is the draft step, even if the agent didn't say so.
@@ -1958,8 +2028,11 @@ class WorkTools:
         files = len([line for line in lines if line.startswith("diff --git ")])
         added = len([line for line in lines if line.startswith("+") and not line.startswith("+++")])
         removed = len([line for line in lines if line.startswith("-") and not line.startswith("---")])
+        what = f"branch {branch} against {args['base']}"
+        if pr is not None:
+            what = f"a new version of {pr}, on top of its newest commit"
         text = (
-            f"{draft['id']} is in the user's Inbox: {files} files, +{added} -{removed}, branch {branch} against {args['base']}, "
+            f"{draft['id']} is in the user's Inbox: {files} files, +{added} -{removed}, {what}, "
             f"with {len(job['evidence'])} pieces of evidence. "
             f"Nothing was pushed or sent: the user reviews it, and you'll get a message with their decision. "
             f"{job['id']} waits on the user now; move on to your next job (release_vm if none is left for {vm_name})."

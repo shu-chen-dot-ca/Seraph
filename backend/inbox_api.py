@@ -5,7 +5,8 @@ reject: stop the agent).
 Approving tells the agent. Only with send (the Inbox asks "are you sure?" first, and only when your
 GitHub account is connected: the GitHub tab, Account) does Approve on a PR or comment send it to GitHub as you,
 before the agent is told; if GitHub refuses, nothing is decided. POST /send does the same for one
-approved before (while no account was connected). Sending runs in a thread (github_account.py).
+approved before (while no account was connected). Sending runs in a thread (github_account.py). A PR draft that is
+a new version of your open PR (update_of) is pushed onto that PR's branch, and its text posted there as your comment.
 Every decision goes through Agents.decide, which also puts the draft's job back in the queue and
 wakes the agent, so those endpoints run on the event loop (`async def`). The
 drafts themselves reach the browser through /api/live.
@@ -115,7 +116,10 @@ async def send(draft_id: str) -> dict:
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error))
     what = "PR" if draft["kind"] == "pr" else "comment"
-    agents.notify(draft["agent"], f"The user sent your approved {what} draft {draft_id} ({draft['title']}) to GitHub: {draft['sent']['url']}")
+    text = f"The user sent your approved {what} draft {draft_id} ({draft['title']}) to GitHub: {draft['sent']['url']}"
+    if draft["sent"].get("update"):
+        text = f"The user pushed your approved draft {draft_id} ({draft['title']}) onto their PR: {draft['sent']['url']}"
+    agents.notify(draft["agent"], text)
     return draft
 
 

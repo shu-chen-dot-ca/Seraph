@@ -341,6 +341,7 @@ export type Job = {
   title: string;
   agent: string;
   issue: string | null;
+  thread: string | null; // follow_up: the PR or issue on GitHub it answers ("owner/name#n")
   repo: string | null;
   vm: string | null;
   status: JobStatus;
@@ -412,6 +413,7 @@ export type Draft = {
   base_sha: string; // the commit the diff starts from; "" on drafts from before sending
   commits: DraftCommit[]; // PRs: the branch's commits since base, replayed when it is sent ([]: one commit)
   sent: DraftSent | null; // what went to GitHub as you (github_searcher/github_account.py); null until then
+  update_of: string | null; // PR: a new version of your open PR "owner/name#n"; approving pushes it onto that PR
 };
 
 // One of a PR branch's commits, sent with your name. own: the agent's (the VM's git address); every commit of a new
@@ -440,6 +442,9 @@ export type DraftSent = {
   commit?: string;
   id?: number; // comment: its id on GitHub
   deleted_at?: string; // comment: when you deleted it on the GitHub tab
+  update?: boolean; // PR: a new version pushed onto a PR that was already open
+  comment_url?: string | null; // PR update: the comment posted with it (null: none was)
+  comment_error?: string | null; // PR update: why GitHub refused the comment, when it did (the push went through)
 };
 
 // One of your PRs on GitHub and how it stands (github_searcher/pr_tracking.py): the ones Approve sent, and your
@@ -467,11 +472,22 @@ export type TrackedPR = {
   issues: { number: number; title: string; url: string; state: "open" | "closed"; reason: string | null; assignees: string[] }[];
   draft_id: string | null; // the Inbox draft it was sent from
   job: string | null;
-  agent: string | null;
+  agent: string | null; // the agent that follows it: the one you picked, else the one whose draft it was sent from
+  agent_mode: AgentMode;
   relation: "author" | "commented"; // you opened it, or only commented on it
+  head: { repo: string; branch: string; sha: string } | null; // its branch and newest commit (null: the branch is gone)
+  last_activity: ThreadActivity | null;
+  your_last_at: string | null; // your newest comment or review there
   checked_at: string;
   error: string | null; // why the last read failed (the status before stays)
 };
+
+// drafts: its agent drafts replies and fixes when someone else writes there or its checks fail, and you approve
+// each in the Inbox; off: no drafts. Nothing ever goes to GitHub without your approval.
+export type AgentMode = "drafts" | "off";
+
+// The newest comment or review on a PR or issue by someone other than you (bots don't count).
+export type ThreadActivity = { login: string; at: string; what: "comment" | "review" };
 
 // One of your issues on GitHub (pr_tracking.py): ones you opened and ones you commented on, on other people's projects.
 export type GithubIssue = {
@@ -491,6 +507,10 @@ export type GithubIssue = {
   comments: number;
   last_comment: { login: string; role: string; at: string; text: string } | null;
   relation: "author" | "commented";
+  agent: string | null;
+  agent_mode: AgentMode;
+  last_activity: ThreadActivity | null;
+  your_last_at: string | null;
   checked_at: string;
   error: string | null;
 };

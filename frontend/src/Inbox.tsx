@@ -1,8 +1,8 @@
 /*
-The Inbox (on the GitHub tab, #/inbox): everything the agents want to send (PRs, comments) or ask (questions),
-waiting for you. And one kind the app makes itself, Taken: an issue an agent has a job for isn't free anymore
-(someone else is on it now, github_searcher/agents.py issue_taken); you pick Keep working or Stop the agent (its job
-is cancelled).
+The Inbox (on the GitHub tab, #/inbox): everything the agents want to send (PRs, comments, new commits for your open
+PRs) or ask (questions), waiting for you. And one kind the app makes itself, Taken: an issue an agent has a job for
+isn't free anymore (someone else is on it now, github_searcher/agents.py issue_taken); you pick Keep working or Stop
+the agent (its job is cancelled).
 
 The page is the list, every item in one list, newest first; only the rows on screen are drawn. Pending ones are in
 bold, decided ones grayed out; they still open like any other.
@@ -19,13 +19,18 @@ is what would be sent:
   before and after pictures are in its text as ![...](evidence:ev_...): shown here in place, and listed above it with
   Copy picture and Download, since GitHub needs its own copy (sending uploads them to your fork; by hand, paste
   each over its line in GitHub's PR box).
+A new version of one of your open PRs (the agent fixed what a review asked for, or its failing checks) says so on top,
+with a link to that PR in the GitHub tab's pop-up, and its last tab is Commit and comment: the title is the commit
+message, the text the comment posted on the PR with it.
 The bar at the bottom of the pop-up decides: Reject, Reply & keep working, or Approve, with an optional reply (Taken:
 Stop the agent or Keep working, with an optional note).
 A decision goes to the agent (and the draft's job goes back to the agent's queue).
-With your GitHub account connected (Account on the GitHub tab), Approve on a PR or comment first asks "are you sure?" (Open PR / Post
-comment), then sends it to GitHub as you (github_searcher/github_account.py): a PR from a new branch in your fork,
-its pictures uploaded there. If GitHub refuses, nothing is decided and the error shows. Without an account nothing is
-sent; you send it yourself. A sent item's bar links to it on GitHub. One approved but not sent (approved before you
+With your GitHub account connected (Account on the GitHub tab), Approve on a PR or comment first asks "are you sure?"
+(Open PR / Post comment / Push changes), then sends it to GitHub as you (github_searcher/github_account.py): a PR from
+a new branch in your fork, its pictures uploaded there; a new version's commits pushed onto your PR's branch in your
+fork (never forced), with its text posted on the PR as a comment. If GitHub refuses (also when the PR's branch moved
+since), nothing is decided and the error shows. Without an account nothing is
+sent; you send it yourself. A sent item's bar links to it on GitHub (a new version: Pushed to PR #n, and why when GitHub refused its comment). One approved but not sent (approved before you
 signed in) has Send to GitHub, with the same question; while you aren't signed in, its bar says in amber it isn't on
 GitHub yet, with a link to Account on the GitHub tab to sign in with GitHub. The bar says who Approve sends as.
 A decided item's bar says what you decided, and has a box to message its agent about it: the message goes into the
@@ -38,7 +43,7 @@ Delete: a decided item's bar has Delete, and many are picked like in a mail app 
 Ctrl-click, Shift-click, dragging a rectangle, Ctrl+A; the bar at the bottom of the list then deletes them at once. It
 asks first (Enter confirms), and it is for good. Only decided items can be deleted: a pending one waits for your
 decision, since its agent waits for the answer. Their agents aren't told, and what was sent to GitHub stays there (a
-comment you posted can still be deleted from its pop-up on the GitHub tab).
+comment you posted can still be deleted from its PR's or issue's pop-up on the GitHub tab).
 */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -359,7 +364,11 @@ export default function Inbox(props: { selected: string | null }) {
       setReplies((current) => ({ ...current, [draft.id]: "" }));
       const sent = result.sent;
       if (send && sent !== null) {
-        toast.success(sent.kind === "pr" ? `PR opened: ${sent.repo}#${sent.number}` : `Comment posted on ${sent.repo}#${sent.number}`, {
+        let what = `Comment posted on ${sent.repo}#${sent.number}`;
+        if (sent.kind === "pr") {
+          what = sent.update ? `Changes pushed to ${sent.repo}#${sent.number}` : `PR opened: ${sent.repo}#${sent.number}`;
+        }
+        toast.success(what, {
           action: { label: "Open", onClick: () => window.open(sent.url, "_blank", "noopener,noreferrer") },
         });
       }
@@ -410,7 +419,11 @@ export default function Inbox(props: { selected: string | null }) {
       const result = await api<Draft>(`/api/inbox/${draft.id}/send`, { method: "POST" });
       const sent = result.sent;
       if (sent !== null) {
-        toast.success(sent.kind === "pr" ? `PR opened: ${sent.repo}#${sent.number}` : `Comment posted on ${sent.repo}#${sent.number}`, {
+        let what = `Comment posted on ${sent.repo}#${sent.number}`;
+        if (sent.kind === "pr") {
+          what = sent.update ? `Changes pushed to ${sent.repo}#${sent.number}` : `PR opened: ${sent.repo}#${sent.number}`;
+        }
+        toast.success(what, {
           action: { label: "Open", onClick: () => window.open(sent.url, "_blank", "noopener,noreferrer") },
         });
       }
@@ -494,6 +507,25 @@ export default function Inbox(props: { selected: string | null }) {
     shownTab = "overview";
   }
   const showTabs = draft !== undefined && draft.kind !== "question" && draft.kind !== "taken";
+  // A new version of your open PR "owner/name#n": its commits go onto that PR's branch, its text as a comment there.
+  const updateOf = draft !== undefined && draft.kind === "pr" ? draft.update_of : null;
+  // The "are you sure?" before Approve (or Send to GitHub) sends it, in words for what goes out.
+  let confirmTitle = "";
+  let confirmText = "";
+  let confirmLabel = "";
+  if (draft !== undefined && updateOf !== null) {
+    confirmTitle = `Push these changes to ${updateOf}?`;
+    confirmText = `It pushes a new commit to your PR's branch in your fork as @${account?.login}, and posts the comment shown here on the PR. Anyone can see them.`;
+    confirmLabel = "Push changes";
+  } else if (draft !== undefined && draft.kind === "pr") {
+    confirmTitle = `Open this PR on ${draft.repo}?`;
+    confirmText = `It opens as @${account?.login}, from a new branch in your fork, with the title, text and diff shown here. Anyone can see it. You can close it on GitHub later, but not delete it.`;
+    confirmLabel = "Open PR";
+  } else if (draft !== undefined) {
+    confirmTitle = `Post this comment on ${draft.target}?`;
+    confirmText = `It is posted as @${account?.login}, with the text shown here. Anyone can see it. You can edit or delete it on GitHub later.`;
+    confirmLabel = "Post comment";
+  }
   // The pictures a PR's text shows (![...](evidence:ev_...)): here they load from this app.
   const pictures = draft !== undefined ? draft.evidence.filter((item) => item.file !== null && draft.body.includes(`evidence:${item.id}`)) : [];
   let shownBody = draft !== undefined ? draft.body : "";
@@ -695,7 +727,17 @@ export default function Inbox(props: { selected: string | null }) {
 
                   <DialogTitle className="leading-normal">{draft.title}</DialogTitle>
 
-                  {draft.kind === "pr" && (
+                  {updateOf !== null && (
+                    <div className="text-xs text-muted-foreground">
+                      A new version of your PR{" "}
+                      <a href={`#/github/pulls?open=${encodeURIComponent(updateOf)}`} className="text-primary hover:underline">
+                        {updateOf}
+                      </a>
+                      : its commits go onto the PR's branch in your fork, and its text is posted on the PR as a comment.
+                    </div>
+                  )}
+
+                  {draft.kind === "pr" && updateOf === null && (
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                       <span>
                         <span className="font-mono text-foreground">{draft.branch || "?"}</span> into{" "}
@@ -725,7 +767,9 @@ export default function Inbox(props: { selected: string | null }) {
                           </TabsTrigger>
                         )}
                         <TabsTrigger value="message" className="px-2.5">
-                          {draft.kind === "pr" ? "PR message" : "Comment"}
+                          {draft.kind === "pr" && updateOf === null && "PR message"}
+                          {draft.kind === "pr" && updateOf !== null && "Commit and comment"}
+                          {draft.kind !== "pr" && "Comment"}
                         </TabsTrigger>
                       </TabsList>
                     </Tabs>
@@ -815,7 +859,9 @@ export default function Inbox(props: { selected: string | null }) {
                         ))}
                       </div>
                     )}
+                    {updateOf !== null && <div className="text-xs font-medium text-muted-foreground">Commit message</div>}
                     {draft.kind === "pr" && <div className="text-[15px] font-semibold">{draft.title}</div>}
+                    {updateOf !== null && <div className="text-xs font-medium text-muted-foreground">Comment on the PR</div>}
                     <Markdown text={shownBody || "*No text.*"} repo={draft.repo ?? undefined} githubImagesOnly issueRefs />
                   </div>
                 )}
@@ -865,9 +911,12 @@ export default function Inbox(props: { selected: string | null }) {
                   />
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-muted-foreground">
-                      {draft.kind !== "question" && account !== null && account.connected
-                        ? `Approve ${draft.kind === "pr" ? "opens this PR" : "posts this comment"} on GitHub as @${account.login}, after you confirm; the agent is told, with your note.`
-                        : "Approve sends nothing to GitHub; the agent is told, with your note."}
+                      {draft.kind !== "question" && account !== null && account.connected && updateOf !== null &&
+                        `Approve pushes these changes to ${updateOf} as @${account.login}, after you confirm; the agent is told, with your note.`}
+                      {draft.kind !== "question" && account !== null && account.connected && updateOf === null &&
+                        `Approve ${draft.kind === "pr" ? "opens this PR" : "posts this comment"} on GitHub as @${account.login}, after you confirm; the agent is told, with your note.`}
+                      {(draft.kind === "question" || account === null || !account.connected) &&
+                        "Approve sends nothing to GitHub; the agent is told, with your note."}
                     </span>
                     <div className="ml-auto flex items-center gap-1.5">
                       <Button variant="outline" size="sm" disabled={busy !== ""} onClick={() => decide("reject")}>
@@ -909,8 +958,16 @@ export default function Inbox(props: { selected: string | null }) {
                     {draft.decided_at !== null && <span className="text-xs text-muted-foreground">{new Date(draft.decided_at).toLocaleString()}</span>}
                     {draft.sent !== null && (
                       <a href={draft.sent.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-primary hover:underline">
-                        {draft.sent.kind === "pr" ? `PR #${draft.sent.number}` : "Comment"} on GitHub, as @{draft.sent.as} <ExternalLink className="size-3" />
+                        {draft.sent.kind === "pr" && draft.sent.update && `Pushed to PR #${draft.sent.number}`}
+                        {draft.sent.kind === "pr" && !draft.sent.update && `PR #${draft.sent.number}`}
+                        {draft.sent.kind === "comment" && "Comment"} on GitHub, as @{draft.sent.as} <ExternalLink className="size-3" />
                       </a>
+                    )}
+                    {/* A new version went onto the PR, but GitHub refused its comment. */}
+                    {draft.sent !== null && draft.sent.comment_error && (
+                      <span className="text-xs text-warn" title={draft.sent.comment_error}>
+                        The comment wasn't posted: {draft.sent.comment_error}
+                      </span>
                     )}
                     {draft.status === "approved" && draft.sent === null && (draft.kind === "pr" || draft.kind === "comment") && account !== null && !account.connected && (
                       <span className="text-xs text-warn">
@@ -974,12 +1031,8 @@ export default function Inbox(props: { selected: string | null }) {
               >
                 <AlertDialogContent>
                   <AlertDialogHeader>
-                    <AlertDialogTitle>{draft.kind === "pr" ? `Open this PR on ${draft.repo}?` : `Post this comment on ${draft.target}?`}</AlertDialogTitle>
-                    <AlertDialogDescription>
-                      {draft.kind === "pr"
-                        ? `It opens as @${account?.login}, from a new branch in your fork, with the title, text and diff shown here. Anyone can see it. You can close it on GitHub later, but not delete it.`
-                        : `It is posted as @${account?.login}, with the text shown here. Anyone can see it. You can edit or delete it on GitHub later.`}
-                    </AlertDialogDescription>
+                    <AlertDialogTitle>{confirmTitle}</AlertDialogTitle>
+                    <AlertDialogDescription>{confirmText}</AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>
                     <AlertDialogCancel>Cancel</AlertDialogCancel>
@@ -992,7 +1045,7 @@ export default function Inbox(props: { selected: string | null }) {
                         }
                       }}
                     >
-                      {draft.kind === "pr" ? "Open PR" : "Post comment"}
+                      {confirmLabel}
                     </AlertDialogAction>
                   </AlertDialogFooter>
                 </AlertDialogContent>

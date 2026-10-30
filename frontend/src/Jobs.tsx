@@ -3,12 +3,15 @@ The Jobs list: every job of every agent, and the place to make new ones.
 
 A job comes from Assign on the Issues page (kind fix_issue), from Set up on the Repos page (kind set_up_repo:
 the repo running on the VM's desktop or opened in VS Code there, and the agent's short introduction to it in its
-notes), from New job here (kind task), or from an agent itself (job_create). Tabs filter by status; "Open" is everything not done or cancelled, the most
+notes), from New job here (kind task), from an agent itself (job_create), or from the app (kind follow_up: someone
+else wrote on one of your PRs or issues whose Agent setting is Drafts, or a PR's checks failed, and its agent drafts
+an answer or a fix for the Inbox). Tabs filter by status; "Open" is everything not done or cancelled, the most
 recently changed first. Each row shows its progress (the step the agent is on) and, under the title, the
 agent's headline in everyday words. Only the rows on screen are drawn, so long lists stay fast.
 A click on a row opens that job in a pop-up (#/jobs/<job id>, whatever the tab or filter); the X, Esc or a click
 outside it closes it, back to the list. Its top has the job's status, links to its agent, VM and issue, and Cancel
-job for an open one (like the row's Cancel). Below that: every step, what the job is about, the technical detail,
+job for an open one (like the row's Cancel). A follow_up job links, in the row and the pop-up, to the PR or issue it
+answers: its pop-up on the GitHub tab (#/github/pulls?open=... or #/github/issues?open=...), and GitHub. Below that: every step, what the job is about, the technical detail,
 the project's test suite runs (before and with the change), what the agent is doing right now, the instructions,
 the agent's notes and the drafts it made, each linking to the Inbox.
 */
@@ -49,6 +52,7 @@ export default function Jobs(props: { selected: string | null }) {
   const jobs = useLive("jobs");
   const agents = useLive("agents");
   const inbox = useLive("inbox");
+  const prs = useLive("prs");
   const loaded = useLoaded("jobs");
   const [tab, setTab] = useState("open");
   const [filter, setFilter] = useState("");
@@ -67,6 +71,8 @@ export default function Jobs(props: { selected: string | null }) {
   for (const draft of inbox) {
     drafts[draft.id] = { kind: draft.kind, status: draft.status, title: draft.title };
   }
+  // A follow_up job's PR or issue opens in the GitHub tab's pop-up: under Pull requests when it is one of your PRs.
+  const prIds: string[] = prs.items.map((each) => each.id);
 
   // The job in the pop-up (#/jobs/<id>), looked up in all jobs, whatever the tab and filter.
   const job = jobs.find((each) => each.id === props.selected);
@@ -90,7 +96,7 @@ export default function Jobs(props: { selected: string | null }) {
       if (needle === "") {
         return true;
       }
-      const text = `${each.id} ${each.title} ${each.issue ?? ""} ${each.vm ?? ""} ${agentNames[each.agent] ?? ""} ${each.instructions} ${each.notes}`.toLowerCase();
+      const text = `${each.id} ${each.title} ${each.issue ?? ""} ${each.thread ?? ""} ${each.vm ?? ""} ${agentNames[each.agent] ?? ""} ${each.instructions} ${each.notes}`.toLowerCase();
       return text.includes(needle);
     })
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
@@ -137,7 +143,7 @@ export default function Jobs(props: { selected: string | null }) {
         <span>Job</span>
         <span>Agent</span>
         <span>VM</span>
-        <span>Issue</span>
+        <span>Issue or PR</span>
         <span>Updated</span>
         <span />
       </div>
@@ -207,6 +213,28 @@ export default function Jobs(props: { selected: string | null }) {
                       </a>
                       <a
                         href={`https://github.com/${each.issue.replace("#", "/issues/")}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="shrink-0 hover:text-foreground"
+                        title="Open on GitHub"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        <ExternalLink className="size-3" />
+                      </a>
+                    </span>
+                  )}
+                  {each.issue === null && each.thread !== null && (
+                    <span className="flex items-center gap-1">
+                      <a
+                        href={`#/github/${prIds.includes(each.thread) ? "pulls" : "issues"}?open=${encodeURIComponent(each.thread)}`}
+                        className="truncate hover:text-foreground hover:underline"
+                        title="Open it on the GitHub tab"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        {each.thread}
+                      </a>
+                      <a
+                        href={`https://github.com/${each.thread.replace("#", "/issues/")}`}
                         target="_blank"
                         rel="noreferrer"
                         className="shrink-0 hover:text-foreground"
@@ -291,6 +319,20 @@ export default function Jobs(props: { selected: string | null }) {
                       </a>
                     </span>
                   )}
+                  {job.thread !== null && (
+                    <span className="flex items-center gap-1">
+                      <a
+                        href={`#/github/${prIds.includes(job.thread) ? "pulls" : "issues"}?open=${encodeURIComponent(job.thread)}`}
+                        className="text-primary hover:underline"
+                        title="Open it on the GitHub tab"
+                      >
+                        {job.thread}
+                      </a>
+                      <a href={`https://github.com/${job.thread.replace("#", "/issues/")}`} target="_blank" rel="noreferrer" className="hover:text-foreground" title="Open on GitHub">
+                        <ExternalLink className="size-3" />
+                      </a>
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <DialogTitle className="min-w-0 flex-1 leading-normal">{job.title}</DialogTitle>
@@ -336,7 +378,7 @@ export default function Jobs(props: { selected: string | null }) {
 
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
                     <span className="font-mono text-xs">{job.id}</span>
-                    <Badge variant="secondary">{job.kind === "fix_issue" ? "fix issue" : job.kind}</Badge>
+                    <Badge variant="secondary">{job.kind.replaceAll("_", " ")}</Badge>
                     <span>
                       Made by {job.created_by === "user" ? "you" : (agentNames[job.created_by] ?? job.created_by)} on {new Date(job.created_at).toLocaleString()}
                     </span>

@@ -1,11 +1,14 @@
 """Jobs: the smallest unit of work. One agent has many jobs; a job has exactly one agent.
 
 The user makes a job by assigning an issue to an agent, or a repo to set up (Set up on the Repos page);
-an agent can make jobs for itself.
+an agent can make jobs for itself. The app makes follow_up jobs (Agents.follow_up): on a PR or issue of the user's
+that an agent follows (the GitHub tab, agent mode Drafts), someone else wrote or the PR's checks failed. "thread" is
+that PR or issue; the agent suggests a reply or a new version of the PR as a draft, or marks the job done when
+nothing needs an answer.
 Each job is one JSON file, DATA_DIR/jobs/<id>.json:
 
-    {"id": "job_a1b2c3", "kind": "fix_issue" | "set_up_repo" | "task" | ..., "title", "agent": "<agent id>",
-     "issue": "owner/name#n" | null, "repo": "owner/name" | null, "vm": "vm1" | null,
+    {"id": "job_a1b2c3", "kind": "fix_issue" | "set_up_repo" | "task" | "follow_up" | ..., "title", "agent": "<agent id>",
+     "issue": "owner/name#n" | null, "thread": "owner/name#n" (follow_up) | null, "repo": "owner/name" | null, "vm": "vm1" | null,
      "status": "queued" | "working" | "waiting_on_user" | "done" | "cancelled",
      "instructions": "extra text from the user", "notes": "the agent's progress notes",
      "drafts": ["draft_..."], "evidence": [Evidence, ...], "created_by": "user" | "<agent id>",
@@ -85,6 +88,9 @@ STEPS = {
     # (show), then a short introduction to it (introduce).
     "set_up_repo": ["understand", "set_up", "show", "introduce"],
     "task": ["understand", "work", "check", "report"],
+    # Answer what happened on a PR or issue the agent follows: read it (understand), make the change or write the reply
+    # (work), the tests when the PR's code changed (test), then the draft.
+    "follow_up": ["understand", "work", "test", "draft"],
 }
 
 
@@ -109,6 +115,8 @@ class Jobs:
             job.setdefault("detail", "")
             # Jobs from before test runs were kept.
             job.setdefault("tests", {"before": None, "after": None})
+            # And from before follow-ups.
+            job.setdefault("thread", None)
             self.jobs[job["id"]] = job
 
     def save(self, job: dict) -> None:
@@ -140,10 +148,12 @@ class Jobs:
             return copy.deepcopy(jobs)
 
     def create(self, kind: str, title: str, agent: str, created_by: str, issue: str | None = None,
-               repo: str | None = None, vm: str | None = None, instructions: str = "") -> dict:
-        # An issue id is "owner/name#n", so it already says the repo.
+               repo: str | None = None, vm: str | None = None, instructions: str = "", thread: str | None = None) -> dict:
+        # An issue id is "owner/name#n", so it already says the repo. So does a thread's.
         if issue and not repo:
             repo = issue.split("#")[0]
+        if thread and not repo:
+            repo = thread.split("#")[0]
 
         now = datetime.now(UTC).isoformat()
         with self.lock:
@@ -156,6 +166,7 @@ class Jobs:
                 "title": title,
                 "agent": agent,
                 "issue": issue,
+                "thread": thread,
                 "repo": repo,
                 "vm": vm,
                 "status": "queued",

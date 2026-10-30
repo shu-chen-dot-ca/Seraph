@@ -43,10 +43,21 @@ send(draft_id) sends a PR or comment draft once, as it was shown in the Inbox. A
    branch is deleted again, so trying again starts clean.
 A comment is posted on its issue or PR (its pictures go to your fork the same way).
 
+A PR draft with update_of is the agent's next version of your open PR (a follow-up: a reviewer asked for
+changes, or its checks failed), not a new PR. The PR is read first, with your token: it must be open, opened
+by you, with its branch in your fork, and that branch must still be at the commit the agent started from
+(base_sha), else it refuses (the agent redrafts on the newest commit). The commits are built as for a new PR
+(pictures, the reviewed diff, the agent's own commits replayed, one more commit when needed) but on top of that
+commit, in your fork; then the PR's branch moves to the last one (a fast-forward, never forced), and the
+draft's body is posted on the PR as your comment (when it has one). If GitHub refuses only the comment (a
+locked conversation, say), the push stays sent and "comment_error" says why.
+
 What was sent is kept on the draft as "sent" (Inbox.mark_sent):
 
     PR:      {"kind": "pr", "url", "number", "repo", "fork", "branch", "base_branch", "base_sha",
               "commit", "as": "<your login>", "at"}
+    update:  the same with "update": True ("url" is the PR's, "base_sha" the commit it went on top of),
+             "comment_url": the comment posted with it | None, "comment_error": None | why it wasn't posted
     comment: {"kind": "comment", "url", "id", "repo", "number", "as", "at", "deleted_at" once deleted from the GitHub tab}
 
 comment(target, body) posts your own comment, as you, on a PR or issue: the comment box of the GitHub tab's
@@ -56,9 +67,6 @@ manage(action, repo, number) is one change you make from the GitHub tab, as you:
 of your PRs, delete a closed PR's branch from your fork, or delete one of your comments (in a PR's or
 issue's conversation in the thread pop-up). It
 checks first that the PR is yours and the branch is in your fork. Following your PRs is pr_tracking.py.
-
-Later (not built yet): the agent's next version pushed onto the same PR. "sent" has what that needs:
-the fork, branch and commit (tree() on base_sha with the new diff, in a commit whose parent is "commit").
 
 Sends go one at a time (a second click waits, then finds the draft sent). A failure raises SendError
 with what GitHub said and at which step; nothing is kept on the draft then.
@@ -242,7 +250,9 @@ class GithubAccount:
             self.step = "starting"
             try:
                 with httpx.Client(base_url=API, headers=headers, timeout=60) as client:
-                    if draft["kind"] == "pr":
+                    if draft["kind"] == "pr" and draft["update_of"]:
+                        sent = self.send_update(client, account, draft)
+                    elif draft["kind"] == "pr":
                         sent = self.send_pr(client, account, draft)
                     else:
                         sent = self.post_comment(client, account, draft)
@@ -530,6 +540,116 @@ class GithubAccount:
             "base_branch": base_branch,
             "base_sha": base_sha,
             "commit": commit,
+            "as": account["login"],
+            "at": datetime.now(UTC).isoformat(),
+        }
+
+    def send_update(self, client: httpx.Client, account: dict, draft: dict) -> dict:
+        """The agent's next version of your open PR: its commits on top of the PR's newest commit, the PR's branch moved
+        to them (no force), then the body posted on the PR as your comment."""
+        repo, _, number = (draft["update_of"] or "").rpartition("#")
+        base_sha = draft["base_sha"]
+        if repo == "" or not number.isdigit() or base_sha == "":
+            raise SendError("This draft doesn't say which PR or commit it is for. Reply to the agent to draft it again.")
+        # Only the agent's own commits go out (the user's rule), as for a new PR.
+        for each in draft["commits"]:
+            if not each["own"]:
+                raise SendError(
+                    f"The commit {each['sha'][:10]} is by {each['author']['name']}, not the agent, and nobody else's work goes out "
+                    "with your name. Reply to the agent to redo the fix on its own and draft it again."
+                )
+
+        self.step = "reading the PR"
+        response = client.get(f"/repos/{repo}/pulls/{number}")
+        response.raise_for_status()
+        pull = response.json()
+        if pull["merged"]:
+            raise SendError(f"{repo}#{number} is merged already: there is no PR to push onto.")
+        if pull["state"] != "open":
+            raise SendError(f"{repo}#{number} is closed: reopen it first.")
+        if pull["user"]["login"].lower() != account["login"].lower():
+            raise SendError(f"{repo}#{number} isn't yours: it was opened by {pull['user']['login']}.")
+        head = pull["head"]
+        if head["repo"] is None:
+            raise SendError("The PR's branch is gone: its fork was deleted.")
+        if head["repo"]["owner"]["login"].lower() != account["login"].lower():
+            raise SendError(f"The PR's branch is in {head['repo']['full_name']}, not in your fork.")
+        if head["sha"] != base_sha:
+            raise SendError("The PR's branch changed since the agent drafted this: Redraft, so the agent works on top of its newest commit.")
+        fork = head["repo"]["full_name"]
+        branch = head["ref"]
+
+        self.step = "reading the PR's newest commit"
+        response = client.get(f"/repos/{fork}/git/commits/{base_sha}")
+        response.raise_for_status()
+        base_tree = response.json()["tree"]["sha"]
+
+        body = self.pictures(client, account, fork, draft)
+        # Exactly the diff you reviewed: where the commits must end.
+        tree = self.tree(client, fork, base_tree, draft["diff"])
+        you = {"name": account["name"], "email": f"{account['id']}+{account['login']}@users.noreply.github.com"}
+
+        # The agent's commits as it made them, each on the last, starting at the PR's newest commit.
+        commit = base_sha
+        commit_tree = base_tree
+        try:
+            for each in draft["commits"]:
+                self.step = f"replaying the commit {each['sha'][:10]}"
+                each_tree = commit_tree
+                if each["diff"].strip() != "":
+                    each_tree = self.tree(client, fork, commit_tree, each["diff"])
+                message = each["message"]
+                if each["vm_email"] != "":
+                    message = message.replace(each["vm_email"], you["email"])
+                payload = {"message": message, "tree": each_tree, "parents": [commit], "author": you, "committer": you}
+                response = client.post(f"/repos/{fork}/git/commits", json=payload)
+                response.raise_for_status()
+                commit = response.json()["sha"]
+                commit_tree = each_tree
+        except SendError:
+            # They don't replay (a binary file in one, say): one commit then.
+            commit = base_sha
+            commit_tree = base_tree
+        # What the commits don't have (changes never committed, or no commits kept): one more commit.
+        if commit_tree != tree:
+            self.step = "making the commit"
+            message = draft["title"]
+            response = client.post(f"/repos/{fork}/git/commits", json={"message": message, "tree": tree, "parents": [commit], "author": you})
+            response.raise_for_status()
+            commit = response.json()["sha"]
+
+        # A fast-forward only: if the branch moved in the meantime, GitHub refuses and nothing is lost.
+        self.step = "pushing onto the PR's branch"
+        response = client.patch(f"/repos/{fork}/git/refs/heads/{branch}", json={"sha": commit, "force": False})
+        response.raise_for_status()
+
+        # The new version is on the PR now: a comment GitHub refuses (a locked conversation, say) doesn't undo that, so
+        # it is kept with what was sent instead of failing the send.
+        comment_url = None
+        comment_error = None
+        if body.strip() != "":
+            self.step = "posting the comment on the PR"
+            try:
+                response = client.post(f"/repos/{repo}/issues/{number}/comments", json={"body": body})
+            except httpx.HTTPError as error:
+                comment_error = f"Could not reach GitHub: {error}"
+            if comment_error is None and response.status_code >= 400:
+                comment_error = f"GitHub answered {response.status_code}: {response.text[:200]}"
+            if comment_error is None:
+                comment_url = response.json()["html_url"]
+        return {
+            "kind": "pr",
+            "update": True,
+            "url": pull["html_url"],
+            "number": int(number),
+            "repo": repo,
+            "fork": fork,
+            "branch": branch,
+            "base_branch": pull["base"]["ref"],
+            "base_sha": base_sha,
+            "commit": commit,
+            "comment_url": comment_url,
+            "comment_error": comment_error,
             "as": account["login"],
             "at": datetime.now(UTC).isoformat(),
         }

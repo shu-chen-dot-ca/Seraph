@@ -615,8 +615,9 @@ def get_tracked_issues(owner: str, repo: str) -> dict:
     return data["data"]["repository"]
 
 
-# One PR as it stands, for the GitHub tab (pr_tracking.py): its state, labels, reviews, latest comment, the issues it
-# says it fixes, and its newest commit's checks.
+# One PR as it stands, for the GitHub tab (pr_tracking.py): its state, its branch (headRef is null once the branch is
+# deleted), labels, reviews, the latest 10 comments (oldest first: the newest is the last), the issues it says it
+# fixes, and its newest commit's checks. The agents' draft_pr reads its state and newest commit too (agent/work_tools.py).
 PR_STATUS_QUERY = """
 query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
@@ -624,8 +625,9 @@ query($owner: String!, $name: String!, $number: Int!) {
       number title url state isDraft createdAt updatedAt closedAt mergedAt reviewDecision
       author { login }
       mergedBy { login }
+      headRefName headRefOid headRepository { nameWithOwner } headRef { name }
       labels(first: 20) { nodes { name } }
-      comments(last: 1) { totalCount nodes { createdAt authorAssociation body author { login __typename } } }
+      comments(last: 10) { totalCount nodes { createdAt authorAssociation body author { login __typename } } }
       reviews(last: 30) { nodes { state submittedAt authorAssociation author { login __typename } } }
       closingIssuesReferences(first: 5) { nodes { number title url state stateReason assignees(first: 5) { nodes { login } } } }
       commits(last: 1) { nodes { commit { oid statusCheckRollup { state } } } }
@@ -659,7 +661,7 @@ def get_action_runs(owner: str, repo: str, sha: str) -> list[dict]:
 
 
 # One issue as it stands, for the GitHub tab (pr_tracking.py), like PR_STATUS_QUERY: its state (stateReason: completed,
-# not_planned or duplicate once closed), labels, assignees and the latest comment.
+# not_planned or duplicate once closed), labels, assignees and the latest 10 comments (oldest first).
 ISSUE_STATUS_QUERY = """
 query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
@@ -668,7 +670,7 @@ query($owner: String!, $name: String!, $number: Int!) {
       author { login }
       labels(first: 20) { nodes { name } }
       assignees(first: 10) { nodes { login } }
-      comments(last: 1) { totalCount nodes { createdAt authorAssociation body author { login __typename } } }
+      comments(last: 10) { totalCount nodes { createdAt authorAssociation body author { login __typename } } }
     }
   }
 }

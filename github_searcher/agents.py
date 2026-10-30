@@ -52,7 +52,14 @@ app with a clear frontend up and leaves it running on the VM's desktop (a server
 service, so it outlives the agent's turn and VM restarts), or clones a library or other low-level
 repo and opens it in VS Code there, then writes a short introduction to the repo in its chat and
 the job's notes. decide() passes the user's decision on a draft back to its agent (with the link,
-when Approve sent it to GitHub).
+when Approve sent it to GitHub, or pushed a new version onto the user's PR).
+
+The GitHub tab's side: follow_up() is called when someone else wrote on a PR or issue of the user's that an
+agent follows (agent mode Drafts), or the PR's checks failed (pr_tracking.needs_reply). The agent gets a
+follow_up job for that thread (an open one it has for it hears the news instead), and an archived agent comes
+back for it. It reads the thread and suggests a reply (draft_comment), a new version of the user's own PR made
+on that PR's branch (draft_pr with pr: Approve pushes it there and posts its text on the PR as a comment), or
+nothing (it marks the job done). It never posts anything itself.
 
 When an issue an agent has a job for goes from free to assigned (someone else is on it now: the
 tags say so, backend/issues_api.py), issue_taken() asks the user in the Inbox ("taken", one pending
@@ -764,6 +771,87 @@ class Agents:
             )
             self.inbox.create("taken", job["agent"], f"{issue_id} isn't free anymore", body, job=job["id"], repo=job["repo"], target=issue_id, vm=job["vm"])
 
+    def follow_up(self, entry: dict) -> dict | None:
+        """Someone else wrote on a PR or issue an agent follows for the user (agent mode Drafts on the GitHub tab), or the
+        PR's checks failed: an entry of pr_tracking.needs_reply ({"id", "kind", "relation", "title", "url", "agent", "reason",
+        "at", "failed_sha", "head"}; only the user's own PR, relation author, gets offered a new version). The agent's open follow_up job for that thread hears about it; else a new one is made.
+        Returns the job, or None when the agent is gone. Any thread."""
+        agent = self.agents.get(entry["agent"])
+        if agent is None:
+            return None
+        thread = entry["id"]
+        repo = thread.split("#")[0]
+        number = thread.split("#")[1]
+        head = entry["head"]
+        what = "issue"
+        if entry["kind"] == "pr":
+            what = "PR"
+        # A new version goes on the PR's own branch, which only the user's own PR has (not one they only commented on).
+        own_pr = entry["kind"] == "pr" and head is not None and entry.get("relation", "author") == "author"
+        # It comes back from the archive for it, as for a job the user gives it. unarchive() wakes it: on the loop.
+        if threading.get_ident() == self.loop_thread:
+            self.unarchive(agent.id)
+        else:
+            self.loop.call_soon_threadsafe(self.unarchive, agent.id)
+
+        for job in self.jobs.for_agent(agent.id):
+            if job["kind"] != "follow_up" or job["thread"] != thread or job["status"] in ["done", "cancelled"]:
+                continue
+            text = f"More on {thread} ({entry['title']}) for {job['id']}: {entry['reason']}. Read it again with read_thread and take it into account."
+            if entry["failed_sha"]:
+                text += f" Its checks failed on {entry['failed_sha'][:10]}: see which and why on {entry['url']}/checks."
+            if own_pr:
+                text += f" Its branch {head['branch']} in {head['repo']} is at {head['sha']} now: a new version goes on top of that commit."
+            if job["status"] == "waiting_on_user":
+                text += " Your draft for it still waits in the user's Inbox; if it no longer fits, draft a new one and say why in it."
+            self.notify(agent.id, text)
+            return job
+
+        title = f"Follow up on {thread}"
+        vm_name = agent.record["target_vm"]
+        job = self.jobs.create("follow_up", title, agent.id, "user", repo=repo, vm=vm_name, thread=thread)
+        text = f"New job {job['id']}: {title}\n{entry['reason']} on the {what} {thread} ({entry['title']}): {entry['url']}"
+        if entry["failed_sha"]:
+            text += (
+                f"\nIts checks failed on {entry['failed_sha'][:10]}: see which and why on its checks page ({entry['url']}/checks, "
+                "with browser_open), and reproduce the failure in the VM before you fix it. A failure that isn't the PR's fault "
+                "(a flaky test, a broken main branch) needs no new version: a short reply saying so, or nothing."
+            )
+        text += (
+            "\nYou follow it for the user: when someone else writes there or its checks fail, you suggest what to do, and the "
+            "user decides. You never post, push or send anything yourself; only the user's Approve does, as them.\n"
+            "First read the whole thread with read_thread. Then do one of these (see Following up on PRs and issues):\n"
+            f"- A reply, when someone asked something or waits for an answer: draft_comment with target {thread}. Short, "
+            "friendly, in the project's tone, the way the user would write it."
+        )
+        if own_pr:
+            text += (
+                "\n- A new version of the PR, when a reviewer asked for changes or its checks failed. Its branch is "
+                f"{head['branch']} in the user's fork {head['repo']}, newest commit {head['sha']}. In the VM, in the project's "
+                f"folder (~/{repo.split('/')[1]}; clone it if it isn't there): `git fetch https://github.com/{head['repo']} "
+                f"{head['branch']} && git switch -C pr-{number} {head['sha']}`, and work on top of that commit. The tests "
+                "are the same rule as for a fix: when: before on the project's unchanged main branch (`git fetch origin && "
+                "git switch --detach origin/main`, base origin/main; or job_progress with step test carries over an earlier "
+                f"passing run of the official checks on this VM), then your change on pr-{number}, committed in the project's "
+                f"style, and when: after with base {head['sha']} and the same command. Then draft_pr with pr {thread} and "
+                f"base {head['sha']}: its title is the commit message's subject, its body the comment posted on the PR with "
+                "the push (what changed, in a line or two)."
+            )
+        text += (
+            f"\n- Nothing, when nothing needs an answer (a thank-you, a bot's note, an approval without questions): job_update "
+            f"{job['id']} with status done and a note on why."
+        )
+        if entry["kind"] == "pr" and not own_pr:
+            text += "\nThe PR's code isn't the user's to change: a reply or nothing."
+        if agent.record["name_by"] == "auto":
+            text += f"\nYou still have the automatic name {agent.name}: give yourself a short name for your work with name_yourself."
+        if vm_name is None:
+            text += "\nYou have no target VM. A reply needs none; for a new version, pick one with vms_list and choose_vm, then queue_for_vm."
+        else:
+            text += f"\nIt is for {vm_name}: queue_for_vm only when you need the VM (a new version does, a reply doesn't)."
+        self.notify(agent.id, text)
+        return job
+
     def decide(self, draft_id: str, decision: str, reply: str = "") -> dict:
         """The user's decision on a draft (approved, rejected or replied) goes to its agent, and its job is open again."""
         if decision == "replied" and self.inbox.get(draft_id)["kind"] == "taken":
@@ -804,11 +892,24 @@ class Agents:
         job_name = job["id"] if job is not None else "your work"
         # Approve sends a PR or comment first when the user's GitHub account is connected (inbox_api.py): then it is on GitHub.
         sent = draft["sent"]
-        if decision == "approved" and draft["kind"] == "pr" and sent is not None:
+        # A new version of the user's open PR (update_of): pushed onto its branch, and the body posted there as a comment.
+        if decision == "approved" and draft["kind"] == "pr" and sent is not None and sent.get("update"):
+            text = (
+                f"The user approved {about}, and it is pushed onto their PR {sent['url']} (branch {sent['branch']} of "
+                f"{sent['fork']}, now at {sent['commit'][:10]})."
+            )
+            if sent["comment_url"]:
+                text += f" Your text is posted there as their comment: {sent['comment_url']}."
+            if sent["comment_error"]:
+                text += f" The comment couldn't be posted ({sent['comment_error']}); tell the user in one line."
+            text += f" Put the link in the job's notes. If it finishes {job_name}, mark the job done with job_update."
+        elif decision == "approved" and draft["kind"] == "pr" and sent is not None:
             text = (
                 f"The user approved {about}, and it is on GitHub now, as their PR: {sent['url']} (branch {sent['branch']} of "
                 f"{sent['fork']}). Put the link in the job's notes. If it finishes {job_name}, mark the job done with job_update."
             )
+        elif decision == "approved" and draft["kind"] == "pr" and draft["update_of"]:
+            text = f"The user approved {about}. They push it onto {draft['update_of']} themselves. If it finishes {job_name}, mark the job done with job_update."
         elif decision == "approved" and draft["kind"] == "pr":
             text = f"The user approved {about}. They send it to GitHub themselves. If it finishes {job_name}, mark the job done with job_update."
         elif decision == "approved" and draft["kind"] == "comment" and sent is not None:
@@ -827,6 +928,9 @@ class Agents:
             # The user wants work done: an archived agent comes back for it.
             if draft["agent"] in self.agents:
                 self.unarchive(draft["agent"])
+        # A follow-up's reply that went out often answers everything there was.
+        if decision == "approved" and draft["kind"] == "comment" and job is not None and job["kind"] == "follow_up":
+            text += f" If that answers everything on {job['thread']} for now, mark {job['id']} done; the app makes a new job when someone writes there again."
         if job is not None and job["status"] == "queued" and job["vm"] is not None:
             text += f"\n{job['id']} is queued again; use queue_for_vm if you need {job['vm']} for it."
         self.notify(draft["agent"], text)

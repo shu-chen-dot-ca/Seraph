@@ -6,7 +6,10 @@ Esc or a click outside closes it (the address drops open). It is read fresh from
 Top: the state (Open, Draft, Merged, Closed), the repo and number (opens it on GitHub), who opened it and when, for a
 PR the Inbox sent Its draft and Its job (links to them), the title, a PR's branch, the labels and who it is assigned
 to. When an open PR's checks wait for a maintainer, a line says why: GitHub runs nothing for a first-time
-contributor's PR until a maintainer approves it, so it only needs waiting.
+contributor's PR until a maintainer approves it, so it only needs waiting. On the right, the Agent setting (only for the PRs
+and issues the GitHub tab lists): Off (no drafts; you write your own comments) or Drafts with one of your agents (turning it on
+picks the one whose PR or comment went there, else a new agent; change it next to it): when someone else writes there or a PR's checks fail, that agent drafts a reply or a fix, and each draft
+waits for your approval in the Inbox. Nothing goes to GitHub without it.
 Tabs (an issue has only Conversation):
 - Conversation: the description, then everything after it, oldest first: comments (tagged Maintainer or bot),
   reviews (Approved, Requested changes, Commented) with their code comments, each under its file and line with the
@@ -55,10 +58,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Markdown } from "@/components/ui/markdown";
-import { StatusDot, type Tone } from "@/components/ui/status-dot";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { AGENT_TONE, StatusDot, type Tone } from "@/components/ui/status-dot";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { api, useLive, type GithubAccountStatus } from "@/live";
+import { api, useLive, type AgentMode, type GithubAccountStatus } from "@/live";
 import { cn, timeAgo } from "@/lib/utils";
 
 // The thread as GET /api/github/thread gives it, fresh from GitHub. role is GitHub's word for the person
@@ -172,11 +176,15 @@ const CHECK_TONE: Record<string, Tone> = {
   none: "gray",
 };
 
+const NEW_AGENT = "__new__";
+
 // A file in Files changed starts collapsed when it changes more lines than this (like the Inbox's diff).
 const BIG_FILE_LINES = 400;
 
 export default function ThreadDialog(props: { id: string | null; onClose: () => void }) {
   const prs = useLive("prs");
+  const agents = useLive("agents");
+  const inbox = useLive("inbox");
   const [thread, setThread] = useState<ThreadDetail | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -347,8 +355,28 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
     [files, fileOpen, props.id],
   );
 
-  // The thread in the GitHub tab's live list (whether you opened it); undefined when it isn't there.
+  const agentNames: Record<string, string> = {};
+  for (const agent of agents) {
+    agentNames[agent.id] = agent.name;
+  }
+
+  // The thread in the GitHub tab's live list (its agent setting, whether you opened it); undefined when it isn't there.
   const pr = prs.items.find((each) => each.id === props.id);
+  const issue = prs.issues.find((each) => each.id === props.id);
+  const tracked = pr ?? issue;
+  // The agents Drafts can pick: not archived, and the one set now (even if archived since).
+  const choices = agents.filter((each) => each.archived_at === null || (tracked !== undefined && each.id === tracked.agent));
+  // Turning Drafts on picks the agent set now, else the one whose PR or comment went there (newest first), while it
+  // exists; else a new agent is made.
+  let draftsAgent = tracked !== undefined ? tracked.agent : null;
+  for (const each of inbox) {
+    if (draftsAgent !== null) {
+      break;
+    }
+    if (each.sent !== null && `${each.sent.repo}#${each.sent.number}` === props.id && agentNames[each.agent] !== undefined) {
+      draftsAgent = each.agent;
+    }
+  }
 
   const comment = props.id !== null ? (comments[props.id] ?? "") : "";
   const connected = account !== null && account.connected;
@@ -396,6 +424,28 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
   function ask(next: Confirm) {
     setConfirm(next);
     setConfirmOpen(true);
+  }
+
+  // The thread's agent setting: Off, or Drafts with this agent (null: a new one is made).
+  async function setAgent(mode: AgentMode, agent: string | null) {
+    if (props.id === null) {
+      return;
+    }
+    setBusy("agent");
+    try {
+      const result = await api<{ mode: AgentMode; agent: string | null }>("/api/github/agent", {
+        method: "POST",
+        body: { id: props.id, mode: mode, agent: agent },
+      });
+      if (result.mode === "drafts") {
+        toast.success(`Drafts on: ${agentNames[result.agent ?? ""] ?? result.agent ?? "a new agent"} follows it. Its drafts wait for you in the Inbox.`);
+      } else {
+        toast.success("Drafts off: no agent drafts for it.");
+      }
+    } catch (err) {
+      toast.error(`Could not change the agent: ${err instanceof Error ? err.message : err}`);
+    }
+    setBusy("");
   }
 
   // Your own comment, posted as you (after the "are you sure?").
@@ -532,6 +582,53 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
                 )}
                 {error !== "" && <div className="text-xs text-destructive">Could not refresh: {error}</div>}
               </div>
+
+              {tracked !== undefined && (
+                <div className="shrink-0 space-y-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs text-muted-foreground">Agent</span>
+                    <Select
+                      value={tracked.agent_mode}
+                      disabled={busy !== ""}
+                      onValueChange={(value) => setAgent(value as AgentMode, value === "drafts" ? draftsAgent : null)}
+                    >
+                      <SelectTrigger size="sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent position="popper" align="end">
+                        <SelectItem value="off">Off</SelectItem>
+                        <SelectItem value="drafts">Drafts</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {tracked.agent_mode === "drafts" && (
+                      <Select
+                        value={tracked.agent ?? NEW_AGENT}
+                        disabled={busy !== ""}
+                        onValueChange={(value) => setAgent("drafts", value === NEW_AGENT ? null : value)}
+                      >
+                        <SelectTrigger size="sm" className="max-w-44">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent position="popper" align="end">
+                          <SelectItem value={NEW_AGENT}>New agent</SelectItem>
+                          {choices.map((each) => (
+                            <SelectItem key={each.id} value={each.id}>
+                              <StatusDot tone={AGENT_TONE[each.status]} />
+                              {each.name}
+                            </SelectItem>
+                          ))}
+                          {tracked.agent !== null && !choices.some((each) => each.id === tracked.agent) && (
+                            <SelectItem value={tracked.agent}>{tracked.agent}</SelectItem>
+                          )}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {tracked.agent_mode === "drafts" ? "Drafts wait for your approval in the Inbox." : "No drafts. You write your own comments."}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex h-9 shrink-0 items-center gap-2 border-y px-4">

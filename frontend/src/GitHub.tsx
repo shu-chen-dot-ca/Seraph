@@ -20,8 +20,10 @@ last changed, and in plain words where it stands:
   "You commented" when it is someone else's PR you commented on.
 Each issue row: the state (open, closed as completed, closed as not planned), the title, the repo and number, its
 labels, "You opened it" or "You commented", how many comments and who wrote the latest, and when it last changed.
+On both: the agent following it (a robot and its name) when its agent drafts replies and fixes there for you to approve.
 A click on a row opens it in a pop-up (ThreadDialog.tsx; the address gets open=owner/name%23n, keeping the repo and
-tab): all of it as on GitHub, where you comment. The X, Esc or a click outside closes it, back to the list.
+tab): all of it as on GitHub, where you comment and set its agent. The X, Esc or a click
+outside closes it, back to the list.
 
 Account: your GitHub account, the one Approve in the Inbox sends PRs and comments as, and Comment in the pop-up
 (github_searcher/github_account.py). Sign in with GitHub, like on any website: this tab goes to GitHub's page, which
@@ -38,7 +40,7 @@ classic token pasted by hand, with Sign in and Cancel, for an organization that 
 settings) tells the header, the Inbox and the left list (a "github-account" window event), which show who it sends as. Below: your forks the app sends PRs from.
 */
 
-import { CircleCheck, CircleDot, CircleSlash, ExternalLink, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Loader2, RefreshCw, X } from "lucide-react";
+import { Bot, CircleCheck, CircleDot, CircleSlash, ExternalLink, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Loader2, RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -85,6 +87,7 @@ function who(login: string, role: string, item: TrackedPR | GithubIssue, you: st
 export default function GitHub(props: { section: string; repo: string | null; state: string; open: string | null }) {
   const prs = useLive("prs");
   const inbox = useLive("inbox");
+  const agents = useLive("agents");
   const loaded = useLoaded("prs");
   const [filter, setFilter] = useState("");
   const [account, setAccount] = useState<GithubAccountStatus | null>(null);
@@ -143,6 +146,10 @@ export default function GitHub(props: { section: string; repo: string | null; st
   }, []);
 
   const you = account?.login ?? "";
+  const agentNames: Record<string, string> = {};
+  for (const agent of agents) {
+    agentNames[agent.id] = agent.name;
+  }
   // The forks Approve sent PRs from, once each.
   const forks: string[] = [];
   for (const draft of inbox) {
@@ -340,6 +347,11 @@ export default function GitHub(props: { section: string; repo: string | null; st
                         Fixes #{issue.number}, {issue.state === "open" ? "still open" : "closed"}
                       </span>
                     ))}
+                    {pr.agent_mode === "drafts" && pr.agent !== null && (
+                      <span className="flex items-center gap-1" title="Its agent drafts replies and fixes here, for you to approve in the Inbox">
+                        <Bot className="size-3" /> {agentNames[pr.agent] ?? pr.agent}
+                      </span>
+                    )}
                     {pr.error !== null && <span className="text-destructive">Last check failed</span>}
                   </div>
                 </div>
@@ -388,6 +400,11 @@ export default function GitHub(props: { section: string; repo: string | null; st
                       {issue.comments === 1 ? "1 comment" : `${issue.comments} comments`}
                       {issue.last_comment !== null && `, the latest by ${who(issue.last_comment.login, issue.last_comment.role, issue, you)} ${since(issue.last_comment.at, now)} ago`}
                     </span>
+                    {issue.agent_mode === "drafts" && issue.agent !== null && (
+                      <span className="flex items-center gap-1" title="Its agent drafts replies here, for you to approve in the Inbox">
+                        <Bot className="size-3" /> {agentNames[issue.agent] ?? issue.agent}
+                      </span>
+                    )}
                     {issue.error !== null && <span className="text-destructive">Last check failed</span>}
                   </div>
                 </div>

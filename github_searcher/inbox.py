@@ -18,10 +18,16 @@ Approve on a PR or comment also sends it to GitHub as them, first; "sent" then s
      "evidence": [Evidence, ...] (a copy of the job's, see jobs.py),
      "overview": {...} (for the user, see below), "template": ".github/pull_request_template.md" | null,
      "status": "pending" | "approved" | "rejected" | "replied", "reply": "the user's text",
-     "created_at", "decided_at": null until decided, "sent": null | what went to GitHub (github_account.py)}
+     "created_at", "decided_at": null until decided, "sent": null | what went to GitHub (github_account.py),
+     "update_of": "owner/name#n" | null (pr only: a new version of the user's open PR, see below)}
 
 "body" is what would be sent to GitHub; "overview" is only for the user, who doesn't know the
 project: plain words on what is wrong and what the draft does about it.
+
+A PR draft with "update_of" is the next version of a PR that is open already (a follow-up job: a reviewer asked
+for changes, or its checks failed). Its commits start from the PR's newest commit (base_sha), "title" is the commit
+message's subject and "body" the comment posted on the PR with them. Approve pushes them onto the PR's branch
+instead of opening a new PR (github_account.py).
 
     pr:      {"project", "problem", "cause", "fix", "risks": ["what could go wrong", ...]}
     comment: {"project", "problem", "why"}  (why post this comment now)
@@ -76,6 +82,8 @@ class Inbox:
             draft.setdefault("base_sha", "")
             draft.setdefault("commits", [])
             draft.setdefault("sent", None)
+            # And from before PR updates.
+            draft.setdefault("update_of", None)
             self.drafts[draft["id"]] = draft
 
     def save(self, draft: dict) -> None:
@@ -112,7 +120,7 @@ class Inbox:
     def create(self, kind: str, agent: str, title: str, body: str, job: str | None = None,
                repo: str | None = None, target: str | None = None, diff: str = "", branch: str = "",
                base: str = "", base_sha: str = "", commits: list | None = None, vm: str | None = None, path: str | None = None, evidence: list | None = None,
-               overview: dict | None = None, template: str | None = None) -> dict:
+               overview: dict | None = None, template: str | None = None, update_of: str | None = None) -> dict:
         with self.lock:
             draft_id = "draft_" + secrets.token_hex(3)
             while draft_id in self.drafts:
@@ -141,6 +149,7 @@ class Inbox:
                 "created_at": datetime.now(UTC).isoformat(),
                 "decided_at": None,
                 "sent": None,
+                "update_of": update_of,
             }
             self.drafts[draft_id] = draft
             self.save(draft)
