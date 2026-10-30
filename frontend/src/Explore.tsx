@@ -22,23 +22,26 @@ repo that clearly doesn't match: Claude reads its open issues, the comments on t
 GitHub (it may hand batches of them to reader agents that read in parallel and report back), then settles the fit and
 writes the note with what it saw. That takes longer, so a candidate may show as being checked for a minute or two.
 
-Every repo that qualifies joins the found list right away, newest first: a table with a column for each thing known
-about it (FOUND_COLUMNS). The main ones come first: outside PRs merged (of those merged or closed), newcomers' first
-PRs merged (the same, for people who never opened a PR there before; hover for how many were merged, closed and still
-open), how newcomers fare, its AI policy, and how fast a maintainer first replies to an outside PR (bots, AI reviewers
-and other outsiders don't count). Then its fit, review tone, who reviews outside PRs (Reviewed by: Agent only when most
-get a review or comment only from an AI reviewer, a bot like CodeRabbit or Copilot; Agent and human; Human only when
-only maintainers do; Few reviews when too few to tell; hover for the counts; CI and other bots don't count), stars, its
-type (the one Claude classified it under), PRs, issues and commits a month
-and the trend, how many new contributors it had lately (people whose first PR there was recent, shown as "16 in 6
-days": the days its 100 newest PRs cover; people who contributed before don't count; it sorts by new contributors a
-day), how many maintainers it has, how many outside PRs no maintainer answered, and when it
-was found; its note under the name. There is no overall score: the numbers are shown as they are. Every column is as wide as its widest
-cell (one CSS grid for the whole table, each row a subgrid), and the text is in the page's own color, not gray: green,
-amber or red only where a value means something (the color rules in index.css). A click on a header adds that column
-to the sort, best first (A to Z for text); again the other way round; again takes it out. Many columns sort at once,
-from left to right: the leftmost sorted column first, then the next among the same (say AI policy, then Fit), and
-newest first among what is still the same; Repo (the name) last of all. Each sorted header is blue with an arrow. With none, it is back to newest
+Every repo that qualifies joins the found list right away, newest first: a table with a field for each thing known
+about it. Each row has two lines of fields, so it isn't too long, and the header two lines of names to match: each
+column holds a first-line field over a second-line one. The first line (FIRST_LINE) is how outside contributors fare,
+the main ones first: outside PRs merged (of those merged or closed), newcomers' first PRs merged (the same, for people
+who never opened a PR there before; hover for how many were merged, closed and still open), how newcomers fare, its AI
+policy, and how fast a maintainer first replies to an outside PR (bots, AI reviewers and other outsiders don't count);
+then review tone, who reviews outside PRs (Reviewed by: Agent only when most get a review or comment only from an AI
+reviewer, a bot like CodeRabbit or Copilot; Agent and human; Human only when only maintainers do; Few reviews when
+too few to tell; hover for the counts; CI and other bots don't count), how many outside PRs no maintainer answered and
+how many maintainers it has. The second line
+(SECOND_LINE) is the repo itself and how busy it is: stars, its type (the one Claude classified it under), fit, PRs,
+issues and commits a month and the trend, how many new contributors it had lately (people whose first PR there was
+recent, shown as "16 in 6 days": the days its 100 newest PRs cover; people who contributed before don't count; it
+sorts by new contributors a day), and when it was found. Its note goes under both, from the name on. There is no
+overall score: the numbers are shown as they are. Every column is as wide as its widest cell (one CSS grid for the
+whole table, each row a subgrid), and the text is in the page's own color, not gray: green, amber or red only where a
+value means something (the color rules in index.css). A click on a field's name in the header adds it to the sort,
+best first (A to Z for text); again the other way round; again takes it out. Many fields sort at once, in the order
+they come: the first line from left to right, then the second (say AI policy, then Fit), and newest first among what
+is still the same; Repo (the name) last of all. Each sorted name is blue with an arrow. With none, it is back to newest
 first. A click on a row opens it in place: its README, then its files folded at the
 bottom (RepoTree), like on the Repos page.
 The user decides on each: Approve puts it in Repos, Remove takes it off the found list (the two buttons at the end of
@@ -132,28 +135,38 @@ type FoundKey =
   | "unanswered"
   | "found";
 
-// The main ones first: outside PRs merged, newcomers' first PRs merged, how newcomers fare, the AI policy and how fast
-// a maintainer replies.
-const FOUND_COLUMNS: { key: FoundKey; label: string; title: string; better: "higher" | "lower" | "text" }[] = [
+type FoundColumn = { key: FoundKey; label: string; title: string; better: "higher" | "lower" | "text" };
+
+// Each row has two lines, so it isn't too long. The first: how outside contributors fare, the main ones first
+// (outside PRs merged, newcomers' first PRs merged, how newcomers fare, the AI policy and how fast a maintainer
+// replies).
+const FIRST_LINE: FoundColumn[] = [
   { key: "merged", label: "Merged", title: "Outside contributors' PRs merged, of those merged or closed", better: "higher" },
   { key: "new_merged", label: "New merged", title: "Newcomers' first PRs merged, of those merged or closed (a newcomer: someone who never opened a PR there before)", better: "higher" },
   { key: "newcomers", label: "Newcomers", title: "How newcomers' first PRs fare", better: "higher" },
   { key: "policy", label: "AI policy", title: "What its contribution files say about AI", better: "higher" },
   { key: "reply", label: "Reply", title: "Median days until outside contributors' PRs get a first reply from a maintainer (bots and other outsiders don't count)", better: "lower" },
-  { key: "fit", label: "Fit", title: "How well Claude thinks it fits your Explore profile", better: "higher" },
   { key: "tone", label: "Reviews", title: "How maintainers' feedback on outside PRs feels", better: "higher" },
   { key: "reviewers", label: "Reviewed by", title: "Who reviews outside PRs: only an AI reviewer (a bot like CodeRabbit or Copilot), both, or only maintainers; human only first", better: "higher" },
+  { key: "unanswered", label: "Unanswered", title: "Outside contributors' PRs open over 30 days that no maintainer answered", better: "lower" },
+  { key: "maintainers", label: "Maintainers", title: "People who merged a PR in the last 30 days (bots not counted)", better: "higher" },
+];
+// The second, under the first: the repo itself and how busy it is.
+const SECOND_LINE: FoundColumn[] = [
   { key: "stars", label: "Stars", title: "Stars on GitHub", better: "higher" },
   { key: "type", label: "Type", title: "The type of repo Claude put it under, from your Explore profile", better: "text" },
+  { key: "fit", label: "Fit", title: "How well Claude thinks it fits your Explore profile", better: "higher" },
   { key: "prs", label: "PRs/mo", title: "PRs opened a month, on average over 90 days", better: "higher" },
   { key: "issues", label: "Issues/mo", title: "Issues opened a month, on average over 90 days", better: "higher" },
   { key: "commits", label: "Commits/mo", title: "Commits a month, on average over 90 days", better: "higher" },
   { key: "trend", label: "Trend", title: "The last 30 days against the 90-day average", better: "higher" },
   { key: "new_contributors", label: "New contributors", title: "People whose first PR there came in the time shown: its 100 newest PRs, at most 90 days, among the 30 most recent outside authors. People who contributed before don't count, nor do maintainers or bots", better: "higher" },
-  { key: "maintainers", label: "Maintainers", title: "People who merged a PR in the last 30 days (bots not counted)", better: "higher" },
-  { key: "unanswered", label: "Unanswered", title: "Outside contributors' PRs open over 30 days that no maintainer answered", better: "lower" },
   { key: "found", label: "Found", title: "When it was found", better: "higher" },
 ];
+// Every column in sort order (the first line from left to right, then the second), and the table's columns between
+// Repo and the buttons: each holds a first-line field over a second-line one.
+const FOUND_COLUMNS = [...FIRST_LINE, ...SECOND_LINE];
+const SLOTS = Array.from({ length: Math.max(FIRST_LINE.length, SECOND_LINE.length) }, (_, index) => index);
 
 // The order of each judged value, best first being the highest. Values not listed (unknown) go last.
 const POLICY_RANK: Record<string, number> = { welcome: 5, none: 4, disclose: 3, unclear: 2, no_ai: 1 };
@@ -177,7 +190,7 @@ export default function Explore() {
   const [pickingFilters, setPickingFilters] = useState(false);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
-  // The found list's order: by these columns, from left to right as the table shows them, the name last (none: newest
+  // The found list's order: by these fields, in FOUND_COLUMNS' order, the name last (none: newest
   // first); best is the way a column's first click sorts, or not.
   const [sorts, setSorts] = useState<{ key: FoundKey; best: boolean }[]>([]);
   // Rows open in place, and the ones approved or removed here that the live feed still lists (hidden meanwhile).
@@ -444,7 +457,7 @@ export default function Explore() {
   const found = explore.found.filter((each) => !leaving.includes(each.name)).reverse();
   if (sorts.length > 0) {
     found.sort((a, b) => {
-      // The leftmost sorted column that tells them apart decides; when none does, they stay newest first (a stable sort).
+      // The first sorted field (in FOUND_COLUMNS' order) that tells them apart decides; when none does, they stay newest first (a stable sort).
       for (const key of [...FOUND_COLUMNS.map((column) => column.key), "name"]) {
         const sort = sorts.find((each) => each.key === key);
         if (sort === undefined) {
@@ -606,13 +619,13 @@ export default function Explore() {
         {found.length > 0 && (
           <div
             className="grid w-max min-w-full gap-x-4 border-b"
-            style={{ gridTemplateColumns: `16px minmax(160px,1fr) repeat(${FOUND_COLUMNS.length}, max-content) max-content` }}
+            style={{ gridTemplateColumns: `16px minmax(160px,1fr) repeat(${SLOTS.length}, max-content) max-content` }}
           >
-            <div className="col-span-full grid h-7 grid-cols-subgrid items-center bg-muted/40 px-3 text-xs font-medium">
+            <div className="col-span-full grid grid-cols-subgrid items-center bg-muted/40 px-3 py-0.5 text-xs font-medium">
               {/* Top left: picks every repo shown, or none when all are; a dash when only some are. */}
               <button
                 type="button"
-                className="flex items-center"
+                className="flex h-5 items-center self-start"
                 aria-label={allPicked ? "Unselect all" : "Select all"}
                 title={allPicked ? "Unselect all" : "Select all (Ctrl+A)"}
                 disabled={foundNames.length === 0}
@@ -622,24 +635,33 @@ export default function Explore() {
               </button>
               <button
                 type="button"
-                className={cn("flex items-center gap-0.5 hover:text-primary", sorts.some((each) => each.key === "name") && "text-primary")}
+                className={cn("flex h-5 items-center gap-0.5 self-start hover:text-primary", sorts.some((each) => each.key === "name") && "text-primary")}
                 title="A to Z"
                 onClick={() => clickSort("name")}
               >
                 Repo
                 {sortMark("name")}
               </button>
-              {FOUND_COLUMNS.map((column) => (
-                <button
-                  key={column.key}
-                  type="button"
-                  className={cn("flex items-center gap-0.5 hover:text-primary", sorts.some((each) => each.key === column.key) && "text-primary")}
-                  title={column.title}
-                  onClick={() => clickSort(column.key)}
-                >
-                  {column.label}
-                  {sortMark(column.key)}
-                </button>
+              {/* Two lines, like the rows: each column's first-line field over its second-line one. */}
+              {SLOTS.map((index) => (
+                <span key={index} className="flex flex-col">
+                  {[FIRST_LINE[index], SECOND_LINE[index]].map((column, line) =>
+                    column === undefined ? (
+                      <span key={line} className="h-5" />
+                    ) : (
+                      <button
+                        key={column.key}
+                        type="button"
+                        className={cn("flex h-5 items-center gap-0.5 hover:text-primary", sorts.some((each) => each.key === column.key) && "text-primary")}
+                        title={column.title}
+                        onClick={() => clickSort(column.key)}
+                      >
+                        {column.label}
+                        {sortMark(column.key)}
+                      </button>
+                    ),
+                  )}
+                </span>
               ))}
               <span />
             </div>
@@ -648,7 +670,7 @@ export default function Explore() {
                 <div
                   data-select-id={each.name}
                   className={cn(
-                    "group col-span-full grid cursor-pointer grid-cols-subgrid px-3 hover:bg-accent/50",
+                    "group col-span-full grid cursor-pointer grid-cols-subgrid px-3 py-2 hover:bg-accent/50",
                     open.includes(each.name) && "bg-accent/40",
                     chosen.includes(each.name) && "bg-selected hover:bg-selected",
                   )}
@@ -691,9 +713,9 @@ export default function Explore() {
                       <ExternalLink className="size-3.5" />
                     </a>
                   </span>
-                  {FOUND_COLUMNS.map((column) => (
-                    <span key={column.key} className="flex h-7 items-center whitespace-nowrap tabular-nums">
-                      {foundCell(each, column.key)}
+                  {SLOTS.map((index) => (
+                    <span key={index} className="flex h-7 items-center whitespace-nowrap tabular-nums">
+                      {FIRST_LINE[index] !== undefined && foundCell(each, FIRST_LINE[index].key)}
                     </span>
                   ))}
                   <span className="flex h-7 items-center gap-1">
@@ -704,8 +726,17 @@ export default function Explore() {
                       <X /> Remove
                     </Button>
                   </span>
-                  {/* Under the name, to the end of the row (always there, for the room under the row). */}
-                  <div className="w-0 min-w-full truncate pb-1.5" style={{ gridColumn: "2 / -1" }} title={each.note}>
+                  {/* The second line, under the first one's columns: nothing under the box and the name. */}
+                  <span />
+                  <span />
+                  {SLOTS.map((index) => (
+                    <span key={index} className="flex h-6 items-center whitespace-nowrap tabular-nums">
+                      {SECOND_LINE[index] !== undefined && foundCell(each, SECOND_LINE[index].key)}
+                    </span>
+                  ))}
+                  <span />
+                  {/* Under the name, to the end of the row. */}
+                  <div className="w-0 min-w-full truncate pt-0.5" style={{ gridColumn: "2 / -1" }} title={each.note}>
                     {each.note}
                   </div>
                 </div>
