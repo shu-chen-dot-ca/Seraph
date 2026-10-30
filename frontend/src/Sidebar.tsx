@@ -4,7 +4,7 @@ The left tree, like Proxmox's resource tree. Every line is a link to a page, in 
   goes), Repos, Tracked (new issues in the repos the user keeps an eye on), Issues
   (one child per issue an agent is on now: its latest job queued, working or waiting on you, waiting on you first;
   each with the issue's number and the job's progress bar and step, like the Issues page's Status column; hover for
-  its repo, title, agent and the agent's headline; a click opens the issue's row on the Issues page);
+  its repo, title, agent and the agent's headline; a click opens the issue in a pop-up on the Issues page);
 - doing it, under a line: Jobs (open / all), Agents (one child per agent), then under another line VMs (one child per VM);
 - the computer, under another line: Resource (this computer's CPU, memory, GPUs, disk, network and battery,
   Resource.tsx);

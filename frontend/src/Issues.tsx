@@ -41,14 +41,20 @@ special hardware. Or it touches politics, in the issue or in what the repo is fo
 work, nothing politically sensitive or activist, and nothing that goes against another country's laws, such as
 China's. Its Assign is greyed out.
 easy: all yes, so the agent can vibe code it, see it and prove it in the VM; hard: it can't run in our VM, the change
-ripples, or two or more are no; medium: one is no. The reason on hover ends with which checks failed. A level is kept once given: it changes only when the issue changes on GitHub. Tag again (in the open row) has Claude read it again now.
+ripples, or two or more are no; medium: one is no. The reason on hover ends with which checks failed. A level is kept once given: it changes only when the issue changes on GitHub. Tag again (in the issue's pop-up) has Claude read it again now.
 
-Rows open in place: the tags and why, the facts in full (author and role, last comment and who wrote it, assignees, linked PRs,
-the repo's last push), the agent's note, the issue body and its comments below it, each with who wrote it and when
-(fetched from GitHub on every open, so new comments show; the last one fetched shows meanwhile; the first 40 comments,
-past that a line says how many more are on GitHub), and every job for the issue with its progress (steps and the agent's headline) and links to its agent, VM and drafts.
+A click on a row opens that issue in a pop-up (#/issues?open=<issue id>, keeping repo= when one repo's issues are
+shown; the links from the Sidebar, Tracked and Jobs pages and Active open it the same way, also one the rows don't
+show); the X, Esc or a click outside it closes it, back to the list. On its top: the repo, the # (to GitHub), how many
+comments, the title (struck through and marked closed when it is), and the row's own buttons: Assign, the arrow to
+GitHub and Remove (greyed out like the row's X; removing it closes the pop-up). Below, scrolling: the tags and why with
+Tag again, the facts in full (author and role, last comment and who wrote it, assignees, linked PRs, the repo's last
+push), the agent's note, the issue body and its comments below it, each with who wrote it and when (fetched from
+GitHub each time it opens, so new comments show; the last one fetched shows meanwhile; the first 40 comments, past
+that a line says how many more are on GitHub), and every job for the issue with its progress (steps and the agent's
+headline), links to its agent, VM and drafts, and Cancel while it is in progress.
 A job in progress shows in the row as a small progress bar with its step.
-Assign (greyed out when the issue is out of scope) opens AssignDialog; the arrow button next to it (and the #) opens the issue on GitHub in a new tab.
+Assign (in the row and the pop-up; greyed out when the issue is out of scope) opens AssignDialog on top; the arrow button next to it (and the #) opens the issue on GitHub in a new tab.
 Only the rows on screen are drawn, so thousands of issues stay fast. Undo / redo like the Repos page.
 Many rows are picked like on the Repos page. Hovering a row shows its box on the left; ticking it picks that issue and
 turns on select mode, like Select (on the right of the bar on top) does: Select stays lit (a click on it ends select
@@ -59,8 +65,8 @@ too. A bar at the bottom then removes them at once, as one undo step (it asks fi
 selection (Escape, the bar's x) ends select mode too.
 Active (first in the bar on top) drops down every issue an agent is on now (its latest job queued, working or waiting
 on you), whatever the repo: waiting on you first, then working, then queued. Each shows its title, the agent's
-headline under it, the agent, and the same progress bar as the Status column; a click opens that issue's row (like a
-link from the Jobs page). The sidebar lists the same issues under Issues.
+headline under it, the agent, and the same progress bar as the Status column; a click opens that issue in its pop-up
+(like a link from the Jobs page). The sidebar lists the same issues under Issues.
 Remove closed and assigned (in the bar on top) takes out every issue that is closed on GitHub or that someone else is
 on (assigned on GitHub, or tagged Assigned; Self-assigned ones stay) in one go, whatever the repo, except ones an agent
 here has a job for (its latest not cancelled); it asks first too, and is one undo step.
@@ -87,6 +93,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { JobProgressBar, JobSteps } from "@/components/ui/job-progress";
 import { Markdown } from "@/components/ui/markdown";
@@ -163,14 +170,14 @@ const LEVEL_VARIANT: Record<string, "ok" | "warn" | "bad" | "secondary"> = {
 const LEVEL_LABEL: Record<string, string> = { easy: "Easy", medium: "Medium", hard: "Hard", "out of scope": "Out of scope" };
 const OUT_OF_SCOPE = "Out of scope, so it can't be assigned (its Level says why)";
 
-// open: an issue id whose row starts open and in view (#/issues?open=owner/name%23n, from the Jobs page).
+// open: the issue shown in the pop-up (#/issues?open=owner/name%23n), null when none is.
 export default function Issues(props: { repo: string | null; open: string | null }) {
   const issues = useLive("issues");
   const repos = useLive("repos");
   const jobs = useLive("jobs");
   const agents = useLive("agents");
   const loaded = useLoaded("issues");
-  const [open, setOpen] = useState<string[]>(props.open !== null ? [props.open] : []);
+  // Each issue's text and comments, by id, as last fetched from GitHub for its pop-up.
   const [threads, setThreads] = useState<Record<string, Thread>>({});
   const [threadErrors, setThreadErrors] = useState<Record<string, string>>({});
   const [assigning, setAssigning] = useState<IssueItem | null>(null);
@@ -576,7 +583,7 @@ export default function Issues(props: { repo: string | null; open: string | null
   }
 
   // Refresh: every issue's facts from GitHub (seconds), then Claude reads every open one and its comments again (still
-  // free? claimed? changed?), a few minutes for many; each open row's Tag again spins meanwhile.
+  // free? claimed? changed?), a few minutes for many; the pop-up's Tag again spins meanwhile.
   async function refreshAll() {
     const ids = issues.items.filter((issue) => (issue.facts?.state ?? issue.state) !== "CLOSED").map((issue) => issue.id);
     setRefreshing(true);
@@ -607,29 +614,14 @@ export default function Issues(props: { repo: string | null; open: string | null
     setRefreshing(false);
   }
 
+  // Every row is one line, 28px high (h-7).
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => 29,
+    estimateSize: () => 28,
     overscan: 10,
     getItemKey: (index) => rows[index].id,
   });
-
-  // Opened from a link to one issue (props.open): bring its row into view once the list is there.
-  const openIndex = props.open !== null ? rows.findIndex((issue) => issue.id === props.open) : -1;
-  const [scrolledTo, setScrolledTo] = useState(false);
-  useEffect(() => {
-    if (scrolledTo || openIndex < 0) {
-      return;
-    }
-    virtualizer.scrollToIndex(openIndex, { align: "start" });
-    setScrolledTo(true);
-    // Its text, as a click on the row would fetch it.
-    const id = rows[openIndex].id;
-    api<Thread>(`/api/issues/thread?id=${encodeURIComponent(id)}`)
-      .then((thread) => setThreads((current) => ({ ...current, [id]: thread })))
-      .catch((err) => setThreadErrors((current) => ({ ...current, [id]: err instanceof Error ? err.message : String(err) })));
-  }, [openIndex, scrolledTo, virtualizer, rows]);
 
   async function undo() {
     try {
@@ -695,21 +687,33 @@ export default function Issues(props: { repo: string | null; open: string | null
     }
   }
 
-  // Open or close a row. Every open fetches the issue thread from GitHub again; the one fetched before shows meanwhile.
-  async function toggle(id: string) {
-    if (open.includes(id)) {
-      setOpen((current) => current.filter((other) => other !== id));
+  // Each time an issue opens in the pop-up, its text and comments come from GitHub again, so new comments show; the
+  // ones fetched before show meanwhile.
+  useEffect(() => {
+    const id = props.open;
+    if (id === null) {
       return;
     }
-    setOpen((current) => [...current, id]);
     setThreadErrors((current) => ({ ...current, [id]: "" }));
-    try {
-      const thread = await api<Thread>(`/api/issues/thread?id=${encodeURIComponent(id)}`);
-      setThreads((current) => ({ ...current, [id]: thread }));
-    } catch (err) {
-      setThreadErrors((current) => ({ ...current, [id]: err instanceof Error ? err.message : String(err) }));
-    }
-  }
+    api<Thread>(`/api/issues/thread?id=${encodeURIComponent(id)}`)
+      .then((thread) => setThreads((current) => ({ ...current, [id]: thread })))
+      .catch((err) => setThreadErrors((current) => ({ ...current, [id]: err instanceof Error ? err.message : String(err) })));
+  }, [props.open]);
+
+  // The page's address with no issue open: the list, of one repo when it shows one.
+  const listHash = props.repo !== null ? `#/issues?repo=${encodeURIComponent(props.repo)}` : "#/issues";
+
+  // The issue open in the pop-up, looked up in all issues (a link may open one the rows don't show), and what it shows.
+  const shown = issues.items.find((issue) => issue.id === props.open);
+  const shownFacts = shown?.facts ?? null;
+  const shownTags = shown?.tags ?? null;
+  const shownThread = props.open !== null ? threads[props.open] : undefined;
+  const shownError = props.open !== null ? (threadErrors[props.open] ?? "") : "";
+  const shownComments = shownFacts !== null ? shownFacts.comments : shownThread !== undefined ? shownThread.comments.length : (shown?.comments ?? 0);
+  const shownState = shownFacts !== null ? shownFacts.state : shown?.state;
+  const shownSelfAssigned = shown !== undefined && selfAssignedIds.includes(shown.id);
+  const shownAssigned = ((shownFacts !== null && shownFacts.assignees.length > 0) || shownTags?.status === "assigned") && !shownSelfAssigned;
+  const shownJobs = props.open !== null ? [...(issueJobs[props.open] ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at)) : [];
 
   // Ctrl+Z / Ctrl+Y (and Ctrl+Shift+Z), unless typing in a field or a dialog is open.
   useEffect(() => {
@@ -737,7 +741,8 @@ export default function Issues(props: { repo: string | null; open: string | null
   return (
     <div className="relative flex h-full flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-        <DropdownMenu>
+        {/* Not modal: its links open an issue's pop-up as it closes, and a modal menu could leave the page unclickable. */}
+        <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="sm" title="Every issue an agent is on now, and how far it got">
               <Activity /> Active <span className={cn("text-xs tabular-nums", active.length > 0 ? "text-primary" : "text-muted-foreground")}>{active.length}</span>
@@ -846,279 +851,95 @@ export default function Issues(props: { repo: string | null; open: string | null
           <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
             {virtualizer.getVirtualItems().map((item) => {
               const issue = rows[item.index];
-              const isOpen = open.includes(issue.id);
-              const thread = threads[issue.id];
-              const threadError = threadErrors[issue.id] ?? "";
               const facts = issue.facts ?? null;
-              const commentCount = facts !== null ? facts.comments : thread !== undefined ? thread.comments.length : issue.comments;
               const state = facts !== null ? facts.state : issue.state;
               const openPRs = facts !== null ? facts.linked_prs.filter((pull) => pull.state === "OPEN") : [];
               const mergedPRs = facts !== null ? facts.linked_prs.filter((pull) => pull.state === "MERGED") : [];
-              const tags = issue.tags ?? null;
-              const isSelfAssigned = selfAssignedIds.includes(issue.id);
-              const isAssigned = ((facts !== null && facts.assignees.length > 0) || tags?.status === "assigned") && !isSelfAssigned;
-              const history = [...(issueJobs[issue.id] ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at));
               return (
-                <div key={item.key} data-index={item.index} ref={virtualizer.measureElement} className="absolute left-0 w-full border-b" style={{ top: item.start }}>
-                  <div
-                    data-select-id={issue.id}
-                    className={cn("group grid min-h-7 cursor-pointer items-center gap-x-4 px-3 py-0.5 hover:bg-accent/50", isOpen && "bg-accent/40", chosen.includes(issue.id) && "bg-selected hover:bg-selected")}
-                    style={{ gridTemplateColumns: template }}
+                <div
+                  key={item.key}
+                  data-select-id={issue.id}
+                  className={cn(
+                    "group absolute left-0 grid h-7 w-full cursor-pointer items-center gap-x-4 border-b px-3 hover:bg-accent/50",
+                    issue.id === props.open && "bg-accent/40",
+                    chosen.includes(issue.id) && "bg-selected hover:bg-selected",
+                  )}
+                  style={{ top: item.start, gridTemplateColumns: template }}
+                  onClick={(event) => {
+                    // In select mode a click picks the row; otherwise Ctrl / Shift-click picks it and a plain click opens it in the pop-up.
+                    if (selectMode || event.ctrlKey || event.metaKey || event.shiftKey) {
+                      select(issue.id, event.shiftKey);
+                    } else if (props.repo !== null) {
+                      window.location.hash = `${listHash}&open=${encodeURIComponent(issue.id)}`;
+                    } else {
+                      window.location.hash = `#/issues?open=${encodeURIComponent(issue.id)}`;
+                    }
+                  }}
+                >
+                  {/* Out of select mode only on hover. Ticking it picks the issue, which turns select mode on. */}
+                  <button
+                    type="button"
+                    className={cn("flex items-center", !selectMode && "invisible group-hover:visible")}
+                    aria-label={`Select ${issue.id}`}
                     onClick={(event) => {
-                      // In select mode a click picks the row; otherwise Ctrl / Shift-click picks it and a plain click opens it.
-                      if (selectMode || event.ctrlKey || event.metaKey || event.shiftKey) {
-                        select(issue.id, event.shiftKey);
-                      } else {
-                        toggle(issue.id);
-                      }
+                      event.stopPropagation();
+                      select(issue.id, event.shiftKey);
                     }}
                   >
-                    {/* Out of select mode only on hover. Ticking it picks the issue, which turns select mode on. */}
-                    <button
-                      type="button"
-                      className={cn("flex items-center", !selectMode && "invisible group-hover:visible")}
-                      aria-label={`Select ${issue.id}`}
+                    <SelectBox checked={chosen.includes(issue.id)} />
+                  </button>
+                  <span className="whitespace-nowrap tabular-nums">{issueCell(issue, "number")}</span>
+                  {/* The title, then what to know before taking it: closed, PRs open or merged for it (the tags have their columns). */}
+                  <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+                    <span className={cn("truncate", state === "CLOSED" && "line-through")}>{facts !== null ? facts.title : issue.title}</span>
+                    {state === "CLOSED" && <Badge variant="secondary">closed</Badge>}
+                    {/* Each PR linked to it on GitHub; the open ones first, at most three. */}
+                    {[...openPRs, ...mergedPRs].slice(0, 3).map((pull) => (
+                      <Badge key={pull.url} asChild variant={pull.state === "OPEN" ? "warn" : "secondary"}>
+                        <a href={pull.url} target="_blank" rel="noreferrer" title={`Open on GitHub: by ${pull.author}`} onClick={(event) => event.stopPropagation()}>
+                          PR #{pull.number} {pull.state === "OPEN" ? "open" : "merged"}
+                        </a>
+                      </Badge>
+                    ))}
+                    {openPRs.length + mergedPRs.length > 3 && <Badge variant="secondary">+{openPRs.length + mergedPRs.length - 3}</Badge>}
+                  </span>
+                  {ISSUE_COLUMNS.map((column) => (
+                    <span key={column.key} className="min-w-0 truncate whitespace-nowrap tabular-nums">
+                      {issueCell(issue, column.key)}
+                    </span>
+                  ))}
+                  <span className="flex items-center justify-end gap-0.5">
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      title={issue.tags?.level === "out of scope" ? OUT_OF_SCOPE : "Give this issue to an agent"}
+                      disabled={issue.tags?.level === "out of scope"}
                       onClick={(event) => {
                         event.stopPropagation();
-                        select(issue.id, event.shiftKey);
+                        setAssigning(issue);
                       }}
                     >
-                      <SelectBox checked={chosen.includes(issue.id)} />
-                    </button>
-                    <span className="whitespace-nowrap tabular-nums">{issueCell(issue, "number")}</span>
-                    {/* The title, then what to know before taking it: closed, PRs open or merged for it (the tags have their columns). */}
-                    <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-                      <span className={cn("truncate", state === "CLOSED" && "line-through")}>{facts !== null ? facts.title : issue.title}</span>
-                      {state === "CLOSED" && <Badge variant="secondary">closed</Badge>}
-                      {/* Each PR linked to it on GitHub; the open ones first, at most three. */}
-                      {[...openPRs, ...mergedPRs].slice(0, 3).map((pull) => (
-                        <Badge key={pull.url} asChild variant={pull.state === "OPEN" ? "warn" : "secondary"}>
-                          <a href={pull.url} target="_blank" rel="noreferrer" title={`Open on GitHub: by ${pull.author}`} onClick={(event) => event.stopPropagation()}>
-                            PR #{pull.number} {pull.state === "OPEN" ? "open" : "merged"}
-                          </a>
-                        </Badge>
-                      ))}
-                      {openPRs.length + mergedPRs.length > 3 && <Badge variant="secondary">+{openPRs.length + mergedPRs.length - 3}</Badge>}
-                    </span>
-                    {ISSUE_COLUMNS.map((column) => (
-                      <span key={column.key} className="min-w-0 truncate whitespace-nowrap tabular-nums">
-                        {issueCell(issue, column.key)}
-                      </span>
-                    ))}
-                    <span className="flex items-center justify-end gap-0.5">
-                      <Button
-                        variant="ghost"
-                        size="xs"
-                        title={issue.tags?.level === "out of scope" ? OUT_OF_SCOPE : "Give this issue to an agent"}
-                        disabled={issue.tags?.level === "out of scope"}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setAssigning(issue);
-                        }}
-                      >
-                        <UserPlus /> Assign
-                      </Button>
-                      <Button variant="ghost" size="icon-xs" asChild>
-                        <a href={issue.html_url} target="_blank" rel="noreferrer" aria-label={`Open ${issue.id} on GitHub`} title="Open on GitHub" onClick={(event) => event.stopPropagation()}>
-                          <ExternalLink />
-                        </a>
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={`Remove ${issue.id}`}
-                        title={workingIds.includes(issue.id) ? "An agent is working on it: cancel its job first to remove it" : "Remove from the list"}
-                        disabled={workingIds.includes(issue.id)}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          remove([issue.id]);
-                        }}
-                      >
-                        <X />
-                      </Button>
-                    </span>
-                  </div>
-
-                  {isOpen && (
-                    <div className="space-y-3 border-t bg-muted/30 px-9 py-3">
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
-                        <span>
-                          {commentCount} {commentCount === 1 ? "comment" : "comments"}
-                        </span>
-                        <a href={issue.html_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 hover:text-foreground">
-                          GitHub <ExternalLink className="size-3" />
-                        </a>
-                      </div>
-
-                      {tags !== null ? (
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                          {isSelfAssigned && <Badge>self-assigned</Badge>}
-                          {isAssigned && <Badge variant="warn">assigned</Badge>}
-                          {!isAssigned && !isSelfAssigned && state !== "CLOSED" && tags.status === "free" && <Badge variant="ok">free</Badge>}
-                          {tags.level !== null && (
-                            <Badge variant={LEVEL_VARIANT[tags.level] ?? "secondary"}>{LEVEL_LABEL[tags.level]}</Badge>
-                          )}
-                          {tags.kind !== null && <Badge variant="secondary">{tags.kind}</Badge>}
-                          <span>{tags.reason}</span>
-                          <Button variant="ghost" size="xs" disabled={retagging.includes(issue.id)} title="Claude reads it and its comments again now" onClick={() => tagAgain(issue.id)}>
-                            {retagging.includes(issue.id) ? <Loader2 className="animate-spin" /> : <Tags />} Tag again
-                          </Button>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2 text-muted-foreground">
-                          <Loader2 className="size-3.5 animate-spin" /> Reading it to tag it…
-                        </div>
-                      )}
-
-                      {facts === null && (
-                        <div className="flex items-center gap-2 text-muted-foreground">
-                          <Loader2 className="size-3.5 animate-spin" /> Getting the facts from GitHub…
-                        </div>
-                      )}
-                      {facts !== null && (
-                        <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-1">
-                          <span className="text-muted-foreground">Opened</span>
-                          <span>
-                            {timeAgo(facts.created_at)} by {facts.author}
-                            {ROLE[facts.author_role] && (
-                              <span className={MAINTAINERS.includes(facts.author_role) ? "text-ok" : "text-muted-foreground"}> · {ROLE[facts.author_role]}</span>
-                            )}
-                          </span>
-
-                          <span className="text-muted-foreground">Last activity</span>
-                          <span>{timeAgo(facts.updated_at)}</span>
-
-                          <span className="text-muted-foreground">Last comment</span>
-                          <span>
-                            {facts.last_comment_at === null && <span className="text-muted-foreground">No comments yet</span>}
-                            {facts.last_comment_at !== null && (
-                              <>
-                                {timeAgo(facts.last_comment_at)} by {facts.last_comment_by}
-                                {facts.last_comment_role !== null && ROLE[facts.last_comment_role] && (
-                                  <span className={MAINTAINERS.includes(facts.last_comment_role) ? "text-ok" : "text-muted-foreground"}>
-                                    {" "}
-                                    · {ROLE[facts.last_comment_role]}
-                                  </span>
-                                )}
-                                <span className="text-muted-foreground"> · {facts.comments} in all</span>
-                              </>
-                            )}
-                          </span>
-
-                          <span className="text-muted-foreground">Interest</span>
-                          <span>
-                            {facts.participants} {facts.participants === 1 ? "person" : "people"} in the thread · {facts.thumbs_up} thumbs up
-                          </span>
-
-                          <span className="text-muted-foreground">Assigned</span>
-                          <span className={facts.assignees.length > 0 ? "text-warn" : "text-muted-foreground"}>
-                            {facts.assignees.length > 0 ? facts.assignees.join(", ") : "Nobody"}
-                          </span>
-
-                          <span className="text-muted-foreground">Linked PRs</span>
-                          <span className="flex flex-wrap gap-x-3">
-                            {facts.linked_prs.length === 0 && <span className="text-muted-foreground">None</span>}
-                            {facts.linked_prs.map((pull) => (
-                              <a
-                                key={pull.url}
-                                href={pull.url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className={cn("hover:underline", pull.state === "OPEN" ? "text-warn" : "text-muted-foreground")}
-                              >
-                                {pull.repo !== issue.repo && pull.repo}#{pull.number} {pull.state.toLowerCase()} by {pull.author}
-                              </a>
-                            ))}
-                          </span>
-
-                          <span className="text-muted-foreground">Repo</span>
-                          <span>
-                            {STARS.format(facts.repo_stars)} stars · last push {timeAgo(facts.repo_pushed_at)}
-                          </span>
-
-                          <span className="col-span-2 text-xs text-muted-foreground">From GitHub {timeAgo(facts.fetched_at)}</span>
-                        </div>
-                      )}
-
-                      {issue.note !== "" && (
-                        <div className="border-l-2 border-muted-foreground/30 pl-3">
-                          <div className="text-xs font-medium text-muted-foreground">Agent's note</div>
-                          <div className="whitespace-pre-wrap">{issue.note}</div>
-                        </div>
-                      )}
-
-                      {thread === undefined && threadError === "" && (
-                        <div className="flex items-center gap-2 text-muted-foreground">
-                          <Loader2 className="size-3.5 animate-spin" /> Loading the issue…
-                        </div>
-                      )}
-                      {threadError !== "" && <div className="text-destructive">Could not load the issue: {threadError}</div>}
-                      {thread !== undefined && (
-                        <div className="border bg-background px-4 py-3">
-                          <Markdown text={thread.body || "*No description.*"} repo={issue.repo} issueRefs />
-                        </div>
-                      )}
-                      {/* The comments below the text, oldest first: claims like "can I take this?" and the answers. */}
-                      {thread !== undefined &&
-                        thread.comments.map((comment, index) => (
-                          <div key={index} className="border bg-background px-4 py-2">
-                            <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
-                              <span className="font-medium text-foreground">{comment.author}</span>
-                              <span title={new Date(comment.at).toLocaleString()}>{timeAgo(comment.at)}</span>
-                            </div>
-                            <Markdown text={comment.body} repo={issue.repo} issueRefs />
-                          </div>
-                        ))}
-                      {thread !== undefined && commentCount > thread.comments.length && (
-                        <a href={issue.html_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-muted-foreground hover:text-foreground">
-                          {commentCount - thread.comments.length} more on GitHub <ExternalLink className="size-3" />
-                        </a>
-                      )}
-
-                      <div>
-                        <div className="mb-1 text-xs font-medium text-muted-foreground">Jobs</div>
-                        {history.length === 0 && <div className="text-muted-foreground">No jobs yet. Use Assign to give this issue to an agent.</div>}
-                        {history.map((each) => (
-                          <div key={each.id} className="border-b py-1 last:border-b-0">
-                            <div className="flex h-6 items-center gap-3">
-                              <span className="flex w-28 shrink-0 items-center gap-1.5">
-                                <StatusDot tone={JOB_TONE[each.status]} />
-                                {JOB_LABEL[each.status] ?? each.status}
-                              </span>
-                              <span className="w-24 shrink-0 font-mono text-xs text-muted-foreground">{each.id}</span>
-                              <a href={`#/agents/${each.agent}`} className="shrink-0 text-primary hover:underline">
-                                {agentNames[each.agent] ?? each.agent}
-                              </a>
-                              {each.vm !== null && (
-                                <a href={`#/vms/${each.vm}`} className="shrink-0 text-primary hover:underline">
-                                  {each.vm}
-                                </a>
-                              )}
-                              {each.drafts.map((draft) => (
-                                <a key={draft} href={`#/inbox/${draft}`} className="shrink-0 font-mono text-xs text-primary hover:underline">
-                                  {draft}
-                                </a>
-                              ))}
-                              <span className="ml-auto shrink-0 text-xs text-muted-foreground">{new Date(each.created_at).toLocaleString()}</span>
-                              {(each.status === "queued" || each.status === "working" || each.status === "waiting_on_user") && (
-                                <Button variant="ghost" size="xs" onClick={() => cancelJob(each)}>
-                                  Cancel
-                                </Button>
-                              )}
-                            </div>
-                            {(each.status === "working" || each.status === "waiting_on_user" || each.step !== null) && (
-                              <div className="space-y-1 py-1 pl-[124px]">
-                                <JobSteps job={each} />
-                                {each.headline !== "" && <div>{each.headline}</div>}
-                              </div>
-                            )}
-                            {each.instructions !== "" && <div className="pl-[124px] whitespace-pre-wrap text-muted-foreground">Instructions: {each.instructions}</div>}
-                            {each.notes !== "" && <div className="pl-[124px] whitespace-pre-wrap text-muted-foreground">{each.notes}</div>}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                      <UserPlus /> Assign
+                    </Button>
+                    <Button variant="ghost" size="icon-xs" asChild>
+                      <a href={issue.html_url} target="_blank" rel="noreferrer" aria-label={`Open ${issue.id} on GitHub`} title="Open on GitHub" onClick={(event) => event.stopPropagation()}>
+                        <ExternalLink />
+                      </a>
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={`Remove ${issue.id}`}
+                      title={workingIds.includes(issue.id) ? "An agent is working on it: cancel its job first to remove it" : "Remove from the list"}
+                      disabled={workingIds.includes(issue.id)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        remove([issue.id]);
+                      }}
+                    >
+                      <X />
+                    </Button>
+                  </span>
                 </div>
               );
             })}
@@ -1205,6 +1026,242 @@ export default function Issues(props: { repo: string | null; open: string | null
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* The open issue in full (props.open). The X, Esc or a click outside goes back to the list. */}
+      <Dialog
+        open={props.open !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            window.location.hash = listHash;
+          }
+        }}
+      >
+        <DialogContent aria-describedby={undefined} className="flex h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
+          {shown === undefined && props.open !== null && (
+            <div className="flex flex-1 items-center justify-center">
+              <DialogTitle className="font-normal text-muted-foreground">{loaded ? `There is no issue ${props.open}.` : "Loading…"}</DialogTitle>
+            </div>
+          )}
+          {shown !== undefined && (
+            <>
+              {/* On top: where it is, how many comments, the title, and the row's own buttons (clear of the pop-up's X). */}
+              <div className="shrink-0 space-y-2 border-b pt-3 pr-10 pb-3 pl-4">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
+                  <span className="text-foreground">{shown.repo}</span>
+                  <span className="tabular-nums">{issueCell(shown, "number")}</span>
+                  <span>
+                    {shownComments} {shownComments === 1 ? "comment" : "comments"}
+                  </span>
+                  <span className="ml-auto flex items-center gap-0.5 text-foreground">
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      title={shownTags?.level === "out of scope" ? OUT_OF_SCOPE : "Give this issue to an agent"}
+                      disabled={shownTags?.level === "out of scope"}
+                      onClick={() => setAssigning(shown)}
+                    >
+                      <UserPlus /> Assign
+                    </Button>
+                    <Button variant="ghost" size="icon-xs" asChild>
+                      <a href={shown.html_url} target="_blank" rel="noreferrer" aria-label={`Open ${shown.id} on GitHub`} title="Open on GitHub">
+                        <ExternalLink />
+                      </a>
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      title={workingIds.includes(shown.id) ? "An agent is working on it: cancel its job first to remove it" : "Remove from the list"}
+                      disabled={workingIds.includes(shown.id)}
+                      onClick={() => {
+                        // It leaves the list, so the pop-up closes too.
+                        window.location.hash = listHash;
+                        remove([shown.id]);
+                      }}
+                    >
+                      <X /> Remove
+                    </Button>
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <DialogTitle className={cn("leading-normal", shownState === "CLOSED" && "line-through")}>{shownFacts !== null ? shownFacts.title : shown.title}</DialogTitle>
+                  {shownState === "CLOSED" && <Badge variant="secondary">closed</Badge>}
+                </div>
+              </div>
+
+              {/* Below, scrolling: the tags, the facts, the agent's note, the text and its comments, and the jobs. */}
+              <div className="min-h-0 flex-1 space-y-3 overflow-auto px-4 py-3">
+                {shownTags !== null ? (
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    {shownSelfAssigned && <Badge>self-assigned</Badge>}
+                    {shownAssigned && <Badge variant="warn">assigned</Badge>}
+                    {!shownAssigned && !shownSelfAssigned && shownState !== "CLOSED" && shownTags.status === "free" && <Badge variant="ok">free</Badge>}
+                    {shownTags.level !== null && (
+                      <Badge variant={LEVEL_VARIANT[shownTags.level] ?? "secondary"}>{LEVEL_LABEL[shownTags.level]}</Badge>
+                    )}
+                    {shownTags.kind !== null && <Badge variant="secondary">{shownTags.kind}</Badge>}
+                    <span>{shownTags.reason}</span>
+                    <Button variant="ghost" size="xs" disabled={retagging.includes(shown.id)} title="Claude reads it and its comments again now" onClick={() => tagAgain(shown.id)}>
+                      {retagging.includes(shown.id) ? <Loader2 className="animate-spin" /> : <Tags />} Tag again
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Loader2 className="size-3.5 animate-spin" /> Reading it to tag it…
+                  </div>
+                )}
+
+                {shownFacts === null && (
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Loader2 className="size-3.5 animate-spin" /> Getting the facts from GitHub…
+                  </div>
+                )}
+                {shownFacts !== null && (
+                  <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-1">
+                    <span className="text-muted-foreground">Opened</span>
+                    <span>
+                      {timeAgo(shownFacts.created_at)} by {shownFacts.author}
+                      {ROLE[shownFacts.author_role] && (
+                        <span className={MAINTAINERS.includes(shownFacts.author_role) ? "text-ok" : "text-muted-foreground"}> · {ROLE[shownFacts.author_role]}</span>
+                      )}
+                    </span>
+
+                    <span className="text-muted-foreground">Last activity</span>
+                    <span>{timeAgo(shownFacts.updated_at)}</span>
+
+                    <span className="text-muted-foreground">Last comment</span>
+                    <span>
+                      {shownFacts.last_comment_at === null && <span className="text-muted-foreground">No comments yet</span>}
+                      {shownFacts.last_comment_at !== null && (
+                        <>
+                          {timeAgo(shownFacts.last_comment_at)} by {shownFacts.last_comment_by}
+                          {shownFacts.last_comment_role !== null && ROLE[shownFacts.last_comment_role] && (
+                            <span className={MAINTAINERS.includes(shownFacts.last_comment_role) ? "text-ok" : "text-muted-foreground"}>
+                              {" "}
+                              · {ROLE[shownFacts.last_comment_role]}
+                            </span>
+                          )}
+                          <span className="text-muted-foreground"> · {shownFacts.comments} in all</span>
+                        </>
+                      )}
+                    </span>
+
+                    <span className="text-muted-foreground">Interest</span>
+                    <span>
+                      {shownFacts.participants} {shownFacts.participants === 1 ? "person" : "people"} in the thread · {shownFacts.thumbs_up} thumbs up
+                    </span>
+
+                    <span className="text-muted-foreground">Assigned</span>
+                    <span className={shownFacts.assignees.length > 0 ? "text-warn" : "text-muted-foreground"}>
+                      {shownFacts.assignees.length > 0 ? shownFacts.assignees.join(", ") : "Nobody"}
+                    </span>
+
+                    <span className="text-muted-foreground">Linked PRs</span>
+                    <span className="flex flex-wrap gap-x-3">
+                      {shownFacts.linked_prs.length === 0 && <span className="text-muted-foreground">None</span>}
+                      {shownFacts.linked_prs.map((pull) => (
+                        <a
+                          key={pull.url}
+                          href={pull.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className={cn("hover:underline", pull.state === "OPEN" ? "text-warn" : "text-muted-foreground")}
+                        >
+                          {pull.repo !== shown.repo && pull.repo}#{pull.number} {pull.state.toLowerCase()} by {pull.author}
+                        </a>
+                      ))}
+                    </span>
+
+                    <span className="text-muted-foreground">Repo</span>
+                    <span>
+                      {STARS.format(shownFacts.repo_stars)} stars · last push {timeAgo(shownFacts.repo_pushed_at)}
+                    </span>
+
+                    <span className="col-span-2 text-xs text-muted-foreground">From GitHub {timeAgo(shownFacts.fetched_at)}</span>
+                  </div>
+                )}
+
+                {shown.note !== "" && (
+                  <div className="border-l-2 border-muted-foreground/30 pl-3">
+                    <div className="text-xs font-medium text-muted-foreground">Agent's note</div>
+                    <div className="whitespace-pre-wrap">{shown.note}</div>
+                  </div>
+                )}
+
+                {shownThread === undefined && shownError === "" && (
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Loader2 className="size-3.5 animate-spin" /> Loading the issue…
+                  </div>
+                )}
+                {shownError !== "" && <div className="text-destructive">Could not load the issue: {shownError}</div>}
+                {shownThread !== undefined && (
+                  <div className="border bg-background px-4 py-3">
+                    <Markdown text={shownThread.body || "*No description.*"} repo={shown.repo} issueRefs />
+                  </div>
+                )}
+                {/* The comments below the text, oldest first: claims like "can I take this?" and the answers. */}
+                {shownThread !== undefined &&
+                  shownThread.comments.map((comment, index) => (
+                    <div key={index} className="border bg-background px-4 py-2">
+                      <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
+                        <span className="font-medium text-foreground">{comment.author}</span>
+                        <span title={new Date(comment.at).toLocaleString()}>{timeAgo(comment.at)}</span>
+                      </div>
+                      <Markdown text={comment.body} repo={shown.repo} issueRefs />
+                    </div>
+                  ))}
+                {shownThread !== undefined && shownComments > shownThread.comments.length && (
+                  <a href={shown.html_url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-muted-foreground hover:text-foreground">
+                    {shownComments - shownThread.comments.length} more on GitHub <ExternalLink className="size-3" />
+                  </a>
+                )}
+
+                <div>
+                  <div className="mb-1 text-xs font-medium text-muted-foreground">Jobs</div>
+                  {shownJobs.length === 0 && <div className="text-muted-foreground">No jobs yet. Use Assign to give this issue to an agent.</div>}
+                  {shownJobs.map((each) => (
+                    <div key={each.id} className="border-b py-1 last:border-b-0">
+                      <div className="flex h-6 items-center gap-3">
+                        <span className="flex w-28 shrink-0 items-center gap-1.5">
+                          <StatusDot tone={JOB_TONE[each.status]} />
+                          {JOB_LABEL[each.status] ?? each.status}
+                        </span>
+                        <span className="w-24 shrink-0 font-mono text-xs text-muted-foreground">{each.id}</span>
+                        <a href={`#/agents/${each.agent}`} className="shrink-0 text-primary hover:underline">
+                          {agentNames[each.agent] ?? each.agent}
+                        </a>
+                        {each.vm !== null && (
+                          <a href={`#/vms/${each.vm}`} className="shrink-0 text-primary hover:underline">
+                            {each.vm}
+                          </a>
+                        )}
+                        {each.drafts.map((draft) => (
+                          <a key={draft} href={`#/inbox/${draft}`} className="shrink-0 font-mono text-xs text-primary hover:underline">
+                            {draft}
+                          </a>
+                        ))}
+                        <span className="ml-auto shrink-0 text-xs text-muted-foreground">{new Date(each.created_at).toLocaleString()}</span>
+                        {(each.status === "queued" || each.status === "working" || each.status === "waiting_on_user") && (
+                          <Button variant="ghost" size="xs" onClick={() => cancelJob(each)}>
+                            Cancel
+                          </Button>
+                        )}
+                      </div>
+                      {(each.status === "working" || each.status === "waiting_on_user" || each.step !== null) && (
+                        <div className="space-y-1 py-1 pl-[124px]">
+                          <JobSteps job={each} />
+                          {each.headline !== "" && <div>{each.headline}</div>}
+                        </div>
+                      )}
+                      {each.instructions !== "" && <div className="pl-[124px] whitespace-pre-wrap text-muted-foreground">Instructions: {each.instructions}</div>}
+                      {each.notes !== "" && <div className="pl-[124px] whitespace-pre-wrap text-muted-foreground">{each.notes}</div>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
