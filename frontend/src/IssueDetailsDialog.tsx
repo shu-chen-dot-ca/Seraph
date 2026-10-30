@@ -1,7 +1,7 @@
 /*
-One tracked issue in full, in a pop-up (a click on an issue in the Tracked page's open repo): the app's tags and why,
+One tracked issue in full, in a pop-up (a click on an issue in the Tracked page's repo pop-up; it opens on top of it): the app's tags and why,
 when it was opened and last updated, then the issue's text and its comments below it. The text and comments come
-fresh from GitHub each time it opens (the same thread the Issues page's open row shows: /api/issues/thread), so new
+fresh from GitHub each time it opens (the same thread the Issues page's pop-up shows: /api/issues/thread), so new
 comments show. GitHub's thread gives the first 40 comments; past that a line says how many more are on GitHub.
 */
 

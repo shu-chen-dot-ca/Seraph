@@ -1,10 +1,9 @@
 /*
 The Tracked list: repos the user wants to keep an eye on for new issues. The user tracks them from the Repos page (its
 Track column); agents can add and remove them too (their tracked_* tools), and undo / redo (Ctrl+Z / Ctrl+Y) works on
-both, like Repos. The bar on top has Expand all (Collapse all when every row is open), Refresh all (Check now for
-every repo, then Claude reads every issue tagged Free again and the page says which ones aren't free anymore: claimed in
-the comments, a PR came, ...; minutes for many) and Mark all as read (every issue new now isn't anymore; only ones found
-later are new).
+both, like Repos. The bar on top has Refresh all (Check now for every repo, then Claude reads every issue tagged Free
+again and the page says which ones aren't free anymore: claimed in the comments, a PR came, ...; minutes for many) and
+Mark all as read (every issue new now isn't anymore; only ones found later are new).
 
 The backend checks each repo's open issues every few minutes (github_searcher/tracked_issues.py): the newest
 ones and every good first or help wanted one. An issue is new for three days after it was opened, assigned or not,
@@ -22,7 +21,7 @@ the fix is for our agent in its VM, by fixed rules, the same as on the Issues pa
 Out of scope (grey: we don't take it, as our agent can't do it yet, like a plugin the project wants as its own
 repository, or it touches politics: activist or politically sensitive, or against another country's laws), and
 its kind, each in its own column, the reason on hover. Assigned on GitHub counts as Assigned at once, without waiting
-for the tags. Tag again (on the repo's row) has Claude read all its unassigned issues again now.
+for the tags. Tag again (on the repo's row and in its pop-up) has Claude read all its unassigned issues again now.
 
 The list is a table like the Explore page's: Name, then the repo's fields in two lines, so a row isn't too long, and
 its description under them, from the name on. The header has two lines of names to match: each column holds a
@@ -39,11 +38,17 @@ in the order they come, the first line from left to right, then the second (say 
 all, and the list's order among what is still the same. With none, it is the list's order. Every sorted name is blue
 with an arrow.
 
-Each row opens in place to its issues, newest first, with tabs Free (a newcomer can start on it now) / Assigned (someone is on it) / All (Free when there are free
-ones). The issues are a table too, sorted the same way by clicks on its columns' headers (one order for every open
-repo; from left to right like the list, # and Title last, newest first among what is still the same): ISSUE_HEADERS (Checked: when Claude last read it and its comments and updated its tags). A click on an issue opens it in full in a pop-up, its comments below (IssueDetailsDialog); its # and the
-arrow button at the row's end open it on GitHub in a new tab. An issue goes into the Issues list with one click (its
-repo into Repos too), or links there when it is in already. The list is short (repos the user picked), so every row is drawn; times re-render every minute.
+A click on a row opens its issues in a pop-up, one repo at a time; the X, Esc or a click outside it closes it, back to
+the list. Its top has the repo's name, its description, when it was last checked and the row's buttons with their
+names: Check now, Tag again and Stop tracking (the pop-up closes when the repo stops being tracked, here or elsewhere).
+Below, its issues, newest first, with tabs Free (a newcomer can start on it now) / Assigned (someone is on it) / All
+(Free when there are free ones). The issues are a table too, sorted the same way by clicks on its columns' headers (one
+order for every repo; from left to right like the list, # and Title last, newest first among what is still the same):
+ISSUE_HEADERS (Checked: when Claude last read it and its comments and updated its tags). A click on an issue opens it
+in full in a second pop-up on top, its comments below (IssueDetailsDialog); closing that one goes back to the repo's.
+Its # and the arrow button at the row's end open it on GitHub in a new tab. An issue goes into the Issues list with one
+click (its repo into Repos too), or links there when it is in already. The list is short (repos the user picked), so
+every row is drawn; times re-render every minute.
 Many rows are picked like on the Repos page. Hovering a row shows its box on the left; ticking it picks that repo and
 turns on select mode, like Select (top right) does: Select stays lit (a click on it ends select mode), every row shows
 its box, and a click picks the row instead of opening it. The box at the top left of the table's header picks every row
@@ -53,7 +58,7 @@ tracking them at once, as one undo step (it asks first; Enter confirms). Clearin
 ends select mode too.
 */
 
-import { ArrowDown, ArrowUp, CheckCheck, ChevronsDownUp, ChevronsUpDown, ExternalLink, Loader2, MessageSquare, Plus, RefreshCw, SquareCheck, Star, Tags, X } from "lucide-react";
+import { ArrowDown, ArrowUp, CheckCheck, ExternalLink, Loader2, MessageSquare, Plus, RefreshCw, SquareCheck, Star, Tags, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -70,6 +75,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { NewcomersTag, PolicyTag, ToneTag } from "@/components/ui/repo-tags";
 import { RowSelection, SelectBox } from "@/components/ui/row-selection";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -124,7 +130,7 @@ const SLOTS = Array.from({ length: Math.max(FIRST_LINE.length, SECOND_LINE.lengt
 const POLICY_RANK: Record<string, number> = { welcome: 5, none: 4, disclose: 3, unclear: 2, no_ai: 1 };
 const NEWCOMER_RANK: Record<string, number> = { welcomes: 5, ok: 4, few: 3, left_waiting: 2, turned_away: 1 };
 const TONE_RANK: Record<string, number> = { warm: 4, neutral: 3, strict: 2, curt: 1 };
-// An open repo's issues: #, Title (the room left over), the tags (Free, Marked, Level, Kind), Opened, Updated, Checked
+// The pop-up's issues: #, Title (the room left over), the tags (Free, Marked, Level, Kind), Opened, Updated, Checked
 // (Claude last read it), comments, then GitHub and Add.
 const ISSUE_COLUMNS = "grid grid-cols-[56px_minmax(0,1fr)_72px_160px_64px_72px_150px_80px_80px_36px_120px] items-center gap-2";
 type IssueKey = "number" | "title" | "free" | "marked" | "level" | "kind" | "opened" | "updated" | "read" | "comments";
@@ -157,14 +163,15 @@ export default function Tracked() {
   const tracked = useLive("tracked");
   const issues = useLive("issues");
   const loaded = useLoaded("tracked");
-  const [open, setOpen] = useState<string[]>([]);
+  // The repo whose issues are open in the pop-up, by name, or none.
+  const [openName, setOpenName] = useState<string | null>(null);
   const [tabs, setTabs] = useState<Record<string, IssueTab>>({});
   const [checking, setChecking] = useState<string[]>([]);
   const [retagging, setRetagging] = useState<string[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   // The issue open in the pop-up, by repo and number, so it shows the live one (new tags arrive while it is open).
   const [details, setDetails] = useState<{ repo: string; number: number } | null>(null);
-  // The open repos' issues' order: newest first (none), or by these columns, like the list's.
+  // The pop-up's issues' order, the same for every repo: newest first (none), or by these columns, like the list's.
   const [issueSorts, setIssueSorts] = useState<{ key: IssueKey; best: boolean }[]>([]);
   // The list's order: as tracked (none), or by these fields, in TRACKED_COLUMNS' order, Name last;
   // best is the way a column's first click sorts, or not.
@@ -494,8 +501,65 @@ export default function Tracked() {
     }
   }
 
-  function toggle(full_name: string) {
-    setOpen((current) => (current.includes(full_name) ? current.filter((n) => n !== full_name) : [...current, full_name]));
+  // The pop-up closes when its repo stops being tracked (here, by an undo, an agent or another tab), and stays closed
+  // when it comes back.
+  useEffect(() => {
+    if (openName !== null && !tracked.items.some((repo) => repo.full_name === openName)) {
+      setOpenName(null);
+    }
+  }, [openName, tracked.items]);
+
+  // The repo open in the pop-up and its issues as the pop-up shows them: the tab picked (Free when it has free ones,
+  // else All), sorted by the issue columns clicked.
+  const openRepo = tracked.items.find((repo) => repo.full_name === openName);
+  const openCheck = openRepo !== undefined ? openRepo.check : null;
+  const openFree = openCheck !== null ? openCheck.issues.filter((issue) => issue.assignees === 0 && issue.tags?.status === "free").length : 0;
+  const openAssigned = openCheck !== null ? openCheck.issues.filter((issue) => issue.assignees > 0 || issue.tags?.status === "assigned").length : 0;
+  let tab: IssueTab = openFree > 0 ? "free" : "all";
+  if (openName !== null && tabs[openName] !== undefined) {
+    tab = tabs[openName];
+  }
+  const shown =
+    openCheck === null
+      ? []
+      : openCheck.issues.filter((issue) => {
+          if (tab === "free") {
+            return issue.assignees === 0 && issue.tags?.status === "free";
+          }
+          if (tab === "assigned") {
+            return issue.assignees > 0 || issue.tags?.status === "assigned";
+          }
+          return true;
+        });
+  if (issueSorts.length > 0) {
+    shown.sort((a, b) => {
+      // Like the list: the leftmost sorted column that tells them apart decides, # and Title last; when none does, they
+      // stay newest first (a stable sort).
+      const keys = ISSUE_HEADERS.map((column) => column.key).filter((key) => key !== "number" && key !== "title");
+      for (const key of [...keys, "number" as IssueKey, "title" as IssueKey]) {
+        const sort = issueSorts.find((each) => each.key === key);
+        if (sort === undefined) {
+          continue;
+        }
+        const first = issueValue(a, key);
+        const second = issueValue(b, key);
+        if (first === second) {
+          continue;
+        }
+        // Missing values go last, whichever way.
+        if (first === null) {
+          return 1;
+        }
+        if (second === null) {
+          return -1;
+        }
+        const order = typeof first === "string" && typeof second === "string" ? first.localeCompare(second) : Number(second) - Number(first);
+        if (order !== 0) {
+          return sort.best ? order : -order;
+        }
+      }
+      return 0;
+    });
   }
 
   // Ctrl+Z / Ctrl+Y (and Ctrl+Shift+Z), unless typing in a field. Re-registered every render, so it sees fresh state.
@@ -523,19 +587,10 @@ export default function Tracked() {
 
   return (
     <div className="relative flex h-full flex-col">
-      {/* The same bar as on the other pages: Expand all / Collapse all, Refresh all and Mark all as read on the left. */}
+      {/* The same bar as on the other pages: Refresh all and Mark all as read on the left. */}
       <div className="flex h-9 shrink-0 items-center border-b px-3">
         {names.length > 0 && (
           <span className="flex items-center gap-1">
-            {names.every((name) => open.includes(name)) ? (
-              <Button variant="ghost" size="xs" onClick={() => setOpen([])}>
-                <ChevronsDownUp /> Collapse all
-              </Button>
-            ) : (
-              <Button variant="ghost" size="xs" onClick={() => setOpen(names)}>
-                <ChevronsUpDown /> Expand all
-              </Button>
-            )}
             <Button
               variant="ghost"
               size="xs"
@@ -570,7 +625,7 @@ export default function Tracked() {
 
         {/* One grid for the whole table, its columns as wide as their widest cell; the header and each row are subgrids
             of it, so they line up. w-max lets it grow past the page (it scrolls sideways); min-w-full fills the page
-            otherwise, the room left over going before the buttons. The description and the open repo span the row without widening it. */}
+            otherwise, the room left over going before the buttons. The description spans the row without widening it. */}
         {rows.length > 0 && (
           <div
             className="grid w-max min-w-full gap-x-4 border-b"
@@ -625,330 +680,144 @@ export default function Tracked() {
               <span />
             </div>
             {rows.map((repo) => {
-              const isOpen = open.includes(repo.full_name);
               const check = repo.check;
               const fresh = newCounts[repo.full_name];
               const signals = repo.signals;
               const free = check !== null ? check.issues.filter((issue) => issue.assignees === 0 && issue.tags?.status === "free").length : 0;
-              const assigned = check !== null ? check.issues.filter((issue) => issue.assignees > 0 || issue.tags?.status === "assigned").length : 0;
               const easy = check !== null ? check.issues.filter((issue) => issue.assignees === 0 && issue.tags?.status === "free" && issue.tags.level === "easy").length : 0;
-              const tab = tabs[repo.full_name] ?? (free > 0 ? "free" : "all");
-              const shown =
-                check === null
-                  ? []
-                  : check.issues.filter((issue) => {
-                      if (tab === "free") {
-                        return issue.assignees === 0 && issue.tags?.status === "free";
-                      }
-                      if (tab === "assigned") {
-                        return issue.assignees > 0 || issue.tags?.status === "assigned";
-                      }
-                      return true;
-                    });
-              if (issueSorts.length > 0) {
-                shown.sort((a, b) => {
-                  // Like the list: the leftmost sorted column that tells them apart decides, # and Title last; when
-                  // none does, they stay newest first (a stable sort).
-                  const keys = ISSUE_HEADERS.map((column) => column.key).filter((key) => key !== "number" && key !== "title");
-                  for (const key of [...keys, "number" as IssueKey, "title" as IssueKey]) {
-                    const sort = issueSorts.find((each) => each.key === key);
-                    if (sort === undefined) {
-                      continue;
-                    }
-                    const first = issueValue(a, key);
-                    const second = issueValue(b, key);
-                    if (first === second) {
-                      continue;
-                    }
-                    // Missing values go last, whichever way.
-                    if (first === null) {
-                      return 1;
-                    }
-                    if (second === null) {
-                      return -1;
-                    }
-                    const order = typeof first === "string" && typeof second === "string" ? first.localeCompare(second) : Number(second) - Number(first);
-                    if (order !== 0) {
-                      return sort.best ? order : -order;
-                    }
-                  }
-                  return 0;
-                });
-              }
               return (
-                <div key={repo.full_name} className="col-span-full grid grid-cols-subgrid border-t">
-                  <div
-                    data-select-id={repo.full_name}
-                    className={cn(
-                      "group col-span-full grid cursor-pointer grid-cols-subgrid px-3 py-2 hover:bg-accent/50",
-                      isOpen && "bg-accent/40",
-                      chosen.includes(repo.full_name) && "bg-selected hover:bg-selected",
-                    )}
+                <div
+                  key={repo.full_name}
+                  data-select-id={repo.full_name}
+                  className={cn(
+                    "group col-span-full grid cursor-pointer grid-cols-subgrid border-t px-3 py-2 hover:bg-accent/50",
+                    openName === repo.full_name && "bg-accent/40",
+                    chosen.includes(repo.full_name) && "bg-selected hover:bg-selected",
+                  )}
+                  onClick={(event) => {
+                    // In select mode a click picks the row; otherwise Ctrl / Shift-click picks it and a plain click opens its pop-up.
+                    if (selectMode || event.ctrlKey || event.metaKey || event.shiftKey) {
+                      select(repo.full_name, event.shiftKey);
+                    } else {
+                      setOpenName(repo.full_name);
+                    }
+                  }}
+                >
+                  {/* Out of select mode only on hover. Ticking it picks the repo, which turns select mode on. */}
+                  <button
+                    type="button"
+                    className={cn("flex h-7 items-center", !selectMode && "invisible group-hover:visible")}
+                    aria-label={`Select ${repo.full_name}`}
                     onClick={(event) => {
-                      // In select mode a click picks the row; otherwise Ctrl / Shift-click picks it and a plain click opens it.
-                      if (selectMode || event.ctrlKey || event.metaKey || event.shiftKey) {
-                        select(repo.full_name, event.shiftKey);
-                      } else {
-                        toggle(repo.full_name);
-                      }
+                      event.stopPropagation();
+                      select(repo.full_name, event.shiftKey);
                     }}
                   >
-                    {/* Out of select mode only on hover. Ticking it picks the repo, which turns select mode on. */}
-                    <button
-                      type="button"
-                      className={cn("flex h-7 items-center", !selectMode && "invisible group-hover:visible")}
-                      aria-label={`Select ${repo.full_name}`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        select(repo.full_name, event.shiftKey);
-                      }}
-                    >
-                      <SelectBox checked={chosen.includes(repo.full_name)} />
-                    </button>
-                    <span className="flex h-7 min-w-0 items-center">
-                      <span className="truncate font-medium">{repo.full_name}</span>
-                    </span>
-                    {/* The first line: the repo's tags, from its signals; – until they are fetched (seconds after it is
-                        tracked). Then an empty column, the room left over and the buttons. */}
-                    <span className="flex h-7 items-center">
-                      {signals !== null ? <PolicyTag tag={signals.ai_policy.tag} quote={signals.ai_policy.quote} file={signals.ai_policy.file} /> : "–"}
-                    </span>
-                    <span className="flex h-7 items-center">
-                      {signals !== null && signals.newcomers !== undefined ? (
-                        <NewcomersTag
-                          tag={signals.newcomers.tag}
-                          detail={`${signals.newcomers.prs} first PRs: ${signals.newcomers.merged} merged, ${signals.newcomers.closed} closed unmerged`}
-                        />
-                      ) : (
-                        "–"
-                      )}
-                    </span>
-                    <span
-                      className={cn(
-                        "flex h-7 items-center tabular-nums",
-                        signals !== null && signals.median_days_to_first_reply !== null && signals.median_days_to_first_reply <= 2 && "text-ok",
-                        signals !== null && signals.median_days_to_first_reply !== null && signals.median_days_to_first_reply > 7 && "text-warn",
-                      )}
-                    >
-                      {signals !== null && signals.median_days_to_first_reply !== null ? `${signals.median_days_to_first_reply}d` : "–"}
-                    </span>
-                    <span className="flex h-7 items-center">
-                      {signals !== null && signals.atmosphere ? <ToneTag tone={signals.atmosphere.tone} summary={signals.atmosphere.summary} /> : "–"}
-                    </span>
-                    <span className={cn("flex h-7 items-center tabular-nums", signals !== null && signals.stale_outside_prs >= 5 && "text-warn")}>
-                      {signals !== null ? signals.stale_outside_prs : "–"}
-                    </span>
-                    <span className={cn("flex h-7 items-center tabular-nums", signals !== null && signals.active_mergers_30d <= 1 && "text-warn")}>
-                      {signals !== null ? signals.active_mergers_30d : "–"}
-                    </span>
-                    <span />
-                    <span />
-                    <span />
-                    <span className="flex h-7 items-center justify-end gap-0.5" onClick={(event) => event.stopPropagation()}>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={`Check ${repo.full_name} now`}
-                        title="Check on GitHub now"
-                        disabled={checking.includes(repo.full_name)}
-                        onClick={() => checkNow(repo.full_name)}
-                      >
-                        <RefreshCw className={cn(checking.includes(repo.full_name) && "animate-spin")} />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-xs"
-                        aria-label={`Tag ${repo.full_name}'s issues again`}
-                        title="Tag again: Claude reads its unassigned issues and their comments again now"
-                        disabled={check === null || retagging.includes(repo.full_name)}
-                        onClick={() => tagAgain(repo)}
-                      >
-                        {retagging.includes(repo.full_name) ? <Loader2 className="animate-spin" /> : <Tags />}
-                      </Button>
-                      <Button variant="ghost" size="icon-xs" aria-label={`Stop tracking ${repo.full_name}`} title="Stop tracking" onClick={() => remove([repo.full_name])}>
-                        <X />
-                      </Button>
-                    </span>
-                    {/* The second line, under the first one's columns: nothing under the box and the name. */}
-                    <span />
-                    <span />
-                    <span className="flex h-6 items-center gap-1 tabular-nums">
-                      <Star className="size-3.5" />
-                      {COMPACT.format(check !== null && check.stars !== null ? check.stars : repo.stars)}
-                    </span>
-                    <span className={cn("flex h-6 items-center tabular-nums", fresh > 0 && "font-medium text-primary")}>{check !== null ? fresh : "–"}</span>
-                    <span className={cn("flex h-6 items-center tabular-nums", free > 0 && "text-ok")}>{check !== null ? free : "–"}</span>
-                    <span className={cn("flex h-6 items-center tabular-nums", easy > 0 && "text-ok")}>{check !== null ? easy : "–"}</span>
-                    <span className="flex h-6 items-center tabular-nums">{check !== null ? check.issues.length : "–"}</span>
-                    <span className="flex h-6 items-center gap-1 whitespace-nowrap tabular-nums">
-                      {check === null && (
-                        <>
-                          <Loader2 className="size-3.5 animate-spin" /> checking
-                        </>
-                      )}
-                      {check !== null && check.error !== null && (
-                        <span className="text-destructive" title={check.error}>
-                          failed
-                        </span>
-                      )}
-                      {check !== null && check.error === null && <span title={new Date(check.checked_at).toLocaleString()}>{timeAgo(check.checked_at)}</span>}
-                    </span>
-                    <span className="flex h-6 items-center whitespace-nowrap tabular-nums">
-                      {signals !== null && signals.newcomers !== undefined && signals.pr_window_days !== undefined
-                        ? `${signals.newcomers.prs} in ${signals.pr_window_days} day${signals.pr_window_days === 1 ? "" : "s"}`
-                        : "–"}
-                    </span>
-                    <span className="flex h-6 items-center whitespace-nowrap tabular-nums" title="A month on average over 90 days; the arrow: the last 30 days were busier or quieter">
-                      {signals !== null && signals.activity !== undefined
-                        ? `${COMPACT.format(signals.activity.prs_opened_month)} PRs · ${COMPACT.format(signals.activity.issues_opened_month)} issues · ${COMPACT.format(signals.activity.commits_month)} commits /mo${signals.activity.trend === "up" ? " ↑" : signals.activity.trend === "down" ? " ↓" : ""}`
-                        : "–"}
-                    </span>
-                    <span />
-                    <span />
-                    {(repo.note !== "" || repo.description !== "") && (
-                      <div className="w-0 min-w-full truncate pt-0.5" style={{ gridColumn: "2 / -1" }} title={repo.note || repo.description}>
-                        {repo.note || repo.description}
-                      </div>
+                    <SelectBox checked={chosen.includes(repo.full_name)} />
+                  </button>
+                  <span className="flex h-7 min-w-0 items-center">
+                    <span className="truncate font-medium">{repo.full_name}</span>
+                  </span>
+                  {/* The first line: the repo's tags, from its signals; – until they are fetched (seconds after it is
+                      tracked). Then an empty column, the room left over and the buttons. */}
+                  <span className="flex h-7 items-center">
+                    {signals !== null ? <PolicyTag tag={signals.ai_policy.tag} quote={signals.ai_policy.quote} file={signals.ai_policy.file} /> : "–"}
+                  </span>
+                  <span className="flex h-7 items-center">
+                    {signals !== null && signals.newcomers !== undefined ? (
+                      <NewcomersTag
+                        tag={signals.newcomers.tag}
+                        detail={`${signals.newcomers.prs} first PRs: ${signals.newcomers.merged} merged, ${signals.newcomers.closed} closed unmerged`}
+                      />
+                    ) : (
+                      "–"
                     )}
-                  </div>
-
-                  {isOpen && (
-                    <div className="col-span-full w-0 min-w-full border-t border-l-4 border-l-primary/50 bg-background px-3 py-1.5">
-                      {/* Set apart from its repo's (gray) row: the page's own background with a blue bar on the left. */}
-                      {check === null && (
-                        <div className="flex items-center gap-2 py-1 text-muted-foreground">
-                          <Loader2 className="size-3.5 animate-spin" /> Getting its issues from GitHub…
-                        </div>
-                      )}
-                      {check !== null && check.error !== null && <div className="py-1 text-destructive">The last check failed: {check.error}</div>}
-                      {check !== null && (
-                        <>
-                          <Tabs value={tab} onValueChange={(value) => setTabs({ ...tabs, [repo.full_name]: value as IssueTab })} className="py-1">
-                            <TabsList>
-                              <TabsTrigger value="free" className="px-2.5">
-                                Free <span className="text-xs text-muted-foreground tabular-nums">{free}</span>
-                              </TabsTrigger>
-                              <TabsTrigger value="assigned" className="px-2.5">
-                                Assigned <span className="text-xs text-muted-foreground tabular-nums">{assigned}</span>
-                              </TabsTrigger>
-                              <TabsTrigger value="all" className="px-2.5">
-                                All <span className="text-xs text-muted-foreground tabular-nums">{check.issues.length}</span>
-                              </TabsTrigger>
-                            </TabsList>
-                          </Tabs>
-                          {shown.length === 0 && (
-                            <div className="py-1 text-muted-foreground">
-                              {tab === "free" && "No issue a newcomer can start on now."}
-                              {tab === "assigned" && "Nobody is assigned to any of its open issues."}
-                              {tab === "all" && "No open issues."}
-                            </div>
-                          )}
-                          {shown.length > 0 && (
-                            <div className={cn(ISSUE_COLUMNS, "h-7 text-xs font-medium text-muted-foreground")}>
-                              {ISSUE_HEADERS.map((column) => {
-                                const sort = issueSorts.find((each) => each.key === column.key);
-                                return (
-                                  <button
-                                    key={column.key}
-                                    type="button"
-                                    className={cn("flex items-center gap-0.5 hover:text-primary", sort !== undefined && "text-primary")}
-                                    title={column.title}
-                                    onClick={() => clickIssueSort(column.key)}
-                                  >
-                                    {column.key === "comments" ? <MessageSquare className="size-3.5" /> : column.label}
-                                    {sort !== undefined && (sort.best ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />)}
-                                  </button>
-                                );
-                              })}
-                              <span />
-                            </div>
-                          )}
-                          {shown.map((issue) => {
-                            const id = `${repo.full_name}#${issue.number}`;
-                            const isNew = new Date(issue.created_at).getTime() > newSince && !(check.read ?? []).includes(issue.number);
-                            const tags = issue.tags ?? null;
-                            const isAssigned = issue.assignees > 0 || tags?.status === "assigned";
-                            const goodFirst = issue.labels.some((label) => GOOD_FIRST.test(label));
-                            const helpWanted = issue.labels.some((label) => HELP_WANTED.test(label));
-                            const confirmed = issue.labels.some((label) => CONFIRMED.test(label));
-                            return (
-                              <div
-                                key={issue.number}
-                                className={cn(ISSUE_COLUMNS, "min-h-7 cursor-pointer border-t border-border/50 py-0.5 hover:bg-accent/50")}
-                                onClick={() => setDetails({ repo: repo.full_name, number: issue.number })}
-                              >
-                                <a
-                                  href={issue.url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="text-muted-foreground tabular-nums hover:text-foreground hover:underline"
-                                  title="Open on GitHub"
-                                  onClick={(event) => event.stopPropagation()}
-                                >
-                                  #{issue.number}
-                                </a>
-                                <span className="flex min-w-0 items-center gap-1.5">
-                                  <span className="truncate" title={issue.title}>
-                                    {issue.title}
-                                  </span>
-                                  {isNew && <Badge>new</Badge>}
-                                </span>
-                                {/* The app's tags, each in its column, the reason on hover; of GitHub's own labels only the Marked ones show.
-                                    – is not ready yet (Free) or none (assigned on GitHub isn't read); … is not tagged yet. */}
-                                <span
-                                  className={cn("truncate", isAssigned && "text-warn", !isAssigned && tags?.status === "free" && "text-ok")}
-                                  title={tags?.reason ?? (isAssigned ? "Assigned on GitHub" : "Claude hasn't tagged it yet")}
-                                >
-                                  {isAssigned ? "Assigned" : tags === null ? "…" : tags.status === "free" ? "Free" : "–"}
-                                </span>
-                                <span className="truncate" title={issue.labels.length > 0 ? `Its labels: ${issue.labels.join(", ")}` : "No labels"}>
-                                  {!goodFirst && !helpWanted && !confirmed && "–"}
-                                  {goodFirst && <span className="text-ok">Good first issue</span>}
-                                  {goodFirst && (helpWanted || confirmed) && " · "}
-                                  {helpWanted && <span className="text-ok">Help wanted</span>}
-                                  {helpWanted && confirmed && " · "}
-                                  {confirmed && "Confirmed"}
-                                </span>
-                                <span className={cn("truncate", tags !== null && tags.level !== null && LEVEL_COLOR[tags.level])} title={tags?.reason}>
-                                  {tags !== null ? (tags.level !== null ? LEVEL_LABEL[tags.level] : "–") : isAssigned ? "–" : "…"}
-                                </span>
-                                <span className="truncate capitalize" title={tags?.reason}>
-                                  {tags !== null ? (tags.kind ?? "–") : isAssigned ? "–" : "…"}
-                                </span>
-                                <span className="truncate text-muted-foreground" title={new Date(issue.created_at).toLocaleString()}>
-                                  {timeAgo(issue.created_at)} by {issue.author}
-                                </span>
-                                <span className="truncate text-muted-foreground" title={issue.updated_at !== undefined ? new Date(issue.updated_at).toLocaleString() : "Known after the next check"}>
-                                  {issue.updated_at !== undefined ? timeAgo(issue.updated_at) : "–"}
-                                </span>
-                                <span className="truncate text-muted-foreground" title={tags !== null ? new Date(tags.judged_at).toLocaleString() : "Claude hasn't read it yet"}>
-                                  {tags !== null ? timeAgo(tags.judged_at) : "–"}
-                                </span>
-                                <span className="flex items-center gap-1 text-muted-foreground tabular-nums" title="Comments">
-                                  <MessageSquare className="size-3.5" />
-                                  {issue.comments}
-                                </span>
-                                <span className="flex items-center justify-end gap-0.5" onClick={(event) => event.stopPropagation()}>
-                                  <Button variant="ghost" size="icon-xs" asChild>
-                                    <a href={issue.url} target="_blank" rel="noreferrer" aria-label={`Open ${id} on GitHub`} title="Open on GitHub">
-                                      <ExternalLink />
-                                    </a>
-                                  </Button>
-                                  {inIssues.has(id) ? (
-                                    <a href={`#/issues?open=${encodeURIComponent(id)}`} className="text-xs text-muted-foreground hover:text-foreground hover:underline">
-                                      In Issues
-                                    </a>
-                                  ) : (
-                                    <Button variant="ghost" size="xs" title="Add to the Issues list" onClick={() => addIssue(repo.full_name, issue.number)}>
-                                      <Plus /> Issues
-                                    </Button>
-                                  )}
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </>
-                      )}
+                  </span>
+                  <span
+                    className={cn(
+                      "flex h-7 items-center tabular-nums",
+                      signals !== null && signals.median_days_to_first_reply !== null && signals.median_days_to_first_reply <= 2 && "text-ok",
+                      signals !== null && signals.median_days_to_first_reply !== null && signals.median_days_to_first_reply > 7 && "text-warn",
+                    )}
+                  >
+                    {signals !== null && signals.median_days_to_first_reply !== null ? `${signals.median_days_to_first_reply}d` : "–"}
+                  </span>
+                  <span className="flex h-7 items-center">
+                    {signals !== null && signals.atmosphere ? <ToneTag tone={signals.atmosphere.tone} summary={signals.atmosphere.summary} /> : "–"}
+                  </span>
+                  <span className={cn("flex h-7 items-center tabular-nums", signals !== null && signals.stale_outside_prs >= 5 && "text-warn")}>
+                    {signals !== null ? signals.stale_outside_prs : "–"}
+                  </span>
+                  <span className={cn("flex h-7 items-center tabular-nums", signals !== null && signals.active_mergers_30d <= 1 && "text-warn")}>
+                    {signals !== null ? signals.active_mergers_30d : "–"}
+                  </span>
+                  <span />
+                  <span />
+                  <span />
+                  <span className="flex h-7 items-center justify-end gap-0.5" onClick={(event) => event.stopPropagation()}>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={`Check ${repo.full_name} now`}
+                      title="Check on GitHub now"
+                      disabled={checking.includes(repo.full_name)}
+                      onClick={() => checkNow(repo.full_name)}
+                    >
+                      <RefreshCw className={cn(checking.includes(repo.full_name) && "animate-spin")} />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={`Tag ${repo.full_name}'s issues again`}
+                      title="Tag again: Claude reads its unassigned issues and their comments again now"
+                      disabled={check === null || retagging.includes(repo.full_name)}
+                      onClick={() => tagAgain(repo)}
+                    >
+                      {retagging.includes(repo.full_name) ? <Loader2 className="animate-spin" /> : <Tags />}
+                    </Button>
+                    <Button variant="ghost" size="icon-xs" aria-label={`Stop tracking ${repo.full_name}`} title="Stop tracking" onClick={() => remove([repo.full_name])}>
+                      <X />
+                    </Button>
+                  </span>
+                  {/* The second line, under the first one's columns: nothing under the box and the name. */}
+                  <span />
+                  <span />
+                  <span className="flex h-6 items-center gap-1 tabular-nums">
+                    <Star className="size-3.5" />
+                    {COMPACT.format(check !== null && check.stars !== null ? check.stars : repo.stars)}
+                  </span>
+                  <span className={cn("flex h-6 items-center tabular-nums", fresh > 0 && "font-medium text-primary")}>{check !== null ? fresh : "–"}</span>
+                  <span className={cn("flex h-6 items-center tabular-nums", free > 0 && "text-ok")}>{check !== null ? free : "–"}</span>
+                  <span className={cn("flex h-6 items-center tabular-nums", easy > 0 && "text-ok")}>{check !== null ? easy : "–"}</span>
+                  <span className="flex h-6 items-center tabular-nums">{check !== null ? check.issues.length : "–"}</span>
+                  <span className="flex h-6 items-center gap-1 whitespace-nowrap tabular-nums">
+                    {check === null && (
+                      <>
+                        <Loader2 className="size-3.5 animate-spin" /> checking
+                      </>
+                    )}
+                    {check !== null && check.error !== null && (
+                      <span className="text-destructive" title={check.error}>
+                        failed
+                      </span>
+                    )}
+                    {check !== null && check.error === null && <span title={new Date(check.checked_at).toLocaleString()}>{timeAgo(check.checked_at)}</span>}
+                  </span>
+                  <span className="flex h-6 items-center whitespace-nowrap tabular-nums">
+                    {signals !== null && signals.newcomers !== undefined && signals.pr_window_days !== undefined
+                      ? `${signals.newcomers.prs} in ${signals.pr_window_days} day${signals.pr_window_days === 1 ? "" : "s"}`
+                      : "–"}
+                  </span>
+                  <span className="flex h-6 items-center whitespace-nowrap tabular-nums" title="A month on average over 90 days; the arrow: the last 30 days were busier or quieter">
+                    {signals !== null && signals.activity !== undefined
+                      ? `${COMPACT.format(signals.activity.prs_opened_month)} PRs · ${COMPACT.format(signals.activity.issues_opened_month)} issues · ${COMPACT.format(signals.activity.commits_month)} commits /mo${signals.activity.trend === "up" ? " ↑" : signals.activity.trend === "down" ? " ↓" : ""}`
+                      : "–"}
+                  </span>
+                  <span />
+                  <span />
+                  {(repo.note !== "" || repo.description !== "") && (
+                    <div className="w-0 min-w-full truncate pt-0.5" style={{ gridColumn: "2 / -1" }} title={repo.note || repo.description}>
+                      {repo.note || repo.description}
                     </div>
                   )}
                 </div>
@@ -963,6 +832,212 @@ export default function Tracked() {
         </Button>
       </RowSelection>
 
+      {/* The open repo's issues. Its top stays put: the name, the row's buttons with their names, the description and
+          the last check, then the tabs. Only the issues scroll, sideways too when the pop-up is narrower than them. */}
+      <Dialog
+        open={openRepo !== undefined}
+        onOpenChange={(open) => {
+          if (!open) {
+            setOpenName(null);
+          }
+        }}
+      >
+        <DialogContent aria-describedby={undefined} className="flex h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-7xl">
+          {openRepo !== undefined && (
+            <>
+              <div className="shrink-0 space-y-2 border-b pt-3 pr-10 pb-2 pl-4">
+                <div className="flex items-center gap-3">
+                  <DialogTitle className="min-w-0 truncate leading-normal">{openRepo.full_name}</DialogTitle>
+                  <span className="flex shrink-0 items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      title="Check on GitHub now"
+                      disabled={checking.includes(openRepo.full_name)}
+                      onClick={() => checkNow(openRepo.full_name)}
+                    >
+                      <RefreshCw className={cn(checking.includes(openRepo.full_name) && "animate-spin")} /> Check now
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      title="Tag again: Claude reads its unassigned issues and their comments again now"
+                      disabled={openCheck === null || retagging.includes(openRepo.full_name)}
+                      onClick={() => tagAgain(openRepo)}
+                    >
+                      {retagging.includes(openRepo.full_name) ? <Loader2 className="animate-spin" /> : <Tags />} Tag again
+                    </Button>
+                    <Button variant="ghost" size="xs" onClick={() => remove([openRepo.full_name])}>
+                      <X /> Stop tracking
+                    </Button>
+                  </span>
+                </div>
+                <div className="flex items-center gap-3 text-muted-foreground">
+                  {(openRepo.note !== "" || openRepo.description !== "") && (
+                    <span className="min-w-0 truncate" title={openRepo.note || openRepo.description}>
+                      {openRepo.note || openRepo.description}
+                    </span>
+                  )}
+                  <span className="flex shrink-0 items-center gap-1 whitespace-nowrap">
+                    {openCheck === null && (
+                      <>
+                        <Loader2 className="size-3.5 animate-spin" /> checking
+                      </>
+                    )}
+                    {openCheck !== null && openCheck.error !== null && (
+                      <span className="text-destructive" title={openCheck.error}>
+                        Check failed
+                      </span>
+                    )}
+                    {openCheck !== null && openCheck.error === null && <span title={new Date(openCheck.checked_at).toLocaleString()}>Checked {timeAgo(openCheck.checked_at)}</span>}
+                  </span>
+                </div>
+                {openCheck !== null && (
+                  <Tabs value={tab} onValueChange={(value) => setTabs({ ...tabs, [openRepo.full_name]: value as IssueTab })}>
+                    <TabsList>
+                      <TabsTrigger value="free" className="px-2.5">
+                        Free <span className="text-xs text-muted-foreground tabular-nums">{openFree}</span>
+                      </TabsTrigger>
+                      <TabsTrigger value="assigned" className="px-2.5">
+                        Assigned <span className="text-xs text-muted-foreground tabular-nums">{openAssigned}</span>
+                      </TabsTrigger>
+                      <TabsTrigger value="all" className="px-2.5">
+                        All <span className="text-xs text-muted-foreground tabular-nums">{openCheck.issues.length}</span>
+                      </TabsTrigger>
+                    </TabsList>
+                  </Tabs>
+                )}
+              </div>
+
+              <div className="min-h-0 flex-1 overflow-auto px-4 pb-2">
+                {openCheck === null && (
+                  <div className="flex items-center gap-2 py-2 text-muted-foreground">
+                    <Loader2 className="size-3.5 animate-spin" /> Getting its issues from GitHub…
+                  </div>
+                )}
+                {openCheck !== null && openCheck.error !== null && <div className="py-2 text-destructive">The last check failed: {openCheck.error}</div>}
+                {openCheck !== null && shown.length === 0 && (
+                  <div className="py-2 text-muted-foreground">
+                    {tab === "free" && "No issue a newcomer can start on now."}
+                    {tab === "assigned" && "Nobody is assigned to any of its open issues."}
+                    {tab === "all" && "No open issues."}
+                  </div>
+                )}
+                {/* min-w-min: never narrower than the columns, so a narrow pop-up scrolls sideways instead of
+                    squeezing them; the headers stay on top while the issues scroll. */}
+                {openCheck !== null && shown.length > 0 && (
+                  <div className="min-w-min">
+                    <div className={cn(ISSUE_COLUMNS, "sticky top-0 h-7 bg-popover text-xs font-medium text-muted-foreground")}>
+                      {ISSUE_HEADERS.map((column) => {
+                        const sort = issueSorts.find((each) => each.key === column.key);
+                        return (
+                          <button
+                            key={column.key}
+                            type="button"
+                            className={cn("flex items-center gap-0.5 hover:text-primary", sort !== undefined && "text-primary")}
+                            title={column.title}
+                            onClick={() => clickIssueSort(column.key)}
+                          >
+                            {column.key === "comments" ? <MessageSquare className="size-3.5" /> : column.label}
+                            {sort !== undefined && (sort.best ? <ArrowDown className="size-3" /> : <ArrowUp className="size-3" />)}
+                          </button>
+                        );
+                      })}
+                      <span />
+                    </div>
+                    {shown.map((issue) => {
+                      const id = `${openRepo.full_name}#${issue.number}`;
+                      const isNew = new Date(issue.created_at).getTime() > newSince && !(openCheck.read ?? []).includes(issue.number);
+                      const tags = issue.tags ?? null;
+                      const isAssigned = issue.assignees > 0 || tags?.status === "assigned";
+                      const goodFirst = issue.labels.some((label) => GOOD_FIRST.test(label));
+                      const helpWanted = issue.labels.some((label) => HELP_WANTED.test(label));
+                      const confirmed = issue.labels.some((label) => CONFIRMED.test(label));
+                      return (
+                        <div
+                          key={issue.number}
+                          className={cn(ISSUE_COLUMNS, "min-h-7 cursor-pointer border-t border-border/50 py-0.5 hover:bg-accent/50")}
+                          onClick={() => setDetails({ repo: openRepo.full_name, number: issue.number })}
+                        >
+                          <a
+                            href={issue.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-muted-foreground tabular-nums hover:text-foreground hover:underline"
+                            title="Open on GitHub"
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            #{issue.number}
+                          </a>
+                          <span className="flex min-w-0 items-center gap-1.5">
+                            <span className="truncate" title={issue.title}>
+                              {issue.title}
+                            </span>
+                            {isNew && <Badge>new</Badge>}
+                          </span>
+                          {/* The app's tags, each in its column, the reason on hover; of GitHub's own labels only the Marked ones show.
+                              – is not ready yet (Free) or none (assigned on GitHub isn't read); … is not tagged yet. */}
+                          <span
+                            className={cn("truncate", isAssigned && "text-warn", !isAssigned && tags?.status === "free" && "text-ok")}
+                            title={tags?.reason ?? (isAssigned ? "Assigned on GitHub" : "Claude hasn't tagged it yet")}
+                          >
+                            {isAssigned ? "Assigned" : tags === null ? "…" : tags.status === "free" ? "Free" : "–"}
+                          </span>
+                          <span className="truncate" title={issue.labels.length > 0 ? `Its labels: ${issue.labels.join(", ")}` : "No labels"}>
+                            {!goodFirst && !helpWanted && !confirmed && "–"}
+                            {goodFirst && <span className="text-ok">Good first issue</span>}
+                            {goodFirst && (helpWanted || confirmed) && " · "}
+                            {helpWanted && <span className="text-ok">Help wanted</span>}
+                            {helpWanted && confirmed && " · "}
+                            {confirmed && "Confirmed"}
+                          </span>
+                          <span className={cn("truncate", tags !== null && tags.level !== null && LEVEL_COLOR[tags.level])} title={tags?.reason}>
+                            {tags !== null ? (tags.level !== null ? LEVEL_LABEL[tags.level] : "–") : isAssigned ? "–" : "…"}
+                          </span>
+                          <span className="truncate capitalize" title={tags?.reason}>
+                            {tags !== null ? (tags.kind ?? "–") : isAssigned ? "–" : "…"}
+                          </span>
+                          <span className="truncate text-muted-foreground" title={new Date(issue.created_at).toLocaleString()}>
+                            {timeAgo(issue.created_at)} by {issue.author}
+                          </span>
+                          <span className="truncate text-muted-foreground" title={issue.updated_at !== undefined ? new Date(issue.updated_at).toLocaleString() : "Known after the next check"}>
+                            {issue.updated_at !== undefined ? timeAgo(issue.updated_at) : "–"}
+                          </span>
+                          <span className="truncate text-muted-foreground" title={tags !== null ? new Date(tags.judged_at).toLocaleString() : "Claude hasn't read it yet"}>
+                            {tags !== null ? timeAgo(tags.judged_at) : "–"}
+                          </span>
+                          <span className="flex items-center gap-1 text-muted-foreground tabular-nums" title="Comments">
+                            <MessageSquare className="size-3.5" />
+                            {issue.comments}
+                          </span>
+                          <span className="flex items-center justify-end gap-0.5" onClick={(event) => event.stopPropagation()}>
+                            <Button variant="ghost" size="icon-xs" asChild>
+                              <a href={issue.url} target="_blank" rel="noreferrer" aria-label={`Open ${id} on GitHub`} title="Open on GitHub">
+                                <ExternalLink />
+                              </a>
+                            </Button>
+                            {inIssues.has(id) ? (
+                              <a href={`#/issues?open=${encodeURIComponent(id)}`} className="text-xs text-muted-foreground hover:text-foreground hover:underline">
+                                In Issues
+                              </a>
+                            ) : (
+                              <Button variant="ghost" size="xs" title="Add to the Issues list" onClick={() => addIssue(openRepo.full_name, issue.number)}>
+                                <Plus /> Issues
+                              </Button>
+                            )}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* On top of the repo's pop-up: a click on one of its issues. Closing it goes back to the repo's. */}
       <IssueDetailsDialog
         repo={details !== null ? details.repo : ""}
         issue={details !== null ? (tracked.items.find((each) => each.full_name === details.repo)?.check?.issues.find((each) => each.number === details.number) ?? null) : null}
