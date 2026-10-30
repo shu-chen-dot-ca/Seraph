@@ -52,7 +52,7 @@ settled after the closer look.
               "ai_policy", "newcomers", "tone", "atmosphere", "prs_month", "issues_month", "commits_month",
               "trend", "found_at", "signals"}, ...]     newest last; summary() leaves "signals" out and adds
                                                          a few of its numbers: merged, newcomer_stats, reply,
-                                                         window_days, maintainers, unanswered
+                                                         window_days, maintainers, unanswered, reviewers
 
 One run at a time. It lives in memory: the counts, the ones being checked now, why others were skipped and
 the errors. The live feed's explore topic carries it with the found list and the profile. version goes up on every
@@ -322,7 +322,8 @@ class Explore:
         # The found list without each repo's signals: those are only for approving, and big. A few numbers from them
         # stay: outside PRs merged, how newcomers' first PRs went (their newcomers part, small: counts and merge rate),
         # how fast a maintainer first replies, how many days its 100 newest PRs cover (newcomer_stats' prs are the new
-        # contributors in those days), who merged PRs, and outside PRs nobody answered (None when not counted yet).
+        # contributors in those days), who merged PRs, outside PRs nobody answered, and who reviews outside PRs (an AI
+        # reviewer, maintainers or both; None when not counted yet).
         found = []
         for entry in self.found:
             shown = {key: value for key, value in entry.items() if key != "signals"}
@@ -333,6 +334,7 @@ class Explore:
             shown["window_days"] = signals.get("pr_window_days")
             shown["maintainers"] = signals.get("active_mergers_30d")
             shown["unanswered"] = signals.get("stale_outside_prs")
+            shown["reviewers"] = signals.get("reviewers")
             found.append(shown)
         return {"profile": copy.deepcopy(self.profile), "run": copy.deepcopy(self.run), "found": copy.deepcopy(found)}
 

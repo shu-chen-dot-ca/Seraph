@@ -258,7 +258,7 @@ def get_issues_for_tags(owner: str, repo: str, numbers: list[int]) -> dict:
 # - open issues under beginner-style labels (GitHub's label search is loose, repo_signals.py keeps the real ones);
 # - the files where projects write their AI policy, read from the default branch (null when missing).
 # PULLS_QUERY:
-# - recent: the $prs newest PRs (reply speed of outside contributors' PRs, and who is new);
+# - recent: the $prs newest PRs (reply speed of outside contributors' PRs, who reviews them, and who is new);
 # - finished: the $prs most recently updated merged or closed PRs (merge rate and merge time, who merges).
 # closing says what closed a closed PR: a Commit when its change landed some other way (pytorch's bot).
 SIGNALS_QUERY = """
@@ -319,8 +319,8 @@ query($owner: String!, $name: String!, $prs: Int!) {
       nodes {
         createdAt state merged mergedAt closedAt authorAssociation author { login __typename }
         closing: timelineItems(itemTypes: [CLOSED_EVENT], last: 1) { nodes { ... on ClosedEvent { closer { __typename } } } }
-        reviews(first: 5) { nodes { createdAt authorAssociation author { login __typename } } }
-        comments(first: 5) { nodes { createdAt authorAssociation author { login __typename } } }
+        reviews(first: 10) { nodes { createdAt authorAssociation author { login __typename } } }
+        comments(first: 10) { nodes { createdAt authorAssociation author { login __typename } } }
       }
     }
     finished: pullRequests(states: [MERGED, CLOSED], first: $prs, orderBy: {field: UPDATED_AT, direction: DESC}) {

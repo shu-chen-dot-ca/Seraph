@@ -26,7 +26,10 @@ Every repo that qualifies joins the found list right away, newest first: a table
 about it (FOUND_COLUMNS). The main ones come first: outside PRs merged (of those merged or closed), newcomers' first
 PRs merged (the same, for people who never opened a PR there before; hover for how many were merged, closed and still
 open), how newcomers fare, its AI policy, and how fast a maintainer first replies to an outside PR (bots, AI reviewers
-and other outsiders don't count). Then its fit, review tone, stars, its type (the one Claude classified it under), PRs, issues and commits a month
+and other outsiders don't count). Then its fit, review tone, who reviews outside PRs (Reviewed by: Agent only when most
+get a review or comment only from an AI reviewer, a bot like CodeRabbit or Copilot; Agent and human; Human only when
+only maintainers do; Few reviews when too few to tell; hover for the counts; CI and other bots don't count), stars, its
+type (the one Claude classified it under), PRs, issues and commits a month
 and the trend, how many new contributors it had lately (people whose first PR there was recent, shown as "16 in 6
 days": the days its 100 newest PRs cover; people who contributed before don't count; it sorts by new contributors a
 day), how many maintainers it has, how many outside PRs no maintainer answered, and when it
@@ -78,7 +81,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { FIT_LEVELS, NEWCOMER_LABEL, POLICY_LABEL, TONE_LABEL } from "@/components/ui/repo-tags";
+import { FIT_LEVELS, NEWCOMER_LABEL, POLICY_LABEL, ReviewersTag, TONE_LABEL } from "@/components/ui/repo-tags";
 import { RowSelection, SelectBox } from "@/components/ui/row-selection";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StatusDot } from "@/components/ui/status-dot";
@@ -119,6 +122,7 @@ type FoundKey =
   | "newcomers"
   | "reply"
   | "tone"
+  | "reviewers"
   | "prs"
   | "issues"
   | "commits"
@@ -138,6 +142,7 @@ const FOUND_COLUMNS: { key: FoundKey; label: string; title: string; better: "hig
   { key: "reply", label: "Reply", title: "Median days until outside contributors' PRs get a first reply from a maintainer (bots and other outsiders don't count)", better: "lower" },
   { key: "fit", label: "Fit", title: "How well Claude thinks it fits your Explore profile", better: "higher" },
   { key: "tone", label: "Reviews", title: "How maintainers' feedback on outside PRs feels", better: "higher" },
+  { key: "reviewers", label: "Reviewed by", title: "Who reviews outside PRs: only an AI reviewer (a bot like CodeRabbit or Copilot), both, or only maintainers; human only first", better: "higher" },
   { key: "stars", label: "Stars", title: "Stars on GitHub", better: "higher" },
   { key: "type", label: "Type", title: "The type of repo Claude put it under, from your Explore profile", better: "text" },
   { key: "prs", label: "PRs/mo", title: "PRs opened a month, on average over 90 days", better: "higher" },
@@ -155,6 +160,7 @@ const POLICY_RANK: Record<string, number> = { welcome: 5, none: 4, disclose: 3, 
 const NEWCOMER_RANK: Record<string, number> = { welcomes: 5, ok: 4, few: 3, left_waiting: 2, turned_away: 1 };
 const TONE_RANK: Record<string, number> = { warm: 4, neutral: 3, strict: 2, curt: 1 };
 const TREND_RANK: Record<string, number> = { up: 3, flat: 2, down: 1 };
+const REVIEWER_RANK: Record<string, number> = { human: 3, both: 2, agent: 1 };
 
 // The AI policy, newcomers and tone columns are tags: green for good news, amber for "have a look", red for bad, gray
 // for the rest.
@@ -305,6 +311,9 @@ export default function Explore() {
     if (key === "tone") {
       return each.tone !== undefined && each.tone !== null ? (TONE_RANK[each.tone] ?? null) : null;
     }
+    if (key === "reviewers") {
+      return each.reviewers ? (REVIEWER_RANK[each.reviewers.tag] ?? null) : null;
+    }
     if (key === "prs") {
       return each.prs_month ?? null;
     }
@@ -392,6 +401,9 @@ export default function Explore() {
           {TONE_LABEL[each.tone] ?? each.tone}
         </Badge>
       );
+    }
+    if (key === "reviewers") {
+      return each.reviewers ? <ReviewersTag reviewers={each.reviewers} /> : "–";
     }
     if (key === "prs") {
       return each.prs_month !== undefined ? STARS.format(each.prs_month) : "–";

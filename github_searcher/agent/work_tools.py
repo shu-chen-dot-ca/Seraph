@@ -735,6 +735,8 @@ class WorkTools:
                     summary["prs_a_month"] = repo_signals["activity"]["prs_opened_month"]
                     summary["issues_a_month"] = repo_signals["activity"]["issues_opened_month"]
                     summary["commits_a_month"] = repo_signals["activity"]["commits_month"]
+                if "reviewers" in repo_signals:
+                    summary["reviewed_by"] = repo_signals["reviewers"]["tag"]
                 if repo_signals.get("atmosphere"):
                     summary["review_tone"] = repo_signals["atmosphere"]["tone"]
                     summary["reviewers_ask_for"] = repo_signals["atmosphere"]["asks_for"]

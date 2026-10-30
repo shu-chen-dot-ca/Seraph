@@ -19,6 +19,7 @@ One JSON file, DATA_DIR/repo_signals.json, by repo (owner/name):
                             "issues_closed_30d", "trend", "last_release", "last_release_at",
                             "issue_reply_rate", "issues_checked"},
                "community": {"contributing", "code_of_conduct", "discussions", "channels"},
+               "reviewers": {"agent", "both", "human", "tag"},
                "atmosphere": {"tone", "summary", "asks_for", "prs", "judged_at"} | None,
                "ai_policy": {"tag", "quote", "file", "basis"}}
 
@@ -32,6 +33,11 @@ Outside contributors are PR authors who aren't owners, members or collaborators,
   those reach back when they cover less than 90): outside_prs_90d, and median_days_to_first_reply, until the
   first review or comment by a maintainer (a merge without one counts as the reply). Only maintainers count: a
   bot's review (an AI reviewer, a CLA check) or another outsider's comment isn't a reply.
+- reviewers: who reviews those PRs. Each one that got a review or comment is counted once: agent (only from an AI
+  reviewer, a bot like CodeRabbit or Copilot: AI_REVIEWERS), both (an AI reviewer and a maintainer), or human (only
+  from maintainers). CI and other bots (tests, coverage, a CLA check) don't count either way, nor do PRs nobody
+  reviewed. tag is the one most of them are ("agent", "both" or "human"; "both" on a tie), or "few" with fewer than
+  MIN_SAMPLE reviewed PRs.
 stale_outside_prs: their open PRs over 30 days old that no maintainer has answered (among the 100 oldest
 open PRs). active_mergers_30d: how many people merged a PR in the last 30 days (bots not counted); the page calls
 them its maintainers. active_contributors: how many people opened a PR in that window, anyone but bots.
@@ -106,6 +112,12 @@ MAINTAINERS = ["OWNER", "MEMBER", "COLLABORATOR"]
 BEGINNER = re.compile(r"good.?first|first.?timer|beginner|easy|help.?wanted", re.IGNORECASE)
 # "AI" only in capitals (not "said"), the rest in any case.
 AI_WORDS = re.compile(r"\bAI\b|\bA\.I\.|(?i:\bllms?\b|chatgpt|copilot|\bgenai\b|generative|large language model|machine.generated|\bclaude\b|\bgemini\b|vibe.cod)")
+# AI code reviewers' bot logins (GitHub apps): CodeRabbit, Copilot, Gemini Code Assist, Sourcery, Greptile, Cursor's
+# Bugbot, Qodo, Ellipsis, Korbit, Bito, CodeAnt, Claude, Codex, Devin, Amazon Q, cubic, Entelligence, LlamaPReview.
+AI_REVIEWERS = re.compile(
+    r"coderabbit|copilot|gemini-code-assist|sourcery|greptile|^cursor|qodo|codium|ellipsis-dev|korbit|bito-code|codeant|^claude|codex|devin-ai|amazon-q|cubic-dev|entelligence|llamapreview",
+    re.IGNORECASE,
+)
 # Chat links in a README, and what they are called.
 CHANNELS = [
     ("Discord", re.compile(r"discord\.gg/|discord\.com/invite/", re.IGNORECASE)),
@@ -272,16 +284,25 @@ class RepoSignals:
             opened = datetime.fromisoformat(pull["createdAt"])
             if opened < window_start:
                 continue
-            # The first reply from a maintainer, a person: not a bot, not the author, not another outsider.
+            # The first reply from a maintainer, a person: not a bot, not the author, not another outsider. And who
+            # reviewed it: an AI reviewer (a bot), a maintainer, or both.
             first = None
+            agent = False
+            human = False
             for item in pull["reviews"]["nodes"] + pull["comments"]["nodes"]:
                 other = item["author"]
-                if other is None or other["__typename"] != "User":
+                if other is None:
+                    continue
+                if other["__typename"] != "User" and AI_REVIEWERS.search(other["login"]):
+                    agent = True
+                    continue
+                if other["__typename"] != "User":
                     continue
                 if other["login"] == author["login"] or other["login"].lower().endswith("bot"):
                     continue
                 if item["authorAssociation"] not in MAINTAINERS:
                     continue
+                human = True
                 at = datetime.fromisoformat(item["createdAt"])
                 if first is None or at < first:
                     first = at
@@ -299,7 +320,19 @@ class RepoSignals:
             if first is not None:
                 reply = (first - opened).total_seconds() / 86400
                 replies.append(reply)
-            window_prs.append({"login": author["login"], "opened": opened, "merged": landed, "closed": closed, "reply": reply})
+            window_prs.append({"login": author["login"], "opened": opened, "merged": landed, "closed": closed, "reply": reply, "agent": agent, "human": human})
+
+        # Who reviews them: only an AI reviewer, both, or only maintainers. PRs nobody reviewed don't count.
+        agent_only = len([pull for pull in window_prs if pull["agent"] and not pull["human"]])
+        both = len([pull for pull in window_prs if pull["agent"] and pull["human"]])
+        human_only = len([pull for pull in window_prs if pull["human"] and not pull["agent"]])
+        reviewer_tag = "few"
+        if agent_only + both + human_only >= MIN_SAMPLE:
+            reviewer_tag = "both"
+            if agent_only > both and agent_only > human_only:
+                reviewer_tag = "agent"
+            elif human_only > both and human_only > agent_only:
+                reviewer_tag = "human"
 
         # Outside contributors' PRs that ended in the last 90 days: merged or closed, and how long a merge took.
         merges = []
@@ -593,6 +626,7 @@ class RepoSignals:
                 "authors_checked": len(logins),
                 "tag": newcomer_tag,
             },
+            "reviewers": {"agent": agent_only, "both": both, "human": human_only, "tag": reviewer_tag},
             "activity": activity,
             "community": community,
             # Kept as they were until complete() reads them again.

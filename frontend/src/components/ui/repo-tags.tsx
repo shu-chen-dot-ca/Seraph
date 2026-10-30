@@ -1,8 +1,8 @@
 import { Badge } from "@/components/ui/badge"
-import type { AIPolicyTag, NewcomerTag, Tone } from "@/live"
+import type { AIPolicyTag, NewcomerTag, Reviewers, ReviewerTag, Tone } from "@/live"
 
 // A repo's status as small tags: how well it fits, what its contribution files say about AI, how newcomers fare, how its
-// reviews feel, how busy it is, and how many contributors, maintainers and unanswered PRs it has; and the labels behind
+// reviews feel, who reviews outside PRs (an AI reviewer, maintainers or both), how busy it is, and how many contributors, maintainers and unanswered PRs it has; and the labels behind
 // them. The Repos and Explore tables show the same things as plain text columns, with these labels; the tags themselves
 // are for places that show one repo, like an open Repos row (and the Tracked table's AI policy, newcomers and reviews).
 //
@@ -58,6 +58,24 @@ const NEWCOMER_MEANING: Record<NewcomerTag, string> = {
   turned_away: "Newcomers' first PRs are mostly closed unmerged",
   left_waiting: "Newcomers' first PRs over a month old are mostly still open: neither merged nor closed",
   few: "Too few newcomers lately to tell",
+}
+
+// Who reviews outside contributors' PRs (repo_signals.py reviewers). Agent only is amber: a PR there may only ever get
+// a bot's review.
+const REVIEWER_LABEL: Record<ReviewerTag, string> = {
+  agent: "Agent only",
+  both: "Agent and human",
+  human: "Human only",
+  few: "Few reviews",
+}
+
+const REVIEWER_VARIANT: Record<ReviewerTag, TagVariant> = { agent: "warn", both: "secondary", human: "secondary", few: "secondary" }
+
+const REVIEWER_MEANING: Record<ReviewerTag, string> = {
+  agent: "Most outside PRs get a review or comment only from an AI reviewer (a bot like CodeRabbit or Copilot), not from a maintainer",
+  both: "Most outside PRs get reviewed by both an AI reviewer and a maintainer",
+  human: "Most outside PRs get reviewed only by maintainers, no AI reviewer",
+  few: "Too few reviewed outside PRs lately to tell",
 }
 
 const TONE_LABEL: Record<Tone, string> = {
@@ -126,6 +144,18 @@ function ToneTag(props: { tone: Tone; summary?: string }) {
   )
 }
 
+// Hover: what it means, and how many reviewed outside PRs went each way. CI and other bots don't count.
+function ReviewersTag(props: { reviewers: Reviewers }) {
+  const reviewers = props.reviewers
+  const total = reviewers.agent + reviewers.both + reviewers.human
+  const detail = `${total} reviewed outside PRs: ${reviewers.agent} agent only, ${reviewers.both} agent and human, ${reviewers.human} human only`
+  return (
+    <Badge variant={REVIEWER_VARIANT[reviewers.tag]} title={`${REVIEWER_MEANING[reviewers.tag]}. ${detail}`}>
+      {REVIEWER_LABEL[reviewers.tag]}
+    </Badge>
+  )
+}
+
 // "62 PRs · 41 issues · 180 commits /mo", with an arrow when the last 30 days are well above or below that.
 function ActivityTag(props: { prs: number; issues: number; commits: number; trend: "up" | "down" | "flat" }) {
   const arrow = props.trend === "up" ? " ↑" : props.trend === "down" ? " ↓" : ""
@@ -184,6 +214,7 @@ export {
   NewcomersTag,
   POLICY_LABEL,
   PolicyTag,
+  ReviewersTag,
   TONE_LABEL,
   ToneTag,
   UnansweredTag,

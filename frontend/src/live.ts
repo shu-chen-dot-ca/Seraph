@@ -76,6 +76,7 @@ export type RepoSignals = {
   pr_window_days?: number; // how many days the 100 newest PRs reach back (at most 90)
   // Missing on signals fetched before these were counted (until their next daily fetch).
   newcomers?: Newcomers;
+  reviewers?: Reviewers;
   activity?: RepoActivity;
   community?: Community;
   atmosphere?: Atmosphere | null; // null until Claude first read the reviews
@@ -83,6 +84,11 @@ export type RepoSignals = {
 };
 
 export type NewcomerTag = "welcomes" | "ok" | "turned_away" | "left_waiting" | "few";
+
+// Who reviews outside contributors' PRs: how many got a review or comment only from an AI reviewer (a bot like
+// CodeRabbit or Copilot), from both, or only from maintainers; tag is the one most are ("few": too few to tell).
+export type ReviewerTag = "agent" | "both" | "human" | "few";
+export type Reviewers = { agent: number; both: number; human: number; tag: ReviewerTag };
 
 // Outside authors who never opened a PR in the repo before the window, and how their first PRs went.
 export type Newcomers = {
@@ -258,7 +264,7 @@ export type ExploreFound = {
   // From its signals: outside PRs merged (of those merged or closed, 0..1), how newcomers' first PRs went (counts and
   // their merge rate; prs is how many new contributors it had in window_days), median days to a maintainer's first
   // reply on an outside PR, how many days its 100 newest PRs cover, who merged PRs in 30 days, outside PRs over 30
-  // days nobody answered.
+  // days nobody answered, who reviews outside PRs.
   // Null when not counted (too few PRs, or found before these were).
   merged: number | null;
   newcomer_stats: Newcomers | null;
@@ -266,6 +272,7 @@ export type ExploreFound = {
   window_days: number | null;
   maintainers: number | null;
   unanswered: number | null;
+  reviewers?: Reviewers | null;
 };
 
 export type ExploreRun = {
