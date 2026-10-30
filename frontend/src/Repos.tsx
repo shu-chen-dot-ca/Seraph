@@ -16,22 +16,26 @@ a month and the trend, new contributors (people whose first PR there was recent,
 newest PRs cover; people who contributed before don't count; it sorts by new contributors a day), maintainers, PRs no maintainer answered, its issues in the Issues list, and more
 (TABLE_COLUMNS; github_searcher/repo_signals.py, kept fresh by the backend). There is no overall score: the numbers
 are shown as they are. What used to be tags under a row are columns too. Values are plain text in the page's own color: green,
-amber or red only where a value means something (the same rules as the Explore page). No lines between columns. Name
-comes first and takes the room left over, the note under it, so the other columns sit on the right. Every column is as
-wide as its widest cell (header included) over the whole list, not only the rows on screen: a hidden copy of every
-row's cells (the sizer at the bottom) measures them (lib/column-widths.ts). A table wider than the page scrolls
+amber or red only where a value means something (the same rules as the Explore page). No lines between columns. Each
+row has two lines, so it isn't too long: the shown columns from the Outside contributors, Newcomers and Policy and
+reviews groups (how outside contributors fare) on the first, the Repo and Activity ones on the second, each line in the
+order picked (FIRST_LINE_GROUPS). The header has two lines of names to match: each column of the table holds a
+first-line field over a second-line one. Name comes first and takes the room left over, the note under both lines
+from the name on, so the other columns sit on the right. Every column is as wide as its widest cell on either line
+(header included) over the whole list, not only the rows on screen: a hidden copy of every row's cells (the sizer at
+the bottom) measures them (lib/column-widths.ts). A table wider than the page scrolls
 sideways, the header with it, and the header stays on top while the rows scroll. The columns are remembered in this
 browser. Rows have no arrow: the first column is for the boxes (see below).
 
-Sorting is by any number of fields at once (SORT_FIELDS): a click on a column header (the Activity column sorts by
+Sorting is by any number of fields at once (SORT_FIELDS): a click on a field's name in the header (Activity sorts by
 commits a month), or on a field's arrow in the All fields panel (every field, shown as a column or not). Each click on
 a field goes one step:
 - down: adds it to the sort, the best or the most first (fastest replies, most merged, warmest reviews, most open to
   AI, A to Z for text),
 - up: turned round,
 - off: takes it out of the sort (with none left, back to the list's own order).
-Which field counts first goes from left to right: the shown columns in their order, then Track, then the fields not
-shown as columns (in the All fields panel's order), Name last of all. A field only orders the repos the ones before it
+Which field counts first: the first line's columns from left to right, then the second line's, then Track, then the
+fields not shown as columns (in the All fields panel's order), Name last of all. A field only orders the repos the ones before it
 leave the same. Every header the list sorts by turns blue with its arrow. Repos without a value for a field go last either way. What Claude judges (AI policy, review tone, what reviewers ask for,
 fit) is always one of a fixed set, so it ranks in a fixed order (*_RANK below). For the AI policy: AI welcome best
 (green), then No AI policy (a lighter green), AI: disclose, AI: unclear, and No AI last (red); the Explore and Tracked
@@ -176,6 +180,9 @@ const SORT_FIELDS: { key: SortKey; label: string; group: string; better: "higher
   { key: "tracked", label: "Tracked", group: "Repo", better: "higher", down: "Tracked first", up: "Not tracked first" },
 ];
 const SORT_GROUPS = ["Repo", "Outside contributors", "Newcomers", "Activity", "Policy and reviews"];
+// Each row has two lines, so it isn't too long: the shown columns of these groups (how outside contributors fare) go on
+// the first, the others (Repo and Activity) on the second, each line in the order picked.
+const FIRST_LINE_GROUPS = ["Outside contributors", "Newcomers", "Policy and reviews"];
 
 // The fixed order of each judged or tagged value, best first being the highest. Values not listed (unknown) go last.
 const POLICY_RANK: Record<string, number> = { welcome: 5, none: 4, disclose: 3, unclear: 2, no_ai: 1 };
@@ -503,10 +510,17 @@ export default function Repos() {
     return present;
   }
 
-  // Which sorted field counts first, from left to right: the shown columns in their order, then Track (the last
-  // column), then the fields not shown (in the All fields panel's order), the name last.
+  // The columns shown, split into a row's two lines. Each table column between Name and the buttons (a slot) holds a
+  // first-line field over a second-line one.
+  const shownColumns = shown.map((key) => TABLE_COLUMNS.find((column) => column.key === key)!);
+  const firstLine = shownColumns.filter((column) => FIRST_LINE_GROUPS.includes(column.group));
+  const secondLine = shownColumns.filter((column) => !FIRST_LINE_GROUPS.includes(column.group));
+  const slots = Array.from({ length: Math.max(firstLine.length, secondLine.length) }, (_, index) => index);
+
+  // Which sorted field counts first: the first line's columns from left to right, then the second's, then Track (the
+  // last column), then the fields not shown (in the All fields panel's order), the name last.
   const priority: SortKey[] = [];
-  for (const key of [...shown.map((each) => TABLE_COLUMNS.find((column) => column.key === each)!.sort), "tracked" as SortKey, ...SORT_FIELDS.map((field) => field.key)]) {
+  for (const key of [...[...firstLine, ...secondLine].map((column) => column.sort), "tracked" as SortKey, ...SORT_FIELDS.map((field) => field.key)]) {
     if (key !== "name" && !priority.includes(key)) {
       priority.push(key);
     }
@@ -565,7 +579,7 @@ export default function Repos() {
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => 72,
+    estimateSize: () => 88,
     overscan: 10,
     getItemKey: (index) => rows[index].full_name,
     // The rows on screen, and every open row even far off screen, so it is never unmounted.
@@ -945,14 +959,13 @@ export default function Repos() {
     return "–";
   }
 
-  // The columns shown, how wide the sizer made each (max-content until it has measured), and the grid the header and
-  // the rows share: the boxes (always there, so a row's box can show on hover without the row moving), name (the room left over), the columns, then Set up and Track. tableWidth
-  // is the least they need, padding and gaps (16px, like the Explore page) too.
-  const shownColumns = shown.map((key) => TABLE_COLUMNS.find((column) => column.key === key)!);
-  const measured = sizes.length === shownColumns.length;
-  let tableWidth = 24 + NAME_MIN + 16 * shownColumns.length + 32 + ACTIONS_WIDTH + 16;
+  // How wide the sizer made each slot (max-content until it has measured), and the grid the header and the rows share:
+  // the boxes (always there, so a row's box can show on hover without the row moving), name (the room left over), the
+  // slots, then Set up and Track. tableWidth is the least they need, padding and gaps (16px, like the Explore page) too.
+  const measured = sizes.length === slots.length;
+  let tableWidth = 24 + NAME_MIN + 16 * slots.length + 32 + ACTIONS_WIDTH + 16;
   const columnTracks: string[] = [];
-  for (let index = 0; index < shownColumns.length; index++) {
+  for (let index = 0; index < slots.length; index++) {
     columnTracks.push(measured ? `${sizes[index]}px` : "max-content");
     tableWidth += measured ? sizes[index] : 0;
   }
@@ -1045,11 +1058,11 @@ export default function Repos() {
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
         <div style={{ minWidth: tableWidth }}>
           <div className="sticky top-0 z-10 border-b bg-background select-none">
-            <div className="grid h-7 gap-x-4 bg-muted/40 px-3 text-xs font-medium" style={{ gridTemplateColumns: template }}>
+            <div className="grid gap-x-4 bg-muted/40 px-3 py-0.5 text-xs font-medium" style={{ gridTemplateColumns: template }}>
               {/* Top left: picks every repo shown, or none when all are; a dash when only some are. */}
               <button
                 type="button"
-                className="flex items-center"
+                className="flex h-5 items-center"
                 aria-label={allPicked ? "Unselect all" : "Select all"}
                 title={allPicked ? "Unselect all" : "Select all (Ctrl+A)"}
                 disabled={rowNames.length === 0}
@@ -1057,7 +1070,7 @@ export default function Repos() {
               >
                 <SelectBox checked={allPicked} partial={chosen.length > 0} />
               </button>
-              <span className="flex min-w-0 items-center">
+              <span className="flex h-5 min-w-0 items-center">
                 <button
                   type="button"
                   className={cn("flex min-w-0 items-center gap-0.5 hover:text-primary", sorts.some((each) => each.key === "name") && "text-primary")}
@@ -1069,22 +1082,30 @@ export default function Repos() {
                   {sorts.find((each) => each.key === "name")?.dir === "up" && <ArrowUp className="size-3 shrink-0" />}
                 </button>
               </span>
-              {shownColumns.map((column) => (
-                <span key={column.key} className="flex min-w-0 items-center">
-                  {/* A click sorts by it, one step a click: best first, the other way round, off. */}
-                  <button
-                    type="button"
-                    className={cn("flex min-w-0 items-center gap-0.5 hover:text-primary", sorts.some((each) => each.key === column.sort) && "text-primary")}
-                    title={column.title}
-                    onClick={() => clickSort(column.sort)}
-                  >
-                    <span className="truncate">{column.label}</span>
-                    {sorts.find((each) => each.key === column.sort)?.dir === "down" && <ArrowDown className="size-3 shrink-0" />}
-                  {sorts.find((each) => each.key === column.sort)?.dir === "up" && <ArrowUp className="size-3 shrink-0" />}
-                  </button>
+              {/* Two lines, like the rows: each slot's first-line column over its second-line one. A click sorts by
+                  it, one step a click: best first, the other way round, off. */}
+              {slots.map((index) => (
+                <span key={index} className="flex min-w-0 flex-col">
+                  {[firstLine[index], secondLine[index]].map((column, line) =>
+                    column === undefined ? (
+                      <span key={line} className="h-5" />
+                    ) : (
+                      <button
+                        key={column.key}
+                        type="button"
+                        className={cn("flex h-5 min-w-0 items-center gap-0.5 hover:text-primary", sorts.some((each) => each.key === column.sort) && "text-primary")}
+                        title={column.title}
+                        onClick={() => clickSort(column.sort)}
+                      >
+                        <span className="truncate">{column.label}</span>
+                        {sorts.find((each) => each.key === column.sort)?.dir === "down" && <ArrowDown className="size-3 shrink-0" />}
+                        {sorts.find((each) => each.key === column.sort)?.dir === "up" && <ArrowUp className="size-3 shrink-0" />}
+                      </button>
+                    ),
+                  )}
                 </span>
               ))}
-              <span className="flex min-w-0 items-center justify-end">
+              <span className="flex h-5 min-w-0 items-center justify-end">
                 <button
                   type="button"
                   className={cn("flex min-w-0 items-center gap-0.5 hover:text-primary", sorts.some((each) => each.key === "tracked") && "text-primary")}
@@ -1124,7 +1145,7 @@ export default function Repos() {
                 >
                   <div
                     data-select-id={repo.full_name}
-                    className={cn("group cursor-pointer px-3 hover:bg-accent/50", isOpen && "bg-accent/40", chosen.includes(repo.full_name) && "bg-selected hover:bg-selected")}
+                    className={cn("group cursor-pointer px-3 py-2 hover:bg-accent/50", isOpen && "bg-accent/40", chosen.includes(repo.full_name) && "bg-selected hover:bg-selected")}
                     onClick={(event) => {
                       // In select mode a click picks the row; otherwise Ctrl / Shift-click picks it and a plain click opens it.
                       if (selectMode || event.ctrlKey || event.metaKey || event.shiftKey) {
@@ -1162,9 +1183,9 @@ export default function Repos() {
                           </a>
                           {signals === null && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-label="Fetching from GitHub" />}
                       </div>
-                      {shownColumns.map((column) => (
-                        <span key={column.key} className="block h-7 min-w-0 truncate leading-7 whitespace-nowrap tabular-nums">
-                          {cell(column.key, repo)}
+                      {slots.map((index) => (
+                        <span key={index} className="block h-7 min-w-0 truncate leading-7 whitespace-nowrap tabular-nums">
+                          {firstLine[index] !== undefined && cell(firstLine[index].key, repo)}
                         </span>
                       ))}
                       <span className="flex h-7 items-center justify-end gap-0.5">
@@ -1203,8 +1224,17 @@ export default function Repos() {
                           {trackedNames.includes(repo.full_name.toLowerCase()) ? "Untrack" : "Track"}
                         </Button>
                       </span>
+                      {/* The second line, under the first one's columns: nothing under the box and the name. */}
+                      <span />
+                      <span />
+                      {slots.map((index) => (
+                        <span key={index} className="block h-6 min-w-0 truncate leading-6 whitespace-nowrap tabular-nums">
+                          {secondLine[index] !== undefined && cell(secondLine[index].key, repo)}
+                        </span>
+                      ))}
+                      <span />
                       {repo.note !== "" && (
-                        <div className="min-w-0 truncate pb-1.5" style={{ gridColumn: "2 / -1" }} title={repo.note}>
+                        <div className="min-w-0 truncate pt-0.5" style={{ gridColumn: "2 / -1" }} title={repo.note}>
                           {repo.note}
                         </div>
                       )}
@@ -1395,24 +1425,32 @@ export default function Repos() {
         </div>
       </div>
       {/* Hidden: every row's cells at their own width in max-content columns, so useColumnWidths can read how wide each
-          column has to be for its widest cell. The header labels count too. */}
+          slot has to be for its widest cell, on either line. The header labels count too. */}
       <div
         ref={sizerRef}
         aria-hidden
         className="invisible absolute top-0 left-0 -z-10 grid h-0 overflow-hidden"
-        style={{ gridTemplateColumns: `repeat(${shownColumns.length}, max-content)` }}
+        style={{ gridTemplateColumns: `repeat(${slots.length}, max-content)` }}
       >
         {/* With the arrow a sorted header shows, so it always fits. */}
-        {shownColumns.map((column) => (
-          <span key={column.key} className="flex items-center gap-0.5 text-xs font-medium">
-            {column.label} <ArrowDown className="size-3" />
+        {slots.map((index) => (
+          <span key={index} className="flex flex-col text-xs font-medium">
+            {[firstLine[index], secondLine[index]].map(
+              (column, line) =>
+                column !== undefined && (
+                  <span key={line} className="flex items-center gap-0.5">
+                    {column.label} <ArrowDown className="size-3" />
+                  </span>
+                ),
+            )}
           </span>
         ))}
         {rows.map((repo) => (
           <Fragment key={repo.full_name}>
-            {shownColumns.map((column) => (
-              <span key={column.key} className="whitespace-nowrap tabular-nums">
-                {cell(column.key, repo)}
+            {slots.map((index) => (
+              <span key={index} className="flex flex-col whitespace-nowrap tabular-nums">
+                <span>{firstLine[index] !== undefined && cell(firstLine[index].key, repo)}</span>
+                <span>{secondLine[index] !== undefined && cell(secondLine[index].key, repo)}</span>
               </span>
             ))}
           </Fragment>
