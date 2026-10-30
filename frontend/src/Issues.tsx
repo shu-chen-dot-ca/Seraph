@@ -61,11 +61,11 @@ Active (first in the bar on top) drops down every issue an agent is on now (its 
 on you), whatever the repo: waiting on you first, then working, then queued. Each shows its title, the agent's
 headline under it, the agent, and the same progress bar as the Status column; a click opens that issue's row (like a
 link from the Jobs page). The sidebar lists the same issues under Issues.
-Remove assigned (in the bar on top) takes out every issue someone else is on (assigned on GitHub, or tagged Assigned)
-in one go, whatever the repo, except ones an agent here has a job for (its latest not cancelled); it asks
-first too, and is one undo step.
+Remove closed and assigned (in the bar on top) takes out every issue that is closed on GitHub or that someone else is
+on (assigned on GitHub, or tagged Assigned; Self-assigned ones stay) in one go, whatever the repo, except ones an agent
+here has a job for (its latest not cancelled); it asks first too, and is one undo step.
 Nothing removes an issue an agent is working on (a job on it queued, working or waiting on you): its X is greyed
-out, the bar at the bottom and Remove assigned leave it out (the bottom bar's question says how many stay), and
+out, the bar at the bottom and Remove closed and assigned leave it out (the bottom bar's question says how many stay), and
 undo / redo keep it too (the backend checks, for agents as well). Cancel its job first to remove it.
 */
 
@@ -180,7 +180,7 @@ export default function Issues(props: { repo: string | null; open: string | null
   // Select mode: every row shows a box and a click picks it. Picking a row any other way shows the boxes too.
   const [selecting, setSelecting] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
-  const [confirmRemoveAssigned, setConfirmRemoveAssigned] = useState(false);
+  const [confirmRemoveClosedAndAssigned, setConfirmRemoveClosedAndAssigned] = useState(false);
   // Your GitHub account (the GitHub page's Account tab), to tell Self-assigned from Assigned.
   const [account, setAccount] = useState<GithubAccountStatus | null>(null);
   // The list's order: as listed (none), or by these columns, from left to right as the table shows them, Title and #
@@ -258,13 +258,15 @@ export default function Issues(props: { repo: string | null; open: string | null
     }
   }
 
-  // Issues someone else is on (assigned on GitHub, or tagged Assigned) that no agent here works on: no job, or the
-  // latest cancelled. Remove assigned takes them all out.
-  const assignedIds = issues.items
+  // Issues closed on GitHub, or someone else is on (assigned on GitHub, or tagged Assigned, but not Self-assigned),
+  // that no agent here works on: no job, or the latest cancelled. Remove closed and assigned takes them all out.
+  const closedAndAssignedIds = issues.items
     .filter((issue) => {
       const job = latestJob[issue.id];
+      const isClosed = (issue.facts?.state ?? issue.state) === "CLOSED";
       const isAssigned = (issue.facts?.assignees.length ?? 0) > 0 || issue.tags?.status === "assigned";
-      return isAssigned && (job === undefined || job.status === "cancelled") && !workingIds.includes(issue.id);
+      const isOthers = isAssigned && !selfAssignedIds.includes(issue.id);
+      return (isClosed || isOthers) && (job === undefined || job.status === "cancelled") && !workingIds.includes(issue.id);
     })
     .map((issue) => issue.id);
 
@@ -790,11 +792,11 @@ export default function Issues(props: { repo: string | null; open: string | null
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button variant="ghost" size="sm" disabled={assignedIds.length === 0} onClick={() => setConfirmRemoveAssigned(true)}>
-              <UserX /> Remove assigned
+            <Button variant="ghost" size="sm" disabled={closedAndAssignedIds.length === 0} onClick={() => setConfirmRemoveClosedAndAssigned(true)}>
+              <UserX /> Remove closed and assigned
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Remove every issue someone else is on: assigned on GitHub, or a claim Claude found in the comments. Ones your agents have a job for stay.</TooltipContent>
+          <TooltipContent>Remove every issue that is closed on GitHub or someone else is on: assigned on GitHub, or a claim Claude found in the comments. Self-assigned ones and ones your agents have a job for stay.</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -1185,19 +1187,19 @@ export default function Issues(props: { repo: string | null; open: string | null
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog open={confirmRemoveAssigned} onOpenChange={setConfirmRemoveAssigned}>
+      <AlertDialog open={confirmRemoveClosedAndAssigned} onOpenChange={setConfirmRemoveClosedAndAssigned}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Remove {assignedIds.length} assigned {assignedIds.length === 1 ? "issue" : "issues"}?
+              Remove {closedAndAssignedIds.length} closed and assigned {closedAndAssignedIds.length === 1 ? "issue" : "issues"}?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              Someone else is on them: assigned on GitHub, or a claim Claude found in the comments. Ones your agents have a job for stay. Undo brings them back.
+              They are closed on GitHub, or someone else is on them: assigned on GitHub, or a claim Claude found in the comments. Self-assigned ones and ones your agents have a job for stay. Undo brings them back.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={() => remove(assignedIds)}>
+            <AlertDialogAction variant="destructive" onClick={() => remove(closedAndAssignedIds)}>
               Remove
             </AlertDialogAction>
           </AlertDialogFooter>

@@ -13,8 +13,8 @@ same way as the user's: every change pushes a copy of the whole list onto "undo"
 UNDO_LIMIT are kept) and clears "redo".
 
 An issue an agent is working on (a job on it queued, working or waiting on the user: WORKING) is never taken
-out, by the user, an agent or Remove assigned: remove skips it and says so, and an undo or redo that would drop it
-keeps it. Cancel its job first.
+out, by the user, an agent or Remove closed and assigned: remove skips it and says so, and an undo or redo that
+would drop it keeps it. Cancel its job first.
 
 The backend keeps one IssueList that the API and every agent share, so each method takes the
 lock. version goes up by one on every change; the live feed compares it to see what to send.
