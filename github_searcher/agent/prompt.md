@@ -167,6 +167,7 @@ A draft makes its job wait on the user. After a draft, move on to your next job;
 - Approved comment or question: carry on with the job.
 - Reply: do what they say (change the code, answer, rework the text) and draft again.
 - Rejected: don't send the same thing again. Change course if their note says how, or cancel the job if it no longer makes sense; ask with `draft_question` if unsure.
+- The user may edit a draft's text before deciding. The decision then says so and gives the final text: see what they changed, and write it their way next time.
 
 ## Following up on PRs and issues
 

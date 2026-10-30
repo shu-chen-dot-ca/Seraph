@@ -7,6 +7,10 @@ GitHub account is connected: the GitHub tab, Account) does Approve on a PR or co
 before the agent is told; if GitHub refuses, nothing is decided. POST /send does the same for one
 approved before (while no account was connected). Sending runs in a thread (github_account.py). A PR draft that is
 a new version of your open PR (update_of) is pushed onto that PR's branch, and its text posted there as your comment.
+
+POST /inbox/{id}/edit changes a pending PR or comment draft's title and text before you decide (the Inbox and the
+GitHub tab's thread pop-up); its agent is told with your decision that you edited it, and the final text.
+
 Every decision goes through Agents.decide, which also puts the draft's job back in the queue and
 wakes the agent, so those endpoints run on the event loop (`async def`). The
 drafts themselves reach the browser through /api/live.
@@ -43,6 +47,11 @@ class ReplyRequest(BaseModel):
 
 class DeleteRequest(BaseModel):
     ids: list[str]
+
+
+class EditRequest(BaseModel):
+    title: str
+    body: str
 
 
 @router.post("/inbox/delete")
@@ -95,6 +104,19 @@ async def reply(draft_id: str, body: ReplyRequest) -> dict:
         raise HTTPException(status_code=400, detail="The reply is empty.")
     try:
         return agents.decide(draft_id, "replied", body.text)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No draft {draft_id}")
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+
+
+@router.post("/inbox/{draft_id}/edit")
+def edit(draft_id: str, body: EditRequest) -> dict:
+    """The user changes a pending PR or comment draft's title and text; returns the draft."""
+    if not body.title.strip() or not body.body.strip():
+        raise HTTPException(status_code=400, detail="The title and the text can't be empty.")
+    try:
+        return inbox.edit(draft_id, body.title, body.body)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"No draft {draft_id}")
     except ValueError as error:

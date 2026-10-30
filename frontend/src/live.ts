@@ -414,6 +414,7 @@ export type Draft = {
   commits: DraftCommit[]; // PRs: the branch's commits since base, replayed when it is sent ([]: one commit)
   sent: DraftSent | null; // what went to GitHub as you (github_searcher/github_account.py); null until then
   update_of: string | null; // PR: a new version of your open PR "owner/name#n"; approving pushes it onto that PR
+  edited: boolean; // you edited its title or text before deciding
 };
 
 // One of a PR branch's commits, sent with your name. own: the agent's (the VM's git address); every commit of a new

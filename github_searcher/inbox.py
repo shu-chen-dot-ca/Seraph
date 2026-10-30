@@ -19,7 +19,8 @@ Approve on a PR or comment also sends it to GitHub as them, first; "sent" then s
      "overview": {...} (for the user, see below), "template": ".github/pull_request_template.md" | null,
      "status": "pending" | "approved" | "rejected" | "replied", "reply": "the user's text",
      "created_at", "decided_at": null until decided, "sent": null | what went to GitHub (github_account.py),
-     "update_of": "owner/name#n" | null (pr only: a new version of the user's open PR, see below)}
+     "update_of": "owner/name#n" | null (pr only: a new version of the user's open PR, see below),
+     "edited": bool (the user changed the title or text before deciding)}
 
 "body" is what would be sent to GitHub; "overview" is only for the user, who doesn't know the
 project: plain words on what is wrong and what the draft does about it.
@@ -28,6 +29,10 @@ A PR draft with "update_of" is the next version of a PR that is open already (a 
 for changes, or its checks failed). Its commits start from the PR's newest commit (base_sha), "title" is the commit
 message's subject and "body" the comment posted on the PR with them. Approve pushes them onto the PR's branch
 instead of opening a new PR (github_account.py).
+
+edit() lets the user change a pending PR or comment draft's title and text before deciding (the Inbox and the GitHub
+tab's thread pop-up). "edited" then says so, and its agent hears the final text with the decision (Agents.decide),
+so it learns how the user wants it written.
 
     pr:      {"project", "problem", "cause", "fix", "risks": ["what could go wrong", ...]}
     comment: {"project", "problem", "why"}  (why post this comment now)
@@ -82,8 +87,9 @@ class Inbox:
             draft.setdefault("base_sha", "")
             draft.setdefault("commits", [])
             draft.setdefault("sent", None)
-            # And from before PR updates.
+            # And from before PR updates and editing.
             draft.setdefault("update_of", None)
+            draft.setdefault("edited", False)
             self.drafts[draft["id"]] = draft
 
     def save(self, draft: dict) -> None:
@@ -150,6 +156,7 @@ class Inbox:
                 "decided_at": None,
                 "sent": None,
                 "update_of": update_of,
+                "edited": False,
             }
             self.drafts[draft_id] = draft
             self.save(draft)
@@ -169,6 +176,30 @@ class Inbox:
             draft["status"] = status
             draft["reply"] = reply
             draft["decided_at"] = datetime.now(UTC).isoformat()
+            self.save(draft)
+            return copy.deepcopy(draft)
+
+    def edit(self, draft_id: str, title: str, body: str) -> dict:
+        """The user changes a pending PR or comment draft's title and text before deciding. Returns the draft as it is now."""
+        title = title.strip()
+        body = body.strip()
+        if title == "" or body == "":
+            raise ValueError("The title and the text can't be empty.")
+
+        with self.lock:
+            if draft_id not in self.drafts:
+                raise KeyError(f"No draft {draft_id}")
+            draft = self.drafts[draft_id]
+            if draft["status"] != "pending":
+                raise ValueError(f"{draft_id} was already {draft['status']}")
+            if draft["kind"] not in ["pr", "comment"]:
+                raise ValueError("Only a PR or a comment can be edited.")
+            # Saved as it was: nothing changed, so it isn't edited.
+            if title == draft["title"] and body == draft["body"].strip():
+                return copy.deepcopy(draft)
+            draft["title"] = title
+            draft["body"] = body
+            draft["edited"] = True
             self.save(draft)
             return copy.deepcopy(draft)
 

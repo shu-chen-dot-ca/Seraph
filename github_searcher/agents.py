@@ -52,7 +52,8 @@ app with a clear frontend up and leaves it running on the VM's desktop (a server
 service, so it outlives the agent's turn and VM restarts), or clones a library or other low-level
 repo and opens it in VS Code there, then writes a short introduction to the repo in its chat and
 the job's notes. decide() passes the user's decision on a draft back to its agent (with the link,
-when Approve sent it to GitHub, or pushed a new version onto the user's PR).
+when Approve sent it to GitHub, or pushed a new version onto the user's PR). When the user edited the draft
+before deciding, the agent also gets the final text, so it learns how they want it written.
 
 The GitHub tab's side: follow_up() is called when someone else wrote on a PR or issue of the user's that an
 agent follows (agent mode Drafts), or the PR's checks failed (pr_tracking.needs_reply). The agent gets a
@@ -931,6 +932,12 @@ class Agents:
         # A follow-up's reply that went out often answers everything there was.
         if decision == "approved" and draft["kind"] == "comment" and job is not None and job["kind"] == "follow_up":
             text += f" If that answers everything on {job['thread']} for now, mark {job['id']} done; the app makes a new job when someone writes there again."
+        # The user changed the text before deciding: the agent sees how they wanted it, to write it that way next time.
+        if draft["edited"]:
+            final = draft["body"]
+            if draft["kind"] == "pr":
+                final = f"{draft['title']}\n\n{draft['body']}"
+            text += f"\nThe user edited your draft before deciding. The final text:\n{final}\nSee what they changed, and write it their way next time."
         if job is not None and job["status"] == "queued" and job["vm"] is not None:
             text += f"\n{job['id']} is queued again; use queue_for_vm if you need {job['vm']} for it."
         self.notify(draft["agent"], text)

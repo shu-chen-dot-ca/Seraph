@@ -19,11 +19,15 @@ is what would be sent:
   before and after pictures are in its text as ![...](evidence:ev_...): shown here in place, and listed above it with
   Copy picture and Download, since GitHub needs its own copy (sending uploads them to your fork; by hand, paste
   each over its line in GitHub's PR box).
+  Edit (a pending PR or comment) makes the title and text editable: Save keeps your change (the agent is told you
+  edited it when you decide), Cancel drops it. An edited one says "Edited by you". While you edit, the decision
+  buttons wait for Save or Cancel.
 A new version of one of your open PRs (the agent fixed what a review asked for, or its failing checks) says so on top,
 with a link to that PR in the GitHub tab's pop-up, and its last tab is Commit and comment: the title is the commit
 message, the text the comment posted on the PR with it.
-The bar at the bottom of the pop-up decides: Reject, Reply & keep working, or Approve, with an optional reply (Taken:
-Stop the agent or Keep working, with an optional note).
+The bar at the bottom of the pop-up decides, with a note for the agent: Reject, Discuss, Redraft or Approve (a
+question: Reject, Reply or Approve; Taken: Stop the agent or Keep working). Redraft: the agent drafts it again with
+your note. Discuss: your note goes to the agent's chat, saying which draft it is about, and the draft keeps waiting.
 A decision goes to the agent (and the draft's job goes back to the agent's queue).
 With your GitHub account connected (Account on the GitHub tab), Approve on a PR or comment first asks "are you sure?"
 (Open PR / Post comment / Push changes), then sends it to GitHub as you (github_searcher/github_account.py): a PR from
@@ -47,7 +51,7 @@ comment you posted can still be deleted from its PR's or issue's pop-up on the G
 */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Check, ChevronRight, CircleHelp, Copy, Download, ExternalLink, FileCheck, GitCommitHorizontal, GitPullRequest, Images, Loader2, MessageSquare, Reply, Send, Square, Trash2, UserX, X } from "lucide-react";
+import { Check, ChevronRight, CircleHelp, Copy, Download, ExternalLink, FileCheck, GitCommitHorizontal, GitPullRequest, Images, Loader2, MessageSquare, MessagesSquare, Pencil, Reply, RotateCcw, Send, Square, Trash2, UserX, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -64,6 +68,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Markdown } from "@/components/ui/markdown";
 import { RowSelection } from "@/components/ui/row-selection";
 import { DRAFT_TONE, JOB_LABEL, JOB_TONE, StatusDot } from "@/components/ui/status-dot";
@@ -104,6 +109,8 @@ export default function Inbox(props: { selected: string | null }) {
   const [account, setAccount] = useState<GithubAccountStatus | null>(null);
   // The "are you sure?" before sending: for Approve, or for Send to GitHub on an approved item.
   const [confirming, setConfirming] = useState<"" | "approve" | "send">("");
+  // Edit on a pending PR's or comment's last tab: the title and text as you change them, until Save or Cancel.
+  const [editing, setEditing] = useState<{ id: string; title: string; body: string } | null>(null);
   const [now, setNow] = useState(Date.now());
   const scrollRef = useRef<HTMLDivElement>(null);
   // Picked items, the last one clicked (where a shift-click range starts), and the decided ones Delete waits to
@@ -381,7 +388,8 @@ export default function Inbox(props: { selected: string | null }) {
     setBusy("");
   }
 
-  // A message to a decided item's agent, in its chat, saying which item it is about.
+  // A message to the item's agent, in its chat, saying which item it is about: Discuss on a pending one (it keeps
+  // waiting for your decision), or the message box of a decided one.
   async function messageAgent() {
     if (draft === undefined) {
       return;
@@ -391,9 +399,13 @@ export default function Inbox(props: { selected: string | null }) {
       return;
     }
     const agentId = draft.agent;
+    let about = `About ${draft.id} (${draft.title}) in the Inbox:`;
+    if (draft.status === "pending") {
+      about = `About ${draft.id} (${draft.title}) in the Inbox, still waiting for your decision:`;
+    }
     setBusy("message");
     try {
-      await api(`/api/agents/${agentId}/message`, { method: "POST", body: { text: `About ${draft.id} (${draft.title}) in the Inbox:\n${text}` } });
+      await api(`/api/agents/${agentId}/message`, { method: "POST", body: { text: `${about}\n${text}` } });
       setReplies((current) => ({ ...current, [draft.id]: "" }));
       toast.success(`Sent to ${agentNames[agentId] ?? agentId}`, {
         action: {
@@ -429,6 +441,22 @@ export default function Inbox(props: { selected: string | null }) {
       }
     } catch (err) {
       toast.error(`Could not send it: ${err instanceof Error ? err.message : err}`);
+    }
+    setBusy("");
+  }
+
+  // Edit's Save: your title and text replace the agent's; the agent is told you edited it when you decide.
+  async function saveEdit() {
+    if (draft === undefined || editing === null || editing.id !== draft.id) {
+      return;
+    }
+    setBusy("edit");
+    try {
+      await api<Draft>(`/api/inbox/${draft.id}/edit`, { method: "POST", body: { title: editing.title, body: editing.body } });
+      setEditing(null);
+      toast.success("Saved your edit.");
+    } catch (err) {
+      toast.error(`Could not save it: ${err instanceof Error ? err.message : err}`);
     }
     setBusy("");
   }
@@ -507,6 +535,9 @@ export default function Inbox(props: { selected: string | null }) {
     shownTab = "overview";
   }
   const showTabs = draft !== undefined && draft.kind !== "question" && draft.kind !== "taken";
+  // Only a pending PR or comment can be edited; the fields show while Edit is on for this item.
+  const canEdit = draft !== undefined && draft.status === "pending" && (draft.kind === "pr" || draft.kind === "comment");
+  const isEditing = draft !== undefined && editing !== null && editing.id === draft.id;
   // A new version of your open PR "owner/name#n": its commits go onto that PR's branch, its text as a comment there.
   const updateOf = draft !== undefined && draft.kind === "pr" ? draft.update_of : null;
   // The "are you sure?" before Approve (or Send to GitHub) sends it, in words for what goes out.
@@ -791,7 +822,7 @@ export default function Inbox(props: { selected: string | null }) {
                         )}
                       </div>
                     )}
-                    {shownTab === "message" && (
+                    {shownTab === "message" && !isEditing && (
                       <div className="ml-auto flex items-center gap-1">
                         {draft.kind === "pr" && (
                           <Button variant="ghost" size="sm" onClick={() => copyText(draft.title, "Title")}>
@@ -801,6 +832,26 @@ export default function Inbox(props: { selected: string | null }) {
                         <Button variant="ghost" size="sm" disabled={draft.body === ""} onClick={() => copyText(draft.body, "Text")}>
                           <Copy /> Copy text
                         </Button>
+                        {canEdit && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={busy !== ""}
+                            onClick={() => setEditing({ id: draft.id, title: draft.title, body: draft.body })}
+                          >
+                            <Pencil /> Edit
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                    {shownTab === "message" && isEditing && (
+                      <div className="ml-auto flex items-center gap-1">
+                        <Button variant="ghost" size="sm" disabled={busy !== ""} onClick={() => setEditing(null)}>
+                          Cancel
+                        </Button>
+                        <Button size="sm" disabled={busy !== ""} onClick={() => saveEdit()}>
+                          {busy === "edit" ? <Loader2 className="animate-spin" /> : <Check />} Save
+                        </Button>
                       </div>
                     )}
                   </div>
@@ -809,6 +860,11 @@ export default function Inbox(props: { selected: string | null }) {
                 {shownTab === "overview" && <Overview draft={draft} files={files.length} added={totalAdded} removed={totalRemoved} />}
                 {shownTab === "message" && (
                   <div className="space-y-3 px-4 py-3">
+                    {draft.edited && !isEditing && (
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <Pencil className="size-3.5" /> Edited by you
+                      </div>
+                    )}
                     {draft.kind === "pr" && draft.template !== null && (
                       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                         <FileCheck className="size-3.5 text-ok" /> Follows the project's PR template <span className="font-mono">{draft.template}</span>
@@ -860,9 +916,23 @@ export default function Inbox(props: { selected: string | null }) {
                       </div>
                     )}
                     {updateOf !== null && <div className="text-xs font-medium text-muted-foreground">Commit message</div>}
-                    {draft.kind === "pr" && <div className="text-[15px] font-semibold">{draft.title}</div>}
+                    {draft.kind === "pr" && !isEditing && <div className="text-[15px] font-semibold">{draft.title}</div>}
+                    {draft.kind === "pr" && isEditing && editing !== null && (
+                      <Input
+                        className="text-[15px] font-semibold"
+                        value={editing.title}
+                        onChange={(event) => setEditing({ ...editing, title: event.target.value })}
+                      />
+                    )}
                     {updateOf !== null && <div className="text-xs font-medium text-muted-foreground">Comment on the PR</div>}
-                    <Markdown text={shownBody || "*No text.*"} repo={draft.repo ?? undefined} githubImagesOnly issueRefs />
+                    {!isEditing && <Markdown text={shownBody || "*No text.*"} repo={draft.repo ?? undefined} githubImagesOnly issueRefs />}
+                    {isEditing && editing !== null && (
+                      <Textarea
+                        className="min-h-64"
+                        value={editing.body}
+                        onChange={(event) => setEditing({ ...editing, body: event.target.value })}
+                      />
+                    )}
                   </div>
                 )}
                 {shownTab === "diff" && files.length === 0 && <div className="px-4 py-3 text-muted-foreground">This draft has no changes.</div>}
@@ -897,7 +967,7 @@ export default function Inbox(props: { selected: string | null }) {
                     placeholder={
                       draft.kind === "question"
                         ? "Your answer. Ctrl+Enter sends it as a reply."
-                        : "A note for the agent (optional for Approve and Reject; needed for Reply). Ctrl+Enter replies."
+                        : "A note for the agent (optional for Approve and Reject; needed for Discuss and Redraft). Ctrl+Enter redrafts."
                     }
                     className="max-h-40 min-h-14 bg-background"
                     value={reply}
@@ -905,35 +975,50 @@ export default function Inbox(props: { selected: string | null }) {
                     onKeyDown={(event) => {
                       if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
                         event.preventDefault();
-                        decide("reply");
+                        if (!isEditing) {
+                          decide("reply");
+                        }
                       }
                     }}
                   />
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-muted-foreground">
-                      {draft.kind !== "question" && account !== null && account.connected && updateOf !== null &&
+                      {isEditing && "Save or cancel your edit first."}
+                      {!isEditing && draft.kind !== "question" && account !== null && account.connected && updateOf !== null &&
                         `Approve pushes these changes to ${updateOf} as @${account.login}, after you confirm; the agent is told, with your note.`}
-                      {draft.kind !== "question" && account !== null && account.connected && updateOf === null &&
+                      {!isEditing && draft.kind !== "question" && account !== null && account.connected && updateOf === null &&
                         `Approve ${draft.kind === "pr" ? "opens this PR" : "posts this comment"} on GitHub as @${account.login}, after you confirm; the agent is told, with your note.`}
-                      {(draft.kind === "question" || account === null || !account.connected) &&
+                      {!isEditing && (draft.kind === "question" || account === null || !account.connected) &&
                         "Approve sends nothing to GitHub; the agent is told, with your note."}
                     </span>
-                    <div className="ml-auto flex items-center gap-1.5">
-                      <Button variant="outline" size="sm" disabled={busy !== ""} onClick={() => decide("reject")}>
+                    <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                      <Button variant="outline" size="sm" disabled={busy !== "" || isEditing} onClick={() => decide("reject")}>
                         {busy === "reject" ? <Loader2 className="animate-spin" /> : <X />} Reject
                       </Button>
-                      <Button
-                        variant={draft.kind === "question" ? "default" : "outline"}
-                        size="sm"
-                        disabled={busy !== "" || reply.trim() === ""}
-                        onClick={() => decide("reply")}
-                      >
-                        {busy === "reply" ? <Loader2 className="animate-spin" /> : <Reply />} Reply & keep working
-                      </Button>
+                      {draft.kind !== "question" && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={busy !== "" || isEditing || reply.trim() === "" || !(draft.agent in agentNames)}
+                          onClick={() => messageAgent()}
+                        >
+                          {busy === "message" ? <Loader2 className="animate-spin" /> : <MessagesSquare />} Discuss
+                        </Button>
+                      )}
+                      {draft.kind === "question" && (
+                        <Button size="sm" disabled={busy !== "" || reply.trim() === ""} onClick={() => decide("reply")}>
+                          {busy === "reply" ? <Loader2 className="animate-spin" /> : <Reply />} Reply
+                        </Button>
+                      )}
+                      {draft.kind !== "question" && (
+                        <Button variant="outline" size="sm" disabled={busy !== "" || isEditing || reply.trim() === ""} onClick={() => decide("reply")}>
+                          {busy === "reply" ? <Loader2 className="animate-spin" /> : <RotateCcw />} Redraft
+                        </Button>
+                      )}
                       <Button
                         variant={draft.kind === "question" ? "outline" : "default"}
                         size="sm"
-                        disabled={busy !== ""}
+                        disabled={busy !== "" || isEditing}
                         onClick={() => {
                           if (draft.kind !== "question" && account !== null && account.connected) {
                             setConfirming("approve");
