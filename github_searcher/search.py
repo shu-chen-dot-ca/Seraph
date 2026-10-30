@@ -1,5 +1,5 @@
 """Reads from GitHub: repos, files, READMEs, PR and issue activity, threads, merged PRs, issue facts, issue and code search,
-how your sent PRs stand (their checks and GitHub Actions runs), and everything the GitHub page's
+how your sent PRs stand (their checks and GitHub Actions runs), and everything the GitHub tab's
 thread pop-up shows of one PR or issue (backend/github_api.py): its whole timeline, commits, checks and files changed,
 and one comment (whose it is, before you delete it).
 
@@ -610,7 +610,7 @@ def get_tracked_issues(owner: str, repo: str) -> dict:
     return data["data"]["repository"]
 
 
-# One PR as it stands, for the GitHub page (pr_tracking.py): its state, labels, reviews, latest comment, the issues it
+# One PR as it stands, for the GitHub tab (pr_tracking.py): its state, labels, reviews, latest comment, the issues it
 # says it fixes, and its newest commit's checks.
 PR_STATUS_QUERY = """
 query($owner: String!, $name: String!, $number: Int!) {
@@ -653,7 +653,7 @@ def get_action_runs(owner: str, repo: str, sha: str) -> list[dict]:
     return response.json()["workflow_runs"]
 
 
-# A PR or issue as the GitHub page's thread pop-up shows it (backend/github_api.py): the description, labels, assignees,
+# A PR or issue as the GitHub tab's thread pop-up shows it (backend/github_api.py): the description, labels, assignees,
 # and its newest 100 timeline items, oldest first: comments (databaseId is the id to delete one by), reviews with their
 # code comments, commits, and the events the pop-up shows. totalCount says how many there are in all, so the pop-up can
 # say how many earlier ones it leaves out. A PR also has its branch (headRef is null once the branch is deleted), the

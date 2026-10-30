@@ -1,8 +1,9 @@
-"""The Inbox: drafts agents write for the user, and the user's decisions on them.
+"""The Inbox: drafts agents write for the user, and the user's decisions on them. It is on the header's
+GitHub tab (#/inbox).
 
 Agents never send anything to GitHub. A pull request, a comment or a question becomes a draft
 here, and the user approves, rejects, or replies to it (the agent then keeps working).
-Approving tells the agent. With the user's GitHub account connected (Settings, github_account.py),
+Approving tells the agent. With the user's GitHub account connected (the GitHub tab, Account; github_account.py),
 Approve on a PR or comment also sends it to GitHub as them, first; "sent" then says what went out
 (mark_sent). Each draft is one JSON file, DATA_DIR/inbox/<id>.json:
 

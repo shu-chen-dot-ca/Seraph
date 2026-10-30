@@ -1,6 +1,6 @@
 /*
 The thread pop-up: one of your PRs on GitHub in full, the way GitHub shows it
-(#/github?open=owner/name%23n, keeping tab=). A click on a PR row of the GitHub page opens it; the X,
+(#/github/pulls?open=owner/name%23n). A click on a row of the GitHub tab opens it; the X,
 Esc or a click outside closes it (the address drops open). It is read fresh from GitHub each time it opens
 (GET /api/github/thread); Refresh reads it again.
 Top: the state (Open, Draft, Merged, Closed), the repo and number (opens it on GitHub), who opened it and when, for a
@@ -17,7 +17,7 @@ Tabs (an issue has only Conversation):
   on GitHub.
 - Files changed: the diff per file, folding open, with +/- counts and line numbers (a big file starts folded).
 For a PR you opened, the bar has Close PR (open), Reopen PR and Delete branch (closed), Delete branch (merged).
-The bottom bar: Leave a comment and Comment, posted as you (needs your account connected: Account on the GitHub page;
+The bottom bar: Leave a comment and Comment, posted as you (needs your account connected: Account on the GitHub tab;
 until then a "connect your GitHub account" link to it).
 Every button that changes something on GitHub asks "are you sure?" first (Enter confirms), then acts as you.
 */
@@ -230,7 +230,7 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
     };
   }, [props.id, reload]);
 
-  // Who the GitHub account is: at first, and again when you connect or disconnect it on the GitHub page's Account tab.
+  // Who the GitHub account is: at first, and again when you connect or disconnect it on the Account page.
   useEffect(() => {
     function load() {
       api<GithubAccountStatus>("/api/github_account")
@@ -347,7 +347,7 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
     [files, fileOpen, props.id],
   );
 
-  // The thread in the GitHub page's live list (one of your PRs); undefined when it isn't there.
+  // The thread in the GitHub tab's live list (one of your PRs); undefined when it isn't there.
   const pr = prs.items.find((each) => each.id === props.id);
 
   const comment = props.id !== null ? (comments[props.id] ?? "") : "";
@@ -814,7 +814,7 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
               {account !== null && !account.connected && (
                 <div className="text-xs text-muted-foreground">
                   To comment here as you,{" "}
-                  <a href="#/github?tab=account" className="text-primary hover:underline">
+                  <a href="#/github/account" className="text-primary hover:underline">
                     connect your GitHub account
                   </a>
                   .

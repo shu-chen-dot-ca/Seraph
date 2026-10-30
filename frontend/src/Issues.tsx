@@ -29,7 +29,7 @@ good first issue counts most, then help wanted, then confirmed, and one marked m
 GitHub's labels aren't shown otherwise: each issue carries the app's own tags instead, the same as on the Tracked page
 (github_searcher/issue_tags.py, made by Claude in the background), each in its own column and sorted like the others:
 Free (a newcomer can start now) or Assigned (someone is on it: an assignee, a claim, the author doing it), or
-Self-assigned (blue: you are on it, your GitHub account from the GitHub page's Account tab is an assignee or has an
+Self-assigned (blue: you are on it, your GitHub account from the GitHub tab's Account page is an assignee or has an
 open PR for it; not counted as Assigned), or Closed (muted, whatever its tags say, when the issue is closed on GitHub;
 it sorts last), its Kind, and
 a Level: how hard the fix is for our agent in its sandbox VM, decided by fixed rules from eight yes / no checks Claude
@@ -188,7 +188,7 @@ export default function Issues(props: { repo: string | null; open: string | null
   const [selecting, setSelecting] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [confirmRemoveClosedAndAssigned, setConfirmRemoveClosedAndAssigned] = useState(false);
-  // Your GitHub account (the GitHub page's Account tab), to tell Self-assigned from Assigned.
+  // Your GitHub account (the GitHub tab's Account page), to tell Self-assigned from Assigned.
   const [account, setAccount] = useState<GithubAccountStatus | null>(null);
   // The list's order: as listed (none), or by these columns, from left to right as the table shows them, Title and #
   // last; best is the way a column's first click sorts, or not.
@@ -202,7 +202,7 @@ export default function Issues(props: { repo: string | null; open: string | null
   const sizerRef = useRef<HTMLDivElement>(null);
   const sizes = useColumnWidths(sizerRef);
 
-  // Who the GitHub account is: at first, and again when the GitHub page connects or disconnects one.
+  // Who the GitHub account is: at first, and again when Account on the GitHub tab connects or disconnects one.
   useEffect(() => {
     function load() {
       api<GithubAccountStatus>("/api/github_account")

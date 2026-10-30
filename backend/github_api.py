@@ -1,6 +1,6 @@
-"""The GitHub page: your PRs on GitHub and how each one stands (github_searcher/pr_tracking.py), each one's
+"""The GitHub tab: your PRs on GitHub and how each one stands (github_searcher/pr_tracking.py), each one's
 whole thread for the thread pop-up, and the changes you make there, as you
-(github_searcher/github_account.py). Its Account tab connects the account itself (backend/github_account_api.py).
+(github_searcher/github_account.py). Its Account page connects the account itself (backend/github_account_api.py).
 
 GET /api/github/thread?id=owner/name%23n is one PR or issue as GitHub has it now, read with the search tokens: the
 description, the newest 100 timeline items (comments, reviews with their code comments, commits, and events in plain
@@ -340,7 +340,7 @@ async def delete_comment(owner: str, name: str, comment_id: int) -> dict:
         raise HTTPException(status_code=400, detail="That isn't a GitHub repo.")
     account = github_account.status()
     if not account["connected"]:
-        raise HTTPException(status_code=400, detail="Connect your GitHub account first: the GitHub page, Account.")
+        raise HTTPException(status_code=400, detail="Connect your GitHub account first: the GitHub tab, Account.")
     # Whose it is, read with the search tokens first: GitHub deletes by id alone, and your token may delete other
     # people's comments on a repo you maintain.
     comment = None

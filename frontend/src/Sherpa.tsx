@@ -11,7 +11,8 @@ It can take a screenshot of the app: the page drawn to an image from its own DOM
 outside the app gets in, no other window or tab. Frames (a VM's desktop, another site) and Sherpa's own chat are
 left out. With numbers on, each usable element's number is drawn on it, for click.
 
-Each message takes the page along, as readPage reads it: the address, the sidebar, the text, and every button, link,
+Each message takes the page along, as readPage reads it: the address, the header's tab (Home or GitHub), the sidebar
+(the tab's left list, the one <nav> on the page), the text, and every button, link,
 field and fold (a folded section's title, open or closed), numbered (data-sherpa-id), the values of password and data-secret fields left out. With a pop-up open, only
 the pop-up. While a turn runs, the chat comes from GET /api/sherpa every half second, and a page action Sherpa asks
 for (pending) is done here, in the tab the message came from (TAB, kept over a reload), and its answer posted back.
@@ -106,6 +107,11 @@ function readPage(): string {
       lines.push("You may answer this one (click with confirm true), but only when the user asked you for exactly this.");
     }
   } else {
+    // The header's tab (Home or GitHub) says which left list the sidebar is.
+    const tab = document.querySelector<HTMLElement>("header [aria-current='page']")?.innerText.trim() ?? "";
+    if (tab !== "") {
+      lines.push(`Tab: ${tab.split("\n")[0]}`);
+    }
     lines.push("Sidebar:", document.querySelector("nav")?.innerText.trim() ?? "", "", "Text on the page:");
     const text = (document.querySelector("main")?.innerText ?? "").replace(/\n{3,}/g, "\n\n").trim();
     lines.push(text.length > TEXT_KEPT ? text.slice(0, TEXT_KEPT) + "\n[...cut]" : text);

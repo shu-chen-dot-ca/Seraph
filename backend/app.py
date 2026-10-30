@@ -2,7 +2,7 @@
 
 The pieces are made once in backend/shared.py (the Repos, Issues and Tracked lists,
 jobs, the inbox, your GitHub account, your PRs, the VMs, the VM queue and the agents), and each page has its
-own router in backend/*_api.py (the GitHub page: github_api.py, and its Account tab: github_account_api.py).
+own router in backend/*_api.py (the GitHub tab: github_api.py, and its Account page: github_account_api.py).
 
 The browser never polls. It keeps one websocket open on /api/live, gets every
 topic when it connects, then only the topics that changed. Every store has a

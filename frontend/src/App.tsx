@@ -1,15 +1,22 @@
 /*
-The whole app: a 36px header, the sidebar tree on the left, and one page on the right.
-On the header's right: this repo on GitHub (a new tab, so the app stays open),
+The whole app: a 36px header, a left list and one page on the right.
+The header's left has two tabs, the open one in full color with the accent under it:
+- Home: finding and doing the work, with the sidebar tree (Sidebar.tsx) on the left.
+- GitHub: your work on GitHub, with its own left list (GitHubNav.tsx: Inbox, Pull requests,
+  Account). The tab shows how many drafts wait in the Inbox for your decision.
+Each tab goes back to the last page you had open under it (Home starts at Issues, GitHub at the Inbox); a reload
+forgets that. On its right: this repo on GitHub (a new tab, so the app stays open),
 found from git's origin remote (vite.config.ts), so no account name is written here; none when it isn't on GitHub. Reset view is in Settings
-(SettingsDialog), opened from the bottom of the sidebar. Sherpa's round button sits at the bottom right of every
+(SettingsDialog), opened from the bottom of Home's sidebar. Sherpa's round button sits at the bottom right of every
 page (Sherpa.tsx).
 
 The page lives in the URL hash, so refresh and back/forward work and switching pages never reloads:
-  #/inbox  #/inbox/<draft id>  #/github  #/github?tab=closed|comments|account  #/github?open=owner/name%23n (that PR in its pop-up)
-  #/issues  #/issues?repo=owner/name  #/issues?open=<issue id>  #/jobs  #/jobs/<job id>  #/explore  #/repos  #/tracked
-  #/agents  #/agents/<agent id>  #/vms  #/vms?tab=images  #/vms?tab=defaults  #/vms/<vm name>  #/vms/<vm name>?tab=notes  #/resource
-Links are plain <a href="#/..."> everywhere; App only reads the hash.
+  Home:  #/issues  #/issues?repo=owner/name  #/issues?open=<issue id>  #/jobs  #/jobs/<job id>  #/explore  #/repos  #/tracked
+         #/agents  #/agents/<agent id>  #/vms  #/vms?tab=images  #/vms?tab=defaults  #/vms/<vm name>  #/vms/<vm name>?tab=notes  #/resource
+  GitHub: #/inbox  #/inbox/<draft id>  #/github (= #/github/pulls)  #/github/account
+         Pull requests takes ?repo=owner/name (only that repo), state=closed (the Closed tab) and
+         open=owner/name%23n (that PR in its pop-up), e.g. #/github/pulls?repo=owner/name&open=owner/name%2312
+Anything else opens Issues. Links are plain <a href="#/..."> everywhere; App only reads the hash.
 
 A VM page, once visited, stays mounted (hidden) while you are elsewhere, so its desktop iframe keeps its
 connection and coming back is instant. It is dropped when that VM no longer exists.
@@ -22,6 +29,7 @@ import AgentChat from "@/AgentChat";
 import Agents from "@/Agents";
 import Explore from "@/Explore";
 import GitHub from "@/GitHub";
+import GitHubNav from "@/GitHubNav";
 import Sherpa from "@/Sherpa";
 import Inbox from "@/Inbox";
 import Issues from "@/Issues";
@@ -37,6 +45,7 @@ import { Toaster } from "@/components/ui/sonner";
 import TitleTooltips from "@/components/ui/title-tooltips";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useConnected, useLiveValue, useLoaded } from "@/live";
+import { cn } from "@/lib/utils";
 
 const PAGES = ["inbox", "github", "issues", "jobs", "explore", "repos", "tracked", "agents", "vms", "resource"];
 // This repo on GitHub, or "": vite.config.ts puts it in from git's origin remote.
@@ -59,8 +68,13 @@ export default function App() {
   });
   const [accent, setAccent] = useState(document.documentElement.dataset.accent ?? "blue");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // The last address open under each header tab, where its tab goes back to.
+  const [lastHome, setLastHome] = useState("#/issues");
+  const [lastGitHub, setLastGitHub] = useState("#/inbox");
   // Only the names: App re-renders every page under it, and the VM list changes every second.
   const vmNamesText = useLiveValue((topics) => topics.vms.map((vm) => vm.name).join(" "));
+  // Only the count, for the GitHub tab.
+  const pending = useLiveValue((topics) => topics.inbox.filter((draft) => draft.status === "pending").length);
   const vmsLoaded = useLoaded("vms");
   const connected = useConnected();
 
@@ -78,6 +92,17 @@ export default function App() {
   const page = PAGES.includes(parts[0]) ? parts[0] : "issues";
   const id = parts.length > 1 && parts[1] !== "" ? decodeURIComponent(parts.slice(1).join("/")) : null;
   const query = new URLSearchParams(queryPart ?? "");
+  // The GitHub tab's pages; everything else is on Home. GitHub's section: "#/github/account" → "account", "#/github" → "pulls".
+  const onGitHub = page === "inbox" || page === "github";
+  const section = id === "account" ? id : "pulls";
+
+  // Keep the address for its tab (setting state while rendering, like visitedVMs below). No hash at all is Issues.
+  if (onGitHub && hash !== lastGitHub) {
+    setLastGitHub(hash);
+  }
+  if (!onGitHub && hash !== "" && hash !== lastHome) {
+    setLastHome(hash);
+  }
 
   // Remember every VM page opened, so it stays mounted. (Setting state while rendering is React's
   // pattern for state derived from props; it re-renders at once, before anything is shown.)
@@ -131,10 +156,34 @@ export default function App() {
     window.location.reload();
   }
 
+  // The header's tabs, like line tabs (components/ui/tabs.tsx): quiet until hovered; the open one in full color with
+  // the accent under it, over the header's border. Only the open one has aria-current (Sherpa reads it).
+  const tab = "relative flex h-full items-center gap-1.5 px-2 font-medium text-muted-foreground hover:text-foreground";
+  const currentTab = "text-foreground after:absolute after:inset-x-2 after:-bottom-px after:h-0.5 after:rounded-full after:bg-primary";
+
   return (
     <TooltipProvider>
       <div className="flex h-full flex-col">
         <header className="flex h-9 shrink-0 items-center gap-3 border-b bg-sidebar px-3">
+          <div className="flex h-full items-center">
+            <a href={lastHome} aria-current={onGitHub ? undefined : "page"} className={cn(tab, !onGitHub && currentTab)}>
+              Home
+            </a>
+            <a
+              href={lastGitHub}
+              aria-current={onGitHub ? "page" : undefined}
+              className={cn(tab, onGitHub && currentTab)}
+              title={pending > 0 ? `${pending} ${pending === 1 ? "draft waits" : "drafts wait"} in the Inbox for your decision` : undefined}
+            >
+              GitHub
+              {/* Like the Inbox's own count: a filled pill, like unread mail. */}
+              {pending > 0 && (
+                <span className="min-w-4.5 rounded-full bg-primary px-1.5 text-center text-xs leading-4.5 font-medium text-primary-foreground tabular-nums">
+                  {pending}
+                </span>
+              )}
+            </a>
+          </div>
           <div className="ml-auto flex items-center gap-1">
             {!connected && (
               <span className="mr-2 flex items-center gap-1.5 text-destructive">
@@ -160,10 +209,20 @@ export default function App() {
         </header>
 
         <div className="flex min-h-0 flex-1">
-          <Sidebar page={page} id={id} onOpenSettings={() => setSettingsOpen(true)} />
+          {/* One <nav> at a time: Sherpa reads the first one as the sidebar. */}
+          {onGitHub && <GitHubNav page={page} section={section} repo={query.get("repo")} />}
+          {!onGitHub && <Sidebar page={page} id={id} onOpenSettings={() => setSettingsOpen(true)} />}
           <main className="relative min-w-0 flex-1 overflow-hidden">
             {page === "inbox" && <Inbox selected={id} />}
-            {page === "github" && <GitHub key={query.get("tab") ?? ""} tab={query.get("tab")} open={query.get("open")} />}
+            {page === "github" && (
+              <GitHub
+                key={section}
+                section={section}
+                repo={query.get("repo")}
+                state={query.get("state") === "closed" ? "closed" : "open"}
+                open={query.get("open")}
+              />
+            )}
             {page === "issues" && <Issues repo={query.get("repo")} open={query.get("open")} />}
             {page === "jobs" && <Jobs selected={id} />}
             {page === "explore" && <Explore />}

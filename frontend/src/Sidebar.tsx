@@ -1,5 +1,6 @@
 /*
-The left tree, like Proxmox's resource tree. Every line is a link to a page, in the order the work flows, in three parts:
+The Home tab's left tree, like Proxmox's resource tree (the GitHub tab has its own list, GitHubNav.tsx, with the Inbox,
+your PRs and issues and your account). Every line is a link to a page, in the order the work flows, in three parts:
 - finding work: Explore (the search for new repos; shows how many found repos wait for the user's approve or remove, with a green dot while a run
   goes), Repos, Tracked (new issues in the repos the user keeps an eye on), Issues
   (one child per issue an agent is on now: its latest job queued, working or waiting on you, waiting on you first;
@@ -8,8 +9,7 @@ The left tree, like Proxmox's resource tree. Every line is a link to a page, in 
 - doing it, under a line: Jobs (open / all), Agents (one child per agent), then under another line VMs (one child per VM);
 - the computer, under another line: Resource (this computer's CPU, memory, GPUs, disk, network and battery,
   Resource.tsx);
-- pinned at the bottom: Inbox, GitHub (your PRs on GitHub and how each stands, your comments and your account, with how
-  many PRs are open; GitHub.tsx) and Settings (below).
+- pinned at the bottom: Settings (below).
 Counts and status dots come straight from the live store, so the tree updates itself.
 The chevrons only fold Issues / Agents / VMs; clicking a name opens that page.
 Hovering Jobs, Agents or VMs fades its count into a + that makes a new one right there:
@@ -19,11 +19,11 @@ Each agent and VM line, like a chat in claude.ai's sidebar, fades its status int
 (a small dialog) and Delete (asks first), and for an agent Archive (asks first). Deleting the one whose page is open
 goes back to its list. Archived agents aren't listed here (they are on the Agents page); an agent that made PRs
 can only be archived, not deleted.
-Inbox (pending drafts), GitHub (open PRs) and Settings stay pinned at the bottom while the tree scrolls; Settings opens SettingsDialog
-(theme and accent color), which App owns.
+Settings stays pinned at the bottom while the tree scrolls; it opens SettingsDialog (theme, accent color, Reset view and
+the env vars for all VMs), which App owns.
 */
 
-import { Archive, Bot, ChevronRight, CircleDot, Compass, Eye, FolderGit2, Gauge, Inbox, ListTodo, Monitor, MoreHorizontal, Pencil, Plus, Settings, Trash2 } from "lucide-react";
+import { Archive, Bot, ChevronRight, CircleDot, Compass, Eye, FolderGit2, Gauge, ListTodo, Monitor, MoreHorizontal, Pencil, Plus, Settings, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -64,7 +64,6 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
   const [deleteOpen, setDeleteOpen] = useState(false);
   // What the confirm dialog does to the agent: delete it, or archive it.
   const [confirmAction, setConfirmAction] = useState<"delete" | "archive">("delete");
-  const inbox = useLive("inbox");
   const issues = useLive("issues");
   const jobs = useLive("jobs");
   const repos = useLive("repos");
@@ -77,9 +76,6 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
   const exploreRunning = useLiveValue((topics) => topics.explore.run !== null && topics.explore.run.status === "running");
   const exploreWaiting = useLiveValue((topics) => topics.explore.found.length);
 
-  const pending = inbox.filter((draft) => draft.status === "pending").length;
-  // Only the count: the PRs topic changes whenever a PR is read again.
-  const openPRs = useLiveValue((topics) => topics.prs.items.filter((pr) => pr.state === "open").length);
   const running = vms.filter((vm) => vm.status === "running").length;
   // Issues opened in tracked repos in the last three days and not marked read (the Tracked page's Mark all as read).
   const newSince = Date.now() - 3 * 24 * 60 * 60 * 1000;
@@ -428,28 +424,6 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
       </div>
 
       <div className="border-t p-2">
-        <a href="#/inbox" className={cn(row, "pl-6", props.page === "inbox" && selected)}>
-          <Inbox className="size-4 text-muted-foreground" />
-          Inbox
-          {/* Drafts waiting on the user hold an agent up, so they get a filled pill, like unread mail. */}
-          <span
-            className={cn(
-              "ml-auto tabular-nums",
-              pending > 0 ? "min-w-4.5 rounded-full bg-primary px-1.5 text-center text-xs leading-4.5 font-medium text-primary-foreground" : "text-muted-foreground",
-            )}
-          >
-            {pending}
-          </span>
-        </a>
-        {/* Like Sent under a mail app's Inbox: what went out, and how it is doing. */}
-        <a href="#/github" className={cn(row, "pl-6", props.page === "github" && selected)}>
-          {/* GitHub's mark (lucide has no brand icons). */}
-          <svg viewBox="0 0 16 16" className="size-4 text-muted-foreground" fill="currentColor" aria-hidden="true">
-            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
-          </svg>
-          GitHub
-          <span className="ml-auto text-muted-foreground tabular-nums">{openPRs}</span>
-        </a>
         <button type="button" className={cn(row, "w-full pl-6")} onClick={props.onOpenSettings}>
           <Settings className="size-4 text-muted-foreground" />
           Settings

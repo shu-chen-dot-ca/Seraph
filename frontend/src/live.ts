@@ -439,7 +439,7 @@ export type DraftSent = {
   base_sha?: string;
   commit?: string;
   id?: number; // comment: its id on GitHub
-  deleted_at?: string; // comment: when you deleted it on the GitHub page
+  deleted_at?: string; // comment: when you deleted it on the GitHub tab
 };
 
 // One of your PRs on GitHub and how it stands (github_searcher/pr_tracking.py): the ones Approve sent, and your
@@ -479,8 +479,8 @@ export type PRsData = {
   refreshing: boolean;
 };
 
-// Your GitHub account (GET /api/github_account, the GitHub page's Account tab), the one that sends what you approve
-// and that the GitHub page's buttons act as. Never the token.
+// Your GitHub account (GET /api/github_account, the GitHub tab's Account page), the one that sends what you approve
+// and that the GitHub tab's buttons act as. Never the token.
 export type GithubAccountStatus = {
   connected: boolean;
   login?: string;

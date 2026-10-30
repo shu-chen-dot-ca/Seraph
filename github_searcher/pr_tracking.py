@@ -1,4 +1,4 @@
-"""Your PRs on GitHub and how each one stands, for the GitHub page (frontend/src/GitHub.tsx).
+"""Your PRs on GitHub and how each one stands, for the GitHub tab (frontend/src/GitHub.tsx).
 
 Which PRs: every PR the Inbox's Approve sent (a draft's "sent", github_account.py), and, with your GitHub
 account connected, your other open and closed PRs on other people's projects (a search for author:<you>), so

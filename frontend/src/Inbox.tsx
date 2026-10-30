@@ -1,7 +1,8 @@
 /*
-The Inbox: everything the agents want to send (PRs, comments) or ask (questions), waiting for you. And one
-kind the app makes itself, Taken: an issue an agent has a job for isn't free anymore (someone else is on it
-now, github_searcher/agents.py issue_taken); you pick Keep working or Stop the agent (its job is cancelled).
+The Inbox (on the GitHub tab, #/inbox): everything the agents want to send (PRs, comments) or ask (questions),
+waiting for you. And one kind the app makes itself, Taken: an issue an agent has a job for isn't free anymore
+(someone else is on it now, github_searcher/agents.py issue_taken); you pick Keep working or Stop the agent (its job
+is cancelled).
 
 The page is the list, every item in one list, newest first; only the rows on screen are drawn. Pending ones are in
 bold, decided ones grayed out; they still open like any other.
@@ -21,12 +22,12 @@ is what would be sent:
 The bar at the bottom of the pop-up decides: Reject, Reply & keep working, or Approve, with an optional reply (Taken:
 Stop the agent or Keep working, with an optional note).
 A decision goes to the agent (and the draft's job goes back to the agent's queue).
-With your GitHub account connected (the GitHub page, Account), Approve on a PR or comment first asks "are you sure?" (Open PR / Post
+With your GitHub account connected (Account on the GitHub tab), Approve on a PR or comment first asks "are you sure?" (Open PR / Post
 comment), then sends it to GitHub as you (github_searcher/github_account.py): a PR from a new branch in your fork,
 its pictures uploaded there. If GitHub refuses, nothing is decided and the error shows. Without an account nothing is
 sent; you send it yourself. A sent item's bar links to it on GitHub. One approved but not sent (approved before you
 connected) has Send to GitHub, with the same question; while no account is connected, its bar says in amber it isn't on
-GitHub yet, with a link to the GitHub page's Account tab to connect one. The bar says who Approve sends as.
+GitHub yet, with a link to Account on the GitHub tab to connect one. The bar says who Approve sends as.
 A decided item's bar says what you decided, and has a box to message its agent about it: the message goes into the
 agent's chat (its page, #/agents/<id>, which Open chat opens), saying which item it is about. An archived agent comes
 back for it; a deleted one can't get messages.
@@ -37,7 +38,7 @@ Delete: a decided item's bar has Delete, and many are picked like in a mail app 
 Ctrl-click, Shift-click, dragging a rectangle, Ctrl+A; the bar at the bottom of the list then deletes them at once. It
 asks first (Enter confirms), and it is for good. Only decided items can be deleted: a pending one waits for your
 decision, since its agent waits for the answer. Their agents aren't told, and what was sent to GitHub stays there (a
-comment you posted can still be deleted from its pop-up on the GitHub page).
+comment you posted can still be deleted from its pop-up on the GitHub tab).
 */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -94,7 +95,7 @@ export default function Inbox(props: { selected: string | null }) {
   // Diff files folded open or shut by hand, by "draft id:path"; others follow BIG_FILE_LINES.
   const [fileOpen, setFileOpen] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState("");
-  // Your GitHub account (the GitHub page): who Approve sends PRs and comments as (null until known).
+  // Your GitHub account (Account on the GitHub tab): who Approve sends PRs and comments as (null until known).
   const [account, setAccount] = useState<GithubAccountStatus | null>(null);
   // The "are you sure?" before sending: for Approve, or for Send to GitHub on an approved item.
   const [confirming, setConfirming] = useState<"" | "approve" | "send">("");
@@ -166,7 +167,7 @@ export default function Inbox(props: { selected: string | null }) {
     getItemKey: (index) => rows[index].id,
   });
 
-  // Who the GitHub account is: at first, and again when the GitHub page connects or disconnects one.
+  // Who the GitHub account is: at first, and again when Account on the GitHub tab connects or disconnects one.
   useEffect(() => {
     function load() {
       api<GithubAccountStatus>("/api/github_account")
@@ -914,7 +915,7 @@ export default function Inbox(props: { selected: string | null }) {
                     {draft.status === "approved" && draft.sent === null && (draft.kind === "pr" || draft.kind === "comment") && account !== null && !account.connected && (
                       <span className="text-xs text-warn">
                         Not on GitHub yet:{" "}
-                        <a href="#/github?tab=account" className="underline hover:text-foreground">
+                        <a href="#/github/account" className="underline hover:text-foreground">
                           connect your GitHub account
                         </a>{" "}
                         to send it from here.

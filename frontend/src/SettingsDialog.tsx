@@ -1,6 +1,6 @@
 /*
-The Settings dialog, opened from the bottom of the sidebar: the theme (Light, Dark or System), the accent color,
-Reset view, and the env vars for all VMs. Your GitHub account is on the GitHub page (GitHub.tsx, its Account tab).
+The Settings dialog, opened from the bottom of the Home tab's sidebar: the theme (Light, Dark or System), the accent
+color, Reset view, and the env vars for all VMs. Your GitHub account is on the GitHub tab (Account, GitHub.tsx).
 
 Reset view puts every panel, fold, sort and column back to its default: it forgets the Repos page's sort and columns
 and reloads the page (App's resetView). Theme, accent and the env vars stay.

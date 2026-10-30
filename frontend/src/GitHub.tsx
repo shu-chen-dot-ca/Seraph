@@ -1,27 +1,34 @@
 /*
-The GitHub page (#/github, #/github?tab=closed|account): your GitHub things in one place. Tabs:
-- Open PRs / Closed PRs (merged ones too): your PRs on GitHub and how each one stands
-  (github_searcher/pr_tracking.py): every PR the Inbox's Approve sent, and your other PRs on other people's
-  projects (the ones you sent by hand, found with your account), the newest change first. The header says when
-  they were last read from GitHub (every few minutes on its own, and right after Approve sends one) and has
-  Check now. Each row, like GitHub's own PR list: the state (open, draft, merged, closed), the title, the repo
-  and number, when it last changed, and in plain words where it stands:
-  - Checks: "Waiting for a maintainer to approve the checks" (GitHub runs nothing for a first-time contributor's
-    PR until a maintainer clicks approve, so this is normal and only needs waiting), running, passed, failed, or none.
-  - Review: approved, changes asked for, reviewed with comments, or not reviewed yet.
-  - How many comments and who wrote the latest (a maintainer, a bot, you), and the issue it fixes, open or closed.
-  A click opens it in a pop-up (ThreadDialog.tsx; the address gets open=owner/name%23n, keeping the tab): all of it
-  as on GitHub, where you comment. The X, Esc or a click outside closes it, back to the list.
-- Account: your GitHub account, the one Approve in the Inbox sends PRs and comments as, and Comment in the pop-up
-  (github_searcher/github_account.py). Paste a classic token with the public_repo scope and Connect: the backend
-  checks it with GitHub (a fine-grained token, or one without that scope, is turned down with why) and keeps it on
-  this computer. It never comes back to the browser: GET /api/github_account says only who it is (Connected as
-  @login) and the token's scopes. Change token pastes a new one; Disconnect forgets it, and Approve then sends
-  nothing again. "make one" opens GitHub's new-token page with public_repo ticked. Both tell the Inbox (a
-  "github-account" window event), which shows who it sends as. Below: your forks the app sends PRs from.
+The GitHub tab's Pull requests and Account pages (#/github/pulls, #/github/account; #/github is Pull requests). Its
+left list is GitHubNav.tsx.
+
+Pull requests: your PRs on other people's projects, as GitHub lists them (github_searcher/pr_tracking.py), the newest
+change first: every PR the Inbox's Approve sent, and the other PRs you opened. They are read from GitHub every few
+minutes on their own (and right after Approve sends one); the ones from outside the app need your account connected
+(Account), so the app knows who you are.
+The bar on top: tabs Open and Closed (merged PRs are under Closed) with how many; when one repo is shown
+(#/github/pulls?repo=owner/name), a chip with its name and an X to show every repo again; a box that
+filters by title, repo and number; on the right when they were last read from GitHub and Check now. A line under it
+says why, when the last search failed.
+Each PR row, like GitHub's own list: the state (open, draft, merged, closed), the title, the repo and number, when it
+last changed, and in plain words where it stands:
+- Checks: "Waiting for a maintainer to approve the checks" (GitHub runs nothing for a first-time contributor's
+  PR until a maintainer clicks approve, so this is normal and only needs waiting), running, passed, failed, or none.
+- Review: approved, changes asked for, reviewed with comments, or not reviewed yet.
+- How many comments and who wrote the latest (a maintainer, a bot, you), and the issue it fixes, open or closed.
+A click on a row opens it in a pop-up (ThreadDialog.tsx; the address gets open=owner/name%23n, keeping the repo and
+tab): all of it as on GitHub, where you comment. The X, Esc or a click outside closes it, back to the list.
+
+Account: your GitHub account, the one Approve in the Inbox sends PRs and comments as, and Comment in the pop-up
+(github_searcher/github_account.py). Paste a classic token with the public_repo scope and Connect: the backend
+checks it with GitHub (a fine-grained token, or one without that scope, is turned down with why) and keeps it on
+this computer. It never comes back to the browser: GET /api/github_account says only who it is (Connected as
+@login) and the token's scopes. Change token pastes a new one; Disconnect forgets it, and Approve then sends
+nothing again. "make one" opens GitHub's new-token page with public_repo ticked. Both tell the Inbox and the left
+list (a "github-account" window event), which show who it sends as. Below: your forks the app sends PRs from.
 */
 
-import { ExternalLink, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Loader2, RefreshCw } from "lucide-react";
+import { ExternalLink, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Loader2, RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -32,8 +39,6 @@ import { since, useNow } from "@/components/ui/job-progress";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, useLive, useLoaded, type GithubAccountStatus, type TrackedPR } from "@/live";
 import { cn } from "@/lib/utils";
-
-const TABS = ["open", "closed", "account"];
 
 const CHECKS_TEXT: Record<string, string> = {
   waiting: "Waiting for a maintainer to approve the checks",
@@ -66,11 +71,11 @@ function who(login: string, role: string, pr: TrackedPR): string {
   return login;
 }
 
-export default function GitHub(props: { tab: string | null; open: string | null }) {
+export default function GitHub(props: { section: string; repo: string | null; state: string; open: string | null }) {
   const prs = useLive("prs");
   const inbox = useLive("inbox");
   const loaded = useLoaded("prs");
-  const [tab, setTab] = useState(props.tab !== null && TABS.includes(props.tab) ? props.tab : "open");
+  const [filter, setFilter] = useState("");
   const [account, setAccount] = useState<GithubAccountStatus | null>(null);
   const [token, setToken] = useState("");
   const [changingToken, setChangingToken] = useState(false);
@@ -102,8 +107,6 @@ export default function GitHub(props: { tab: string | null; open: string | null 
     };
   }, []);
 
-  const openPRs = prs.items.filter((pr) => pr.state === "open");
-  const closedPRs = prs.items.filter((pr) => pr.state !== "open");
   // The forks Approve sent PRs from, once each.
   const forks: string[] = [];
   for (const draft of inbox) {
@@ -111,10 +114,26 @@ export default function GitHub(props: { tab: string | null; open: string | null 
       forks.push(draft.sent.fork);
     }
   }
-  const rows = tab === "open" ? openPRs : closedPRs;
-  // Addresses: this tab's list, and the same with one PR open in its pop-up.
-  const listHash = tab === "open" ? "#/github" : `#/github?tab=${tab}`;
-  const openPrefix = tab === "open" ? `${listHash}?open=` : `${listHash}&open=`;
+
+  // This section's PRs, of the one repo when it shows one. The tabs count those; the rows are the tab's ones (Closed
+  // has the merged PRs too) that match the filter.
+  const repoPRs = prs.items.filter((pr) => props.repo === null || pr.repo === props.repo);
+  const openCount = repoPRs.filter((pr) => pr.state === "open").length;
+  const closedCount = repoPRs.length - openCount;
+  const needle = filter.trim().toLowerCase();
+  const prRows = repoPRs.filter((pr) => (pr.state === "open") === (props.state === "open") && `${pr.id} ${pr.title}`.toLowerCase().includes(needle));
+  const isList = props.section === "pulls";
+
+  // Addresses: this section's list (with its repo and the Closed tab when they are on), and the same with one change.
+  const sectionHash = `#/github/${props.section}`;
+  const repoQuery = props.repo !== null ? `repo=${encodeURIComponent(props.repo)}` : "";
+  const stateQuery = props.state === "closed" ? "state=closed" : "";
+  const listQuery = [repoQuery, stateQuery].filter((part) => part !== "").join("&");
+  const listHash = listQuery !== "" ? `${sectionHash}?${listQuery}` : sectionHash;
+  const openTabHash = repoQuery !== "" ? `${sectionHash}?${repoQuery}` : sectionHash;
+  const closedTabHash = repoQuery !== "" ? `${sectionHash}?${repoQuery}&state=closed` : `${sectionHash}?state=closed`;
+  const allReposHash = stateQuery !== "" ? `${sectionHash}?${stateQuery}` : sectionHash;
+  const openPrefix = listQuery !== "" ? `${listHash}&open=` : `${listHash}?open=`;
 
   async function checkNow() {
     try {
@@ -154,48 +173,51 @@ export default function GitHub(props: { tab: string | null; open: string | null 
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-        <Tabs value={tab} onValueChange={setTab}>
-          <TabsList>
-            <TabsTrigger value="open" className="px-2.5">
-              Open PRs <span className="text-xs text-muted-foreground tabular-nums">{openPRs.length}</span>
-            </TabsTrigger>
-            <TabsTrigger value="closed" className="px-2.5">
-              Closed PRs <span className="text-xs text-muted-foreground tabular-nums">{closedPRs.length}</span>
-            </TabsTrigger>
-            <TabsTrigger value="account" className="px-2.5">
-              Account
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-        {(tab === "open" || tab === "closed") && (
-          <>
-            <span className={cn("ml-auto text-xs text-muted-foreground", prs.error !== null && "text-destructive")} title={prs.error ?? undefined}>
-              {prs.error !== null ? "Could not search for your PRs" : prs.checked_at !== null ? `Checked ${since(prs.checked_at, now)} ago` : ""}
+      {isList && (
+        <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+          <Tabs value={props.state} onValueChange={(value) => (window.location.hash = value === "closed" ? closedTabHash : openTabHash)}>
+            <TabsList>
+              <TabsTrigger value="open" className="px-2.5">
+                Open <span className="text-xs text-muted-foreground tabular-nums">{openCount}</span>
+              </TabsTrigger>
+              <TabsTrigger value="closed" className="px-2.5">
+                Closed <span className="text-xs text-muted-foreground tabular-nums">{closedCount}</span>
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          {props.repo !== null && (
+            <span className="flex items-center gap-1 rounded-md border border-primary pl-2 text-primary">
+              {props.repo}
+              <Button variant="ghost" size="icon-xs" aria-label="Show every repo" title="Show every repo" onClick={() => (window.location.hash = allReposHash)}>
+                <X />
+              </Button>
             </span>
-            <Button size="sm" variant="outline" disabled={prs.refreshing} onClick={checkNow}>
-              {prs.refreshing ? <Loader2 className="animate-spin" /> : <RefreshCw />} Check now
-            </Button>
-          </>
-        )}
-      </div>
+          )}
+          <Input className="w-52" placeholder="Filter pull requests" value={filter} onChange={(event) => setFilter(event.target.value)} />
+          <span className="ml-auto text-xs text-muted-foreground">{prs.checked_at !== null ? `Checked ${since(prs.checked_at, now)} ago` : ""}</span>
+          <Button size="sm" variant="outline" disabled={prs.refreshing} onClick={checkNow}>
+            {prs.refreshing ? <Loader2 className="animate-spin" /> : <RefreshCw />} Check now
+          </Button>
+        </div>
+      )}
+      {isList && prs.error !== null && (
+        <div className="shrink-0 border-b bg-destructive/10 px-3 py-1.5 text-destructive">Could not search GitHub for your pull requests: {prs.error}</div>
+      )}
 
       <div className="min-h-0 flex-1 overflow-auto">
-        {(tab === "open" || tab === "closed") && (
-          <>
-            {!loaded && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
-            {loaded && prs.items.length === 0 && (
-              <div className="px-3 py-2 text-muted-foreground">
-                No PRs yet. A PR you approve in the Inbox shows here once it is on GitHub; with your account connected (Account), so do the ones
-                you sent by hand.
-              </div>
-            )}
-            {loaded && prs.items.length > 0 && rows.length === 0 && <div className="px-3 py-2 text-muted-foreground">None here.</div>}
-          </>
+        {isList && !loaded && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
+        {props.section === "pulls" && loaded && prs.items.length === 0 && (
+          <div className="px-3 py-2 text-muted-foreground">
+            No pull requests yet. A PR you approve in the Inbox shows here once it is on GitHub; with your account connected (Account), so do the
+            ones you opened by hand.
+          </div>
+        )}
+        {isList && loaded && prs.items.length > 0 && prRows.length === 0 && (
+          <div className="px-3 py-2 text-muted-foreground">{needle !== "" ? "Nothing matches the filter." : "None here."}</div>
         )}
 
-        {(tab === "open" || tab === "closed") &&
-          rows.map((pr) => {
+        {props.section === "pulls" &&
+          prRows.map((pr) => {
             let icon = <GitPullRequest className="size-4 shrink-0 text-ok" />;
             if (pr.state === "open" && pr.draft) {
               icon = <GitPullRequestDraft className="size-4 shrink-0 text-muted-foreground" />;
@@ -242,7 +264,7 @@ export default function GitHub(props: { tab: string | null; open: string | null 
             );
           })}
 
-        {tab === "account" && (
+        {props.section === "account" && (
           <div className="max-w-xl space-y-4 p-4">
             <section>
               <div className="mb-2 font-medium">Your GitHub account</div>
