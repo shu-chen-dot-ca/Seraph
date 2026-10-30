@@ -1,11 +1,14 @@
-"""The tags the app puts on issues, the same on the Tracked and Issues pages: free or assigned, how hard, what kind.
+"""The tags the app puts on issues, the same on the Tracked and Issues pages: free or assigned, how hard (or out of
+scope), what kind.
 
 GitHub's own labels are spelled differently in every repo ("good first issue", "good-first-issue", "help wanted",
 "effort/small", "kind/bug", ...) and are mostly noise to the user, so the pages don't show them. Claude reads
 each issue instead and gives it tags we define. One JSON file, DATA_DIR/issue_tags.json, by issue id:
 
-    {"owner/name#n": {"status": "free" | "assigned" | "waiting", "level": "easy" | "medium" | "hard" | None,
-                      "checks": {"clear", "runs_in_vm", "visible", "checkable", "general", "contained": bool} | None,
+    {"owner/name#n": {"status": "free" | "assigned" | "waiting",
+                      "level": "easy" | "medium" | "hard" | "out of scope" | None,
+                      "checks": {"in_scope", "apolitical", "clear", "runs_in_vm", "visible", "checkable", "general",
+                                 "contained": bool} | None,
                       "kind": "bug" | "feature" | "docs" | "question" | None, "reason", "updated_at", "judged_at"}, ...}
 
 status weighs everything about who may take it: assignees, open pull requests that would close it, the labels
@@ -18,11 +21,16 @@ waiting: nobody is, but it isn't ready (it needs a decision, a design, more info
 
 level is how hard the fix is for us: our agent writing it in its sandbox VM, then seeing and proving it works there.
 It is decided by fixed rules, not by Claude's feel: Claude answers the yes / no questions in CHECKS (checks), and the
-level follows from them. easy: every answer is yes, so the agent can vibe code it, see the effect and prove it in the
-VM. hard: it can't be run in our VM, the fix touches code where a change ripples, or two or more answers are no.
-medium: one answer is no. reason is Claude's plain sentence on the status, then a line on the level that says which
-checks failed. An issue with an assignee on GitHub is assigned without asking Claude; its level, checks and kind stay
-None.
+level follows from them. out of scope: we don't take it, whatever the rest says. Either our agent can't do it at all
+yet: the work can't end as a pull request to this repo (the project wants it as a new, separate repository, like a
+plugin or driver it keeps outside its main code), or it only shows on macOS, Windows, a phone or hardware other than
+one NVIDIA GPU. Or it touches politics, in the issue or in what the repo is for: we only do non-political work,
+nothing politically sensitive or activist, and nothing that goes against another country's laws, such as China's. The
+Issues page doesn't let the user assign one, and the agents don't pick them. easy: every answer is yes, so the agent
+can vibe code it, see the effect and prove it in the VM. hard: it can't be run in our VM, the fix touches code where a
+change ripples, or two or more answers are no. medium: one answer is no. reason is Claude's plain sentence on the
+status, then a line on the level that says which checks failed. An issue with an assignee on GitHub is assigned
+without asking Claude; its level, checks and kind stay None.
 
 Issues go in batches, not one Claude run each: up to BATCH issues of one repo take one GitHub call, and as many
 of them as fit in CHARS_PER_RUN take one Claude run, the repo said once; AT_ONCE batches run at the same time.
@@ -37,8 +45,9 @@ The level is kept once given: the checks and kind stay from one read to the next
 GitHub (Claude is told, and the old ones are kept even if it answers otherwise), so a refresh doesn't flip easy and
 medium; only the status is judged afresh every time. When the issue changed, Claude sees the old answers and keeps
 them unless what is new shows otherwise. Tags from before the rules (no checks) are judged afresh once, by the
-backend on its own. Cost isn't a
-concern here: Claude reads at high effort, CHARS_PER_RUN of issues a run. judged_at is when it was last read.
+backend on its own, and so are tags from before a check was added (like in_scope or apolitical): their other answers
+are kept like any others, the new check takes Claude's new answer. Cost isn't a concern here: Claude reads at high effort, CHARS_PER_RUN of issues a
+run. judged_at is when it was last read.
 
 Kept apart from the lists on purpose, like issue_facts.py: undo/redo of a list shouldn't undo tags, and an issue
 that comes back with an undo keeps its tags. version goes up on every change.
@@ -72,6 +81,21 @@ SANDBOX = (
 )
 # The yes / no questions the level is decided from: (key, question, what it means when the answer is no).
 CHECKS = [
+    (
+        "in_scope",
+        "Can our agent do it at all: the work ends as a pull request to this repo, and the problem and the fix can be run "
+        "on Linux? No when the project wants it as a new, separate repository (a plugin, extension, driver or port it "
+        "keeps outside its main code), or it only shows on macOS, Windows or a phone, or on hardware other than one "
+        "NVIDIA GPU.",
+        "it can't be a pull request to this repo, made and run in our Linux VM",
+    ),
+    (
+        "apolitical",
+        "Is it free of politics, in the issue and in what the repo is for? We only do non-political work: nothing "
+        "political, politically sensitive or activist, and nothing that goes against another country's laws, such as "
+        "China's.",
+        "it touches politics, which we stay out of",
+    ),
     (
         "clear",
         "Is it clear what done looks like: the wanted behavior or change is stated or obvious, with no design choice left "
@@ -141,6 +165,8 @@ SCHEMA = {
                     "status": {"type": "string", "enum": ["free", "assigned", "waiting"]},
                     "kind": {"type": "string", "enum": ["bug", "feature", "docs", "question"]},
                     "reason": {"type": "string"},
+                    "in_scope": {"type": "boolean"},
+                    "apolitical": {"type": "boolean"},
                     "clear": {"type": "boolean"},
                     "runs_in_vm": {"type": "boolean"},
                     "visible": {"type": "boolean"},
@@ -148,7 +174,10 @@ SCHEMA = {
                     "general": {"type": "boolean"},
                     "contained": {"type": "boolean"},
                 },
-                "required": ["number", "status", "kind", "reason", "clear", "runs_in_vm", "visible", "checkable", "general", "contained"],
+                "required": [
+                    "number", "status", "kind", "reason", "in_scope", "apolitical", "clear", "runs_in_vm", "visible",
+                    "checkable", "general", "contained",
+                ],
             },
         }
     },
@@ -389,20 +418,27 @@ class IssueTags:
                     checks[key] = item[key]
                 kind = item["kind"]
                 if item["number"] in kept:
-                    checks = kept[item["number"]][0]
+                    # The answers from before stay; a check added since (not among them) takes the new answer.
+                    checks.update(kept[item["number"]][0])
                     kind = kept[item["number"]][1]
-                # The level by the rules: every check yes is easy; not runnable in our VM, a rippling change, or two or
-                # more checks no is hard; one is medium.
+                # The level by the rules: political or out of our reach is out of scope, whatever the rest says; every
+                # check yes is easy; not runnable in our VM, a rippling change, or two or more checks no is hard; one is
+                # medium.
                 failures = [failed for key, question, failed in CHECKS if not checks.get(key)]
                 level = "medium"
-                if not failures:
+                why = "; ".join(failures)
+                if not checks.get("apolitical"):
+                    level = "out of scope"
+                    why = "it touches politics, which we stay out of"
+                elif not checks.get("in_scope"):
+                    level = "out of scope"
+                    why = "it can't be a pull request to this repo, made and run in our Linux VM"
+                elif not failures:
                     level = "easy"
+                    why = "our agent can write it, see it and prove it in the VM"
                 elif not checks.get("runs_in_vm") or not checks.get("contained") or len(failures) >= 2:
                     level = "hard"
-                if level == "easy":
-                    reason += " Easy: our agent can write it, see it and prove it in the VM."
-                else:
-                    reason += f" {level.capitalize()}: {'; '.join(failures)}."
+                reason += f" {level.capitalize()}: {why}."
                 answered[f"{full_name}#{item['number']}"] = {
                     "status": item["status"],
                     "level": level,

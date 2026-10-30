@@ -155,12 +155,14 @@ export type IssueItem = {
 
 // The tags the app puts on an issue, the same on the Tracked and Issues pages (github_searcher/issue_tags.py), in
 // place of GitHub's labels. status: free (a newcomer can start now), assigned (someone is on it) or waiting (nobody
-// is, but it isn't ready). level is like LeetCode's. level and kind are null when it is assigned on GitHub (not asked).
+// is, but it isn't ready). level is like LeetCode's, or out of scope (we don't take it: our agent can't do it yet, as
+// it can't be a pull request to that repo, made and run in a Linux VM, or it touches politics; it can't be assigned).
+// level and kind are null when it is assigned on GitHub (not asked).
 export type IssueTags = {
   status: "free" | "assigned" | "waiting";
-  level: "easy" | "medium" | "hard" | null;
+  level: "easy" | "medium" | "hard" | "out of scope" | null;
   // The yes / no answers the level follows from by fixed rules; missing on tags from before the rules.
-  checks?: Record<"clear" | "runs_in_vm" | "visible" | "checkable" | "general" | "contained", boolean> | null;
+  checks?: Record<"in_scope" | "apolitical" | "clear" | "runs_in_vm" | "visible" | "checkable" | "general" | "contained", boolean> | null;
   kind: "bug" | "feature" | "docs" | "question" | null;
   reason: string;
   updated_at: string;

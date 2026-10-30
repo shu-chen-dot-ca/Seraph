@@ -29,18 +29,23 @@ good first issue counts most, then help wanted, then confirmed, and one marked m
 GitHub's labels aren't shown otherwise: each issue carries the app's own tags instead, the same as on the Tracked page
 (github_searcher/issue_tags.py, made by Claude in the background), each in its own column and sorted like the others:
 Free (a newcomer can start now) or Assigned (someone is on it: an assignee, a claim, the author doing it), its Kind, and
-a Level: how hard the fix is for our agent in its sandbox VM, decided by fixed rules from six yes / no checks Claude
-answers (the goal is clear, it runs in our VM, its effect is easy to see, easy to prove fixed, general programming
-knowledge is enough, the change stays local). easy: all yes, so the agent can vibe code it, see it and prove it in the
-VM; hard: it can't run in our VM, the change ripples, or two or more are no; medium: one is no. The reason on hover ends
-with which checks failed. A level is kept once given: it changes only when the issue changes on GitHub. Tag again (in the open row) has Claude read it again now.
+a Level: how hard the fix is for our agent in its sandbox VM, decided by fixed rules from eight yes / no checks Claude
+answers (we can do it at all, it is free of politics, the goal is clear, it runs in our VM, its effect is easy to see,
+easy to prove fixed, general programming knowledge is enough, the change stays local). Out of scope (grey): we don't
+take it, whatever the rest says. Either our agent can't do it yet: it can't end as a pull request to this repo (the
+project wants a new, separate repository, like a plugin or driver), or it only shows on macOS, Windows, a phone or
+special hardware. Or it touches politics, in the issue or in what the repo is for: the app only does non-political
+work, nothing politically sensitive or activist, and nothing that goes against another country's laws, such as
+China's. Its Assign is greyed out.
+easy: all yes, so the agent can vibe code it, see it and prove it in the VM; hard: it can't run in our VM, the change
+ripples, or two or more are no; medium: one is no. The reason on hover ends with which checks failed. A level is kept once given: it changes only when the issue changes on GitHub. Tag again (in the open row) has Claude read it again now.
 
 Rows open in place: the tags and why, the facts in full (author and role, last comment and who wrote it, assignees, linked PRs,
 the repo's last push), the agent's note, the issue body and its comments below it, each with who wrote it and when
 (fetched from GitHub on every open, so new comments show; the last one fetched shows meanwhile; the first 40 comments,
 past that a line says how many more are on GitHub), and every job for the issue with its progress (steps and the agent's headline) and links to its agent, VM and drafts.
 A job in progress shows in the row as a small progress bar with its step.
-Assign opens AssignDialog; the arrow button next to it (and the #) opens the issue on GitHub in a new tab.
+Assign (greyed out when the issue is out of scope) opens AssignDialog; the arrow button next to it (and the #) opens the issue on GitHub in a new tab.
 Only the rows on screen are drawn, so thousands of issues stay fast. Undo / redo like the Repos page.
 Many rows are picked like on the Repos page. Hovering a row shows its box on the left; ticking it picks that issue and
 turns on select mode, like Select (on the right of the bar on top) does: Select stays lit (a click on it ends select
@@ -116,7 +121,7 @@ const ISSUE_COLUMNS: IssueColumn[] = [
   { key: "repo", label: "Repo", title: "The repo it is in", better: "text" },
   { key: "free", label: "Free", title: "Free first (a newcomer can start now), then not ready yet, then assigned", better: "higher" },
   { key: "marked", label: "Marked", title: "What the maintainers marked it with on GitHub: good first issue, help wanted (they want an outside PR) or confirmed. Hover for all its labels", better: "higher" },
-  { key: "level", label: "Level", title: "How hard the fix is for our agent in its VM, by fixed rules: easy (it can write it, see it and prove it there), medium or hard", better: "higher" },
+  { key: "level", label: "Level", title: "How hard the fix is for our agent in its VM, by fixed rules: easy (it can write it, see it and prove it there), medium or hard; out of scope when we don't take it (our agent can't do it yet, or it touches politics)", better: "higher" },
   { key: "kind", label: "Kind", title: "Bug, docs, feature or question: A to Z", better: "text" },
   { key: "stars", label: "Stars", title: "The repo's stars", better: "higher" },
   { key: "opened", label: "Opened", title: "When the issue was opened on GitHub", better: "higher" },
@@ -142,14 +147,18 @@ const CONFIRMED = /\b(accepted|confirmed|approved|triaged)\b/i;
 
 // Free first when sorted (the same as on the Tracked page).
 const FREE_RANK: Record<string, number> = { free: 3, waiting: 2, assigned: 1 };
-// Difficulty levels: their order for sorting, and their color (a soft Badge variant, like LeetCode's green / amber / red).
-const LEVEL_RANK: Record<string, number> = { easy: 1, medium: 2, hard: 3 };
-const LEVEL_COLOR: Record<string, string> = { easy: "text-ok", medium: "text-warn", hard: "text-destructive" };
-const LEVEL_VARIANT: Record<string, "ok" | "warn" | "bad"> = {
+// Difficulty levels: their order for sorting, their color (a soft Badge variant, like LeetCode's green / amber / red;
+// grey when out of scope) and their name.
+const LEVEL_RANK: Record<string, number> = { easy: 1, medium: 2, hard: 3, "out of scope": 4 };
+const LEVEL_COLOR: Record<string, string> = { easy: "text-ok", medium: "text-warn", hard: "text-destructive", "out of scope": "text-muted-foreground" };
+const LEVEL_VARIANT: Record<string, "ok" | "warn" | "bad" | "secondary"> = {
   easy: "ok",
   medium: "warn",
   hard: "bad",
+  "out of scope": "secondary",
 };
+const LEVEL_LABEL: Record<string, string> = { easy: "Easy", medium: "Medium", hard: "Hard", "out of scope": "Out of scope" };
+const OUT_OF_SCOPE = "Out of scope, so it can't be assigned (its Level says why)";
 
 // open: an issue id whose row starts open and in view (#/issues?open=owner/name%23n, from the Jobs page).
 export default function Issues(props: { repo: string | null; open: string | null }) {
@@ -444,8 +453,8 @@ export default function Issues(props: { repo: string | null; open: string | null
         return <span title={issue.tags ? issue.tags.reason : "Being tagged"}>{issue.tags ? "–" : "…"}</span>;
       }
       return (
-        <span className={cn("capitalize", LEVEL_COLOR[issue.tags.level])} title={issue.tags.reason}>
-          {issue.tags.level}
+        <span className={LEVEL_COLOR[issue.tags.level]} title={issue.tags.reason}>
+          {LEVEL_LABEL[issue.tags.level]}
         </span>
       );
     }
@@ -845,7 +854,8 @@ export default function Issues(props: { repo: string | null; open: string | null
                       <Button
                         variant="ghost"
                         size="xs"
-                        title="Give this issue to an agent"
+                        title={issue.tags?.level === "out of scope" ? OUT_OF_SCOPE : "Give this issue to an agent"}
+                        disabled={issue.tags?.level === "out of scope"}
                         onClick={(event) => {
                           event.stopPropagation();
                           setAssigning(issue);
@@ -890,9 +900,7 @@ export default function Issues(props: { repo: string | null; open: string | null
                           {isAssigned && <Badge variant="warn">assigned</Badge>}
                           {!isAssigned && tags.status === "free" && <Badge variant="ok">free</Badge>}
                           {tags.level !== null && (
-                            <Badge variant={LEVEL_VARIANT[tags.level] ?? "secondary"} className="capitalize">
-                              {tags.level}
-                            </Badge>
+                            <Badge variant={LEVEL_VARIANT[tags.level] ?? "secondary"}>{LEVEL_LABEL[tags.level]}</Badge>
                           )}
                           {tags.kind !== null && <Badge variant="secondary">{tags.kind}</Badge>}
                           <span>{tags.reason}</span>

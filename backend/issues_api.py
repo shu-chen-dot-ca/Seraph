@@ -6,7 +6,8 @@ neither does an undo or redo (github_searcher/issue_list.py): its job has to be 
 Agents fill the list; the list reaches the browser through /api/live. The
 thread is fetched from GitHub each time the user expands a row. Assigning goes
 through Agents.assign, which makes a job for the issue and wakes the agent, so
-that endpoint runs on the event loop (`async def`).
+that endpoint runs on the event loop (`async def`). An issue tagged out of scope
+(our agent can't do it yet, or it touches politics, see issue_tags.py) can't be assigned.
 
 The facts about each issue (age, last activity, assignees, linked PRs, ... see
 github_searcher/issue_facts.py) are kept fresh by keep_facts(), which the app
@@ -17,7 +18,7 @@ ACTIVE_REFRESH_SECONDS, so a claim or a pull request by someone else shows withi
 a minute: a new comment changes the issue on GitHub, so keep_tags has Claude read it
 again. Opening a row and the Refresh button fetch them at once.
 
-Each issue's tags (free / assigned / waiting, easy / medium / hard, its kind:
+Each issue's tags (free / assigned / waiting, easy / medium / hard / out of scope, its kind:
 github_searcher/issue_tags.py) are made by keep_tags(), also in the background,
 for the Issues list and the tracked repos' issues alike: new issues get theirs
 within TAGS_CHECK_SECONDS, an issue that changed on GitHub gets them again, and
@@ -40,6 +41,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.shared import agents, issue_facts, issue_tags, issues, jobs, tracked, tracked_issues
+from github_searcher.issue_tags import CHECKS
 from github_searcher.search import CACHE, get_thread
 from sandbox.vms import VMsError
 
@@ -146,6 +148,9 @@ async def assign_issue(body: AssignRequest) -> dict:
     """Makes a fix_issue job for the issue and gives it to an agent; returns the job."""
     if body.issue not in [item["id"] for item in issues.items()]:
         raise HTTPException(status_code=404, detail=f"{body.issue} is not in the Issues list.")
+    tags = issue_tags.all().get(body.issue)
+    if tags is not None and tags["level"] == "out of scope":
+        raise HTTPException(status_code=409, detail=f"{body.issue} is out of scope, so it can't be assigned.")
     try:
         return agents.assign(body.issue, body.agent, body.vm, body.instructions)
     except KeyError as error:
@@ -226,7 +231,7 @@ async def keep_facts() -> None:
 
 async def keep_tags() -> None:
     """Runs as long as the backend: tags every issue that has no tags yet, changed on GitHub since, was free an hour ago
-    (5 minutes ago when an agent is on it), or has a level from before the level rules.
+    (5 minutes ago when an agent is on it), or has a level from before the level rules or before one of their checks.
 
     Those are the Issues list's issues, then the tracked repos' open issues nobody is assigned to (the page
     shows an assigned one as assigned without asking), newest first. issue_tags.tag batches them.
@@ -273,8 +278,9 @@ async def keep_tags() -> None:
                 todo.append(issue_id)
             elif tags["status"] == "free" and issue_id in active and datetime.fromisoformat(tags["judged_at"]) < active_before:
                 todo.append(issue_id)
-            elif tags["level"] is not None and "checks" not in tags:
-                # Its level is from before the level rules (issue_tags.CHECKS): once more, by them.
+            elif tags["level"] is not None and any(key not in (tags.get("checks") or {}) for key, question, failed in CHECKS):
+                # Its level is from before the level rules (issue_tags.CHECKS), or before one of them was added: once
+                # more, by them.
                 todo.append(issue_id)
 
         if todo:

@@ -18,7 +18,9 @@ triaged); "–" when none, and hovering shows all its labels. Sorted, good first
 then confirmed, and one marked more ways goes higher.
 GitHub's labels aren't shown otherwise: each issue carries the app's own tags instead, the same as on the Issues page
 (github_searcher/issue_tags.py, made by Claude in the background): Free or Assigned, Easy / Medium / Hard (how hard
-the fix is for our agent in its VM, by fixed rules, the same as on the Issues page; kept until the issue changes), and
+the fix is for our agent in its VM, by fixed rules, the same as on the Issues page; kept until the issue changes) or
+Out of scope (grey: we don't take it, as our agent can't do it yet, like a plugin the project wants as its own
+repository, or it touches politics: activist or politically sensitive, or against another country's laws), and
 its kind, each in its own column, the reason on hover. Assigned on GitHub counts as Assigned at once, without waiting
 for the tags. Tag again (on the repo's row) has Claude read all its unassigned issues again now.
 
@@ -119,7 +121,7 @@ const ISSUE_HEADERS: { key: IssueKey; label: string; title: string }[] = [
   { key: "title", label: "Title", title: "A to Z" },
   { key: "free", label: "Free", title: "Free first (a newcomer can start now), then not ready yet, then assigned" },
   { key: "marked", label: "Marked", title: "What the maintainers marked it with on GitHub: good first issue, help wanted (they want an outside PR) or confirmed; the most marked first. Hover for all its labels" },
-  { key: "level", label: "Level", title: "How hard the fix is for our agent in its VM, by fixed rules: easy (it can write it, see it and prove it there), medium or hard; the hardest first" },
+  { key: "level", label: "Level", title: "How hard the fix is for our agent in its VM, by fixed rules: easy (it can write it, see it and prove it there), medium or hard; out of scope when we don't take it (our agent can't do it yet, or it touches politics); the hardest first" },
   { key: "kind", label: "Kind", title: "Bug, docs, feature or question: A to Z" },
   { key: "opened", label: "Opened", title: "When it was opened on GitHub, newest first" },
   { key: "updated", label: "Updated", title: "Its last change on GitHub: a comment, a label, an edit…; the latest first" },
@@ -128,8 +130,9 @@ const ISSUE_HEADERS: { key: IssueKey; label: string; title: string }[] = [
 ];
 // The tags' order for sorting and their colors (the same as on the Issues page): levels like LeetCode's green / amber / red.
 const FREE_RANK: Record<string, number> = { free: 3, waiting: 2, assigned: 1 };
-const LEVEL_RANK: Record<string, number> = { easy: 1, medium: 2, hard: 3 };
-const LEVEL_COLOR: Record<string, string> = { easy: "text-ok", medium: "text-warn", hard: "text-destructive" };
+const LEVEL_RANK: Record<string, number> = { easy: 1, medium: 2, hard: 3, "out of scope": 4 };
+const LEVEL_COLOR: Record<string, string> = { easy: "text-ok", medium: "text-warn", hard: "text-destructive", "out of scope": "text-muted-foreground" };
+const LEVEL_LABEL: Record<string, string> = { easy: "Easy", medium: "Medium", hard: "Hard", "out of scope": "Out of scope" };
 // GitHub labels only maintainers can put on an issue, by what they say, for the Marked column (the same as on the Issues
 // page). Confirmed has word edges so "unconfirmed" and "untriaged" don't count.
 const GOOD_FIRST = /good.?first|first.?timer|beginner|starter|newcomer/i;
@@ -868,8 +871,8 @@ export default function Tracked() {
                                   {helpWanted && confirmed && " · "}
                                   {confirmed && "Confirmed"}
                                 </span>
-                                <span className={cn("truncate capitalize", tags !== null && tags.level !== null && LEVEL_COLOR[tags.level])} title={tags?.reason}>
-                                  {tags !== null ? (tags.level ?? "–") : isAssigned ? "–" : "…"}
+                                <span className={cn("truncate", tags !== null && tags.level !== null && LEVEL_COLOR[tags.level])} title={tags?.reason}>
+                                  {tags !== null ? (tags.level !== null ? LEVEL_LABEL[tags.level] : "–") : isAssigned ? "–" : "…"}
                                 </span>
                                 <span className="truncate capitalize" title={tags?.reason}>
                                   {tags !== null ? (tags.kind ?? "–") : isAssigned ? "–" : "…"}

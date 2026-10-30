@@ -749,7 +749,7 @@ class Agents:
         Inbox, so the user decides whether its agent keeps working or stops. One pending item per job at most."""
         asked = [draft["job"] for draft in self.inbox.list() if draft["kind"] == "taken" and draft["status"] == "pending"]
         # reason is the tags' sentence on who has it, then one on how hard it is ("Easy: ..."); only the first part matters here.
-        why = re.split(r"\s(?:Easy|Medium|Hard): ", reason)[0]
+        why = re.split(r"\s(?:Easy|Medium|Hard|Out of scope): ", reason)[0]
         for job in self.jobs.list():
             if job["issue"] != issue_id or job["status"] in ["done", "cancelled"] or job["id"] in asked:
                 continue

@@ -14,8 +14,9 @@ import { Markdown } from "@/components/ui/markdown";
 import { api, type Thread, type TrackedIssue } from "@/live";
 import { timeAgo } from "@/lib/utils";
 
-// The level's soft color, like LeetCode's green / amber / red (the same as the Issues page's).
-const LEVEL_VARIANT: Record<string, "ok" | "warn" | "bad"> = { easy: "ok", medium: "warn", hard: "bad" };
+// The level's soft color, like LeetCode's green / amber / red, grey when out of scope (the same as the Issues page's).
+const LEVEL_VARIANT: Record<string, "ok" | "warn" | "bad" | "secondary"> = { easy: "ok", medium: "warn", hard: "bad", "out of scope": "secondary" };
+const LEVEL_LABEL: Record<string, string> = { easy: "Easy", medium: "Medium", hard: "Hard", "out of scope": "Out of scope" };
 
 export default function IssueDetailsDialog(props: { repo: string; issue: TrackedIssue | null; onClose: () => void }) {
   const [thread, setThread] = useState<Thread | null>(null);
@@ -85,9 +86,7 @@ export default function IssueDetailsDialog(props: { repo: string; issue: Tracked
               {isAssigned && <Badge variant="warn">assigned</Badge>}
               {!isAssigned && tags?.status === "free" && <Badge variant="ok">free</Badge>}
               {tags !== null && tags.level !== null && (
-                <Badge variant={LEVEL_VARIANT[tags.level]} className="capitalize">
-                  {tags.level}
-                </Badge>
+                <Badge variant={LEVEL_VARIANT[tags.level]}>{LEVEL_LABEL[tags.level]}</Badge>
               )}
               {tags !== null && tags.kind !== null && <Badge variant="secondary">{tags.kind}</Badge>}
               {tags !== null && <span>{tags.reason}</span>}

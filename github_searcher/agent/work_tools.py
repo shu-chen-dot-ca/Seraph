@@ -220,7 +220,7 @@ class WorkTools:
                 "issues_list",
                 "See the Issues list the user sees: each issue with its title, labels, state, your note, its job status "
                 "(new when nobody was assigned yet) and the app's tags: free / assigned / waiting (whether someone new can take it), "
-                "level (easy, medium or hard), kind and the reason, made shortly after an issue is added. repo limits it to one "
+                "level (easy, medium, hard, or out of scope: we can't do it yet), kind and the reason, made shortly after an issue is added. repo limits it to one "
                 "repo (owner/name).",
                 {"type": "object", "properties": {"repo": {"type": "string"}}},
             )(self.issues_list),
@@ -263,7 +263,7 @@ class WorkTools:
             tool(
                 "tracked_issues",
                 "See the open issues the last check found in tracked repos, newest first, each with its labels, comments, "
-                "assignees, the app's tags (free / assigned / waiting, level easy / medium / hard, kind, and the reason; None "
+                "assignees, the app's tags (free / assigned / waiting, level easy / medium / hard / out of scope, kind, and the reason; None "
                 "while not made yet), whether it is new (opened in the last 3 days) and whether it is in the Issues list "
                 "already. name limits it to one repo (owner/name). which: free (a newcomer can take it now; the default), "
                 "assigned (someone is on it), or all (the 100 newest open issues plus every good first or help wanted one).",
