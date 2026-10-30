@@ -28,7 +28,10 @@ PRs) and Confirmed (accepted, confirmed, approved, triaged); "–" when none, an
 good first issue counts most, then help wanted, then confirmed, and one marked more ways goes higher.
 GitHub's labels aren't shown otherwise: each issue carries the app's own tags instead, the same as on the Tracked page
 (github_searcher/issue_tags.py, made by Claude in the background), each in its own column and sorted like the others:
-Free (a newcomer can start now) or Assigned (someone is on it: an assignee, a claim, the author doing it), its Kind, and
+Free (a newcomer can start now) or Assigned (someone is on it: an assignee, a claim, the author doing it), or
+Self-assigned (blue: you are on it, your GitHub account from the GitHub page's Account tab is an assignee or has an
+open PR for it; not counted as Assigned), or Closed (muted, whatever its tags say, when the issue is closed on GitHub;
+it sorts last), its Kind, and
 a Level: how hard the fix is for our agent in its sandbox VM, decided by fixed rules from eight yes / no checks Claude
 answers (we can do it at all, it is free of politics, the goal is clear, it runs in our VM, its effect is easy to see,
 easy to prove fixed, general programming knowledge is enough, the change stays local). Out of scope (grey): we don't
@@ -90,7 +93,7 @@ import { Markdown } from "@/components/ui/markdown";
 import { RowSelection, SelectBox } from "@/components/ui/row-selection";
 import { JOB_LABEL, JOB_TONE, StatusDot } from "@/components/ui/status-dot";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { api, useLive, useLoaded, type IssueItem, type Job, type Thread } from "@/live";
+import { api, useLive, useLoaded, type GithubAccountStatus, type IssueItem, type Job, type Thread } from "@/live";
 import { useColumnWidths } from "@/lib/column-widths";
 import { cn, timeAgo } from "@/lib/utils";
 
@@ -119,7 +122,7 @@ const NUMBER_COLUMN: IssueColumn = { key: "number", label: "#", title: "Its numb
 const TITLE_COLUMN: IssueColumn = { key: "title", label: "Title", title: "A to Z", better: "text" };
 const ISSUE_COLUMNS: IssueColumn[] = [
   { key: "repo", label: "Repo", title: "The repo it is in", better: "text" },
-  { key: "free", label: "Free", title: "Free first (a newcomer can start now), then not ready yet, then assigned", better: "higher" },
+  { key: "free", label: "Free", title: "Free first (a newcomer can start now), then self-assigned (you are on it), then not ready yet, then assigned, then closed", better: "higher" },
   { key: "marked", label: "Marked", title: "What the maintainers marked it with on GitHub: good first issue, help wanted (they want an outside PR) or confirmed. Hover for all its labels", better: "higher" },
   { key: "level", label: "Level", title: "How hard the fix is for our agent in its VM, by fixed rules: easy (it can write it, see it and prove it there), medium or hard; out of scope when we don't take it (our agent can't do it yet, or it touches politics)", better: "higher" },
   { key: "kind", label: "Kind", title: "Bug, docs, feature or question: A to Z", better: "text" },
@@ -146,7 +149,7 @@ const HELP_WANTED = /help.?wanted|contributions?.?welcome|prs?.?welcome|pull.?re
 const CONFIRMED = /\b(accepted|confirmed|approved|triaged)\b/i;
 
 // Free first when sorted (the same as on the Tracked page).
-const FREE_RANK: Record<string, number> = { free: 3, waiting: 2, assigned: 1 };
+const FREE_RANK: Record<string, number> = { free: 4, selfAssigned: 3, waiting: 2, assigned: 1, closed: 0 };
 // Difficulty levels: their order for sorting, their color (a soft Badge variant, like LeetCode's green / amber / red;
 // grey when out of scope) and their name.
 const LEVEL_RANK: Record<string, number> = { easy: 1, medium: 2, hard: 3, "out of scope": 4 };
@@ -178,6 +181,8 @@ export default function Issues(props: { repo: string | null; open: string | null
   const [selecting, setSelecting] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [confirmRemoveAssigned, setConfirmRemoveAssigned] = useState(false);
+  // Your GitHub account (the GitHub page's Account tab), to tell Self-assigned from Assigned.
+  const [account, setAccount] = useState<GithubAccountStatus | null>(null);
   // The list's order: as listed (none), or by these columns, from left to right as the table shows them, Title and #
   // last; best is the way a column's first click sorts, or not.
   const [sorts, setSorts] = useState<{ key: SortKey; best: boolean }[]>([]);
@@ -189,6 +194,18 @@ export default function Issues(props: { repo: string | null; open: string | null
   // The hidden copy of every shown row's cells (but the title's), and the widths it gives each column.
   const sizerRef = useRef<HTMLDivElement>(null);
   const sizes = useColumnWidths(sizerRef);
+
+  // Who the GitHub account is: at first, and again when the GitHub page connects or disconnects one.
+  useEffect(() => {
+    function load() {
+      api<GithubAccountStatus>("/api/github_account")
+        .then(setAccount)
+        .catch(() => setAccount({ connected: false }));
+    }
+    load();
+    window.addEventListener("github-account", load);
+    return () => window.removeEventListener("github-account", load);
+  }, []);
 
   // "3h ago" goes stale on its own: draw again every minute.
   useEffect(() => {
@@ -224,6 +241,20 @@ export default function Issues(props: { repo: string | null; open: string | null
   for (const job of jobs) {
     if (job.issue !== null && (job.status === "queued" || job.status === "working" || job.status === "waiting_on_user")) {
       workingIds.push(job.issue);
+    }
+  }
+
+  // Issues you are on yourself: your GitHub account is an assignee, or has an open PR for it. They are Self-assigned,
+  // not Assigned.
+  const myLogin = (account?.login ?? "").toLowerCase();
+  const selfAssignedIds: string[] = [];
+  for (const issue of issues.items) {
+    const assignees = issue.facts?.assignees ?? [];
+    const pulls = issue.facts?.linked_prs ?? [];
+    const isAssignee = assignees.some((name) => name.toLowerCase() === myLogin);
+    const hasOpenPR = pulls.some((pull) => pull.state === "OPEN" && pull.author.toLowerCase() === myLogin);
+    if (myLogin !== "" && (isAssignee || hasOpenPR)) {
+      selfAssignedIds.push(issue.id);
     }
   }
 
@@ -269,6 +300,12 @@ export default function Issues(props: { repo: string | null; open: string | null
       return issue.repo.toLowerCase();
     }
     if (key === "free") {
+      if ((facts?.state ?? issue.state) === "CLOSED") {
+        return FREE_RANK.closed;
+      }
+      if (selfAssignedIds.includes(issue.id)) {
+        return FREE_RANK.selfAssigned;
+      }
       if (facts && facts.assignees.length > 0) {
         return FREE_RANK.assigned;
       }
@@ -398,7 +435,22 @@ export default function Issues(props: { repo: string | null; open: string | null
       return issue.repo;
     }
     if (key === "free") {
-      // – is not ready yet; … is not tagged yet.
+      // – is not ready yet; … is not tagged yet. A closed issue says Closed, whatever its tags say.
+      const state = facts !== null ? facts.state : issue.state;
+      if (state === "CLOSED") {
+        return (
+          <span className="text-muted-foreground" title="Closed on GitHub">
+            Closed
+          </span>
+        );
+      }
+      if (selfAssignedIds.includes(issue.id)) {
+        return (
+          <span className="text-primary" title="You are on it: your GitHub account is assigned, or has an open PR for it">
+            Self-assigned
+          </span>
+        );
+      }
       const isAssigned = (facts !== null && facts.assignees.length > 0) || issue.tags?.status === "assigned";
       if (isAssigned) {
         return (
@@ -801,7 +853,8 @@ export default function Issues(props: { repo: string | null; open: string | null
               const openPRs = facts !== null ? facts.linked_prs.filter((pull) => pull.state === "OPEN") : [];
               const mergedPRs = facts !== null ? facts.linked_prs.filter((pull) => pull.state === "MERGED") : [];
               const tags = issue.tags ?? null;
-              const isAssigned = (facts !== null && facts.assignees.length > 0) || tags?.status === "assigned";
+              const isSelfAssigned = selfAssignedIds.includes(issue.id);
+              const isAssigned = ((facts !== null && facts.assignees.length > 0) || tags?.status === "assigned") && !isSelfAssigned;
               const history = [...(issueJobs[issue.id] ?? [])].sort((a, b) => b.created_at.localeCompare(a.created_at));
               return (
                 <div key={item.key} data-index={item.index} ref={virtualizer.measureElement} className="absolute left-0 w-full border-b" style={{ top: item.start }}>
@@ -897,8 +950,9 @@ export default function Issues(props: { repo: string | null; open: string | null
 
                       {tags !== null ? (
                         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          {isSelfAssigned && <Badge>self-assigned</Badge>}
                           {isAssigned && <Badge variant="warn">assigned</Badge>}
-                          {!isAssigned && tags.status === "free" && <Badge variant="ok">free</Badge>}
+                          {!isAssigned && !isSelfAssigned && state !== "CLOSED" && tags.status === "free" && <Badge variant="ok">free</Badge>}
                           {tags.level !== null && (
                             <Badge variant={LEVEL_VARIANT[tags.level] ?? "secondary"}>{LEVEL_LABEL[tags.level]}</Badge>
                           )}
