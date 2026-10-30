@@ -165,7 +165,7 @@ export default function App() {
             {page === "inbox" && <Inbox selected={id} />}
             {page === "github" && <GitHub key={query.get("tab") ?? ""} tab={query.get("tab")} />}
             {page === "issues" && <Issues repo={query.get("repo")} open={query.get("open")} />}
-            {page === "jobs" && <Jobs key={id ?? ""} selected={id} />}
+            {page === "jobs" && <Jobs selected={id} />}
             {page === "explore" && <Explore />}
             {page === "repos" && <Repos />}
             {page === "tracked" && <Tracked />}
