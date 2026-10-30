@@ -42,12 +42,14 @@ value means something (the color rules in index.css). A click on a field's name 
 best first (A to Z for text); again the other way round; again takes it out. Many fields sort at once, in the order
 they come: the first line from left to right, then the second (say AI policy, then Fit), and newest first among what
 is still the same; Repo (the name) last of all. Each sorted name is blue with an arrow. With none, it is back to newest
-first. A click on a row opens it in place: its README, then its files folded at the
-bottom (RepoTree), like on the Repos page.
+first. A click on a row opens that repo in a pop-up: on top its name (the icon next to it goes to GitHub), its note,
+Approve and Remove; below, scrolling, its README, then its files folded at the bottom (RepoTree). The X, Esc or a
+click outside closes it; so do Approve and Remove there, and the repo leaving the list any other way.
 The user decides on each: Approve puts it in Repos, Remove takes it off the found list (the two buttons at the end of
-its row). For many at once, like on the Repos page: hovering a row shows its box on the left, and ticking it picks that
-repo and turns on select mode, like Select (top right) does: Select stays lit (a click on it ends select mode), every
-row shows its box, and a click picks the row instead of opening it. The box at the top left of the table's header
+its row, and on top of its pop-up). For many at once, like on the Repos page: hovering a row shows its box on the
+left, and ticking it picks that repo and turns on select mode, like Select (top right) does: Select stays lit (a click
+on it ends select mode), every row shows its box, and a click picks the row instead of opening its pop-up. The box at
+the top left of the table's header
 picks every row (checked when all are, a dash when some are); a click when all are picked unpicks them. Rows are also picked like in a mail
 app (components/ui/row-selection.tsx): Ctrl-click, Shift-click, dragging a rectangle, Ctrl+A. A bar at the bottom then
 approves or removes them at once (removing asks first; Enter confirms). Either takes the rows away at once, before the
@@ -83,6 +85,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { FIT_LEVELS, NEWCOMER_LABEL, POLICY_LABEL, ReviewersTag, TONE_LABEL } from "@/components/ui/repo-tags";
 import { RowSelection, SelectBox } from "@/components/ui/row-selection";
@@ -193,8 +196,9 @@ export default function Explore() {
   // The found list's order: by these fields, in FOUND_COLUMNS' order, the name last (none: newest
   // first); best is the way a column's first click sorts, or not.
   const [sorts, setSorts] = useState<{ key: FoundKey; best: boolean }[]>([]);
-  // Rows open in place, and the ones approved or removed here that the live feed still lists (hidden meanwhile).
-  const [open, setOpen] = useState<string[]>([]);
+  // The repo open in the pop-up (null: none), and the ones approved or removed here that the live feed still lists
+  // (hidden meanwhile).
+  const [openName, setOpenName] = useState<string | null>(null);
   const [leaving, setLeaving] = useState<string[]>([]);
   // Selected found repos, and the last one clicked (where a shift-click range starts).
   const [selected, setSelected] = useState<string[]>([]);
@@ -224,8 +228,11 @@ export default function Explore() {
     return () => clearInterval(timer);
   }, [running]);
 
+  // What the live feed no longer lists isn't leaving anymore, and its pop-up closes (so it doesn't open again by itself
+  // if a later run finds it again).
   useEffect(() => {
     setLeaving((current) => current.filter((name) => explore.found.some((each) => each.name === name)));
+    setOpenName((current) => (explore.found.some((each) => each.name === current) ? current : null));
   }, [explore.found]);
 
   const laneLabels: Record<string, string> = {};
@@ -513,10 +520,8 @@ export default function Explore() {
   // Only what is still in the list counts as selected (a decision elsewhere, or another tab, may have taken some out).
   const foundNames = found.map((each) => each.name);
   const chosen = selected.filter((name) => foundNames.includes(name));
-
-  function toggle(name: string) {
-    setOpen((current) => (current.includes(name) ? current.filter((each) => each !== name) : [...current, name]));
-  }
+  // The repo in the pop-up, while it is still in the list: approved or removed here, or gone elsewhere, it closes.
+  const openRepo = found.find((each) => each.name === openName) ?? null;
 
   // Clearing the selection (Escape, the bar's x, a click on the list's empty space) also ends select mode.
   function onSelect(names: string[]) {
@@ -615,7 +620,7 @@ export default function Explore() {
       <div ref={listRef} className="min-h-0 flex-1 overflow-auto">
         {/* One grid for the whole table, its columns as wide as their widest cell; the header and each row are subgrids
             of it, so they line up. w-max lets it grow past the page (it scrolls sideways); min-w-full fills the page
-            otherwise, Repo taking the room left over. The note and the open repo span the row without widening it. */}
+            otherwise, Repo taking the room left over. The note spans the row without widening it. */}
         {found.length > 0 && (
           <div
             className="grid w-max min-w-full gap-x-4 border-b"
@@ -666,85 +671,79 @@ export default function Explore() {
               <span />
             </div>
             {found.map((each) => (
-              <div key={each.name} className="col-span-full grid grid-cols-subgrid border-t">
-                <div
-                  data-select-id={each.name}
-                  className={cn(
-                    "group col-span-full grid cursor-pointer grid-cols-subgrid px-3 py-2 hover:bg-accent/50",
-                    open.includes(each.name) && "bg-accent/40",
-                    chosen.includes(each.name) && "bg-selected hover:bg-selected",
-                  )}
-                  onClick={(event) => {
-                    // Its links and buttons do their own thing.
-                    if ((event.target as HTMLElement).closest("a, button") !== null) {
-                      return;
-                    }
-                    // In select mode a click picks the row; otherwise Ctrl / Shift-click picks it and a plain click opens it.
-                    if (selectMode || event.ctrlKey || event.metaKey || event.shiftKey) {
-                      select(each.name, event.shiftKey);
-                    } else {
-                      toggle(each.name);
-                    }
-                  }}
-                >
-                  {/* Always there, so it can show on hover without the row moving. Ticking it picks the repo, which
-                      turns select mode on. */}
-                  <button
-                    type="button"
-                    className={cn("flex h-7 items-center", !selectMode && "invisible group-hover:visible")}
-                    aria-label={`Select ${each.name}`}
-                    onClick={(event) => select(each.name, event.shiftKey)}
-                  >
-                    <SelectBox checked={chosen.includes(each.name)} />
-                  </button>
-                  {/* The name opens the row like the rest of it; only the icon goes to GitHub, in a new tab. */}
-                  <span className="flex h-7 min-w-0 items-center gap-1.5">
-                    <span className="truncate font-medium" title={each.description}>
-                      {each.name}
-                    </span>
-                    <a
-                      href={each.html_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="shrink-0 text-primary hover:text-foreground"
-                      aria-label={`Open ${each.name} on GitHub`}
-                      title="Open on GitHub in a new tab"
-                    >
-                      <ExternalLink className="size-3.5" />
-                    </a>
-                  </span>
-                  {SLOTS.map((index) => (
-                    <span key={index} className="flex h-7 items-center whitespace-nowrap tabular-nums">
-                      {FIRST_LINE[index] !== undefined && foundCell(each, FIRST_LINE[index].key)}
-                    </span>
-                  ))}
-                  <span className="flex h-7 items-center gap-1">
-                    <Button variant="outline" size="xs" title="Add it to Repos" onClick={() => approve([each.name])}>
-                      <Check /> Approve
-                    </Button>
-                    <Button variant="ghost" size="xs" title="Take it off the found list" onClick={() => remove([each.name])}>
-                      <X /> Remove
-                    </Button>
-                  </span>
-                  {/* The second line, under the first one's columns: nothing under the box and the name. */}
-                  <span />
-                  <span />
-                  {SLOTS.map((index) => (
-                    <span key={index} className="flex h-6 items-center whitespace-nowrap tabular-nums">
-                      {SECOND_LINE[index] !== undefined && foundCell(each, SECOND_LINE[index].key)}
-                    </span>
-                  ))}
-                  <span />
-                  {/* Under the name, to the end of the row. */}
-                  <div className="w-0 min-w-full truncate pt-0.5" style={{ gridColumn: "2 / -1" }} title={each.note}>
-                    {each.note}
-                  </div>
-                </div>
-                {open.includes(each.name) && (
-                  <div className="col-span-full w-0 min-w-full border-t bg-muted/30">
-                    <RepoTree repo={{ full_name: each.name, description: each.description, html_url: each.html_url }} />
-                  </div>
+              <div
+                key={each.name}
+                data-select-id={each.name}
+                className={cn(
+                  "group col-span-full grid cursor-pointer grid-cols-subgrid border-t px-3 py-2 hover:bg-accent/50",
+                  chosen.includes(each.name) && "bg-selected hover:bg-selected",
                 )}
+                onClick={(event) => {
+                  // Its links and buttons do their own thing.
+                  if ((event.target as HTMLElement).closest("a, button") !== null) {
+                    return;
+                  }
+                  // In select mode a click picks the row; otherwise Ctrl / Shift-click picks it and a plain click opens
+                  // its pop-up.
+                  if (selectMode || event.ctrlKey || event.metaKey || event.shiftKey) {
+                    select(each.name, event.shiftKey);
+                  } else {
+                    setOpenName(each.name);
+                  }
+                }}
+              >
+                {/* Always there, so it can show on hover without the row moving. Ticking it picks the repo, which
+                    turns select mode on. */}
+                <button
+                  type="button"
+                  className={cn("flex h-7 items-center", !selectMode && "invisible group-hover:visible")}
+                  aria-label={`Select ${each.name}`}
+                  onClick={(event) => select(each.name, event.shiftKey)}
+                >
+                  <SelectBox checked={chosen.includes(each.name)} />
+                </button>
+                {/* The name opens the pop-up like the rest of the row; only the icon goes to GitHub, in a new tab. */}
+                <span className="flex h-7 min-w-0 items-center gap-1.5">
+                  <span className="truncate font-medium" title={each.description}>
+                    {each.name}
+                  </span>
+                  <a
+                    href={each.html_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="shrink-0 text-primary hover:text-foreground"
+                    aria-label={`Open ${each.name} on GitHub`}
+                    title="Open on GitHub in a new tab"
+                  >
+                    <ExternalLink className="size-3.5" />
+                  </a>
+                </span>
+                {SLOTS.map((index) => (
+                  <span key={index} className="flex h-7 items-center whitespace-nowrap tabular-nums">
+                    {FIRST_LINE[index] !== undefined && foundCell(each, FIRST_LINE[index].key)}
+                  </span>
+                ))}
+                <span className="flex h-7 items-center gap-1">
+                  <Button variant="outline" size="xs" title="Add it to Repos" onClick={() => approve([each.name])}>
+                    <Check /> Approve
+                  </Button>
+                  <Button variant="ghost" size="xs" title="Take it off the found list" onClick={() => remove([each.name])}>
+                    <X /> Remove
+                  </Button>
+                </span>
+                {/* The second line, under the first one's columns: nothing under the box and the name. */}
+                <span />
+                <span />
+                {SLOTS.map((index) => (
+                  <span key={index} className="flex h-6 items-center whitespace-nowrap tabular-nums">
+                    {SECOND_LINE[index] !== undefined && foundCell(each, SECOND_LINE[index].key)}
+                  </span>
+                ))}
+                <span />
+                {/* Under the name, to the end of the row. */}
+                <div className="w-0 min-w-full truncate pt-0.5" style={{ gridColumn: "2 / -1" }} title={each.note}>
+                  {each.note}
+                </div>
               </div>
             ))}
           </div>
@@ -823,6 +822,68 @@ export default function Explore() {
           onClose={() => setPickingFilters(false)}
         />
       )}
+
+      {/* The open repo: its name, note and the row's buttons on top, then RepoTree (its README, then its files), which
+          scrolls. Out here, not in its row, so a click in the pop-up doesn't reach the row's own click. Approve and
+          Remove close it first, so it doesn't open again if the backend refuses and the row comes back. */}
+      <Dialog
+        open={openRepo !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setOpenName(null);
+          }
+        }}
+      >
+        <DialogContent aria-describedby={undefined} className="flex h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
+          {openRepo !== null && (
+            <>
+              <div className="shrink-0 space-y-1 border-b pt-3 pr-10 pb-2 pl-4">
+                <div className="flex items-center gap-1.5">
+                  <DialogTitle className="min-w-0 truncate leading-normal">{openRepo.name}</DialogTitle>
+                  <a
+                    href={openRepo.html_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="shrink-0 text-primary hover:text-foreground"
+                    aria-label={`Open ${openRepo.name} on GitHub`}
+                    title="Open on GitHub in a new tab"
+                  >
+                    <ExternalLink className="size-3.5" />
+                  </a>
+                  <span className="ml-auto flex shrink-0 items-center gap-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      title="Add it to Repos"
+                      onClick={() => {
+                        setOpenName(null);
+                        approve([openRepo.name]);
+                      }}
+                    >
+                      <Check /> Approve
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      title="Take it off the found list"
+                      onClick={() => {
+                        setOpenName(null);
+                        remove([openRepo.name]);
+                      }}
+                    >
+                      <X /> Remove
+                    </Button>
+                  </span>
+                </div>
+                {openRepo.note !== "" && <div>{openRepo.note}</div>}
+              </div>
+              <div className="min-h-0 flex-1 overflow-auto">
+                <RepoTree key={openRepo.name} repo={{ full_name: openRepo.name, description: openRepo.description, html_url: openRepo.html_url }} />
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={confirmRemove} onOpenChange={setConfirmRemove}>
         <AlertDialogContent>
