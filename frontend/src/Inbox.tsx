@@ -3,9 +3,11 @@ The Inbox: everything the agents want to send (PRs, comments) or ask (questions)
 kind the app makes itself, Taken: an issue an agent has a job for isn't free anymore (someone else is on it
 now, github_searcher/agents.py issue_taken); you pick Keep working or Stop the agent (its job is cancelled).
 
-Top: the list, every item in one list, newest first; only the rows on screen are drawn. Pending ones are in bold,
-decided ones grayed out; they still open like any other.
-Bottom: the open item (#/inbox/<id>), in tabs. The first two are for you, the last is what would be sent:
+The page is the list, every item in one list, newest first; only the rows on screen are drawn. Pending ones are in
+bold, decided ones grayed out; they still open like any other.
+A click on a row opens that item in a pop-up (#/inbox/<id>); the X, Esc or a click outside it closes it, back to the
+list (what you typed in its reply box stays). The pop-up shows the item in tabs. The first two are for you, the last
+is what would be sent:
 - Overview (Overview.tsx): what it is about in plain words (problem, cause, fix, what could go wrong) and the
   agent's before and after, side by side. A question is only this tab.
 - Diff (PRs): the unified diff split into files, each folding open with +/- counts and colored lines.
@@ -16,9 +18,9 @@ Bottom: the open item (#/inbox/<id>), in tabs. The first two are for you, the la
   before and after pictures are in its text as ![...](evidence:ev_...): shown here in place, and listed above it with
   Copy picture and Download, since GitHub needs its own copy (sending uploads them to your fork; by hand, paste
   each over its line in GitHub's PR box).
-The bar at the bottom decides: Reject, Reply & keep working, or Approve, with an optional reply (Taken: Stop the
-agent or Keep working, with an optional note). A decision goes to the agent (and the draft's job goes back to the
-agent's queue).
+The bar at the bottom of the pop-up decides: Reject, Reply & keep working, or Approve, with an optional reply (Taken:
+Stop the agent or Keep working, with an optional note).
+A decision goes to the agent (and the draft's job goes back to the agent's queue).
 With your GitHub account connected (the GitHub page, Account), Approve on a PR or comment first asks "are you sure?" (Open PR / Post
 comment), then sends it to GitHub as you (github_searcher/github_account.py): a PR from a new branch in your fork,
 its pictures uploaded there. If GitHub refuses, nothing is decided and the error shows. Without an account nothing is
@@ -28,8 +30,9 @@ GitHub yet, with a link to the GitHub page's Account tab to connect one. The bar
 A decided item's bar says what you decided, and has a box to message its agent about it: the message goes into the
 agent's chat (its page, #/agents/<id>, which Open chat opens), saying which item it is about. An archived agent comes
 back for it; a deleted one can't get messages.
-After a decision the next pending item opens (the one after it in the list, or else before).
-J / K (or the arrow keys) move through the list when you are not typing.
+After a decision the next pending item opens in the pop-up (the one after it in the list, or else before).
+J / K move through the list when you are not typing, also while the pop-up is open (it shows the next item); the
+arrow keys scroll the pop-up.
 Delete: a decided item's bar has Delete, and many are picked like in a mail app (components/ui/row-selection.tsx):
 Ctrl-click, Shift-click, dragging a rectangle, Ctrl+A; the bar at the bottom of the list then deletes them at once. It
 asks first (Enter confirms), and it is for good. Only decided items can be deleted: a pending one waits for your
@@ -54,8 +57,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Markdown } from "@/components/ui/markdown";
-import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { RowSelection } from "@/components/ui/row-selection";
 import { DRAFT_TONE, JOB_LABEL, JOB_TONE, StatusDot } from "@/components/ui/status-dot";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -445,15 +448,19 @@ export default function Inbox(props: { selected: string | null }) {
     }
   }
 
-  // J / K move through the list, unless you are typing. Not the arrow keys: they scroll the open item.
+  // J / K move through the list, unless you are typing, also in the open item's pop-up. Not the arrow keys: they scroll it.
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.ctrlKey || event.metaKey || event.altKey) {
         return;
       }
       const target = event.target as HTMLElement;
-      // Nor in a pop-up: the "are you sure?" before sending is about the item open under it.
-      if (target.closest("input, textarea, select, [contenteditable=''], [contenteditable='true'], [role='dialog'], [role='alertdialog']")) {
+      if (target.closest("input, textarea, select, [contenteditable=''], [contenteditable='true']")) {
+        return;
+      }
+      // Nor in another pop-up: the "are you sure?" before sending is about the item open under it.
+      const popup = target.closest("[role='dialog'], [role='alertdialog']");
+      if (popup !== null && !popup.hasAttribute("data-inbox-item")) {
         return;
       }
       let step = 0;
@@ -494,507 +501,509 @@ export default function Inbox(props: { selected: string | null }) {
   }
 
   return (
-    <ResizablePanelGroup orientation="vertical">
-      <ResizablePanel defaultSize="38" minSize={120}>
-        <div className="relative flex h-full flex-col">
-          <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-            <span className="text-xs text-muted-foreground tabular-nums">{pendingCount} pending</span>
-            <span className="ml-auto text-xs text-muted-foreground">
-              {account !== null && account.connected
-                ? `Approved PRs and comments go to GitHub as @${account.login}. Decisions go to the agent.`
-                : "Nothing here is sent to GitHub. Decisions go to the agent."}
-            </span>
+    <div className="relative flex h-full flex-col">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+        <span className="text-xs text-muted-foreground tabular-nums">{pendingCount} pending</span>
+        <span className="ml-auto text-xs text-muted-foreground">
+          {account !== null && account.connected
+            ? `Approved PRs and comments go to GitHub as @${account.login}. Decisions go to the agent.`
+            : "Nothing here is sent to GitHub. Decisions go to the agent."}
+        </span>
+      </div>
+
+      <div className={cn(COLUMNS, "h-7 shrink-0 border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground")}>
+        <span />
+        <span>Kind</span>
+        <span>Agent</span>
+        <span>Target</span>
+        <span>Title</span>
+        <span className="text-right">Age</span>
+      </div>
+
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
+        {!loaded && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
+        {loaded && rows.length === 0 && (
+          <div className="px-3 py-2 text-muted-foreground">
+            Nothing here yet. Agents put PRs, comments and questions here, and the app asks when someone else takes an issue an agent works on.
           </div>
-
-          <div className={cn(COLUMNS, "h-7 shrink-0 border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground")}>
-            <span />
-            <span>Kind</span>
-            <span>Agent</span>
-            <span>Target</span>
-            <span>Title</span>
-            <span className="text-right">Age</span>
-          </div>
-
-          <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
-            {!loaded && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
-            {loaded && rows.length === 0 && (
-              <div className="px-3 py-2 text-muted-foreground">
-                Nothing here yet. Agents put PRs, comments and questions here, and the app asks when someone else takes an issue an agent works on.
-              </div>
-            )}
-            <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
-              {virtualizer.getVirtualItems().map((item) => {
-                const each = rows[item.index];
-                const minutes = Math.max(0, Math.floor((now - Date.parse(each.created_at)) / 60000));
-                let age = `${Math.floor(minutes / 1440)}d`;
-                if (minutes < 1) {
-                  age = "now";
-                } else if (minutes < 60) {
-                  age = `${minutes}m`;
-                } else if (minutes < 1440) {
-                  age = `${Math.floor(minutes / 60)}h`;
-                }
-                return (
-                  <a
-                    key={item.key}
-                    href={`#/inbox/${each.id}`}
-                    data-select-id={each.id}
-                    className={cn(
-                      COLUMNS,
-                      "absolute left-0 h-7 w-full border-b px-3 hover:bg-accent/50",
-                      each.status !== "pending" && "text-muted-foreground",
-                      (each.id === props.selected || chosen.includes(each.id)) && "bg-selected hover:bg-selected",
-                    )}
-                    style={{ top: item.start }}
-                    onClick={(event) => {
-                      // Not a new tab or window: these pick the row.
-                      if (event.ctrlKey || event.metaKey || event.shiftKey) {
-                        event.preventDefault();
-                        select(each.id, event.shiftKey);
-                      }
-                    }}
-                  >
-                    <StatusDot tone={DRAFT_TONE[each.status]} />
-                    <span className="flex items-center gap-1.5 text-muted-foreground">
-                      {each.kind === "pr" && <GitPullRequest className="size-3.5" />}
-                      {each.kind === "comment" && <MessageSquare className="size-3.5" />}
-                      {each.kind === "question" && <CircleHelp className="size-3.5" />}
-                      {each.kind === "taken" && <UserX className="size-3.5" />}
-                      {KIND_LABEL[each.kind] ?? each.kind}
-                    </span>
-                    <span className="truncate">{agentNames[each.agent] ?? each.agent}</span>
-                    <span className="truncate text-muted-foreground">{each.target ?? each.repo ?? "–"}</span>
-                    <span className="flex min-w-0 items-center gap-1.5">
-                      <span className={cn("truncate", each.status === "pending" && "font-medium")}>{each.title}</span>
-                      {each.evidence.length > 0 && (
-                        <span className="flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground tabular-nums" title={`${each.evidence.length} in Before and after`}>
-                          <Images className="size-3.5" />
-                          {each.evidence.length}
-                        </span>
-                      )}
-                    </span>
-                    <span className="text-right text-xs text-muted-foreground tabular-nums">{age}</span>
-                  </a>
-                );
-              })}
-            </div>
-          </div>
-
-          <RowSelection listRef={scrollRef} ids={rowIds} selected={chosen} onSelect={setSelected}>
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={chosenDecided.length === 0}
-              title={chosenDecided.length === 0 ? "Pending items can't be deleted: decide them first." : undefined}
-              onClick={() => setDeleting({ ids: chosenDecided, pending: chosen.length - chosenDecided.length })}
-            >
-              <Trash2 /> Delete
-            </Button>
-          </RowSelection>
-
-          <AlertDialog
-            open={deleting !== null}
-            onOpenChange={(open) => {
-              if (!open) {
-                setDeleting(null);
-              }
-            }}
-          >
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>
-                  {deleting !== null && deleting.ids.length === 1 ? "Delete this item?" : `Delete ${deleting !== null ? deleting.ids.length : 0} items?`}
-                </AlertDialogTitle>
-                <AlertDialogDescription>
-                  {deleting !== null && deleting.ids.length === 1
-                    ? "It is gone from the Inbox for good, with your decision and note. Its agent isn't told, and what was sent to GitHub stays there."
-                    : "They are gone from the Inbox for good, with your decisions and notes. Their agents aren't told, and what was sent to GitHub stays there."}
-                  {deleting !== null &&
-                    inbox.some((each) => deleting.ids.includes(each.id) && each.sent !== null && each.sent.kind === "comment") &&
-                    " A comment the app posted also leaves the GitHub page, so you can't delete it on GitHub from the app anymore."}
-                  {deleting !== null && deleting.pending > 0 && ` ${deleting.pending} pending ${deleting.pending === 1 ? "one stays" : "ones stay"}: decide ${deleting.pending === 1 ? "it" : "them"} first.`}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction
-                  variant="destructive"
-                  onClick={() => {
-                    if (deleting !== null) {
-                      remove(deleting.ids);
-                    }
-                  }}
-                >
-                  Delete
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-        </div>
-      </ResizablePanel>
-
-      <ResizableHandle />
-
-      <ResizablePanel defaultSize="62" minSize={160}>
-        {props.selected === null && (
-          <div className="flex h-full items-center justify-center text-muted-foreground">Pick an item above (J / K to move).</div>
         )}
-        {props.selected !== null && draft === undefined && (
-          <div className="flex h-full items-center justify-center text-muted-foreground">{loaded ? `There is no draft ${props.selected}.` : "Loading…"}</div>
-        )}
-        {draft !== undefined && (
-          <div className="flex h-full flex-col">
-            <div className="min-h-0 flex-1 overflow-auto">
-              <div className="space-y-2 px-4 pt-3 pb-2">
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
-                  <Badge variant="secondary">
-                    {draft.kind === "pr" && <GitPullRequest />}
-                    {draft.kind === "comment" && <MessageSquare />}
-                    {draft.kind === "question" && <CircleHelp />}
-                    {draft.kind === "taken" && <UserX />}
-                    {KIND_LABEL[draft.kind] ?? draft.kind}
-                  </Badge>
-                  {draft.target !== null && targetUrl !== null && (
-                    <a href={targetUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-foreground hover:underline">
-                      {draft.target} <ExternalLink className="size-3" />
-                    </a>
-                  )}
-                  {draft.target !== null && targetUrl === null && <span className="text-foreground">{draft.target}</span>}
-                  {draft.target === null && draft.repo !== null && (
-                    <a href={`https://github.com/${draft.repo}`} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-foreground hover:underline">
-                      {draft.repo} <ExternalLink className="size-3" />
-                    </a>
-                  )}
-                  <span>
-                    {draft.kind === "taken" ? "agent" : "by"}{" "}
-                    <a href={`#/agents/${draft.agent}`} className="text-primary hover:underline">
-                      {agentNames[draft.agent] ?? draft.agent}
-                    </a>
-                  </span>
-                  {draft.job !== null && (
-                    <span className="flex min-w-0 items-center gap-1.5" title={job?.title}>
-                      <StatusDot tone={job !== undefined ? JOB_TONE[job.status] : "gray"} />
-                      <span className="font-mono text-xs">{draft.job}</span>
-                      {job !== undefined && <span className="max-w-80 truncate">{job.title}</span>}
-                      {job !== undefined && <span className="text-xs">({JOB_LABEL[job.status] ?? job.status})</span>}
-                    </span>
-                  )}
-                  {draft.vm !== null && (
-                    <a href={`#/vms/${draft.vm}`} className="text-primary hover:underline">
-                      {draft.vm}
-                    </a>
-                  )}
-                  <span className="text-xs">{new Date(draft.created_at).toLocaleString()}</span>
-                </div>
-
-                <h2 className="text-[15px] font-semibold">{draft.title}</h2>
-
-                {draft.kind === "pr" && (
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                    <span>
-                      <span className="font-mono text-foreground">{draft.branch || "?"}</span> into{" "}
-                      <span className="font-mono text-foreground">{draft.base || "?"}</span>
-                    </span>
-                    {draft.path !== null && draft.path !== "" && <span className="font-mono">{draft.path}</span>}
-                  </div>
+        <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+          {virtualizer.getVirtualItems().map((item) => {
+            const each = rows[item.index];
+            const minutes = Math.max(0, Math.floor((now - Date.parse(each.created_at)) / 60000));
+            let age = `${Math.floor(minutes / 1440)}d`;
+            if (minutes < 1) {
+              age = "now";
+            } else if (minutes < 60) {
+              age = `${minutes}m`;
+            } else if (minutes < 1440) {
+              age = `${Math.floor(minutes / 60)}h`;
+            }
+            return (
+              <a
+                key={item.key}
+                href={`#/inbox/${each.id}`}
+                data-select-id={each.id}
+                className={cn(
+                  COLUMNS,
+                  "absolute left-0 h-7 w-full border-b px-3 hover:bg-accent/50",
+                  each.status !== "pending" && "text-muted-foreground",
+                  (each.id === props.selected || chosen.includes(each.id)) && "bg-selected hover:bg-selected",
                 )}
-              </div>
-
-              {showTabs && (
-                <div className="flex h-9 items-center gap-2 border-y px-4">
-                  <Tabs value={shownTab} onValueChange={setPRTab}>
-                    <TabsList>
-                      <TabsTrigger value="overview" className="px-2.5">
-                        Overview
-                      </TabsTrigger>
-                      {draft.kind === "pr" && (
-                        <TabsTrigger value="diff" className="px-2.5">
-                          Diff
-                          <span className="text-xs text-muted-foreground tabular-nums">
-                            {files.length} {files.length === 1 ? "file" : "files"}
-                          </span>
-                          <span className="font-mono text-xs tabular-nums">
-                            <span className="text-ok">+{totalAdded}</span> <span className="text-destructive">−{totalRemoved}</span>
-                          </span>
-                        </TabsTrigger>
-                      )}
-                      <TabsTrigger value="message" className="px-2.5">
-                        {draft.kind === "pr" ? "PR message" : "Comment"}
-                      </TabsTrigger>
-                    </TabsList>
-                  </Tabs>
-                  {shownTab === "diff" && (
-                    <div className="ml-auto flex items-center gap-1">
-                      <Button variant="ghost" size="sm" disabled={draft.diff === ""} onClick={() => copyText(draft.diff, "Diff")}>
-                        <Copy /> Copy diff
-                      </Button>
-                      {draft.diff === "" ? (
-                        <Button variant="ghost" size="sm" disabled>
-                          <Download /> Download .patch
-                        </Button>
-                      ) : (
-                        <Button variant="ghost" size="sm" asChild>
-                          <a href={`/api/inbox/${draft.id}/patch`} download={`${draft.id}.patch`}>
-                            <Download /> Download .patch
-                          </a>
-                        </Button>
-                      )}
-                    </div>
-                  )}
-                  {shownTab === "message" && (
-                    <div className="ml-auto flex items-center gap-1">
-                      {draft.kind === "pr" && (
-                        <Button variant="ghost" size="sm" onClick={() => copyText(draft.title, "Title")}>
-                          <Copy /> Copy title
-                        </Button>
-                      )}
-                      <Button variant="ghost" size="sm" disabled={draft.body === ""} onClick={() => copyText(draft.body, "Text")}>
-                        <Copy /> Copy text
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {shownTab === "overview" && <Overview draft={draft} files={files.length} added={totalAdded} removed={totalRemoved} />}
-              {shownTab === "message" && (
-                <div className="space-y-3 px-4 py-3">
-                  {draft.kind === "pr" && draft.template !== null && (
-                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <FileCheck className="size-3.5 text-ok" /> Follows the project's PR template <span className="font-mono">{draft.template}</span>
-                    </div>
-                  )}
-                  {pictures.length > 0 && (
-                    <div className="space-y-2 rounded-md border bg-muted/30 p-2.5">
-                      <div className="text-xs text-muted-foreground">
-                        GitHub needs its own copy of these pictures.{" "}
-                        {account !== null && account.connected && "Sending uploads them to your fork and links them in the text. By hand: "}
-                        In the PR box on GitHub, select each{" "}
-                        <code className="font-mono">![…](evidence:…)</code> and paste its picture over it, or drag the downloaded file there.
-                      </div>
-                      <div className="flex flex-wrap gap-3">
-                        {pictures.map((item) => (
-                          <div key={item.id} className="w-48 space-y-1">
-                            <img src={`/api/evidence/${item.file}`} alt={item.caption} className="h-28 w-full rounded border bg-black object-contain" />
-                            <div className="truncate text-xs" title={item.caption}>
-                              <span className="font-mono">{item.id}</span> · {item.stage}
-                            </div>
-                            <div className="flex items-center gap-1">
-                              {item.file !== null && !item.file.endsWith(".gif") && (
-                                <Button variant="ghost" size="xs" onClick={() => copyPicture(item.file ?? "")}>
-                                  <Copy /> Copy picture
-                                </Button>
-                              )}
-                              <Button variant="ghost" size="xs" asChild>
-                                <a href={`/api/evidence/${item.file}`} download={item.file}>
-                                  <Download /> Download
-                                </a>
-                              </Button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {draft.kind === "pr" && (
-                    <div className="space-y-0.5 text-xs text-muted-foreground">
-                      {draft.commits.length === 0 && <div>Goes out as one commit, with the title as its message.</div>}
-                      {draft.commits.length > 0 && <div>Goes out as these commits from the agent's branch, with your name:</div>}
-                      {draft.commits.map((commit) => (
-                        <div key={commit.sha} className="flex min-w-0 items-center gap-1.5">
-                          <GitCommitHorizontal className="size-3.5 shrink-0" />
-                          <span className="truncate text-foreground">{commit.message.split("\n")[0]}</span>
-                          {!commit.own && <span className="shrink-0 text-destructive">by {commit.author.name}: can't be sent</span>}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {draft.kind === "pr" && <div className="text-[15px] font-semibold">{draft.title}</div>}
-                  <Markdown text={shownBody || "*No text.*"} repo={draft.repo ?? undefined} githubImagesOnly issueRefs />
-                </div>
-              )}
-              {shownTab === "diff" && files.length === 0 && <div className="px-4 py-3 text-muted-foreground">This draft has no changes.</div>}
-              {shownTab === "diff" && diffView}
-            </div>
-
-            {draft.status === "pending" && draft.kind === "taken" && (
-              <div className="shrink-0 space-y-2 border-t bg-muted/30 px-4 py-2">
-                <Textarea
-                  placeholder="A note for the agent (optional)."
-                  className="max-h-40 min-h-14 bg-background"
-                  value={reply}
-                  onChange={(event) => setReplies((current) => ({ ...current, [draft.id]: event.target.value }))}
-                />
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground">Stop cancels the job, and the agent stops working on it right away.</span>
-                  <div className="ml-auto flex items-center gap-1.5">
-                    <Button variant="outline" size="sm" disabled={busy !== ""} onClick={() => decide("reject")}>
-                      {busy === "reject" ? <Loader2 className="animate-spin" /> : <Square />} Stop the agent
-                    </Button>
-                    <Button size="sm" disabled={busy !== ""} onClick={() => decide("approve")}>
-                      {busy === "approve" ? <Loader2 className="animate-spin" /> : <Check />} Keep working
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {draft.status === "pending" && draft.kind !== "taken" && (
-              <div className="shrink-0 space-y-2 border-t bg-muted/30 px-4 py-2">
-                <Textarea
-                  placeholder={
-                    draft.kind === "question"
-                      ? "Your answer. Ctrl+Enter sends it as a reply."
-                      : "A note for the agent (optional for Approve and Reject; needed for Reply). Ctrl+Enter replies."
+                style={{ top: item.start }}
+                onClick={(event) => {
+                  // Not a new tab or window: these pick the row.
+                  if (event.ctrlKey || event.metaKey || event.shiftKey) {
+                    event.preventDefault();
+                    select(each.id, event.shiftKey);
                   }
-                  className="max-h-40 min-h-14 bg-background"
-                  value={reply}
-                  onChange={(event) => setReplies((current) => ({ ...current, [draft.id]: event.target.value }))}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-                      event.preventDefault();
-                      decide("reply");
-                    }
-                  }}
-                />
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground">
-                    {draft.kind !== "question" && account !== null && account.connected
-                      ? `Approve ${draft.kind === "pr" ? "opens this PR" : "posts this comment"} on GitHub as @${account.login}, after you confirm; the agent is told, with your note.`
-                      : "Approve sends nothing to GitHub; the agent is told, with your note."}
-                  </span>
-                  <div className="ml-auto flex items-center gap-1.5">
-                    <Button variant="outline" size="sm" disabled={busy !== ""} onClick={() => decide("reject")}>
-                      {busy === "reject" ? <Loader2 className="animate-spin" /> : <X />} Reject
-                    </Button>
-                    <Button
-                      variant={draft.kind === "question" ? "default" : "outline"}
-                      size="sm"
-                      disabled={busy !== "" || reply.trim() === ""}
-                      onClick={() => decide("reply")}
-                    >
-                      {busy === "reply" ? <Loader2 className="animate-spin" /> : <Reply />} Reply & keep working
-                    </Button>
-                    <Button
-                      variant={draft.kind === "question" ? "outline" : "default"}
-                      size="sm"
-                      disabled={busy !== ""}
-                      onClick={() => {
-                        if (draft.kind !== "question" && account !== null && account.connected) {
-                          setConfirming("approve");
-                        } else {
-                          decide("approve");
-                        }
-                      }}
-                    >
-                      {busy === "approve" || busy === "send" ? <Loader2 className="animate-spin" /> : <Check />}
-                      {busy === "send" ? "Sending…" : "Approve"}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {draft.status !== "pending" && (
-              <div className="shrink-0 border-t bg-muted/30 px-4 py-2">
-                <div className="flex items-center gap-2">
-                  <StatusDot tone={DRAFT_TONE[draft.status]} />
-                  <span className="font-medium">{(draft.kind === "taken" ? TAKEN_LABEL[draft.status] : DECISION_LABEL[draft.status]) ?? draft.status}</span>
-                  {draft.decided_at !== null && <span className="text-xs text-muted-foreground">{new Date(draft.decided_at).toLocaleString()}</span>}
-                  {draft.sent !== null && (
-                    <a href={draft.sent.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-primary hover:underline">
-                      {draft.sent.kind === "pr" ? `PR #${draft.sent.number}` : "Comment"} on GitHub, as @{draft.sent.as} <ExternalLink className="size-3" />
-                    </a>
-                  )}
-                  {draft.status === "approved" && draft.sent === null && (draft.kind === "pr" || draft.kind === "comment") && account !== null && !account.connected && (
-                    <span className="text-xs text-warn">
-                      Not on GitHub yet:{" "}
-                      <a href="#/github?tab=account" className="underline hover:text-foreground">
-                        connect your GitHub account
-                      </a>{" "}
-                      to send it from here.
+                }}
+              >
+                <StatusDot tone={DRAFT_TONE[each.status]} />
+                <span className="flex items-center gap-1.5 text-muted-foreground">
+                  {each.kind === "pr" && <GitPullRequest className="size-3.5" />}
+                  {each.kind === "comment" && <MessageSquare className="size-3.5" />}
+                  {each.kind === "question" && <CircleHelp className="size-3.5" />}
+                  {each.kind === "taken" && <UserX className="size-3.5" />}
+                  {KIND_LABEL[each.kind] ?? each.kind}
+                </span>
+                <span className="truncate">{agentNames[each.agent] ?? each.agent}</span>
+                <span className="truncate text-muted-foreground">{each.target ?? each.repo ?? "–"}</span>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className={cn("truncate", each.status === "pending" && "font-medium")}>{each.title}</span>
+                  {each.evidence.length > 0 && (
+                    <span className="flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground tabular-nums" title={`${each.evidence.length} in Before and after`}>
+                      <Images className="size-3.5" />
+                      {each.evidence.length}
                     </span>
                   )}
-                  <div className="ml-auto flex items-center gap-1.5">
-                    <Button variant="ghost" size="sm" disabled={busy !== ""} onClick={() => setDeleting({ ids: [draft.id], pending: 0 })}>
-                      <Trash2 /> Delete
-                    </Button>
-                    {draft.status === "approved" && draft.sent === null && (draft.kind === "pr" || draft.kind === "comment") && account !== null && account.connected && (
-                      <Button size="sm" disabled={busy !== ""} onClick={() => setConfirming("send")}>
-                        {busy === "send" ? <Loader2 className="animate-spin" /> : <Send />}
-                        {busy === "send" ? "Sending…" : "Send to GitHub"}
-                      </Button>
-                    )}
-                  </div>
-                </div>
-                {draft.reply !== "" && <div className="mt-1 border-l-2 border-muted-foreground/30 pl-3 whitespace-pre-wrap">{draft.reply}</div>}
-                <Textarea
-                  placeholder={
-                    draft.agent in agentNames
-                      ? `A message to ${agentNames[draft.agent]} about this, in its chat. Ctrl+Enter sends it.`
-                      : "Its agent was deleted, so it can't get messages."
-                  }
-                  className="mt-2 max-h-40 min-h-14 bg-background"
-                  disabled={!(draft.agent in agentNames)}
-                  value={reply}
-                  onChange={(event) => setReplies((current) => ({ ...current, [draft.id]: event.target.value }))}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-                      event.preventDefault();
-                      messageAgent();
-                    }
-                  }}
-                />
-                <div className="mt-2 flex items-center justify-end gap-1.5">
-                  <Button variant="ghost" size="sm" asChild>
-                    <a href={`#/agents/${draft.agent}`}>
-                      <MessageSquare /> Open chat
-                    </a>
-                  </Button>
-                  <Button size="sm" disabled={busy !== "" || reply.trim() === "" || !(draft.agent in agentNames)} onClick={() => messageAgent()}>
-                    {busy === "message" ? <Loader2 className="animate-spin" /> : <Send />} Send to agent
-                  </Button>
-                </div>
-              </div>
-            )}
+                </span>
+                <span className="text-right text-xs text-muted-foreground tabular-nums">{age}</span>
+              </a>
+            );
+          })}
+        </div>
+      </div>
 
-            <AlertDialog
-              open={confirming !== ""}
-              onOpenChange={(open) => {
-                if (!open) {
-                  setConfirming("");
+      <RowSelection listRef={scrollRef} ids={rowIds} selected={chosen} onSelect={setSelected}>
+        <Button
+          size="xs"
+          variant="ghost"
+          disabled={chosenDecided.length === 0}
+          title={chosenDecided.length === 0 ? "Pending items can't be deleted: decide them first." : undefined}
+          onClick={() => setDeleting({ ids: chosenDecided, pending: chosen.length - chosenDecided.length })}
+        >
+          <Trash2 /> Delete
+        </Button>
+      </RowSelection>
+
+      <AlertDialog
+        open={deleting !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleting(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {deleting !== null && deleting.ids.length === 1 ? "Delete this item?" : `Delete ${deleting !== null ? deleting.ids.length : 0} items?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleting !== null && deleting.ids.length === 1
+                ? "It is gone from the Inbox for good, with your decision and note. Its agent isn't told, and what was sent to GitHub stays there."
+                : "They are gone from the Inbox for good, with your decisions and notes. Their agents aren't told, and what was sent to GitHub stays there."}
+              {deleting !== null &&
+                inbox.some((each) => deleting.ids.includes(each.id) && each.sent !== null && each.sent.kind === "comment") &&
+                " A comment the app posted also leaves the GitHub page, so you can't delete it on GitHub from the app anymore."}
+              {deleting !== null && deleting.pending > 0 && ` ${deleting.pending} pending ${deleting.pending === 1 ? "one stays" : "ones stay"}: decide ${deleting.pending === 1 ? "it" : "them"} first.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                if (deleting !== null) {
+                  remove(deleting.ids);
                 }
               }}
             >
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>{draft.kind === "pr" ? `Open this PR on ${draft.repo}?` : `Post this comment on ${draft.target}?`}</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    {draft.kind === "pr"
-                      ? `It opens as @${account?.login}, from a new branch in your fork, with the title, text and diff shown here. Anyone can see it. You can close it on GitHub later, but not delete it.`
-                      : `It is posted as @${account?.login}, with the text shown here. Anyone can see it. You can edit or delete it on GitHub later.`}
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={() => {
-                      if (confirming === "approve") {
-                        decide("approve", true);
-                      } else {
-                        sendApproved();
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog
+        open={props.selected !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            window.location.hash = "#/inbox";
+          }
+        }}
+      >
+        <DialogContent data-inbox-item aria-describedby={undefined} className="flex h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
+          {draft === undefined && (
+            <div className="flex flex-1 items-center justify-center">
+              <DialogTitle className="font-normal text-muted-foreground">{loaded ? `There is no draft ${props.selected}.` : "Loading…"}</DialogTitle>
+            </div>
+          )}
+          {draft !== undefined && (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="min-h-0 flex-1 overflow-auto">
+                <div className="space-y-2 pt-3 pr-10 pb-2 pl-4">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
+                    <Badge variant="secondary">
+                      {draft.kind === "pr" && <GitPullRequest />}
+                      {draft.kind === "comment" && <MessageSquare />}
+                      {draft.kind === "question" && <CircleHelp />}
+                      {draft.kind === "taken" && <UserX />}
+                      {KIND_LABEL[draft.kind] ?? draft.kind}
+                    </Badge>
+                    {draft.target !== null && targetUrl !== null && (
+                      <a href={targetUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-foreground hover:underline">
+                        {draft.target} <ExternalLink className="size-3" />
+                      </a>
+                    )}
+                    {draft.target !== null && targetUrl === null && <span className="text-foreground">{draft.target}</span>}
+                    {draft.target === null && draft.repo !== null && (
+                      <a href={`https://github.com/${draft.repo}`} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-foreground hover:underline">
+                        {draft.repo} <ExternalLink className="size-3" />
+                      </a>
+                    )}
+                    <span>
+                      {draft.kind === "taken" ? "agent" : "by"}{" "}
+                      <a href={`#/agents/${draft.agent}`} className="text-primary hover:underline">
+                        {agentNames[draft.agent] ?? draft.agent}
+                      </a>
+                    </span>
+                    {draft.job !== null && (
+                      <span className="flex min-w-0 items-center gap-1.5" title={job?.title}>
+                        <StatusDot tone={job !== undefined ? JOB_TONE[job.status] : "gray"} />
+                        <span className="font-mono text-xs">{draft.job}</span>
+                        {job !== undefined && <span className="max-w-80 truncate">{job.title}</span>}
+                        {job !== undefined && <span className="text-xs">({JOB_LABEL[job.status] ?? job.status})</span>}
+                      </span>
+                    )}
+                    {draft.vm !== null && (
+                      <a href={`#/vms/${draft.vm}`} className="text-primary hover:underline">
+                        {draft.vm}
+                      </a>
+                    )}
+                    <span className="text-xs">{new Date(draft.created_at).toLocaleString()}</span>
+                  </div>
+
+                  <DialogTitle className="leading-normal">{draft.title}</DialogTitle>
+
+                  {draft.kind === "pr" && (
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                      <span>
+                        <span className="font-mono text-foreground">{draft.branch || "?"}</span> into{" "}
+                        <span className="font-mono text-foreground">{draft.base || "?"}</span>
+                      </span>
+                      {draft.path !== null && draft.path !== "" && <span className="font-mono">{draft.path}</span>}
+                    </div>
+                  )}
+                </div>
+
+                {showTabs && (
+                  <div className="flex h-9 items-center gap-2 border-y px-4">
+                    <Tabs value={shownTab} onValueChange={setPRTab}>
+                      <TabsList>
+                        <TabsTrigger value="overview" className="px-2.5">
+                          Overview
+                        </TabsTrigger>
+                        {draft.kind === "pr" && (
+                          <TabsTrigger value="diff" className="px-2.5">
+                            Diff
+                            <span className="text-xs text-muted-foreground tabular-nums">
+                              {files.length} {files.length === 1 ? "file" : "files"}
+                            </span>
+                            <span className="font-mono text-xs tabular-nums">
+                              <span className="text-ok">+{totalAdded}</span> <span className="text-destructive">−{totalRemoved}</span>
+                            </span>
+                          </TabsTrigger>
+                        )}
+                        <TabsTrigger value="message" className="px-2.5">
+                          {draft.kind === "pr" ? "PR message" : "Comment"}
+                        </TabsTrigger>
+                      </TabsList>
+                    </Tabs>
+                    {shownTab === "diff" && (
+                      <div className="ml-auto flex items-center gap-1">
+                        <Button variant="ghost" size="sm" disabled={draft.diff === ""} onClick={() => copyText(draft.diff, "Diff")}>
+                          <Copy /> Copy diff
+                        </Button>
+                        {draft.diff === "" ? (
+                          <Button variant="ghost" size="sm" disabled>
+                            <Download /> Download .patch
+                          </Button>
+                        ) : (
+                          <Button variant="ghost" size="sm" asChild>
+                            <a href={`/api/inbox/${draft.id}/patch`} download={`${draft.id}.patch`}>
+                              <Download /> Download .patch
+                            </a>
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                    {shownTab === "message" && (
+                      <div className="ml-auto flex items-center gap-1">
+                        {draft.kind === "pr" && (
+                          <Button variant="ghost" size="sm" onClick={() => copyText(draft.title, "Title")}>
+                            <Copy /> Copy title
+                          </Button>
+                        )}
+                        <Button variant="ghost" size="sm" disabled={draft.body === ""} onClick={() => copyText(draft.body, "Text")}>
+                          <Copy /> Copy text
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {shownTab === "overview" && <Overview draft={draft} files={files.length} added={totalAdded} removed={totalRemoved} />}
+                {shownTab === "message" && (
+                  <div className="space-y-3 px-4 py-3">
+                    {draft.kind === "pr" && draft.template !== null && (
+                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <FileCheck className="size-3.5 text-ok" /> Follows the project's PR template <span className="font-mono">{draft.template}</span>
+                      </div>
+                    )}
+                    {pictures.length > 0 && (
+                      <div className="space-y-2 rounded-md border bg-muted/30 p-2.5">
+                        <div className="text-xs text-muted-foreground">
+                          GitHub needs its own copy of these pictures.{" "}
+                          {account !== null && account.connected && "Sending uploads them to your fork and links them in the text. By hand: "}
+                          In the PR box on GitHub, select each{" "}
+                          <code className="font-mono">![…](evidence:…)</code> and paste its picture over it, or drag the downloaded file there.
+                        </div>
+                        <div className="flex flex-wrap gap-3">
+                          {pictures.map((item) => (
+                            <div key={item.id} className="w-48 space-y-1">
+                              <img src={`/api/evidence/${item.file}`} alt={item.caption} className="h-28 w-full rounded border bg-black object-contain" />
+                              <div className="truncate text-xs" title={item.caption}>
+                                <span className="font-mono">{item.id}</span> · {item.stage}
+                              </div>
+                              <div className="flex items-center gap-1">
+                                {item.file !== null && !item.file.endsWith(".gif") && (
+                                  <Button variant="ghost" size="xs" onClick={() => copyPicture(item.file ?? "")}>
+                                    <Copy /> Copy picture
+                                  </Button>
+                                )}
+                                <Button variant="ghost" size="xs" asChild>
+                                  <a href={`/api/evidence/${item.file}`} download={item.file}>
+                                    <Download /> Download
+                                  </a>
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {draft.kind === "pr" && (
+                      <div className="space-y-0.5 text-xs text-muted-foreground">
+                        {draft.commits.length === 0 && <div>Goes out as one commit, with the title as its message.</div>}
+                        {draft.commits.length > 0 && <div>Goes out as these commits from the agent's branch, with your name:</div>}
+                        {draft.commits.map((commit) => (
+                          <div key={commit.sha} className="flex min-w-0 items-center gap-1.5">
+                            <GitCommitHorizontal className="size-3.5 shrink-0" />
+                            <span className="truncate text-foreground">{commit.message.split("\n")[0]}</span>
+                            {!commit.own && <span className="shrink-0 text-destructive">by {commit.author.name}: can't be sent</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {draft.kind === "pr" && <div className="text-[15px] font-semibold">{draft.title}</div>}
+                    <Markdown text={shownBody || "*No text.*"} repo={draft.repo ?? undefined} githubImagesOnly issueRefs />
+                  </div>
+                )}
+                {shownTab === "diff" && files.length === 0 && <div className="px-4 py-3 text-muted-foreground">This draft has no changes.</div>}
+                {shownTab === "diff" && diffView}
+              </div>
+
+              {draft.status === "pending" && draft.kind === "taken" && (
+                <div className="shrink-0 space-y-2 border-t bg-muted/30 px-4 py-2">
+                  <Textarea
+                    placeholder="A note for the agent (optional)."
+                    className="max-h-40 min-h-14 bg-background"
+                    value={reply}
+                    onChange={(event) => setReplies((current) => ({ ...current, [draft.id]: event.target.value }))}
+                  />
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">Stop cancels the job, and the agent stops working on it right away.</span>
+                    <div className="ml-auto flex items-center gap-1.5">
+                      <Button variant="outline" size="sm" disabled={busy !== ""} onClick={() => decide("reject")}>
+                        {busy === "reject" ? <Loader2 className="animate-spin" /> : <Square />} Stop the agent
+                      </Button>
+                      <Button size="sm" disabled={busy !== ""} onClick={() => decide("approve")}>
+                        {busy === "approve" ? <Loader2 className="animate-spin" /> : <Check />} Keep working
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {draft.status === "pending" && draft.kind !== "taken" && (
+                <div className="shrink-0 space-y-2 border-t bg-muted/30 px-4 py-2">
+                  <Textarea
+                    placeholder={
+                      draft.kind === "question"
+                        ? "Your answer. Ctrl+Enter sends it as a reply."
+                        : "A note for the agent (optional for Approve and Reject; needed for Reply). Ctrl+Enter replies."
+                    }
+                    className="max-h-40 min-h-14 bg-background"
+                    value={reply}
+                    onChange={(event) => setReplies((current) => ({ ...current, [draft.id]: event.target.value }))}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                        event.preventDefault();
+                        decide("reply");
                       }
                     }}
-                  >
-                    {draft.kind === "pr" ? "Open PR" : "Post comment"}
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          </div>
-        )}
-      </ResizablePanel>
-    </ResizablePanelGroup>
+                  />
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">
+                      {draft.kind !== "question" && account !== null && account.connected
+                        ? `Approve ${draft.kind === "pr" ? "opens this PR" : "posts this comment"} on GitHub as @${account.login}, after you confirm; the agent is told, with your note.`
+                        : "Approve sends nothing to GitHub; the agent is told, with your note."}
+                    </span>
+                    <div className="ml-auto flex items-center gap-1.5">
+                      <Button variant="outline" size="sm" disabled={busy !== ""} onClick={() => decide("reject")}>
+                        {busy === "reject" ? <Loader2 className="animate-spin" /> : <X />} Reject
+                      </Button>
+                      <Button
+                        variant={draft.kind === "question" ? "default" : "outline"}
+                        size="sm"
+                        disabled={busy !== "" || reply.trim() === ""}
+                        onClick={() => decide("reply")}
+                      >
+                        {busy === "reply" ? <Loader2 className="animate-spin" /> : <Reply />} Reply & keep working
+                      </Button>
+                      <Button
+                        variant={draft.kind === "question" ? "outline" : "default"}
+                        size="sm"
+                        disabled={busy !== ""}
+                        onClick={() => {
+                          if (draft.kind !== "question" && account !== null && account.connected) {
+                            setConfirming("approve");
+                          } else {
+                            decide("approve");
+                          }
+                        }}
+                      >
+                        {busy === "approve" || busy === "send" ? <Loader2 className="animate-spin" /> : <Check />}
+                        {busy === "send" ? "Sending…" : "Approve"}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {draft.status !== "pending" && (
+                <div className="shrink-0 border-t bg-muted/30 px-4 py-2">
+                  <div className="flex items-center gap-2">
+                    <StatusDot tone={DRAFT_TONE[draft.status]} />
+                    <span className="font-medium">{(draft.kind === "taken" ? TAKEN_LABEL[draft.status] : DECISION_LABEL[draft.status]) ?? draft.status}</span>
+                    {draft.decided_at !== null && <span className="text-xs text-muted-foreground">{new Date(draft.decided_at).toLocaleString()}</span>}
+                    {draft.sent !== null && (
+                      <a href={draft.sent.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-primary hover:underline">
+                        {draft.sent.kind === "pr" ? `PR #${draft.sent.number}` : "Comment"} on GitHub, as @{draft.sent.as} <ExternalLink className="size-3" />
+                      </a>
+                    )}
+                    {draft.status === "approved" && draft.sent === null && (draft.kind === "pr" || draft.kind === "comment") && account !== null && !account.connected && (
+                      <span className="text-xs text-warn">
+                        Not on GitHub yet:{" "}
+                        <a href="#/github?tab=account" className="underline hover:text-foreground">
+                          connect your GitHub account
+                        </a>{" "}
+                        to send it from here.
+                      </span>
+                    )}
+                    <div className="ml-auto flex items-center gap-1.5">
+                      <Button variant="ghost" size="sm" disabled={busy !== ""} onClick={() => setDeleting({ ids: [draft.id], pending: 0 })}>
+                        <Trash2 /> Delete
+                      </Button>
+                      {draft.status === "approved" && draft.sent === null && (draft.kind === "pr" || draft.kind === "comment") && account !== null && account.connected && (
+                        <Button size="sm" disabled={busy !== ""} onClick={() => setConfirming("send")}>
+                          {busy === "send" ? <Loader2 className="animate-spin" /> : <Send />}
+                          {busy === "send" ? "Sending…" : "Send to GitHub"}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  {draft.reply !== "" && <div className="mt-1 border-l-2 border-muted-foreground/30 pl-3 whitespace-pre-wrap">{draft.reply}</div>}
+                  <Textarea
+                    placeholder={
+                      draft.agent in agentNames
+                        ? `A message to ${agentNames[draft.agent]} about this, in its chat. Ctrl+Enter sends it.`
+                        : "Its agent was deleted, so it can't get messages."
+                    }
+                    className="mt-2 max-h-40 min-h-14 bg-background"
+                    disabled={!(draft.agent in agentNames)}
+                    value={reply}
+                    onChange={(event) => setReplies((current) => ({ ...current, [draft.id]: event.target.value }))}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                        event.preventDefault();
+                        messageAgent();
+                      }
+                    }}
+                  />
+                  <div className="mt-2 flex items-center justify-end gap-1.5">
+                    <Button variant="ghost" size="sm" asChild>
+                      <a href={`#/agents/${draft.agent}`}>
+                        <MessageSquare /> Open chat
+                      </a>
+                    </Button>
+                    <Button size="sm" disabled={busy !== "" || reply.trim() === "" || !(draft.agent in agentNames)} onClick={() => messageAgent()}>
+                      {busy === "message" ? <Loader2 className="animate-spin" /> : <Send />} Send to agent
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              <AlertDialog
+                open={confirming !== ""}
+                onOpenChange={(open) => {
+                  if (!open) {
+                    setConfirming("");
+                  }
+                }}
+              >
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>{draft.kind === "pr" ? `Open this PR on ${draft.repo}?` : `Post this comment on ${draft.target}?`}</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      {draft.kind === "pr"
+                        ? `It opens as @${account?.login}, from a new branch in your fork, with the title, text and diff shown here. Anyone can see it. You can close it on GitHub later, but not delete it.`
+                        : `It is posted as @${account?.login}, with the text shown here. Anyone can see it. You can edit or delete it on GitHub later.`}
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={() => {
+                        if (confirming === "approve") {
+                          decide("approve", true);
+                        } else {
+                          sendApproved();
+                        }
+                      }}
+                    >
+                      {draft.kind === "pr" ? "Open PR" : "Post comment"}
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }
 
