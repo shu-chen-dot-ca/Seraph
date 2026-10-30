@@ -20,12 +20,18 @@ Tabs (an issue has only Conversation):
   on GitHub.
 - Files changed: the diff per file, folding open, with +/- counts and line numbers (a big file starts folded).
 For a PR you opened, the bar has Close PR (open), Reopen PR and Delete branch (closed), Delete branch (merged).
-The bottom bar: Leave a comment and Comment, posted as you (needs you signed in: Account on the GitHub tab;
+The bottom bar shows what waits in the Inbox for this PR or issue. A comment draft: who drafted it, its text (you can
+change it; your change is saved before you decide), a note for the agent, and Reject, Discuss (the note goes to the
+agent's chat, the draft keeps waiting), Redraft (the agent drafts it again with your note) and Approve (with your
+GitHub account connected it asks "Post this comment as @you?" and posts it; without, nothing is sent, like the
+Inbox). A PR draft (a new PR, or new commits for this one) is one line with Review, which opens it in the Inbox.
+With no comment draft: Leave a comment and Comment, posted as you (needs you signed in: Account on the GitHub tab;
 until then a "sign in with GitHub" link to it).
 Every button that changes something on GitHub asks "are you sure?" first (Enter confirms), then acts as you.
 */
 
 import {
+  Check,
   ChevronRight,
   CircleCheck,
   CircleDot,
@@ -37,9 +43,13 @@ import {
   GitPullRequestClosed,
   GitPullRequestDraft,
   Loader2,
+  MessageSquare,
+  MessagesSquare,
   RefreshCw,
+  RotateCcw,
   Send,
   Trash2,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -62,7 +72,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { AGENT_TONE, StatusDot, type Tone } from "@/components/ui/status-dot";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
-import { api, useLive, type AgentMode, type GithubAccountStatus } from "@/live";
+import { api, useLive, type AgentMode, type Draft, type GithubAccountStatus } from "@/live";
 import { cn, timeAgo } from "@/lib/utils";
 
 // The thread as GET /api/github/thread gives it, fresh from GitHub. role is GitHub's word for the person
@@ -140,9 +150,9 @@ type ThreadDetail = {
 
 type DiffLine = { kind: "hunk" | "add" | "del" | "context" | "note"; text: string; oldNo: number | null; newNo: number | null };
 
-// What a button does, waiting for its "are you sure?": post your own comment, or POST to path (close, reopen, delete
-// branch, delete a comment).
-type Confirm = { title: string; text: string; label: string; destructive: boolean; action: "comment" | "path"; path: string };
+// What a button does, waiting for its "are you sure?": approve the comment draft and post it, post your own
+// comment, or POST to path (close, reopen, delete branch, delete a comment).
+type Confirm = { title: string; text: string; label: string; destructive: boolean; action: "approve" | "comment" | "path"; path: string };
 
 // GitHub's role for someone in the project, in plain words. Other roles get no tag.
 const ROLE_LABEL: Record<string, string> = { OWNER: "Maintainer", MEMBER: "Maintainer", COLLABORATOR: "Maintainer" };
@@ -193,10 +203,12 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
   const [tab, setTab] = useState("conversation");
   // Files folded open or shut by hand, by "thread id:path"; others follow BIG_FILE_LINES.
   const [fileOpen, setFileOpen] = useState<Record<string, boolean>>({});
-  // Per thread: your own comment being written.
+  // Per draft: its text as you changed it, and your note for its agent. Per thread: your own comment being written.
+  const [edits, setEdits] = useState<Record<string, string>>({});
+  const [notes, setNotes] = useState<Record<string, string>>({});
   const [comments, setComments] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState("");
-  // Your GitHub account: who Comment posts as (null until known).
+  // Your GitHub account: who Approve and Comment post as (null until known).
   const [account, setAccount] = useState<GithubAccountStatus | null>(null);
   // The last button clicked stays set while its "are you sure?" fades out, so the text doesn't blank.
   const [confirm, setConfirm] = useState<Confirm | null>(null);
@@ -378,6 +390,12 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
     }
   }
 
+  // The drafts waiting in the Inbox for this thread: a comment draft is decided here, the others are one line each.
+  const pending = props.id === null ? [] : inbox.filter((each) => each.status === "pending" && (each.target === props.id || each.update_of === props.id));
+  const commentDraft = pending.find((each) => each.kind === "comment");
+  const otherDrafts = pending.filter((each) => each !== commentDraft);
+  const draftText = commentDraft !== undefined ? (edits[commentDraft.id] ?? commentDraft.body) : "";
+  const note = commentDraft !== undefined ? (notes[commentDraft.id] ?? "") : "";
   const comment = props.id !== null ? (comments[props.id] ?? "") : "";
   const connected = account !== null && account.connected;
 
@@ -448,6 +466,69 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
     setBusy("");
   }
 
+  // Decides the comment draft, like the Inbox does; your change to its text is saved first.
+  // send: Approve also posts it on GitHub as you (after the "are you sure?").
+  async function decide(draft: Draft, action: "approve" | "reject" | "reply", send: boolean) {
+    const text = (notes[draft.id] ?? "").trim();
+    if (action === "reply" && text === "") {
+      toast.error("Write a note first: what the new version should change.");
+      return;
+    }
+    const edited = edits[draft.id];
+    setBusy(send ? "send" : action);
+    try {
+      if (edited !== undefined && edited !== draft.body) {
+        await api<Draft>(`/api/inbox/${draft.id}/edit`, { method: "POST", body: { title: draft.title, body: edited } });
+      }
+      const result = await api<Draft>(`/api/inbox/${draft.id}/${action}`, { method: "POST", body: { text: text, send: send } });
+      setNotes((current) => ({ ...current, [draft.id]: "" }));
+      const sent = result.sent;
+      if (send && sent !== null) {
+        toast.success(`Comment posted on ${sent.repo}#${sent.number}`, {
+          action: { label: "Open", onClick: () => window.open(sent.url, "_blank", "noopener,noreferrer") },
+        });
+        setReload((count) => count + 1);
+      }
+      if (action === "reply") {
+        toast.success("The agent drafts it again with your note. The new draft shows here.");
+      }
+    } catch (err) {
+      toast.error(`Could not ${send ? "post it" : action === "reply" ? "redraft" : action}: ${err instanceof Error ? err.message : err}`);
+    }
+    setBusy("");
+  }
+
+  // Discuss: the note goes to the agent's chat, saying which draft it is about; the draft keeps waiting.
+  async function discuss(draft: Draft) {
+    const text = (notes[draft.id] ?? "").trim();
+    if (text === "") {
+      return;
+    }
+    const edited = edits[draft.id];
+    setBusy("discuss");
+    try {
+      if (edited !== undefined && edited !== draft.body) {
+        await api<Draft>(`/api/inbox/${draft.id}/edit`, { method: "POST", body: { title: draft.title, body: edited } });
+      }
+      await api(`/api/agents/${draft.agent}/message`, {
+        method: "POST",
+        body: { text: `About ${draft.id} (${draft.title}) in the Inbox, still waiting for your decision:\n${text}` },
+      });
+      setNotes((current) => ({ ...current, [draft.id]: "" }));
+      toast.success(`Sent to ${agentNames[draft.agent] ?? draft.agent}`, {
+        action: {
+          label: "Open chat",
+          onClick: () => {
+            window.location.hash = `#/agents/${draft.agent}`;
+          },
+        },
+      });
+    } catch (err) {
+      toast.error(`Could not send it: ${err instanceof Error ? err.message : err}`);
+    }
+    setBusy("");
+  }
+
   // Your own comment, posted as you (after the "are you sure?").
   async function postComment() {
     if (props.id === null) {
@@ -488,6 +569,12 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
 
   async function act() {
     if (confirm === null) {
+      return;
+    }
+    if (confirm.action === "approve") {
+      if (commentDraft !== undefined) {
+        decide(commentDraft, "approve", true);
+      }
       return;
     }
     if (confirm.action === "comment") {
@@ -908,7 +995,100 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
             </div>
 
             <div className="shrink-0 space-y-2 border-t bg-muted/30 px-4 py-2">
-              {account !== null && !account.connected && (
+              {otherDrafts.map((each) => (
+                <div key={each.id} className="flex min-w-0 items-center gap-2">
+                  {each.kind === "pr" ? (
+                    <GitPullRequest className="size-3.5 shrink-0 text-muted-foreground" />
+                  ) : (
+                    <MessageSquare className="size-3.5 shrink-0 text-muted-foreground" />
+                  )}
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    {each.kind === "pr" && each.update_of !== null && "New commits for this PR"}
+                    {each.kind === "pr" && each.update_of === null && "PR draft"}
+                    {each.kind !== "pr" && "Draft reply"} by {agentNames[each.agent] ?? each.agent}, waiting in the Inbox:
+                  </span>
+                  <span className="min-w-0 truncate">{each.title}</span>
+                  <Button variant="outline" size="sm" className="ml-auto" asChild>
+                    <a href={`#/inbox/${each.id}`}>Review</a>
+                  </Button>
+                </div>
+              ))}
+
+              {commentDraft !== undefined && (
+                <>
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <MessageSquare className="size-3.5 shrink-0" />
+                    <span>
+                      Draft reply by{" "}
+                      <a href={`#/agents/${commentDraft.agent}`} className="text-primary hover:underline">
+                        {agentNames[commentDraft.agent] ?? commentDraft.agent}
+                      </a>
+                      , waiting for your decision.
+                      {commentDraft.edited && " Edited by you."}
+                    </span>
+                    <a href={`#/inbox/${commentDraft.id}`} className="ml-auto text-primary hover:underline">
+                      Open in the Inbox
+                    </a>
+                  </div>
+                  <Textarea
+                    className="max-h-60 min-h-20 bg-background"
+                    value={draftText}
+                    onChange={(event) => setEdits((current) => ({ ...current, [commentDraft.id]: event.target.value }))}
+                  />
+                  <Textarea
+                    placeholder="A note for the agent (optional for Approve and Reject; needed for Discuss and Redraft)."
+                    className="max-h-32 min-h-10 bg-background"
+                    value={note}
+                    onChange={(event) => setNotes((current) => ({ ...current, [commentDraft.id]: event.target.value }))}
+                  />
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">
+                      {connected
+                        ? `Approve posts it on GitHub as @${account?.login}, after you confirm; the agent is told, with your note.`
+                        : "Approve sends nothing to GitHub; the agent is told, with your note."}
+                    </span>
+                    <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                      <Button variant="outline" size="sm" disabled={busy !== ""} onClick={() => decide(commentDraft, "reject", false)}>
+                        {busy === "reject" ? <Loader2 className="animate-spin" /> : <X />} Reject
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busy !== "" || note.trim() === "" || !(commentDraft.agent in agentNames)}
+                        onClick={() => discuss(commentDraft)}
+                      >
+                        {busy === "discuss" ? <Loader2 className="animate-spin" /> : <MessagesSquare />} Discuss
+                      </Button>
+                      <Button variant="outline" size="sm" disabled={busy !== "" || note.trim() === ""} onClick={() => decide(commentDraft, "reply", false)}>
+                        {busy === "reply" ? <Loader2 className="animate-spin" /> : <RotateCcw />} Redraft
+                      </Button>
+                      <Button
+                        size="sm"
+                        disabled={busy !== "" || draftText.trim() === ""}
+                        onClick={() => {
+                          if (account !== null && account.connected) {
+                            ask({
+                              title: `Post this comment as @${account.login}?`,
+                              text: `It is posted on ${props.id}, with the text shown here. Anyone can see it. You can edit or delete it on GitHub later.`,
+                              label: "Post comment",
+                              destructive: false,
+                              action: "approve",
+                              path: "",
+                            });
+                          } else {
+                            decide(commentDraft, "approve", false);
+                          }
+                        }}
+                      >
+                        {busy === "approve" || busy === "send" ? <Loader2 className="animate-spin" /> : <Check />}
+                        {busy === "send" ? "Posting…" : "Approve"}
+                      </Button>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {commentDraft === undefined && account !== null && !account.connected && (
                 <div className="text-xs text-muted-foreground">
                   To comment here as you,{" "}
                   <a href="#/github/account" className="text-primary hover:underline">
@@ -917,7 +1097,7 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
                   .
                 </div>
               )}
-              {connected && (
+              {commentDraft === undefined && connected && (
                 <>
                   <Textarea
                     placeholder="Leave a comment. Ctrl+Enter posts it, after you confirm."

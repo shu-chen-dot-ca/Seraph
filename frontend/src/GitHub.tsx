@@ -20,9 +20,10 @@ last changed, and in plain words where it stands:
   "You commented" when it is someone else's PR you commented on.
 Each issue row: the state (open, closed as completed, closed as not planned), the title, the repo and number, its
 labels, "You opened it" or "You commented", how many comments and who wrote the latest, and when it last changed.
-On both: the agent following it (a robot and its name) when its agent drafts replies and fixes there for you to approve.
+On both: "Draft waiting" when a draft for it waits in the Inbox for your decision, and the agent following it (a robot
+and its name) when its agent drafts replies and fixes there for you to approve.
 A click on a row opens it in a pop-up (ThreadDialog.tsx; the address gets open=owner/name%23n, keeping the repo and
-tab): all of it as on GitHub, where you comment and set its agent. The X, Esc or a click
+tab): all of it as on GitHub, where you comment, approve a waiting draft and set its agent. The X, Esc or a click
 outside closes it, back to the list.
 
 Account: your GitHub account, the one Approve in the Inbox sends PRs and comments as, and Comment in the pop-up
@@ -149,6 +150,19 @@ export default function GitHub(props: { section: string; repo: string | null; st
   const agentNames: Record<string, string> = {};
   for (const agent of agents) {
     agentNames[agent.id] = agent.name;
+  }
+  // The PRs and issues a draft waits for in the Inbox (a reply to one, or a new version of a PR).
+  const waiting: string[] = [];
+  for (const draft of inbox) {
+    if (draft.status !== "pending") {
+      continue;
+    }
+    if (draft.target !== null) {
+      waiting.push(draft.target);
+    }
+    if (draft.update_of !== null) {
+      waiting.push(draft.update_of);
+    }
   }
   // The forks Approve sent PRs from, once each.
   const forks: string[] = [];
@@ -325,6 +339,7 @@ export default function GitHub(props: { section: string; repo: string | null; st
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="truncate font-medium">{pr.title}</span>
+                    {waiting.includes(pr.id) && <Badge className="py-0">Draft waiting</Badge>}
                     <span className="ml-auto shrink-0 text-xs text-muted-foreground">
                       {pr.state === "merged" && pr.closed_at !== null ? `merged ${since(pr.closed_at, now)} ago` : `updated ${since(pr.updated_at, now)} ago`}
                     </span>
@@ -382,6 +397,7 @@ export default function GitHub(props: { section: string; repo: string | null; st
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="truncate font-medium">{issue.title}</span>
+                    {waiting.includes(issue.id) && <Badge className="py-0">Draft waiting</Badge>}
                     <span className="ml-auto shrink-0 text-xs text-muted-foreground">
                       {issue.state === "closed" && issue.closed_at !== null ? `closed ${since(issue.closed_at, now)} ago` : `updated ${since(issue.updated_at, now)} ago`}
                     </span>
