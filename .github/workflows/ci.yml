@@ -1,19 +1,17 @@
-# Runs on every push to main and on every pull request. Two jobs, side by side:
+# Runs on every pull request, not on pushes. Two jobs, side by side:
 # - Frontend: npm run build, which type-checks every .tsx file (npm run dev doesn't) and then builds.
 # - Python: every file under github_searcher/, sandbox/ and backend/ must compile, and the tests in tests/ must pass.
 # Nothing here needs GitHub tokens, Incus, a GPU or the agent's login: the tests only cover what runs without them.
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
 
 # Only read the code: this workflow never writes to the repository.
 permissions:
   contents: read
 
-# A newer push to the same branch cancels the run still going for the older one.
+# A newer push to the same pull request cancels the run still going for the older one.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
