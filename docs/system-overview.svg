@@ -56,7 +56,7 @@
 <text x="56" y="292" class="h" text-anchor="start">React app</text>
 <text x="56" y="312" class="s" text-anchor="start">Explore · Repos · Tracked</text>
 <text x="56" y="330" class="s" text-anchor="start">Issues · Jobs · Agents</text>
-<text x="56" y="348" class="s" text-anchor="start">VMs · Inbox · Sherpa</text>
+<text x="56" y="348" class="s" text-anchor="start">VMs · Inbox</text>
 <text x="56" y="366" class="m" text-anchor="start">Tailwind · shadcn/ui</text>
 <rect class="card-shadow" x="40" y="520" width="200" height="56" rx="9"/>
 <rect class="c-browser" x="40" y="518" width="200" height="56" rx="9" stroke-width="1.3"/>

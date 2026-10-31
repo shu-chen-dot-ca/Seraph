@@ -46,11 +46,12 @@ It searches GitHub for projects that fit you and welcome outside contributors, t
 - **The project's own rules.** Before it sets anything up, the agent gathers the project's rules for contributors wherever they are: CONTRIBUTING in any folder, developer guides in its docs, the PR template, AGENTS.md, and guides the README links to on the project's website. It follows all of them, and writes the PR from those rules and the project's recently merged PRs.
 - **Proof before a PR.** Whatever the project's rules ask to run before a PR (or else the tests that cover the change) must pass on the unchanged code and again after the fix, with the same command, however long it takes. A PR draft is refused without before-and-after evidence: real screenshots of the project running, screen recordings, or command runs, never charts or pictures the agent drew. The fix is the agent's own: it never builds on someone else's fix, and no PR credits a co-author.
 - **One Inbox for every decision.** A plain-words overview, the evidence side by side, the diff and the PR message. **Approve** (it sends the PR from your GitHub account, once you confirm), **Edit** the text first, **Redraft** (the agent applies your note and drafts again), **Discuss** it with the agent in its chat, or **Reject**. If someone else takes an issue while an agent works on it (the app checks every 5 minutes), the Inbox asks you whether the agent keeps working or stops.
-- **Your GitHub in one place.** The header has two tabs: Home (finding and doing the work) and GitHub, your mission control. The GitHub tab opens on an Overview of everything that waits for you, and holds the Inbox, your GitHub notifications, your pull requests and your issues on other people's projects (sent from the app or by hand, and ones you commented on), Tasks (every piece of work by repo and how far it got, from issue to agent to draft to PR to merged, with a link to each part), your own repositories (public and private), the repos you starred, and your account. It checks GitHub every few minutes. Open a PR or issue to see all of it, like on GitHub: the conversation with reviews and their code comments, commits, checks and files changed. Comment there as yourself, delete your comments, close or reopen your PR, or delete a finished PR's branch from your fork; each asks you first.
-- **Your own repositories and stars.** Every repo you can push to, public and private, and every repo you starred has its page on the GitHub tab: its README and latest commits, its issues, pull requests and GitHub Actions runs, and Star or Unstar. Open an issue there; in your own, review, merge, close, label, assign or edit like a maintainer, or re-run failed checks; each asks you first.
+- **Your GitHub in one place.** The header has three tabs: Home (finding and doing the work), GitHub, your mission control, and Workspace (below). The GitHub tab opens on an Overview of everything that waits for you, and holds the Inbox, your GitHub notifications, your pull requests and your issues on other people's projects (sent from the app or by hand, and ones you commented on), Tasks (every piece of work by repo and how far it got, from issue to agent to draft to PR to merged, with a link to each part), your own repositories (public and private), the repos you starred, and your account. It checks GitHub every few minutes. Open a PR or issue to see all of it, like on GitHub: the conversation with reviews and their code comments, commits, checks and files changed. Comment there as yourself, delete your comments, close or reopen your PR, or delete a finished PR's branch from your fork; each asks you first.
+- **Your own repositories and stars.** Every repo you can push to, public and private, and every repo you starred has its page on the GitHub tab and on Workspace's Home, like on GitHub: its files (open any to read it) and README, its issues, pull requests, commits and GitHub Actions runs, and Star or Unstar. A page you opened before opens at once: its tabs are kept on this computer and read from GitHub again every 15 minutes (Refresh reads them now). Open an issue there; in your own, review, merge, close, label, assign or edit like a maintainer, or re-run failed checks; each asks you first.
 - **Agents follow up, you decide.** Each PR or issue has an agent setting: **Drafts** or **Off**. With Drafts, when someone else writes there or the checks fail, its agent drafts a reply, or new commits for your PR, and you approve, edit, redraft, discuss or reject it in the Inbox. An approved fix is pushed onto the same PR. Nothing is ever posted without you.
-- **Sherpa, the built-in guide.** The round button at the bottom right of every page. Ask how something works, or ask it to do it: it sees the page you are on and opens pages, clicks and fills in fields while you watch. Its chats are kept.
+- **Workspace, the new layout.** The third tab opens on Home: your repositories and stars as cards in a column, like the chats in a chat app, and the open one's page next to them, like on GitHub (files, README, issues, pull requests, commits, Actions). Then the open-source pages and the machines. On a phone its left list turns into a thin column of icons, and Home shows the cards or the open repo. Nothing behind it is new: the same agents, jobs, VMs and Inbox.
 - **This computer at a glance.** The Resource page shows CPU, memory, GPUs, disk, network and battery, and what each running VM takes.
+- **From your phone, or anywhere.** Open the same app at your own address, signed in with a passkey (Face ID, Touch ID or Windows Hello). A small server you rent passes the encrypted traffic through to this computer, which dials out to it, so any network works and the server never sees inside. Add a device in Settings → Remote access by scanning a QR code. Setup: [remote_access/README.md](remote_access/README.md).
 - **Fast UI.** Two tabs with a Proxmox-style sidebar each, and one websocket with no polling. Long lists render only the rows on screen. Light and dark themes with an accent color, and env vars for all VMs, live in Settings.
 - **Rate limits handled.** GitHub requests are spread over as many tokens as you give it, paced, and retried when a rate limit clears.
 
@@ -135,8 +136,6 @@ Open **http://localhost:5173**. Then:
 6. **GitHub → Account.** Sign in with GitHub, so Approve can open PRs as you.
 7. Decide on its drafts in **GitHub → Inbox**.
 
-Stuck anywhere? Ask Sherpa, the round button at the bottom right.
-
 ## Configuration
 
 Everything is set in `.env`; [.env.example](.env.example) lists every option.
@@ -145,7 +144,7 @@ Everything is set in `.env`; [.env.example](.env.example) lists every option.
 |---|---|---|
 | `GITHUB_TOKEN`, `GITHUB_TOKEN_2`, … | | GitHub tokens; requests are spread over all of them |
 | `CLAUDE_CODE_OAUTH_TOKEN` | | Claude Code token (`claude setup-token`) |
-| `CLAUDE_MODEL` | `claude-opus-5-5[1m]` | The model every agent and Sherpa use |
+| `CLAUDE_MODEL` | `claude-opus-5-5[1m]` | The model every agent uses |
 | `AGENT_CONTEXT_CAP` | `500000` | Tokens a conversation holds before it's compacted |
 | `BACKEND_PORT` | `8001` | Backend port (the UI is served by Vite on 5173) |
 | `DATA_DIR` | `data` | Where lists, jobs, drafts, agents and VM records are kept |
@@ -154,6 +153,8 @@ Everything is set in `.env`; [.env.example](.env.example) lists every option.
 | `SANDBOX_MEMORY_GB_ALLOWED` | `4,8,16` | Memory sizes offered for a VM |
 | `SANDBOX_MIN_FREE_RAM_GB` | `8` | RAM always left free for the host |
 | `SANDBOX_BUILD_MEMORY` | `8GiB` | Memory of each image build; several build at once while memory allows |
+| `REMOTE_ACCESS_DOMAIN` | | Your address for opening the app from other devices; empty means this computer only |
+| `REMOTE_ACCESS_SERVER` | | The forwarder's address (the small server this computer keeps an SSH connection to) |
 
 ## Safety
 
@@ -161,11 +162,11 @@ Everything is set in `.env`; [.env.example](.env.example) lists every option.
   <img src="docs/trust-boundaries.svg" alt="Trust boundaries: tokens stay on the host, Claude Code has no host tools, VMs can't reach the host or LAN, only what you approve is posted to GitHub" width="100%">
 </p>
 
-- **Only what you approve is posted to GitHub.** Agents read GitHub only. A PR or comment is a draft until you approve it and confirm; then the app sends exactly that draft as you, the account you signed in with. Your sign-in stays on this computer (`data/`): agents, Sherpa and the VMs never get it, and searches don't use it.
+- **Only what you approve is posted to GitHub.** Agents read GitHub only. A PR or comment is a draft until you approve it and confirm; then the app sends exactly that draft as you, the account you signed in with. Your sign-in stays on this computer (`data/`): agents and the VMs never get it, and searches don't use it.
 - **Agents can't touch your machine.** Each agent is a Claude Code process whose only built-in tool is a todo list. Its other tools run in the backend and act on GitHub (read only), the app's lists, or the VM it holds. Copying files between this computer and a VM is yours alone: agents have no tool for it.
 - **Tokens never enter a VM.** VM secrets you set yourself reach commands in that VM, but the agent sees only their names: values show as `[hidden]` in output, and a diff that contains one is refused.
-- **VMs are fenced off.** They reach the internet but not this machine or your LAN, and their internet can be turned off. The API answers only pages on localhost.
-- **Sherpa is fenced too.** It reads only the app's screens, docs and the descriptions at the top of its Python files, never `data/` or `.env`, and GitHub read-only. It never answers an "are you sure?" pop-up for you, except deleting an image you asked it to delete.
+- **VMs are fenced off.** They reach the internet but not this machine or your LAN, and their internet can be turned off. The API answers only pages on localhost, and with remote access set up, pages at your own address signed in with a passkey.
+- **Remote access is yours alone.** Every request through your address needs a passkey sign-in, and devices are added only on this computer. The forwarder only passes encrypted traffic: the certificate and every key stay on this computer (`data/remote_access/`).
 
 ## Architecture
 
@@ -180,11 +181,12 @@ Everything is set in `.env`; [.env.example](.env.example) lists every option.
 ```text
 backend/          FastAPI app: one router per page, and the /api/live websocket
 frontend/         React + Vite + Tailwind + shadcn/ui
-github_searcher/  lists, Explore, jobs, inbox, sending as your GitHub account, following your PRs, your repositories, notifications, the agents manager, Sherpa, GitHub reads, token balancer
+github_searcher/  lists, Explore, jobs, inbox, sending as your GitHub account, following your PRs, your repositories, notifications, the agents manager, GitHub reads, token balancer
   agent/          one agent: its Claude conversation, system prompt and tools
 sandbox/          Incus VMs, the VM queue, images, the agent's VM tools, and this computer's use
   image/          what every image gets (base_layer.sh), and listing what an image has (inspect.sh, inventory.py)
 docs/             architecture and diagrams
+remote_access/    opening the app from other devices: Caddy's config, the SSH tunnel, the one-time setup
 data/             runtime state, not in git
 ```
 

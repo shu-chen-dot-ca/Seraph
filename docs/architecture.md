@@ -57,6 +57,20 @@ The diagrams are SVG files in this folder and follow your light or dark theme.
 
 ![Trust boundaries between your browser, the host, a VM and the internet; green lines are allowed, red crossed lines are blocked.](trust-boundaries.svg)
 
-- The GitHub and Claude tokens stay on the host. They never enter a VM. Agents, Sherpa and searches read GitHub with the search tokens only. Your account's token (from Sign in with GitHub, kept in `data/github_account.json`, readable by you only) sends what you approve and does what you click on the GitHub tab, and reads only what the GitHub tab shows you of your own repositories and notifications; the browser, agents and Sherpa never get it.
+- The GitHub and Claude tokens stay on the host. They never enter a VM. Agents and searches read GitHub with the search tokens only. Your account's token (from Sign in with GitHub, kept in `data/github_account.json`, readable by you only) sends what you approve and does what you click on the GitHub tab, and reads only what the GitHub tab shows you of your own repositories and notifications; the browser and agents never get it.
 - A VM's own secrets (set in its Settings tab) reach commands in the VM. The agent sees only their names: any value that shows up in output reads `[hidden]`, and a PR diff that contains one is refused.
 - A VM can reach the internet but not this machine or the LAN. The API answers only pages on localhost, so a VM's desktop page gets 403.
+
+## Remote access
+
+Once it is set up ([remote_access/README.md](../remote_access/README.md)), the app also opens at your own address, from any device:
+
+```text
+device ──► your address ──► forwarder ◄── SSH, opened from this computer ──► Caddy (127.0.0.1) ──┬─► /api/* : backend
+                            (small server,                                   holds the            └─► the rest: Vite, after
+                             only SSH)                                       certificate                GET /api/remote_access/check
+```
+
+- The forwarder passes the address's ports 443 and 80 back through the SSH connection that this computer keeps open. TLS ends at Caddy on this computer, so the forwarder sees only encrypted traffic. Its tunnel key may open those two ports and nothing else.
+- Every request through the address needs a passkey session: the backend checks every API call and the live websocket (a request counts as through the address when its Host is the address or it carries X-Forwarded-For, which Caddy adds), and Caddy asks it before passing on the app's own files. Only the Sign in and Add this device pages are open.
+- Devices are added only on this computer, with a one-time link (Settings → Remote access → Add a device). Remove signs a device out at once, including its open live feed. The passkeys' public keys and the sessions (only their hashes) are in `data/remote_access.json`. The tunnel key, the server's fingerprint and the certificate are in `data/remote_access/`.
