@@ -43,7 +43,8 @@ After each turn the worker enforces the VM rule: an agent never holds a VM it ha
 - Holding one with open jobs there: it is reminded to go on with them now, not to wait for an answer in chat. After
   MAX_NUDGES reminders in a row with no change to its jobs, the VM is released for it.
 - In no queue but with queued jobs for a VM: it is reminded to queue_for_vm (MAX_NUDGES times at most).
-The VM queue (sandbox/vm_queue.py) tells Agents when an agent's turn comes (on_grant: a message
+The VM queue (sandbox/vm_queue.py: one line per desktop of each VM, and agents on different desktops work at
+the same time) tells Agents when an agent's turn comes (on_grant: a message
 that wakes it, with the VM's notes on what earlier agents set up in it, or the VM passes on at once
 if it has no open jobs there anymore) and when the
 user took the VM or its place away (on_kick: it is interrupted, and what it still ran in that
@@ -113,7 +114,8 @@ DATA_DIR = PROJECT_ROOT / os.environ["DATA_DIR"]
 MAX_NUDGES = 2
 # The user's messages that may wait for their turn at once.
 MAX_QUEUED = 10
-# The VM's demo service (sandbox/image/base_layer.sh) runs DEMO_DIR/run.sh and keeps it running, also after a restart.
+# Desktop 1's demo service (sandbox/image/base_layer.sh) runs DEMO_DIR/run.sh and keeps it running, also after a
+# restart. Desktop n has its own, demo-<n> with /opt/demo-<n>/run.sh (sandbox/vm.py).
 DEMO_DIR = os.environ["SANDBOX_VM_DEMO_DIR"]
 # While an agent works, its record is saved this often (and after every turn).
 SAVE_SECONDS = 5
@@ -187,7 +189,10 @@ class Agents:
 
         # The queues are saved with the VMs: take out agents whose record is gone.
         for vm_record in self.vms.list():
-            for agent_id in [vm_record.holder] + list(vm_record.priority) + list(vm_record.queue):
+            waiting = list(vm_record.queue)
+            for line in vm_record.desktops:
+                waiting += [line["holder"]] + list(line["priority"])
+            for agent_id in waiting:
                 if agent_id is None or agent_id == "user" or agent_id in self.agents:
                     continue
                 self.queue.leave_all(agent_id)
@@ -388,9 +393,13 @@ class Agents:
             if place is not None and place > 0:
                 status = "in_queue"
             # In a VM's priority line: it stepped aside while its run goes, and gets the VM back first.
+            desktop = None
             for vm_record in self.vms.list():
-                if agent.id in vm_record.priority:
-                    status = "in_priority"
+                if vm_record.name == vm_name:
+                    desktop = vm_record.desktop_of(agent.id)
+                for line in vm_record.desktops:
+                    if agent.id in line["priority"]:
+                        status = "in_priority"
             if place == 0:
                 status = "using_vm"
             # The last thing it did, for the one-line activity column.
@@ -418,6 +427,8 @@ class Agents:
                     "status": status,
                     "busy": agent.busy,
                     "vm": vm_name,
+                    # The desktop of that VM it holds, stepped aside from or asked for (None: it waits for any).
+                    "desktop": desktop,
                     "place": place,
                     "context_used": agent.context_used,
                     "context_max": agent.context_max,
@@ -779,8 +790,9 @@ class Agents:
             "\nRead its README and docs first. If it has a clear frontend, set it up the way they say and leave it running on "
             "the desktop; if it is a library or other low-level building block, clone it and open it in VS Code. Either way, "
             "end with a short introduction to the repo (see Setting up a repo)."
-            f"\nA server you leave running goes in the VM's demo service: its start command in {DEMO_DIR}/run.sh, then "
-            "`sudo systemctl enable demo` and `sudo systemctl restart demo` (logs: `journalctl -u demo`)."
+            f"\nA server you leave running goes in your desktop's demo service. On desktop 1: its start command in "
+            f"{DEMO_DIR}/run.sh, then `sudo systemctl enable demo` and `sudo systemctl restart demo` (logs: "
+            "`journalctl -u demo`). On desktop n: the same with /opt/demo-n/run.sh and the service demo-n."
         )
         if instructions:
             text += f"\nInstructions from the user: {instructions}"
@@ -999,17 +1011,21 @@ class Agents:
         jobs = [job for job in self.jobs.for_agent(agent_id) if job["status"] in OPEN_STATUSES and job["vm"] == vm_name]
         if jobs:
             titles = ", ".join(f"{job['id']} ({job['title']})" for job in jobs)
-            text = f"{vm_name} is yours now. Your open jobs for it: {titles}. Do them all, then release_vm."
             # Its notes come with it, so the agent always knows what earlier agents left in it.
             try:
-                notes = self.vms.get(vm_name).notes
+                vm_record = self.vms.get(vm_name)
+                notes = vm_record.notes
+                desktop = vm_record.holding(agent_id)
             except VMsError:
                 notes = []
+                desktop = None
+            text = f"Desktop {desktop} of {vm_name} is yours now. Your open jobs for it: {titles}. Do them all, then release_vm."
             if notes:
                 text += "\nIts notes (check what is really there before you rely on them):"
                 for note in notes:
                     by = self.agents[note["by"]].name if note["by"] in self.agents else note["by"]
-                    text += f"\n- {note['id']} by {by}, {note['at'][:10]}: {note['text']}"
+                    on = f", on desktop {note['desktop']}" if "desktop" in note else ""
+                    text += f"\n- {note['id']} by {by}, {note['at'][:10]}{on}: {note['text']}"
             else:
                 text += "\nIt has no notes yet: nobody wrote down what is set up in it."
             self.notify(agent_id, text)
@@ -1061,7 +1077,7 @@ class Agents:
         else:
             text = f"Your run {run['id']} in {vm_record.name} ended: `{run['label'][:200]}`, " + agent.computer_tools.bash_result(vm_record, run, ended)
         agent.history.append({"type": "system", "text": f"Its run in {vm_record.name} ended: {run['label'][:120]}", "time": datetime.now(UTC).isoformat()})
-        if agent.id not in vm_record.priority:
+        if not [line for line in vm_record.desktops if agent.id in line["priority"]]:
             self.notify(agent.id, text)
             return
         text += f"\nYou get {vm_record.name} back first, with a message, as soon as it is free; until then end your turn."

@@ -569,17 +569,18 @@ class WorkTools:
             )(self.evidence_remove),
             tool(
                 "vms_list",
-                "See every VM: whether it runs, CPU, memory and disk, who holds it and how many wait, what it started "
-                "with (the OS, languages, tools, ready-made Docker images and models of its image), and its notes: what agents "
-                "and the user set up in it since (a project cloned and built, a service configured, what was added on top), "
-                "oldest first, each with who wrote it and when. Use it to pick the VM that suits your jobs (choose_vm). "
-                "You can't make VMs; only the user can.",
+                "See every VM: whether it runs, CPU, memory and disk, its desktops (who holds each), how many wait, "
+                "what it started with (the OS, languages, tools, ready-made Docker images and models of its image), and its "
+                "notes: what agents and the user set up in it since (a project cloned and built, a service configured, what "
+                "was added on top), oldest first, each with who wrote it, when, and on which desktop. Use it to pick the VM "
+                "that suits your jobs (choose_vm). You can't make VMs; only the user can.",
                 {},
             )(self.vms_list),
             tool(
                 "vm_note_add",
                 "Add a note to the VM you hold, for the next agent that picks it or works in it: what is set up in it now and "
-                "how it differs from a plain set-up. One thing per note, e.g. 'openclaw in ~/openclaw: pnpm install and build "
+                "how it differs from a plain set-up. It is marked with your desktop, since ~ is that desktop's own home. "
+                "One thing per note, e.g. 'openclaw in ~/openclaw: pnpm install and build "
                 "done, on main at 3f2a1c9 (Oct 27). Added the matrix plugin and turned on debug logs in ~/.openclaw for issue "
                 "4120.' Facts that stay true, not a diary. Never a secret.",
                 {"text": str},
@@ -605,13 +606,16 @@ class WorkTools:
             )(self.image_packages),
             tool(
                 "queue_for_vm",
-                "Join your target VM's queue to work in it. Either it is yours at once, or you get your place in line: then end your "
-                "turn, and you get a message when it is yours (even while the VM is off, you keep your place).",
-                {},
+                "Join your target VM's queue to work in it, on one of its desktops: each has its own screen, mouse, keyboard and "
+                "home folder, and agents on different desktops work at the same time. Either a desktop is yours at once, or you "
+                "get your place in the VM's line: then end your turn, and you get a message when it is yours (even while the VM is "
+                "off, you keep your place). desktop: the one to work on, e.g. where your project is already set up (the notes "
+                "say which desktop); leave it out to get any desktop, the first one free.",
+                {"type": "object", "properties": {"desktop": {"type": "integer"}}, "required": []},
             )(self.queue_for_vm),
             tool(
                 "release_vm",
-                "Give your VM back so the next agent in line can use it. Do it as soon as your jobs for it are done or waiting on the user. "
+                "Give your VM's desktop back so the next agent in line can use it. Do it as soon as your jobs for it are done or waiting on the user. "
                 "While you wait in a VM's queue, it takes you out of the queue instead (e.g. when your jobs there were cancelled). "
                 "Not while you wait on a run you need the result of: then just end your turn, and the app lets the next agent "
                 "in and gives the VM back to you first once the run is over.",
@@ -619,7 +623,7 @@ class WorkTools:
             )(self.release_vm),
             tool(
                 "vm_queue_status",
-                "See your target VM, whether it is running, who holds it, who waits for it, and your own place.",
+                "See your target VM, whether it is running, who holds and waits for each of its desktops, and your own place.",
                 {},
             )(self.vm_queue_status),
         ]
@@ -708,6 +712,8 @@ class WorkTools:
             return f"Chose {args.get('name')}: {args.get('reason')}"
         if name == "image_packages":
             return f"Searched {args.get('vm')}'s image for `{args.get('search')}`"
+        if name == "queue_for_vm" and args.get("desktop"):
+            return f"Queuing for desktop {args.get('desktop')} of {self.record['target_vm']}"
         if name == "queue_for_vm":
             return f"Queuing for {self.record['target_vm']}"
         if name == "release_vm":
@@ -1376,10 +1382,13 @@ class WorkTools:
             vm_record = self.agents.vms.get(vm_name)
         except VMsError as error:
             return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
-        if vm_record.holder != self.agent_id:
+        desktop = vm_record.holding(self.agent_id)
+        if desktop is None:
             text = "You don't hold a VM. Call queue_for_vm and wait for the message that it is yours."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
-        computer = Computer(vm_record.vm, f"sandbox-agent-{self.agent_id}")
+        # The desktop it holds: commands run as its user, in its home folder.
+        vm = vm_record.desktop_vm(desktop)
+        computer = Computer(vm, f"sandbox-agent-{self.agent_id}")
         try:
             await asyncio.to_thread(computer.check)
             data = await asyncio.to_thread(computer.screenshot, EVIDENCE_QUALITY, region)
@@ -1403,15 +1412,18 @@ class WorkTools:
             vm_record = self.agents.vms.get(vm_name)
         except VMsError as error:
             return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
-        if vm_record.holder != self.agent_id:
+        desktop = vm_record.holding(self.agent_id)
+        if desktop is None:
             text = "You don't hold a VM. Call queue_for_vm and wait for the message that it is yours."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
+        # The desktop it holds: commands run as its user, in its home folder.
+        vm = vm_record.desktop_vm(desktop)
         # Commands run in the home folder, so ~/x and x are the same; the copy needs the full path.
-        where = await asyncio.to_thread(vm_record.vm.exec, f"realpath -e -- {shlex.quote(source.removeprefix('~/'))}", 30)
+        where = await asyncio.to_thread(vm.exec, f"realpath -e -- {shlex.quote(source.removeprefix('~/'))}", 30)
         if where.returncode != 0:
             return {"content": [{"type": "text", "text": f"{source} is not in the VM."}], "is_error": True}
         try:
-            saved = await asyncio.to_thread(self.agents.artifacts.from_vm, self.agent_id, vm_record.vm, where.stdout.strip(), args.get("folder") or "")
+            saved = await asyncio.to_thread(self.agents.artifacts.from_vm, self.agent_id, vm, where.stdout.strip(), args.get("folder") or "")
         except (ArtifactsError, FileTransferError) as error:
             return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
         return {"content": [{"type": "text", "text": f"Copied into your artifacts as {saved}."}]}
@@ -1425,9 +1437,12 @@ class WorkTools:
             vm_record = self.agents.vms.get(vm_name)
         except VMsError as error:
             return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
-        if vm_record.holder != self.agent_id:
+        desktop = vm_record.holding(self.agent_id)
+        if desktop is None:
             text = "You don't hold a VM. Call queue_for_vm and wait for the message that it is yours."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
+        # The desktop it holds: commands run as its user, in its home folder.
+        vm = vm_record.desktop_vm(desktop)
         try:
             source = self.agents.artifacts.resolve(self.agent_id, path)
             # A link would be followed by the copy and could take a file of this computer into the VM.
@@ -1439,11 +1454,11 @@ class WorkTools:
         if links:
             return {"content": [{"type": "text", "text": f"{path} has links in it, which can't be copied."}], "is_error": True}
         folder = (args.get("folder") or "").strip().removeprefix("~/")
-        where = await asyncio.to_thread(vm_record.vm.exec, f"realpath -e -- {shlex.quote(folder or '.')}", 30)
+        where = await asyncio.to_thread(vm.exec, f"realpath -e -- {shlex.quote(folder or '.')}", 30)
         if where.returncode != 0:
             return {"content": [{"type": "text", "text": f"{args.get('folder')} is not a folder in the VM."}], "is_error": True}
         try:
-            await asyncio.to_thread(to_vm, vm_record.vm, str(source), where.stdout.strip())
+            await asyncio.to_thread(to_vm, vm, str(source), where.stdout.strip())
         except FileTransferError as error:
             return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
         return {"content": [{"type": "text", "text": f"Copied into the VM as {where.stdout.strip()}/{source.name}."}]}
@@ -1763,15 +1778,18 @@ class WorkTools:
             vm_record = self.agents.vms.get(vm_name)
         except VMsError as error:
             return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
-        if vm_record.holder != self.agent_id:
+        desktop = vm_record.holding(self.agent_id)
+        if desktop is None:
             text = "You don't hold a VM. Call queue_for_vm and wait for the message that it is yours."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
+        # The desktop it holds: commands run as its user, in its home folder.
+        vm = vm_record.desktop_vm(desktop)
 
         # Commands run in the user's home, so ~/click and click are the same folder.
         folder = shlex.quote(args["path"].strip().removeprefix("~/"))
         base = shlex.quote(args["base"].strip())
         try:
-            result = await asyncio.to_thread(vm_record.vm.exec, f"cd {folder} && pwd && git rev-parse --abbrev-ref HEAD", 60)
+            result = await asyncio.to_thread(vm.exec, f"cd {folder} && pwd && git rev-parse --abbrev-ref HEAD", 60)
         except Exception as error:
             return {"content": [{"type": "text", "text": f"Could not reach the VM: {error}"}], "is_error": True}
         if result.returncode != 0:
@@ -1793,7 +1811,7 @@ class WorkTools:
             '[ -z "$f" ] || { echo "$f"; cat "$f"; }'
         )
         try:
-            result = await asyncio.to_thread(vm_record.vm.exec, command, 60)
+            result = await asyncio.to_thread(vm.exec, command, 60)
         except Exception as error:
             return {"content": [{"type": "text", "text": f"Could not reach the VM: {error}"}], "is_error": True}
         template = None
@@ -1823,7 +1841,7 @@ class WorkTools:
         # inside the VM (one byte over the limit is enough to tell), so it never fills this machine's memory.
         command = f"set -o pipefail; cd {folder} && git add -A -N . && git diff {base} | head -c {DIFF_LIMIT + 1}"
         try:
-            result = await asyncio.to_thread(vm_record.vm.exec, command, 120)
+            result = await asyncio.to_thread(vm.exec, command, 120)
         except Exception as error:
             return {"content": [{"type": "text", "text": f"Could not reach the VM: {error}"}], "is_error": True}
         diff = result.stdout
@@ -1898,7 +1916,7 @@ class WorkTools:
         # The commit the diff starts from, as it is now: sending the PR builds it on that commit (github_account.py),
         # wherever the base moves later.
         try:
-            result = await asyncio.to_thread(vm_record.vm.exec, f"cd {folder} && git rev-parse --verify {base}^{{commit}}", 60)
+            result = await asyncio.to_thread(vm.exec, f"cd {folder} && git rev-parse --verify {base}^{{commit}}", 60)
         except Exception as error:
             return {"content": [{"type": "text", "text": f"Could not reach the VM: {error}"}], "is_error": True}
         base_sha = result.stdout.strip()
@@ -1934,7 +1952,7 @@ class WorkTools:
             f"git log --format=%ae%x1f%an%x1f%h%x1f%s {base}..HEAD"
         )
         try:
-            result = await asyncio.to_thread(vm_record.vm.exec, command, 60)
+            result = await asyncio.to_thread(vm.exec, command, 60)
         except Exception as error:
             return {"content": [{"type": "text", "text": f"Could not reach the VM: {error}"}], "is_error": True}
         if result.returncode != 0:
@@ -1967,7 +1985,7 @@ class WorkTools:
             f"git log --reverse -p --format=%x1e%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%B%x1f {base}..HEAD | head -c {DIFF_LIMIT + 1}"
         )
         try:
-            result = await asyncio.to_thread(vm_record.vm.exec, command, 120)
+            result = await asyncio.to_thread(vm.exec, command, 120)
         except Exception as error:
             return {"content": [{"type": "text", "text": f"Could not reach the VM: {error}"}], "is_error": True}
         commits = []
@@ -2089,9 +2107,12 @@ class WorkTools:
             vm_record = self.agents.vms.get(vm_name)
         except VMsError as error:
             return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
-        if vm_record.holder != self.agent_id:
+        desktop = vm_record.holding(self.agent_id)
+        if desktop is None:
             text = "You don't hold a VM. Call queue_for_vm and wait for the message that it is yours."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
+        # The desktop it holds: commands run as its user, in its home folder.
+        vm = vm_record.desktop_vm(desktop)
 
         # The same tag as the agent's VM tools (ComputerTools), so losing the VM stops these commands too.
         tag = f"sandbox-agent-{self.agent_id}"
@@ -2124,7 +2145,7 @@ class WorkTools:
                 if len(region) != 4 or region[2] <= 0 or region[3] <= 0 or region[0] < 0 or region[1] < 0:
                     return {"content": [{"type": "text", "text": "region is [x, y, width, height], all positive."}], "is_error": True}
                 region = tuple(region)
-            computer = Computer(vm_record.vm, tag)
+            computer = Computer(vm, tag)
             try:
                 await asyncio.to_thread(computer.check)
                 data = await asyncio.to_thread(computer.screenshot, EVIDENCE_QUALITY, region)
@@ -2144,7 +2165,7 @@ class WorkTools:
             # over the limit is enough to tell, and a huge file never fills this machine's memory.
             command = f"set -o pipefail; head -c {IMAGE_LIMIT + 1} {shlex.quote(path.removeprefix('~/'))} | base64 -w0"
             try:
-                result = await asyncio.to_thread(vm_record.vm.exec, command, 60, None, tag)
+                result = await asyncio.to_thread(vm.exec, command, 60, None, tag)
             except subprocess.TimeoutExpired:
                 return {"content": [{"type": "text", "text": "Reading the image took too long."}], "is_error": True}
             if result.returncode != 0:
@@ -2188,7 +2209,7 @@ class WorkTools:
             # stops the command; pipefail makes the exit code the command's. The newline ends a comment on its last line.
             capped = f"set -o pipefail; {{ {command}\n}} 2>&1 | tail -c {OUTPUT_LIMIT}"
             try:
-                result = await asyncio.to_thread(vm_record.vm.exec, capped, 600, None, tag)
+                result = await asyncio.to_thread(vm.exec, capped, 600, None, tag)
             except subprocess.TimeoutExpired:
                 return {"content": [{"type": "text", "text": "The command ran over 10 minutes and was stopped."}], "is_error": True}
             output = result.stdout
@@ -2204,7 +2225,7 @@ class WorkTools:
             data = output.encode()
 
         # The VM may have been taken from it, or the job cancelled, while it ran.
-        if vm_record.holder != self.agent_id:
+        if vm_record.holding(self.agent_id) != desktop:
             return {"content": [{"type": "text", "text": "You lost the VM meanwhile; no evidence was added."}], "is_error": True}
         job = self.agents.jobs.get(job["id"])
         if job["status"] in CLOSED_STATUSES:
@@ -2276,9 +2297,12 @@ class WorkTools:
             vm_record = self.agents.vms.get(vm_name)
         except VMsError as error:
             return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
-        if vm_record.holder != self.agent_id:
+        desktop = vm_record.holding(self.agent_id)
+        if desktop is None:
             text = "You don't hold a VM. Call queue_for_vm and wait for the message that it is yours."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
+        # The desktop it holds: commands run as its user, in its home folder.
+        vm = vm_record.desktop_vm(desktop)
 
         # The diff is read with the tag of the agent's VM tools (ComputerTools), so losing the VM stops that. The suite
         # itself is a run (long_runs.py) with a tag of its own: it goes on when the agent steps aside or loses the VM.
@@ -2290,7 +2314,7 @@ class WorkTools:
         # The code the suite runs on: its diff from base, read exactly the way draft_pr reads it, so the two can be compared.
         diff_command = f"set -o pipefail; cd {folder} && git add -A -N . && git diff {base} | head -c {DIFF_LIMIT + 1}"
         try:
-            result = await asyncio.to_thread(vm_record.vm.exec, diff_command, 120, None, tag)
+            result = await asyncio.to_thread(vm.exec, diff_command, 120, None, tag)
         except Exception as error:
             return {"content": [{"type": "text", "text": f"Could not reach the VM: {error}"}], "is_error": True}
         diff = result.stdout
@@ -2329,7 +2353,7 @@ class WorkTools:
         # would break the VM page's one line.
         label = f"{TESTS_TOPICS[scope].capitalize()}, {'before the change' if when == 'before' else 'with the change'}: {command}"
         try:
-            run = await asyncio.to_thread(long_runs.start, vm_record, self.agent_id, "tests", command, label.replace("\n", " ")[:300], folder)
+            run = await asyncio.to_thread(long_runs.start, vm_record, self.agent_id, desktop, "tests", command, label.replace("\n", " ")[:300], folder)
         except Exception as error:
             return {"content": [{"type": "text", "text": f"Could not start the tests: {error}"}], "is_error": True}
         # What finish_tests needs to keep the result, also after a backend restart.
@@ -2385,7 +2409,8 @@ class WorkTools:
             folder = shlex.quote(run["path"].removeprefix("~/"))
             diff_command = f"set -o pipefail; cd {folder} && git add -A -N . && git diff {shlex.quote(run['base'])} | head -c {DIFF_LIMIT + 1}"
             try:
-                result = await asyncio.to_thread(vm_record.vm.exec, diff_command, 120)
+                # As the user of the desktop the run is on (runs from before desktops were on desktop 1).
+                result = await asyncio.to_thread(vm_record.desktop_vm(run.get("desktop", 1)).exec, diff_command, 120)
             except Exception as error:
                 text = f"Could not reach the VM to check the code the tests ran on ({error}), so the run doesn't count. Run it again."
                 return {"content": [{"type": "text", "text": text}], "is_error": True}
@@ -2487,17 +2512,23 @@ class WorkTools:
             names[agent.id] = agent.name
         vms = []
         for vm_record in self.agents.vms.list():
-            holder = vm_record.holder
-            if holder is not None and holder != "user":
-                holder = names.get(holder, holder)
-            if holder == self.agent_id or holder == names.get(self.agent_id):
-                holder = "you"
+            desktops = []
+            for number, line in enumerate(vm_record.desktops, start=1):
+                holder = line["holder"]
+                if holder == self.agent_id:
+                    holder = "you"
+                if holder is not None and holder not in ["user", "you"]:
+                    holder = names.get(holder, holder)
+                desktops.append({"desktop": number, "holder": holder})
             notes = []
             for note in vm_record.notes:
                 by = names.get(note["by"], note["by"])
                 if note["by"] == self.agent_id:
                     by = "you"
-                notes.append({"id": note["id"], "text": note["text"], "by": by, "at": note["at"][:16]})
+                entry = {"id": note["id"], "text": note["text"], "by": by, "at": note["at"][:16]}
+                if "desktop" in note:
+                    entry["desktop"] = note["desktop"]
+                notes.append(entry)
             entry = {
                 "name": vm_record.name,
                 "status": vm_record.status,
@@ -2505,7 +2536,7 @@ class WorkTools:
                 "memory_gb": vm_record.memory_gb,
                 "disk_gb": vm_record.disk_gb,
                 "internet": vm_record.internet,
-                "holder": holder,
+                "desktops": desktops,
                 "waiting": len(vm_record.queue),
                 "your_target": vm_record.name == self.record["target_vm"],
                 "forked_from": vm_record.forked_from or None,
@@ -2557,23 +2588,26 @@ class WorkTools:
             text = "You have no target VM. Pick the VM that suits your jobs with vms_list and choose_vm, then queue again."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         try:
-            place = self.agents.queue.join(vm_name, self.agent_id)
+            place = self.agents.queue.join(vm_name, self.agent_id, args.get("desktop") or None)
             vm_record = self.agents.vms.get(vm_name)
         except (ValueError, VMsError) as error:
             return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        desktop = vm_record.desktop_of(self.agent_id)
 
-        if place > 0 and self.agent_id in vm_record.priority:
+        if place > 0 and self.agent_id not in vm_record.queue:
             text = (
-                f"You stepped aside from {vm_name} and are number {place} in its priority line: you get it back before the "
-                "agents waiting in its queue, once your run there is over. End your turn; you'll get a message when it's yours."
+                f"You stepped aside from desktop {desktop} of {vm_name} and are number {place} in its priority line: you get it "
+                "back before the agents waiting in its queue, once your run there is over. End your turn; you'll get a message "
+                "when it's yours."
             )
             return {"content": [{"type": "text", "text": text}]}
         if place > 0:
-            text = f"You are number {place} in {vm_name}'s queue. End your turn; you'll get a message when it's yours."
+            which = f"desktop {desktop}" if desktop is not None else "the first desktop that frees up"
+            text = f"You are number {place} in {vm_name}'s queue, for {which}. End your turn; you'll get a message when it's yours."
             return {"content": [{"type": "text", "text": text}]}
         jobs = [job for job in self.agents.jobs.for_agent(self.agent_id) if job["status"] in OPEN_STATUSES and job["vm"] == vm_name]
         titles = ", ".join(f"{job['id']} ({job['title']})" for job in jobs) or "none"
-        text = f"{vm_name} is yours now. Your open jobs for it: {titles}. Do them all, then release_vm."
+        text = f"Desktop {desktop} of {vm_name} is yours now. Your open jobs for it: {titles}. Do them all, then release_vm."
         if vm_record.status != "running":
             text += f" {vm_name} is {vm_record.status}: start it with vm_start."
         # Its notes come with it, so the agent always knows what earlier agents left in it.
@@ -2583,7 +2617,8 @@ class WorkTools:
                 agent_names[agent.id] = agent.name
             text += "\nIts notes (check what is really there before you rely on them):"
             for note in vm_record.notes:
-                text += f"\n- {note['id']} by {agent_names.get(note['by'], note['by'])}, {note['at'][:10]}: {note['text']}"
+                on = f", on desktop {note['desktop']}" if "desktop" in note else ""
+                text += f"\n- {note['id']} by {agent_names.get(note['by'], note['by'])}, {note['at'][:10]}{on}: {note['text']}"
         else:
             text += "\nIt has no notes yet: nobody wrote down what is set up in it."
         return {"content": [{"type": "text", "text": text}]}
@@ -2596,7 +2631,7 @@ class WorkTools:
             return {"content": [{"type": "text", "text": NO_EMOJI + ", ".join(EMOJI.findall(args["text"]))}], "is_error": True}
         try:
             vm_record = self.agents.vms.get(vm_name)
-            note = await asyncio.to_thread(vm_record.add_note, args["text"], self.agent_id)
+            note = await asyncio.to_thread(vm_record.add_note, args["text"], self.agent_id, vm_record.holding(self.agent_id))
         except VMsError as error:
             return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
         return {"content": [{"type": "text", "text": f"Noted on {vm_name} as {note['id']}."}]}
@@ -2644,12 +2679,21 @@ class WorkTools:
                 vm_record = self.agents.vms.get(self.record["target_vm"])
             except VMsError as error:
                 return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
-            if self.agent_id in vm_record.priority:
-                status["you"] = f"number {place} in {vm_name}'s priority line (you stepped aside; you get it back first)"
+            desktop = vm_record.desktop_of(self.agent_id)
+            if desktop is not None:
+                status["you"] += f", desktop {desktop}"
+            if desktop is not None and self.agent_id in vm_record.desktops[desktop - 1]["priority"]:
+                status["you"] = f"number {place} in the priority line of desktop {desktop} of {vm_name} (you stepped aside; you get it back first)"
             status["vm_status"] = vm_record.status
-            status["holder"] = vm_record.holder
-            status["priority"] = list(vm_record.priority)
+            status["desktops"] = [
+                {"desktop": number, "holder": line["holder"], "priority": list(line["priority"])}
+                for number, line in enumerate(vm_record.desktops, start=1)
+            ]
             status["queue"] = list(vm_record.queue)
+            status["asked_for"] = dict(vm_record.wants)
             # The long runs going in it (yours and other agents'): leave their folders alone.
-            status["runs"] = [{"id": run["id"], "by": run["agent"], "what": run["label"], "started_at": run["started_at"][:16]} for run in vm_record.runs]
+            status["runs"] = [
+                {"id": run["id"], "by": run["agent"], "desktop": run.get("desktop", 1), "what": run["label"], "started_at": run["started_at"][:16]}
+                for run in vm_record.runs
+            ]
         return {"content": [{"type": "text", "text": json.dumps(status)}]}
