@@ -1,0 +1,52 @@
+# Runs on every push to main and on every pull request. Two jobs, side by side:
+# - Frontend: npm run build, which type-checks every .tsx file (npm run dev doesn't) and then builds.
+# - Python: every file under github_searcher/, sandbox/ and backend/ must compile, and the tests in tests/ must pass.
+# Nothing here needs GitHub tokens, Incus, a GPU or the agent's login: the tests only cover what runs without them.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Only read the code: this workflow never writes to the repository.
+permissions:
+  contents: read
+
+# A newer push to the same branch cancels the run still going for the older one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+
+  python:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.14"
+          enable-cache: true
+      # The code reads its settings from .env when it is imported. .env is never committed; the example's values
+      # are enough for the tests, which never reach GitHub, Incus or the real data folder.
+      - run: cp .env.example .env
+      # --locked: fail when uv.lock doesn't match pyproject.toml, instead of quietly resolving new versions.
+      - run: uv sync --locked
+      - run: uv run python -m compileall -q github_searcher sandbox backend
+      - run: uv run pytest
