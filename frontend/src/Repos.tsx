@@ -11,10 +11,10 @@ month), the AI policy, and reply speed (how fast a maintainer first answers an o
 bots, AI reviewers and other outsiders don't count). Then its type and fit, stars, Reviewed by (who reviews outside
 PRs: Agent only when most get a review or comment only from an AI reviewer, a bot like CodeRabbit or Copilot; Agent and
 human; Human only; Few reviews when too few to tell; hover for the counts, the pop-up says them too; CI and other bots
-don't count), PRs, issues and commits
-a month and the trend, new contributors (people whose first PR there was recent, as "16 in 6 days": the days its 100
-newest PRs cover; people who contributed before don't count; it sorts by new contributors a day), maintainers, PRs no maintainer answered, its issues in the Issues list, and more
-(TABLE_COLUMNS; github_searcher/repo_signals.py, kept fresh by the backend). There is no overall score: the numbers
+don't count), new contributors (people whose first PR there was recent, as "16 in 6 days": the days its 100 newest PRs
+cover; people who contributed before don't count; it sorts by new contributors a day), maintainers and PRs no
+maintainer answered. The Columns dialog has more (TABLE_COLUMNS: PRs, issues and commits a month, the trend, its
+issues in the Issues list, ...; github_searcher/repo_signals.py, kept fresh by the backend). There is no overall score: the numbers
 are shown as they are. What used to be tags under a row are columns too. Values are plain text in the page's own color: green,
 amber or red only where a value means something (the same rules as the Explore page). No lines between columns. Each
 row has two lines, so it isn't too long: the shown columns from the Outside contributors, Newcomers and Policy and
@@ -238,9 +238,8 @@ const TABLE_COLUMNS: TableColumn[] = [
   { key: "community", label: "Community", name: "Community", group: "Policy and reviews", title: "Contributing guide, code of conduct, GitHub Discussions and chat", sort: "community" },
 ];
 // What a row shows until the Columns dialog changes it: the main ones first (outside PRs merged, newcomers' first PRs
-// merged, how newcomers fare,
-// the AI policy and how fast a maintainer replies), then much like the Explore page's columns, then the repo's issues
-// in the Issues list.
+// merged, how newcomers fare, the AI policy and how fast a maintainer replies), then its type, fit and stars, who
+// reviews, new contributors, maintainers and unanswered PRs.
 const DEFAULT_COLUMNS: ColumnKey[] = [
   "merged",
   "newcomers",
@@ -251,18 +250,13 @@ const DEFAULT_COLUMNS: ColumnKey[] = [
   "fit",
   "stars",
   "reviewers",
-  "prs",
-  "issues",
-  "commits",
-  "trend",
   "newcomer_prs",
   "mergers",
   "stale",
-  "listed",
 ];
-// "-6": saved before Reviewed by (who reviews outside PRs) joined the defaults; starting from the new defaults once
-// shows it.
-const COLUMNS_STORAGE = "repos-columns-6";
+// "-7": saved before review tone, the activity columns (PRs, issues and commits a month, the trend) and Listed issues
+// left the defaults; starting from the new defaults once hides them.
+const COLUMNS_STORAGE = "repos-columns-7";
 // The AI policy and newcomers columns are tags (the Explore page's too): green for good news, amber for "have a
 // look", red for bad, gray for the rest. Other values are plain text, colored only when it means something.
 const POLICY_VARIANT: Record<string, "ok" | "fine" | "warn" | "bad"> = { welcome: "ok", none: "fine", no_ai: "bad" };
