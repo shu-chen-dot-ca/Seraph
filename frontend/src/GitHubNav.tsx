@@ -16,6 +16,7 @@ with the same look as the sidebar (Sidebar.tsx). Every line is a link to a page;
 - Account, pinned at the bottom: your GitHub account, the one Approve sends as (GitHub.tsx's Account), with who you
   are signed in as, or "Not signed in".
 Counts come straight from the live store, so the list updates itself.
+In phone mode (App.tsx) the list is in the Menu instead, between Home's sidebar tree and the Workspace tab's list.
 */
 
 import { Bell, BookMarked, CircleDot, CircleUser, GitPullRequest, Inbox, LayoutDashboard, ListTodo, Lock } from "lucide-react";

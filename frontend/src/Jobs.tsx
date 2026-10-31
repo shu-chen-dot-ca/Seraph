@@ -32,7 +32,8 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, useLive, useLoaded, type AgentSummary, type Job } from "@/live";
 import { cn } from "@/lib/utils";
 
-const COLUMNS = "grid grid-cols-[120px_165px_minmax(0,1fr)_110px_70px_190px_120px_64px] items-center gap-2";
+// Phone mode (App.tsx) keeps Status, Job and Cancel; the job's page has the rest.
+const COLUMNS = "grid grid-cols-[120px_165px_minmax(0,1fr)_110px_70px_190px_120px_64px] items-center gap-2 max-md:grid-cols-[110px_minmax(0,1fr)_56px]";
 
 const OPEN = ["queued", "working", "waiting_on_user"];
 
@@ -120,8 +121,8 @@ export default function Jobs(props: { selected: string | null }) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-        <Tabs value={tab} onValueChange={setTab}>
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3 max-md:h-auto max-md:min-h-9 max-md:flex-wrap max-md:py-1">
+        <Tabs value={tab} onValueChange={setTab} className="max-w-full overflow-x-auto">
           <TabsList>
             {TABS.map((item) => (
               <TabsTrigger key={item.value} value={item.value} className="px-2.5">
@@ -131,7 +132,7 @@ export default function Jobs(props: { selected: string | null }) {
             ))}
           </TabsList>
         </Tabs>
-        <Input className="ml-auto w-52" placeholder="Filter jobs" value={filter} onChange={(event) => setFilter(event.target.value)} />
+        <Input className="ml-auto w-52 max-md:ml-0 max-md:w-auto max-md:min-w-0 max-md:flex-1" placeholder="Filter jobs" value={filter} onChange={(event) => setFilter(event.target.value)} />
         <Button size="sm" onClick={() => setCreating(true)}>
           <Plus /> New job
         </Button>
@@ -139,12 +140,12 @@ export default function Jobs(props: { selected: string | null }) {
 
       <div className={cn(COLUMNS, "h-7 shrink-0 border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground")}>
         <span>Status</span>
-        <span>Progress</span>
+        <span className="max-md:hidden">Progress</span>
         <span>Job</span>
-        <span>Agent</span>
-        <span>VM</span>
-        <span>Issue or PR</span>
-        <span>Updated</span>
+        <span className="max-md:hidden">Agent</span>
+        <span className="max-md:hidden">VM</span>
+        <span className="max-md:hidden">Issue or PR</span>
+        <span className="max-md:hidden">Updated</span>
         <span />
       </div>
 
@@ -181,7 +182,7 @@ export default function Jobs(props: { selected: string | null }) {
                   <StatusDot tone={eachStuck !== "" ? "amber" : JOB_TONE[each.status]} />
                   {JOB_LABEL[each.status] ?? each.status}
                 </span>
-                <JobProgressBar job={each} />
+                <JobProgressBar job={each} className="max-md:hidden" />
                 <span className="min-w-0">
                   <span className={cn("block truncate", !eachIsOpen && "text-muted-foreground")}>{each.title}</span>
                   {eachIsOpen && each.headline !== "" && (
@@ -190,17 +191,17 @@ export default function Jobs(props: { selected: string | null }) {
                     </span>
                   )}
                 </span>
-                <a href={`#/agents/${each.agent}`} className="truncate hover:underline" onClick={(event) => event.stopPropagation()}>
+                <a href={`#/agents/${each.agent}`} className="truncate hover:underline max-md:hidden" onClick={(event) => event.stopPropagation()}>
                   {agentNames[each.agent] ?? each.agent}
                 </a>
-                <span className="truncate">
+                <span className="truncate max-md:hidden">
                   {each.vm !== null && (
                     <a href={`#/vms/${each.vm}`} className="hover:underline" onClick={(event) => event.stopPropagation()}>
                       {each.vm}
                     </a>
                   )}
                 </span>
-                <span className="truncate text-muted-foreground">
+                <span className="truncate text-muted-foreground max-md:hidden">
                   {each.issue !== null && (
                     <span className="flex items-center gap-1">
                       <a
@@ -246,7 +247,7 @@ export default function Jobs(props: { selected: string | null }) {
                     </span>
                   )}
                 </span>
-                <span className="truncate text-xs whitespace-nowrap text-muted-foreground tabular-nums">{new Date(each.updated_at).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}</span>
+                <span className="truncate text-xs whitespace-nowrap text-muted-foreground tabular-nums max-md:hidden">{new Date(each.updated_at).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}</span>
                 <span className="flex justify-end">
                   {eachIsOpen && (
                     <Button

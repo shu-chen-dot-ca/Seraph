@@ -740,7 +740,7 @@ export default function Issues(props: { repo: string | null; open: string | null
 
   return (
     <div className="relative flex h-full flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3 max-md:h-auto max-md:min-h-9 max-md:flex-wrap max-md:py-1">
         {/* Not modal: its links open an issue's pop-up as it closes, and a modal menu could leave the page unclickable. */}
         <DropdownMenu modal={false}>
           <DropdownMenuTrigger asChild>
@@ -1220,7 +1220,7 @@ export default function Issues(props: { repo: string | null; open: string | null
                   {shownJobs.length === 0 && <div className="text-muted-foreground">No jobs yet. Use Assign to give this issue to an agent.</div>}
                   {shownJobs.map((each) => (
                     <div key={each.id} className="border-b py-1 last:border-b-0">
-                      <div className="flex h-6 items-center gap-3">
+                      <div className="flex h-6 items-center gap-3 max-md:h-auto max-md:min-h-6 max-md:flex-wrap max-md:gap-y-0.5">
                         <span className="flex w-28 shrink-0 items-center gap-1.5">
                           <StatusDot tone={JOB_TONE[each.status]} />
                           {JOB_LABEL[each.status] ?? each.status}

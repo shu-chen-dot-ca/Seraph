@@ -21,6 +21,8 @@ goes back to its list. Archived agents aren't listed here (they are on the Agent
 can only be archived, not deleted.
 Settings stays pinned at the bottom while the tree scrolls; it opens SettingsDialog (theme, accent color, Reset view and
 the env vars for all VMs), which App owns.
+In phone mode (App.tsx) the tree is in the Menu instead, with the GitHub and Workspace tabs' lists under it. A touch
+screen has no hover, so there the + and ⋯ show always, in place of the counts and statuses (index.css).
 */
 
 import { Archive, Bot, ChevronRight, CircleDot, Compass, Eye, FolderGit2, Gauge, ListTodo, Monitor, MoreHorizontal, Pencil, Plus, Settings, Trash2 } from "lucide-react";

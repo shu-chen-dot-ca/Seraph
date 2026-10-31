@@ -34,6 +34,12 @@ a line of their own and scroll sideways.
   for, the branch, what started it, who and when. A click opens the run on GitHub. In your own repositories a failed
   run has Re-run failed jobs, after an "are you sure?".
 New issue opens NewIssueDialog.tsx.
+
+On the Workspace tab's Home (live) the bar has no link to GitHub in its top left: there the first tabs are Agents
+(RepoAgents.tsx: every agent linked to the repo's VM, with how many, New agent, and the open one's chat), where a repo
+opens, and Live (tab=live; RepoLive.tsx: the repo running in a VM of its own, next to a chat with its own agent). Code
+then has tab=code in the address (none is Agents), and Refresh is left out on both, which read nothing from GitHub.
+Live stays mounted (hidden) once opened, so its desktop keeps its connection while another tab is open.
 */
 
 import {
@@ -63,6 +69,8 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import NewIssueDialog from "@/NewIssueDialog";
+import RepoAgents from "@/RepoAgents";
+import RepoLive from "@/RepoLive";
 import ThreadDialog from "@/ThreadDialog";
 import {
   AlertDialog,
@@ -79,7 +87,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Markdown } from "@/components/ui/markdown";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api, useLive } from "@/live";
+import { api, useLive, useLiveValue } from "@/live";
 import { cn, timeAgo } from "@/lib/utils";
 
 // What GET /api/your_repositories/<repo>/<tab> gives (github_searcher/your_repositories.py).
@@ -170,8 +178,15 @@ const TABS = ["issues", "pulls", "commits", "actions"];
 // reload, and the read behind it only brings it up to date.
 const kept = new Map<string, Record<string, unknown>>();
 
-export default function Repository(props: { repo: string; tab: string; state: string; open: string | null; base?: string }) {
+export default function Repository(props: { repo: string; tab: string; state: string; open: string | null; base?: string; live?: boolean }) {
   const yourRepos = useLive("your_repos");
+  // How many agents are linked to the repo's VM (the Agents tab's count, worked out the same way as there): only the
+  // number, so the page doesn't re-render on every agent update.
+  const agentCount = useLiveValue((topics) => {
+    const own = topics.agents.filter((agent) => agent.repo === props.repo);
+    const vmName = own.length > 0 ? own[0].target_vm : null;
+    return topics.agents.filter((agent) => agent.repo === props.repo || (vmName !== null && (agent.target_vm === vmName || agent.vm === vmName))).length;
+  });
   // This repo's kept answers: from memory, else from localStorage (after a reload).
   if (!kept.has(props.repo)) {
     let saved: Record<string, unknown> = {};
@@ -209,15 +224,25 @@ export default function Repository(props: { repo: string; tab: string; state: st
   const [rerun, setRerun] = useState<RepoRun | null>(null);
   const [rerunOpen, setRerunOpen] = useState(false);
   const [starring, setStarring] = useState(false);
+  // Whether Live was opened: it stays mounted from then on.
+  const [liveOpened, setLiveOpened] = useState(false);
 
-  const tab = TABS.includes(props.tab) ? props.tab : "code";
+  // The tab without tab= in the address: Agents on the Workspace tab, else Code.
+  const defaultTab = props.live ? "agents" : "code";
+  let tab = defaultTab;
+  if (TABS.includes(props.tab) || (props.live && (props.tab === "code" || props.tab === "live"))) {
+    tab = props.tab;
+  }
+  if (tab === "live" && !liveOpened) {
+    setLiveOpened(true);
+  }
   const listed = yourRepos.repos.find((each) => each.name === props.repo) ?? yourRepos.starred.find((each) => each.name === props.repo);
   const starred = listed !== undefined && listed.starred;
   const stars = listed?.stars ?? overview?.stars ?? 0;
   const canPush = listed !== undefined && listed.can_push;
   const base = props.base ?? `#/github/repo?repo=${encodeURIComponent(props.repo)}`;
   let listHash = base;
-  if (tab !== "code") {
+  if (tab !== defaultTab) {
     listHash += `&tab=${tab}`;
   }
   if (props.state === "closed") {
@@ -229,6 +254,11 @@ export default function Repository(props: { repo: string; tab: string; state: st
   useEffect(() => {
     let current = true;
     setError("");
+    // Agents and Live read nothing from GitHub.
+    if (tab === "agents" || tab === "live") {
+      setLoading(false);
+      return;
+    }
     let path = tab;
     if (tab === "code") {
       path = "overview";
@@ -397,27 +427,41 @@ export default function Repository(props: { repo: string; tab: string; state: st
     shownAt = issues?.cached_at;
   } else if (tab === "pulls") {
     shownAt = pulls?.cached_at;
+  } else if (tab === "agents" || tab === "live") {
+    shownAt = undefined;
   }
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-9 shrink-0 items-center gap-3 border-b px-3 max-md:h-auto max-md:flex-wrap max-md:gap-y-1 max-md:py-1">
-        <a
-          href={`https://github.com/${props.repo}`}
-          target="_blank"
-          rel="noreferrer"
-          className="flex min-w-0 items-center gap-1.5 font-medium hover:underline"
-          title="Open on GitHub"
-        >
-          {listed !== undefined && listed.private ? <Lock className="size-4 shrink-0 text-muted-foreground" /> : <BookMarked className="size-4 shrink-0 text-muted-foreground" />}
-          <span className="truncate">{props.repo}</span>
-        </a>
+        {!props.live && (
+          <a
+            href={`https://github.com/${props.repo}`}
+            target="_blank"
+            rel="noreferrer"
+            className="flex min-w-0 items-center gap-1.5 font-medium hover:underline"
+            title="Open on GitHub"
+          >
+            {listed !== undefined && listed.private ? <Lock className="size-4 shrink-0 text-muted-foreground" /> : <BookMarked className="size-4 shrink-0 text-muted-foreground" />}
+            <span className="truncate">{props.repo}</span>
+          </a>
+        )}
         <Tabs
           value={tab}
-          onValueChange={(value) => (window.location.hash = value === "code" ? base : `${base}&tab=${value}`)}
+          onValueChange={(value) => (window.location.hash = value === defaultTab ? base : `${base}&tab=${value}`)}
           className="max-md:order-last max-md:w-full max-md:overflow-x-auto"
         >
           <TabsList>
+            {props.live && (
+              <TabsTrigger value="agents" className="px-2.5">
+                Agents <span className="text-xs text-muted-foreground tabular-nums">{agentCount}</span>
+              </TabsTrigger>
+            )}
+            {props.live && (
+              <TabsTrigger value="live" className="px-2.5">
+                Live
+              </TabsTrigger>
+            )}
             <TabsTrigger value="code" className="px-2.5">
               Code
             </TabsTrigger>
@@ -445,14 +489,16 @@ export default function Repository(props: { repo: string; tab: string; state: st
           <Button size="sm" variant="outline" disabled={yourRepos.login === null} onClick={() => setNewIssueOpen(true)}>
             <Plus /> New issue
           </Button>
-          <Button size="sm" variant="outline" disabled={loading} onClick={() => setReload((count) => count + 1)}>
-            {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />} Refresh
-          </Button>
+          {tab !== "agents" && tab !== "live" && (
+            <Button size="sm" variant="outline" disabled={loading} onClick={() => setReload((count) => count + 1)}>
+              {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />} Refresh
+            </Button>
+          )}
         </div>
       </div>
 
       {(tab === "issues" || tab === "pulls") && (
-        <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+        <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3 max-md:h-auto max-md:min-h-9 max-md:flex-wrap max-md:py-1">
           <Tabs value={props.state} onValueChange={(value) => (window.location.hash = value === "closed" ? `${base}&tab=${tab}&state=closed` : `${base}&tab=${tab}`)}>
             <TabsList>
               <TabsTrigger value="open" className="px-2.5">
@@ -464,7 +510,7 @@ export default function Repository(props: { repo: string; tab: string; state: st
             </TabsList>
           </Tabs>
           <Input
-            className="w-52"
+            className="w-52 max-md:w-auto max-md:min-w-0 max-md:flex-1"
             placeholder={tab === "pulls" ? "Filter pull requests" : "Filter issues"}
             value={filter}
             onChange={(event) => setFilter(event.target.value)}
@@ -474,7 +520,17 @@ export default function Repository(props: { repo: string; tab: string; state: st
 
       {error !== "" && <div className="shrink-0 border-b bg-destructive/10 px-3 py-1.5 text-destructive">Could not read it from GitHub: {error}</div>}
 
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div className={tab === "agents" || tab === "live" ? "min-h-0 flex-1" : "min-h-0 flex-1 overflow-auto"}>
+        {tab === "agents" && (
+          <div className="h-full">
+            <RepoAgents repo={props.repo} liveHash={`${base}&tab=live`} />
+          </div>
+        )}
+        {liveOpened && (
+          <div className={tab === "live" ? "h-full" : "hidden"}>
+            <RepoLive repo={props.repo} />
+          </div>
+        )}
         {tab === "code" && codeReady && overview !== null && (
           <div className="max-w-5xl space-y-4 p-4 max-md:p-2">
             <div className="space-y-1">

@@ -48,7 +48,9 @@ import { StatusDot } from "@/components/ui/status-dot";
 import { api, useLive, useLoaded, type Image, type ImageTask } from "@/live";
 import { cn } from "@/lib/utils";
 
-const COLUMNS = "grid grid-cols-[minmax(0,200px)_minmax(0,170px)_minmax(0,1fr)_80px_150px_56px_96px_32px] items-center gap-3";
+// Phone mode (App.tsx) keeps Name, Size and the buttons.
+const COLUMNS =
+  "grid grid-cols-[minmax(0,200px)_minmax(0,170px)_minmax(0,1fr)_80px_150px_56px_96px_32px] items-center gap-3 max-md:grid-cols-[minmax(0,1fr)_64px_80px_32px]";
 
 const TASK_TITLE: Record<string, string> = { build: "Building", save: "Saving", inspect: "Listing what it has:" };
 
@@ -129,7 +131,7 @@ export default function Images(props: { tabs: ReactNode }) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3 max-md:h-auto max-md:min-h-9 max-md:flex-wrap max-md:py-1">
         {props.tabs}
         <div className="ml-auto flex items-center gap-1">
           <Button size="sm" variant="outline" onClick={() => setSaving(true)}>
@@ -201,11 +203,11 @@ export default function Images(props: { tabs: ReactNode }) {
 
       <div className={cn(COLUMNS, "h-7 shrink-0 border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground")}>
         <span>Name</span>
-        <span>System</span>
-        <span>Description</span>
+        <span className="max-md:hidden">System</span>
+        <span className="max-md:hidden">Description</span>
         <span className="text-right">Size</span>
-        <span>Made</span>
-        <span className="text-right">VMs</span>
+        <span className="max-md:hidden">Made</span>
+        <span className="text-right max-md:hidden">VMs</span>
         <span />
         <span />
       </div>
@@ -231,15 +233,15 @@ export default function Images(props: { tabs: ReactNode }) {
               )}
               {image.default && <Badge>default</Badge>}
             </span>
-            <span className="truncate text-muted-foreground">{image.inventory === null ? "–" : image.inventory.system.os}</span>
-            <span className="truncate" title={image.description}>
+            <span className="truncate text-muted-foreground max-md:hidden">{image.inventory === null ? "–" : image.inventory.system.os}</span>
+            <span className="truncate max-md:hidden" title={image.description}>
               {image.description === "" ? <span className="text-muted-foreground">–</span> : image.description.split("\n").join(" ")}
             </span>
             <span className="text-right tabular-nums">{image.size_gb.toFixed(1)} GB</span>
-            <span className="text-muted-foreground tabular-nums">
+            <span className="text-muted-foreground tabular-nums max-md:hidden">
               {new Date(image.created_at).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
             </span>
-            <span className={cn("text-right tabular-nums", image.used_by.length === 0 && "text-muted-foreground")} title={image.used_by.join(", ")}>
+            <span className={cn("text-right tabular-nums max-md:hidden", image.used_by.length === 0 && "text-muted-foreground")} title={image.used_by.join(", ")}>
               {image.used_by.length}
             </span>
             <span className="flex justify-end">
@@ -285,13 +287,13 @@ export default function Images(props: { tabs: ReactNode }) {
               <span className="truncate font-medium">{image.name}</span>
               <Badge variant="outline">not built</Badge>
             </span>
-            <span className="truncate text-muted-foreground">{image.system || "–"}</span>
-            <span className="truncate" title={image.description}>
+            <span className="truncate text-muted-foreground max-md:hidden">{image.system || "–"}</span>
+            <span className="truncate max-md:hidden" title={image.description}>
               {image.description === "" ? <span className="text-muted-foreground">–</span> : image.description.split("\n").join(" ")}
             </span>
             <span className="text-right text-muted-foreground">–</span>
-            <span className="text-muted-foreground">–</span>
-            <span className="text-right text-muted-foreground">–</span>
+            <span className="text-muted-foreground max-md:hidden">–</span>
+            <span className="text-right text-muted-foreground max-md:hidden">–</span>
             <span className="flex justify-end">
               <Button size="xs" variant="ghost" disabled={image.building} onClick={() => rebuild(image)}>
                 {image.building ? <Loader2 className="animate-spin" /> : <Hammer />} {image.building ? "Building" : "Build"}

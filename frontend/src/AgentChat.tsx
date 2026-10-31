@@ -4,6 +4,7 @@ warning when it has been quiet too long; the rest of its progress is on the Jobs
 on the right where it stands in a VM queue (or its priority line, after it stepped aside while its run goes), its jobs in two lists that each fold with their header: In queue (still to
 do, being done or waiting on you, in the order it takes them, with their progress; a queued one has an x that takes it
 off: the job is cancelled, and the agent is told) and Finished (done and cancelled, newest first), and the Desktop.
+In phone mode (App.tsx, a screen under 768px wide) the right side is left out: the conversation takes the whole width.
 
 The header has two tabs: Chat (all of the above) and Artifacts (AgentArtifacts.tsx: the agent's own folder of files,
 pictures and screenshots). In the conversation, a picture the agent keeps there shows where it writes
@@ -514,8 +515,20 @@ export default function AgentChat(props: { agentId: string; compact?: boolean })
   const [pageTab, setPageTab] = useState("chat");
   // The job lists (In queue, Finished) folded on the right, by key.
   const [foldedLists, setFoldedLists] = useState<string[]>([]);
+  // Phone mode (App.tsx, under 768px): the conversation only, without the right side.
+  const [phone, setPhone] = useState(() => window.matchMedia("(max-width: 767px)").matches);
   const scrollRef = useRef<HTMLDivElement>(null);
   const atBottom = useRef(true);
+
+  // Follow the screen's width, also when a phone turns sideways.
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 767px)");
+    function update() {
+      setPhone(media.matches);
+    }
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
 
   useEffect(() => {
     try {
@@ -1084,10 +1097,10 @@ export default function AgentChat(props: { agentId: string; compact?: boolean })
   return (
     <div className="flex h-full flex-col">
       {!props.compact && (
-        <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+        <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3 max-md:h-auto max-md:min-h-9 max-md:flex-wrap max-md:py-1">
           <StatusDot tone={AGENT_TONE[summary.status] ?? "gray"} />
           <h1 className="font-semibold">{summary.name}</h1>
-          <span className="font-mono text-xs text-muted-foreground" title="Its id: unique, and it never changes, also when renamed">
+          <span className="font-mono text-xs text-muted-foreground max-md:hidden" title="Its id: unique, and it never changes, also when renamed">
             {summary.id}
           </span>
           <Tabs value={pageTab} onValueChange={setPageTab}>
@@ -1109,8 +1122,8 @@ export default function AgentChat(props: { agentId: string; compact?: boolean })
             {summary.busy && summary.status !== "working" && " · working"}
           </span>
 
-          <div className="ml-auto flex shrink-0 items-center gap-2">
-            <span className="text-muted-foreground">Target VM</span>
+          <div className="ml-auto flex shrink-0 items-center gap-2 max-md:ml-0 max-md:shrink max-md:flex-wrap">
+            <span className="text-muted-foreground max-md:hidden">Target VM</span>
             <span title={locked ? `It can't change while ${summary.name} waits for or holds ${summary.vm}.` : undefined}>
               <Select value={summary.target_vm ?? NO_VM} onValueChange={setTargetVM} disabled={locked}>
                 <SelectTrigger className="w-40">
@@ -1253,8 +1266,8 @@ export default function AgentChat(props: { agentId: string; compact?: boolean })
       )}
 
       <div className={pageTab === "chat" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
-        {props.compact && conversation}
-        {!props.compact && (
+        {(props.compact || phone) && conversation}
+        {!props.compact && !phone && (
           <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
             <ResizablePanel defaultSize="70%" minSize="35%">
               {conversation}

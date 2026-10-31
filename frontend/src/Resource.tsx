@@ -271,8 +271,8 @@ export default function Resource() {
     });
   }
 
-  // Name, CPU, memory, disk, internet.
-  const columns = "grid grid-cols-[minmax(0,1fr)_5rem_8rem_8rem_10rem] items-center gap-3";
+  // Name, CPU, memory, disk, internet. In phone mode (App.tsx) the table scrolls sideways instead of squeezing Name.
+  const columns = "grid grid-cols-[minmax(0,1fr)_5rem_8rem_8rem_10rem] items-center gap-3 max-md:min-w-[560px]";
 
   return (
     <div className="flex h-full flex-col">
@@ -395,7 +395,7 @@ export default function Resource() {
           <div className="mb-1 font-medium">Running VMs</div>
           {running.length === 0 && <div className="text-muted-foreground">No VM is running.</div>}
           {running.length > 0 && (
-            <div className="rounded-lg border bg-card">
+            <div className="overflow-x-auto rounded-lg border bg-card">
               <div className={cn(columns, "h-7 border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground")}>
                 <span>Name</span>
                 <span>CPU</span>

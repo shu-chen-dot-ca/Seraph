@@ -16,6 +16,11 @@ release is ready (UpdateDialog.tsx), and Restarting… while the app restarts on
 found from git's origin remote (vite.config.ts), so no account name is written here; none when it isn't on GitHub. Reset view is in Settings
 (SettingsDialog), opened from the bottom of Home's sidebar.
 
+Phone mode, on a narrow screen (under 768px, a phone): no tabs and no left list. The header's left has Menu instead
+(with how many drafts wait in the Inbox) and the open page's name. Menu slides in one list with every page of all three
+tabs: Home's sidebar tree, then the GitHub tab's list, then the Workspace tab's list, one under another, so a few pages
+show twice. Picking a page closes it, and so does a tap beside it. The pages are the same as on a computer.
+
 The page lives in the URL hash, so refresh and back/forward work and switching pages never reloads:
   Home:  #/issues  #/issues?repo=owner/name  #/issues?open=<issue id>  #/jobs  #/jobs/<job id>  #/explore  #/repos  #/tracked
          #/agents  #/agents/<agent id>  #/vms  #/vms?tab=images  #/vms?tab=defaults  #/vms/<vm name>  #/vms/<vm name>?tab=notes  #/resource
@@ -27,8 +32,8 @@ The page lives in the URL hash, so refresh and back/forward work and switching p
          One of your repositories takes tab=issues|pulls|commits|actions (none: its Code), state=closed and open=... the same
          way; Notifications takes open=... too; Tasks takes state=done (its Done tab), view=recent (its Recent
          tab), task=owner/name%23n (that task in its pop-up) and open=....
-  Workspace: #/home  #/home?repo=owner/name (Home.tsx; the open repo, which takes tab=issues|pulls|commits|actions,
-         state=closed and open=owner/name%23n like a repository's page on the GitHub tab)
+  Workspace: #/home  #/home?repo=owner/name (Home.tsx; the open repo, which takes tab=live|code|issues|pulls|commits|actions
+         (none: Agents), state=closed and open=owner/name%23n like a repository's page on the GitHub tab)
          #/pulls (PullRequests.tsx; takes state=closed, view=assigned|mentioned|review-requested,
          visibility=public|private, repo=owner/name, sort=created-asc|comments-desc|comments-asc|updated-desc|updated-asc
          and open=owner/name%23n)
@@ -38,7 +43,7 @@ A VM page, once visited, stays mounted (hidden) while you are elsewhere, so its 
 connection and coming back is instant. It is dropped when that VM no longer exists.
 */
 
-import { Loader2, WifiOff } from "lucide-react";
+import { Loader2, Menu, WifiOff, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -75,6 +80,29 @@ import { cn } from "@/lib/utils";
 const PAGES = ["inbox", "github", "issues", "jobs", "explore", "repos", "tracked", "agents", "vms", "resource", "home", "pulls"];
 // The GitHub tab's pages under #/github/; anything else there is Pull requests.
 const GITHUB_SECTIONS = ["overview", "notifications", "issues", "tasks", "account", "repo"];
+// The open page's name in phone mode's header, where there are no tabs and no left list to show it.
+const PAGE_NAMES: Record<string, string> = {
+  inbox: "Inbox",
+  issues: "Issues",
+  jobs: "Jobs",
+  explore: "Explore",
+  repos: "Repos",
+  tracked: "Tracked",
+  agents: "Agents",
+  vms: "VMs",
+  resource: "Resource",
+  home: "Home",
+  pulls: "Pull requests",
+};
+const GITHUB_NAMES: Record<string, string> = {
+  overview: "Overview",
+  notifications: "Notifications",
+  pulls: "Pull requests",
+  issues: "Issues",
+  tasks: "Tasks",
+  account: "Account",
+  repo: "Repository",
+};
 // This repo on GitHub, or "": vite.config.ts puts it in from git's origin remote.
 declare const __REPO_URL__: string;
 
@@ -96,6 +124,8 @@ export default function App() {
   const [accent, setAccent] = useState(document.documentElement.dataset.accent ?? "blue");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
+  // Phone mode's Menu: the list of every page, slid in from the left.
+  const [menuOpen, setMenuOpen] = useState(false);
   // The last address open under each header tab, where its tab goes back to.
   const [lastHome, setLastHome] = useState("#/issues");
   const [lastGitHub, setLastGitHub] = useState("#/github/overview");
@@ -139,6 +169,8 @@ export default function App() {
   useEffect(() => {
     function onHashChange() {
       setHash(window.location.hash);
+      // A page was picked (also from a button, like the sidebar's + on Agents): phone mode's Menu is done.
+      setMenuOpen(false);
     }
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
@@ -156,6 +188,11 @@ export default function App() {
   const onWorkspace = page === "home" || page === "pulls";
   const onGitHub = !onWorkspace && (page === "inbox" || page === "github");
   const onHome = !onWorkspace && !onGitHub;
+  // Phone mode's header: the open page's name, a VM's own name on its page.
+  let pageName = page === "github" ? GITHUB_NAMES[section] : PAGE_NAMES[page];
+  if (page === "vms" && id !== null) {
+    pageName = id;
+  }
 
   // Keep the address for its tab (setting state while rendering, like visitedVMs below). No hash at all is Issues.
   if (onWorkspace && hash !== "" && hash !== lastWorkspace) {
@@ -229,7 +266,22 @@ export default function App() {
     <TooltipProvider>
       <div className="flex h-full flex-col">
         <header className="flex h-9 shrink-0 items-center gap-3 border-b bg-sidebar px-3">
-          <div className="flex h-full items-center">
+          {/* Phone mode: Menu and the open page's name instead of the tabs. */}
+          <button
+            type="button"
+            className="-ml-1.5 flex h-7 shrink-0 items-center gap-1.5 rounded-sm px-1.5 font-medium text-muted-foreground hover:bg-accent hover:text-foreground md:hidden"
+            aria-label="Menu"
+            onClick={() => setMenuOpen(true)}
+          >
+            <Menu className="size-4" />
+            {pending > 0 && (
+              <span className="min-w-4.5 rounded-full bg-primary px-1.5 text-center text-xs leading-4.5 font-medium text-primary-foreground tabular-nums">
+                {pending}
+              </span>
+            )}
+          </button>
+          <span className="-ml-1.5 min-w-0 truncate font-medium md:hidden">{pageName}</span>
+          <div className="flex h-full items-center max-md:hidden">
             <a href={lastHome} aria-current={onHome ? "page" : undefined} className={cn(tab, onHome && currentTab)}>
               Home
             </a>
@@ -263,8 +315,8 @@ export default function App() {
               </Button>
             )}
             {!connected && !updates.restarting && (
-              <span className="mr-2 flex items-center gap-1.5 text-destructive">
-                <WifiOff className="size-3.5" /> Offline, reconnecting
+              <span className="mr-2 flex shrink-0 items-center gap-1.5 text-destructive">
+                <WifiOff className="size-3.5" /> Offline<span className="max-md:hidden">, reconnecting</span>
               </span>
             )}
             {account !== null && !account.connected && (
@@ -278,7 +330,9 @@ export default function App() {
                 className="mr-1 flex h-7 items-center gap-1.5 rounded-sm px-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
                 title="Your GitHub account"
               >
-                <img src={`https://github.com/${account.login}.png?size=40`} alt="" className="size-5 rounded-full" />@{account.login}
+                <img src={`https://github.com/${account.login}.png?size=40`} alt="" className="size-5 rounded-full" />
+                {/* Phone mode: only the picture, to leave room for the page's name. */}
+                <span className="max-md:hidden">@{account.login}</span>
               </a>
             )}
             {__REPO_URL__ !== "" && (
@@ -300,9 +354,12 @@ export default function App() {
         </header>
 
         <div className="flex min-h-0 flex-1">
-          {onGitHub && <GitHubNav page={page} section={section} repo={query.get("repo")} />}
-          {onHome && <Sidebar page={page} id={id} onOpenSettings={() => setSettingsOpen(true)} />}
-          {onWorkspace && <WorkspaceNav page={page} onOpenSettings={() => setSettingsOpen(true)} />}
+          {/* The open tab's left list; phone mode has Menu instead. */}
+          <div className="flex shrink-0 max-md:hidden">
+            {onGitHub && <GitHubNav page={page} section={section} repo={query.get("repo")} />}
+            {onHome && <Sidebar page={page} id={id} onOpenSettings={() => setSettingsOpen(true)} />}
+            {onWorkspace && <WorkspaceNav page={page} onOpenSettings={() => setSettingsOpen(true)} />}
+          </div>
           <main className="relative min-w-0 flex-1 overflow-hidden">
             {page === "inbox" && <Inbox selected={id} />}
             {page === "github" && section === "overview" && <GitHubOverview />}
@@ -336,7 +393,7 @@ export default function App() {
             {page === "home" && (
               <Home
                 repo={query.get("repo")}
-                tab={query.get("tab") ?? "code"}
+                tab={query.get("tab") ?? ""}
                 state={query.get("state") === "closed" ? "closed" : "open"}
                 open={query.get("open")}
               />
@@ -364,6 +421,53 @@ export default function App() {
           </main>
         </div>
       </div>
+      {/* Phone mode's Menu: the three tabs' left lists one under another, so every page is in it. The lists keep their
+          look; here each is as wide as the menu and as tall as what it holds, and the menu scrolls as a whole. */}
+      {menuOpen && (
+        <div className="fixed inset-0 z-50 md:hidden">
+          <div className="absolute inset-0 animate-in bg-black/40 duration-200 ease-out fade-in-0 dark:bg-black/60" onClick={() => setMenuOpen(false)} />
+          <div
+            className="absolute inset-y-0 left-0 w-72 max-w-[85vw] animate-in overflow-y-auto overscroll-contain border-r bg-sidebar text-sidebar-foreground shadow-overlay duration-200 ease-out slide-in-from-left [&>nav]:w-full [&>nav]:border-r-0 [&>nav>div]:flex-none"
+            onClick={(event) => {
+              // A link closes it at once, also one to the page already open (no hashchange then).
+              if ((event.target as Element).closest("a") !== null) {
+                setMenuOpen(false);
+              }
+            }}
+          >
+            <div className="flex h-9 items-center gap-1.5 border-b px-3">
+              <button
+                type="button"
+                className="-ml-1.5 flex size-7 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+                aria-label="Close menu"
+                onClick={() => setMenuOpen(false)}
+              >
+                <X className="size-4" />
+              </button>
+              <span className="font-medium text-foreground">Menu</span>
+            </div>
+            <div className="px-3 pt-3 pb-1 text-xs font-medium text-muted-foreground">Home</div>
+            <Sidebar
+              page={page}
+              id={id}
+              onOpenSettings={() => {
+                setMenuOpen(false);
+                setSettingsOpen(true);
+              }}
+            />
+            <div className="border-t px-3 pt-3 pb-1 text-xs font-medium text-muted-foreground">GitHub</div>
+            <GitHubNav page={page} section={section} repo={query.get("repo")} />
+            <div className="border-t px-3 pt-3 pb-1 text-xs font-medium text-muted-foreground">Workspace</div>
+            <WorkspaceNav
+              page={page}
+              onOpenSettings={() => {
+                setMenuOpen(false);
+                setSettingsOpen(true);
+              }}
+            />
+          </div>
+        </div>
+      )}
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}

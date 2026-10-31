@@ -659,7 +659,7 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
         {thread !== null && (
           <div className="flex min-h-0 flex-1 flex-col">
             {/* The X sits top right, so nothing goes under it. */}
-            <div className="flex shrink-0 gap-4 pt-3 pr-10 pb-2 pl-4">
+            <div className="flex shrink-0 gap-4 pt-3 pr-10 pb-2 pl-4 max-md:flex-col max-md:gap-2">
               <div className="min-w-0 flex-1 space-y-2">
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
                   <Badge variant="secondary">
@@ -858,8 +858,8 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
               )}
             </div>
 
-            <div className="flex h-9 shrink-0 items-center gap-2 border-y px-4">
-              <Tabs value={shownTab} onValueChange={setTab}>
+            <div className="flex h-9 shrink-0 items-center gap-2 border-y px-4 max-md:h-auto max-md:min-h-9 max-md:flex-wrap max-md:py-1">
+              <Tabs value={shownTab} onValueChange={setTab} className="max-w-full overflow-x-auto">
                 <TabsList>
                   <TabsTrigger value="conversation" className="px-2.5">
                     Conversation
@@ -1320,13 +1320,13 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
                     value={note}
                     onChange={(event) => setNotes((current) => ({ ...current, [commentDraft.id]: event.target.value }))}
                   />
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 max-md:flex-wrap">
                     <span className="text-xs text-muted-foreground">
                       {connected
                         ? `Approve posts it on GitHub as @${account?.login}, after you confirm; the agent is told, with your note.`
                         : "Approve sends nothing to GitHub; the agent is told, with your note."}
                     </span>
-                    <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                    <div className="ml-auto flex shrink-0 items-center gap-1.5 max-md:shrink max-md:flex-wrap max-md:justify-end">
                       <Button variant="outline" size="sm" disabled={busy !== ""} onClick={() => decide(commentDraft, "reject", false)}>
                         {busy === "reject" ? <Loader2 className="animate-spin" /> : <X />} Reject
                       </Button>
@@ -1393,7 +1393,7 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
                       }
                     }}
                   />
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 max-md:flex-wrap">
                     <span className="text-xs text-muted-foreground">Posted on GitHub as @{account?.login}, after you confirm. Markdown works, like on GitHub.</span>
                     <Button size="sm" className="ml-auto" disabled={busy !== "" || comment.trim() === ""} onClick={askComment}>
                       {busy === "comment" ? <Loader2 className="animate-spin" /> : <Send />} Comment

@@ -159,11 +159,11 @@ export default function VMs(props: { tab: "vms" | "images" | "defaults" }) {
   );
 
   const header = (
-    <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+    <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3 max-md:h-auto max-md:min-h-9 max-md:flex-wrap max-md:py-1">
       {tabs}
       {props.tab === "vms" && (
         <>
-          <span className="text-muted-foreground tabular-nums">
+          <span className="text-muted-foreground tabular-nums max-md:hidden">
             {running} of {vms.length} running
           </span>
           <Button size="sm" className="ml-auto" onClick={() => setCreating(true)}>

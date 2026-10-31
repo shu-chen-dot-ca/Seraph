@@ -6,7 +6,8 @@ files from here into its VM. It can't delete anything here; you can.
 
 Left: the folder you are in, with the path on top (click a part to go there), Up, New folder, Upload and Upload
 folder. Double-click a folder to open it; click a file to see it on the right: a picture, text, or a Download button
-for anything else. Each row's ⋯ menu has Download (files), Rename and Delete (asks first; a folder goes with
+for anything else. In phone mode (App.tsx, a screen under 768px wide) the file shows under the list, and one tap
+opens a folder. Each row's ⋯ menu has Download (files), Rename and Delete (asks first; a folder goes with
 everything in it). The list reads its folder again whenever the agent's artifacts change (artifacts_stamp in the live
 agent list), so a screenshot the agent takes shows up by itself. Nothing is ever overwritten: a name that is taken
 is refused.
@@ -63,8 +64,20 @@ export default function AgentArtifacts(props: { agentId: string; stamp: number }
   const [deleting, setDeleting] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
+  // Phone mode (App.tsx, under 768px): the file shown goes under the list instead of beside it.
+  const [phone, setPhone] = useState(() => window.matchMedia("(max-width: 767px)").matches);
 
   const base = `/api/agents/${props.agentId}/artifacts`;
+
+  // Follow the screen's width, also when a phone turns sideways.
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 767px)");
+    function update() {
+      setPhone(media.matches);
+    }
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
 
   // The folder, again whenever the artifacts change.
   useEffect(() => {
@@ -274,7 +287,7 @@ export default function AgentArtifacts(props: { agentId: string; stamp: number }
         </div>
       </div>
 
-      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
+      <ResizablePanelGroup key={phone ? "phone" : "computer"} orientation={phone ? "vertical" : "horizontal"} className="min-h-0 flex-1">
         <ResizablePanel defaultSize="55%" minSize="30%">
           <div
             className={cn("h-full overflow-y-auto", dragOver && "bg-accent/40 outline-2 -outline-offset-2 outline-primary outline-dashed")}
@@ -311,7 +324,15 @@ export default function AgentArtifacts(props: { agentId: string; stamp: number }
                   <div
                     key={entry.name}
                     className={cn("flex h-7 cursor-default items-center gap-2 border-b px-3 select-none hover:bg-accent/50", selected === full && "bg-selected hover:bg-selected")}
-                    onClick={() => entry.kind === "file" && setSelected(full)}
+                    onClick={() => {
+                      if (entry.kind === "file") {
+                        setSelected(full);
+                      }
+                      // A phone has no double-click: one tap opens a folder, like a phone's file app.
+                      if (entry.kind === "folder" && phone) {
+                        setPath(full);
+                      }
+                    }}
                     onDoubleClick={() => entry.kind === "folder" && setPath(full)}
                   >
                     {entry.kind === "folder" && <Folder className="size-4 shrink-0 text-muted-foreground" />}
