@@ -17,7 +17,8 @@ a message brings it back. An agent that made PRs can't be deleted, only archived
 The Desktop is the live screen of the agent's own desktop of the VM it holds or waits for (a VM has one to three, each
 with its own screen), else of desktop 1 of its target VM: only the screen, like the VMs page's
 picture, without noVNC's page and buttons around it (noVNC's own client draws it straight from the VM's VNC
-connection), so it moves as smoothly as the VM page's desktop. View-only: nothing reaches the VM from it. A click opens
+connection; LiveDesktop.tsx, through the backend when the page came through the remote access domain), so it moves as
+smoothly as the VM page's desktop. View-only: nothing reaches the VM from it. A click opens
 it big in a pop-up on this page (still view-only; the VM's name above it links to the VM page, where you can use it).
 Off, starting, not answering, or a terminal-only image say so instead.
 Under the Desktop, cards for the same VM like the VMs page's: CPU, Memory and Internet (the number now and a chart of
@@ -90,7 +91,6 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import RFB from "@novnc/novnc";
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -106,6 +106,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import AgentArtifacts from "@/AgentArtifacts";
+import LiveDesktop, { REMOTE } from "@/LiveDesktop";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -302,45 +303,6 @@ const IssueDraftCard = memo(function IssueDraftCard(props: { draft: IssueDraft }
     </div>
   );
 });
-
-// The VM's screen, live: noVNC's client (RFB) draws only the screen into this box, scaled to fit, none of noVNC's
-// page around it. View-only: nothing reaches the VM. A dropped connection tries again every 2 seconds.
-function LiveDesktop(props: { url: string; className?: string }) {
-  const boxRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const box = boxRef.current;
-    if (box === null) {
-      return;
-    }
-    let rfb: RFB | null = null;
-    let stopped = false;
-    let timer = 0;
-    // An arrow function, not a declaration: it keeps box narrowed to not null.
-    const connect = () => {
-      rfb = new RFB(box, props.url);
-      rfb.viewOnly = true;
-      rfb.scaleViewport = true;
-      rfb.focusOnClick = false;
-      rfb.background = "black";
-      rfb.addEventListener("disconnect", () => {
-        // A disconnected RFB is done for good: the next try is a new one.
-        rfb = null;
-        if (!stopped) {
-          timer = window.setTimeout(connect, 2000);
-        }
-      });
-    };
-    connect();
-    return () => {
-      stopped = true;
-      window.clearTimeout(timer);
-      if (rfb !== null) {
-        rfb.disconnect();
-      }
-    };
-  }, [props.url]);
-  return <div ref={boxRef} className={props.className} />;
-}
 
 // The cards under the Desktop, like the VMs page's: CPU, Memory and Internet with a chart of the last minute, and
 // Disk. A component of its own because it reads the whole VM list, which changes every second while the VM runs:
@@ -581,8 +543,15 @@ export default function AgentChat(props: { agentId: string; compact?: boolean })
           return;
         }
         // answer.desktop is noVNC's page (http://<VM>:<port>/vnc.html?...); LiveDesktop takes the websocket that page
-        // itself uses, on the same address.
-        setDeskUrl(answer.desktop === null ? null : `ws://${new URL(answer.desktop).host}/websockify`);
+        // itself uses, on the same address. Through the remote access domain it goes through the backend instead.
+        let url: string | null = null;
+        if (answer.desktop !== null) {
+          url = `ws://${new URL(answer.desktop).host}/websockify`;
+        }
+        if (answer.desktop !== null && REMOTE) {
+          url = `wss://${window.location.host}/api/vms/${encodeURIComponent(name)}/vnc?desktop=${deskNumber}`;
+        }
+        setDeskUrl(url);
         setDeskTerminal(answer.desktop === null);
       } catch {
         if (!stopped) {
@@ -1410,7 +1379,7 @@ export default function AgentChat(props: { agentId: string; compact?: boolean })
                   <div className="relative aspect-video overflow-hidden rounded-md border bg-muted/30">
                     {deskReady && deskUrl !== null && (
                       <>
-                        <LiveDesktop url={deskUrl} className="pointer-events-none absolute inset-0 bg-black" />
+                        <LiveDesktop url={deskUrl} viewOnly className="pointer-events-none absolute inset-0 bg-black" />
                         {/* Over the picture: a click opens it big, here on the page. */}
                         <button
                           type="button"
@@ -1450,7 +1419,7 @@ export default function AgentChat(props: { agentId: string; compact?: boolean })
                         .
                       </DialogDescription>
                     </DialogHeader>
-                    {deskUrl !== null && <LiveDesktop url={deskUrl} className="min-h-0 flex-1 overflow-hidden rounded-md bg-black" />}
+                    {deskUrl !== null && <LiveDesktop url={deskUrl} viewOnly className="min-h-0 flex-1 overflow-hidden rounded-md bg-black" />}
                   </DialogContent>
                 </Dialog>
               </div>

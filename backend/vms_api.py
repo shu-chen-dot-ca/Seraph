@@ -6,13 +6,15 @@ Resources tab, desktop 1's home; only the user can, see sandbox/file_transfer.py
 A VM has one to three desktops (sandbox/vm.py), each with its own holder and priority line, and one waiting line for
 them all: the viewer, the screen picture, the lock, Take over, Release and Give name the desktop (1 when left out);
 Front, Skip and Remove name an agent. The number of desktops is set with CPU and memory (Resources, only while the VM
-is stopped); a desktop in use can't go, and new ones go to the agents waiting.
+is stopped), or one at a time at any time (the desktop bar's + and ×: add one, or remove the last); a desktop in use
+can't go, and new ones go to the agents waiting.
 
 Create, start, stop and restart run in background threads inside
 sandbox/vms.py and answer at once; the browser follows the state through
 /api/live. Saving env variables (a VM's or the ones for all VMs) that an agent added empty tells that agent
 they are filled in now (Agents.secrets_filled). Settings and the viewer make Incus calls that block, so those
-endpoints are plain `def` (FastAPI runs them in a thread pool). The queue
+endpoints are plain `def` (FastAPI runs them in a thread pool). Through the remote access domain the page draws the
+desktop itself and its VNC connection passes through here (/vms/{name}/vnc). The queue
 endpoints are `async def`: they are quick, and taking a VM from an agent
 interrupts that agent, which lives on the event loop. Skip makes the holding agent step aside (the next one gets
 the VM, and the agent waits in the VM's priority line, sandbox/vm_queue.py). Stop ends one of the long runs agents
@@ -23,12 +25,16 @@ import asyncio
 import os
 import subprocess
 from pathlib import Path
+from urllib.parse import urlsplit
 
+import websockets
 from dotenv import load_dotenv
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Response, WebSocket
 from pydantic import BaseModel
+from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from backend.shared import agents, images, queue, vms
+from backend.shared import agents, images, queue, remote_access, vms
+from github_searcher.remote_access import COOKIE, DOMAIN as REMOTE_DOMAIN
 from sandbox import file_transfer
 from sandbox.agent import long_runs
 from sandbox.agent.computer_use import Computer, ComputerError
@@ -41,6 +47,8 @@ load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 
 NOVNC_PORT = os.environ["SANDBOX_VM_NOVNC_PORT"]
 TERMINAL_PORT = os.environ["SANDBOX_VM_TERMINAL_PORT"]
+# The hosts whose pages may open the VNC websocket, like backend/app.py's ALLOWED_HOSTS.
+ALLOWED_HOSTS = ["localhost", "127.0.0.1"] + ([REMOTE_DOMAIN] if REMOTE_DOMAIN != "" else [])
 
 router = APIRouter(prefix="/api")
 
@@ -247,7 +255,7 @@ def vm_viewer(name: str, desktop: int = 1) -> dict:
     (ttyd) when it has no desktop.
 
     The browser loads it straight from the VM's address on the Incus bridge,
-    which only this machine can reach.
+    which only this machine can reach. Pages through the remote access domain use /vms/{name}/vnc instead.
     """
     try:
         record = vms.get(name)
@@ -267,6 +275,74 @@ def vm_viewer(name: str, desktop: int = 1) -> dict:
     # bell=off: no ding in the browser each time the desktop beeps (e.g. while the agent types).
     url = f"http://{address}:{port}/vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=2000&bell=off"
     return {"desktop": url, "terminal": None}
+
+
+@router.websocket("/vms/{name}/vnc")
+async def vm_vnc(websocket: WebSocket, name: str, desktop: int = 1) -> None:
+    """One of the VM's desktops for the page's own noVNC client (frontend/src/LiveDesktop.tsx), for pages through the
+    remote access domain: they can't load the VM's address (only this machine reaches it, and an https page can't
+    load http). Only the VNC connection passes through, never noVNC's page from the VM: the VM's agent could change
+    that page, and here it would run on this site, signed in.
+
+    Checked like /api/live, since websockets skip the http middleware: a page from another site never gets in, and
+    through the domain only signed in. A device removed or signed out loses the desktop at its next message.
+    """
+    origin = websocket.headers.get("origin")
+    if origin is not None and urlsplit(origin).hostname not in ALLOWED_HOSTS:
+        await websocket.close(code=1008)
+        return
+    outside = remote_access.from_outside(websocket.headers)
+    cookie = websocket.cookies.get(COOKIE)
+    if outside and remote_access.device_for(cookie) is None:
+        await websocket.close(code=1008)
+        return
+    try:
+        record = vms.get(name)
+    except VMsError:
+        await websocket.close(code=1008)
+        return
+    if desktop < 1 or desktop > len(record.desktops):
+        await websocket.close(code=1008)
+        return
+    # An Incus call that blocks, so in a thread. None while the VM is off or still has no address: the page tries
+    # again by itself.
+    address = await asyncio.to_thread(record.vm.address)
+    if address is None:
+        await websocket.close(code=1011)
+        return
+    port = int(NOVNC_PORT) + desktop - 1
+    try:
+        # The same websocket noVNC's page in the VM uses. max_size=None: one screen update can be bigger than 1 MB.
+        vm_socket = await websockets.connect(f"ws://{address}:{port}/websockify", max_size=None, compression=None)
+    except (OSError, websockets.WebSocketException):
+        await websocket.close(code=1011)
+        return
+    await websocket.accept()
+
+    async def to_vm() -> None:
+        async for data in websocket.iter_bytes():
+            if outside and remote_access.device_for(cookie) is None:
+                return
+            await vm_socket.send(data)
+
+    async def to_browser() -> None:
+        async for data in vm_socket:
+            if outside and remote_access.device_for(cookie) is None:
+                return
+            await websocket.send_bytes(data)
+
+    # Until either side goes away; then both close.
+    tasks = [asyncio.create_task(to_vm()), asyncio.create_task(to_browser())]
+    await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
+    await vm_socket.close()
+    if websocket.client_state == WebSocketState.CONNECTED:
+        try:
+            await websocket.close()
+        except (RuntimeError, WebSocketDisconnect):
+            pass
 
 
 @router.get("/vms/{name}/screen")
@@ -352,6 +428,36 @@ def set_resources(name: str, body: ResourcesRequest) -> dict:
         raise HTTPException(status_code=409, detail=str(error))
     except VMError as error:
         raise HTTPException(status_code=500, detail=str(error))
+    return {}
+
+
+@router.post("/vms/{name}/desktops")
+def add_desktop(name: str) -> dict:
+    """One more desktop, running or not. While the VM runs it is set up first: under a minute the first time."""
+    try:
+        record = vms.get(name)
+    except VMsError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    try:
+        record.add_desktop(queue.lock)
+        # The new desktop goes to the agents waiting.
+        queue.fill(name)
+    except VMsError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    return {}
+
+
+@router.delete("/vms/{name}/desktops/{number}")
+def remove_desktop(name: str, number: int) -> dict:
+    """Take the last desktop away, running or not. A desktop in use can't go."""
+    try:
+        record = vms.get(name)
+    except VMsError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    try:
+        record.remove_desktop(number, queue.lock)
+    except VMsError as error:
+        raise HTTPException(status_code=409, detail=str(error))
     return {}
 
 

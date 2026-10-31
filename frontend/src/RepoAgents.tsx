@@ -1,20 +1,21 @@
 /*
 A repository's Agents tab on the Workspace tab (Repository.tsx with live, from Home.tsx; the tab a repo opens on): every
-agent linked to the repo's VM, laid out like a chat app's list of chats.
+agent working with the repo, laid out like a chat app's list of chats.
 
-The repo's VM is the one Set up on the Live tab made, its own agent's target VM. The agents linked to it are its own
-agent (marked Live) and every agent that has the VM as its target VM, waits for it or holds it. Its own agent comes
-first, then the others, newest first; archived ones last, marked so.
+Which VMs have the repo set up comes from their notes: a VM has it when one of its notes names the repo as owner/name
+(agents write their notes that way, github_searcher/agent/prompt.md; you can add one yourself on the VM's Notes tab).
+The agents working with the repo: the repo's own agent, every agent with a job on the repo, and every agent that has
+one of those VMs as its target VM, waits for it or holds it. Newest first; archived ones last, marked so.
 
-Left: the VM's name (a link to its page) and New agent, which makes an agent with the next free name ("agent-N"), sets
-the VM as its target VM and opens its chat. Under them one card per agent: where it stands (idle, working, in the VM's
-queue, using the VM and which desktop) and when it last did something; the job it is on, with how far that is and its
-headline in everyday words, or else what it did last. The open one is marked. Right: the open agent's chat
-(AgentChat.tsx, compact), where you talk to it; at first the first agent's. With none (the repo isn't set up), a line
-says Set up on the Live tab makes the repo's own agent and its VM.
+Left: the VMs that have the repo set up (each a link to its page), or a line that none has, and New agent, which makes
+an agent with the next free name ("agent-N"), sets the first of those VMs as its target VM and opens its chat (only
+when one has it). Under them one card per agent: where it stands (idle, working, in the VM's queue, using the VM and
+which desktop) and when it last did something; the job it is on, with how far that is and its headline in everyday
+words, or else what it did last. The open one is marked. Right: the open agent's chat (AgentChat.tsx, compact), where
+you talk to it; at first the first agent's.
 On a narrow screen (a phone) one side shows at a time: the cards, or the open agent's chat with Agents (back to the
 cards) above it.
-Everything comes from the live store (agents and jobs), so the cards move on their own while agents work.
+Everything comes from the live store (agents, jobs and VMs), so the cards move on their own while agents work.
 */
 
 import { ChevronLeft, Loader2, Monitor, Plus } from "lucide-react";
@@ -26,12 +27,22 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { JobProgressBar, currentJob, since, stuckFor, useNow } from "@/components/ui/job-progress";
 import { AGENT_TONE, StatusDot } from "@/components/ui/status-dot";
-import { api, useLive, useLoaded } from "@/live";
+import { api, useLive, useLiveValue, useLoaded } from "@/live";
 import { cn } from "@/lib/utils";
 
-export default function RepoAgents(props: { repo: string; liveHash: string }) {
+export default function RepoAgents(props: { repo: string }) {
   const agents = useLive("agents");
   const jobs = useLive("jobs");
+  // The VMs that have the repo set up, one name per line: one of their notes names it as owner/name, not as part of a
+  // longer name. Only the names, since the VM list changes every second while a VM runs.
+  const vmText = useLiveValue((topics) => {
+    const pattern = new RegExp(`(?<![\\w.-])${props.repo.replaceAll(".", "\\.")}(?![\\w.-])`, "i");
+    return topics.vms
+      .filter((vm) => vm.notes.some((note) => pattern.test(note.text)))
+      .map((vm) => vm.name)
+      .join("\n");
+  });
+  const vmNames = vmText === "" ? [] : vmText.split("\n");
   const loaded = useLoaded("agents");
   const now = useNow();
   // The agent whose chat is open; null: none picked yet (the first one's shows, except on a phone).
@@ -39,22 +50,29 @@ export default function RepoAgents(props: { repo: string; liveHash: string }) {
   // New agent's requests are on their way.
   const [creating, setCreating] = useState(false);
 
-  // Its own agent first, then the others linked to the repo's VM, newest first; archived ones last.
-  const own = agents.filter((agent) => agent.repo === props.repo);
-  const vmName = own.length > 0 ? own[0].target_vm : null;
-  const others = agents
-    .filter((agent) => agent.repo !== props.repo && vmName !== null && (agent.target_vm === vmName || agent.vm === vmName))
+  // The repo's own agent, the agents with a job on the repo, and the agents linked to a VM that has it set up. Newest
+  // first; archived ones last.
+  const jobAgents = jobs.filter((job) => job.repo !== null && job.repo.toLowerCase() === props.repo.toLowerCase()).map((job) => job.agent);
+  const all = agents
+    .filter(
+      (agent) =>
+        agent.repo === props.repo ||
+        jobAgents.includes(agent.id) ||
+        (agent.target_vm !== null && vmNames.includes(agent.target_vm)) ||
+        (agent.vm !== null && vmNames.includes(agent.vm)),
+    )
     .sort((a, b) => b.created_at.localeCompare(a.created_at));
-  const all = [...own, ...others];
   const list = [...all.filter((agent) => agent.archived_at === null), ...all.filter((agent) => agent.archived_at !== null)];
   const picked = list.find((agent) => agent.id === selected);
   const shown = picked !== undefined ? picked : list[0];
 
-  // No name: the backend gives it the next free "agent-N". Then the repo's VM becomes its target VM.
+  // No name: the backend gives it the next free "agent-N". Then the first VM that has the repo set up becomes its
+  // target VM.
   async function createAgent() {
-    if (vmName === null || creating) {
+    if (vmNames.length === 0 || creating) {
       return;
     }
+    const vmName = vmNames[0];
     setCreating(true);
     try {
       const agent = await api<{ id: string }>("/api/agents", { method: "POST", body: { name: "" } });
@@ -74,31 +92,27 @@ export default function RepoAgents(props: { repo: string; liveHash: string }) {
     return <div className="p-3 text-muted-foreground">Loading…</div>;
   }
 
-  if (list.length === 0) {
-    return (
-      <div className="flex h-full items-center justify-center px-4 text-center text-muted-foreground">
-        <span>
-          No agents for this repo yet.{" "}
-          <a href={props.liveHash} className="text-primary hover:underline">
-            Set up on the Live tab
-          </a>{" "}
-          makes its own agent and its VM.
-        </span>
-      </div>
-    );
-  }
-
   return (
     <div className="flex h-full">
       <div className={cn("flex w-80 shrink-0 flex-col border-r max-md:w-full max-md:border-r-0", picked !== undefined && "max-md:hidden")}>
         <div className="flex h-9 shrink-0 items-center gap-2 border-b px-2">
-          {vmName !== null && (
-            <a href={`#/vms/${encodeURIComponent(vmName)}`} className="flex min-w-0 items-center gap-1.5 text-muted-foreground hover:text-foreground hover:underline" title="Open the VM's page">
-              <Monitor className="size-4 shrink-0" />
-              <span className="truncate">{vmName}</span>
-            </a>
+          {vmNames.length === 0 && (
+            <span className="min-w-0 truncate text-muted-foreground" title={`A VM has it once one of its notes names ${props.repo} (the VM's Notes tab)`}>
+              No VM has this repo set up
+            </span>
           )}
-          <Button size="sm" variant="outline" className="ml-auto" disabled={vmName === null || creating} onClick={createAgent}>
+          {vmNames.map((name) => (
+            <a
+              key={name}
+              href={`#/vms/${encodeURIComponent(name)}`}
+              className="flex min-w-0 items-center gap-1.5 text-muted-foreground hover:text-foreground hover:underline"
+              title="Open the VM's page"
+            >
+              <Monitor className="size-4 shrink-0" />
+              <span className="truncate">{name}</span>
+            </a>
+          ))}
+          <Button size="sm" variant="outline" className="ml-auto shrink-0" disabled={vmNames.length === 0 || creating} onClick={createAgent}>
             {creating ? <Loader2 className="animate-spin" /> : <Plus />} New agent
           </Button>
         </div>
@@ -120,11 +134,6 @@ export default function RepoAgents(props: { repo: string; liveHash: string }) {
                 <div className="flex min-w-0 items-center gap-2">
                   <StatusDot tone={stuck !== "" ? "amber" : (AGENT_TONE[agent.status] ?? "gray")} />
                   <span className="min-w-0 truncate font-semibold">{agent.name}</span>
-                  {agent.repo === props.repo && (
-                    <Badge variant="outline" className="py-0" title="This repo's own agent, the one on the Live tab">
-                      Live
-                    </Badge>
-                  )}
                   {agent.archived_at !== null && (
                     <Badge variant="secondary" className="py-0">
                       Archived

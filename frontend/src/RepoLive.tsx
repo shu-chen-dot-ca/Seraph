@@ -12,7 +12,9 @@ Once set up: the desktop on the left, the chat on the right. The desktop is desk
 like on the VM's page: noVNC in an iframe (asked for once the VM runs, again every 3 s until it has an address), its
 name (a link to its page) and state above it, Start while it is off, Lock (keeps your mouse and keyboard out) and
 Reconnect. Locked (by the agent while it works, or by you), a cover stops clicks and keys, with Unlock. On a narrow
-screen (a phone) one side shows at a time, picked with Desktop and Chat on top.
+screen (a phone) one side shows at a time, picked with Desktop and Chat on top. Through the remote access domain the
+page draws the desktop itself (LiveDesktop.tsx, its VNC connection through the backend), since the VM's address can't
+be reached from there; a terminal-only image's terminal opens only on this computer.
 */
 
 import { Loader2, Lock, Monitor, Play, Power, RotateCw, Unlock } from "lucide-react";
@@ -20,6 +22,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import AgentChat from "@/AgentChat";
+import LiveDesktop, { REMOTE } from "@/LiveDesktop";
 import { Button } from "@/components/ui/button";
 import { StatusDot, VM_TONE } from "@/components/ui/status-dot";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -230,7 +233,18 @@ export default function RepoLive(props: { repo: string }) {
           )}
 
           <div className="relative min-h-0 flex-1 bg-muted/30">
-            {running && desktopUrl !== null && (
+            {running && desktopUrl !== null && REMOTE && terminalOnly && (
+              <div className="flex h-full items-center justify-center px-4 text-center text-muted-foreground">The terminal opens only on this computer.</div>
+            )}
+            {running && desktopUrl !== null && REMOTE && !terminalOnly && (
+              <LiveDesktop
+                key={reload}
+                url={`wss://${window.location.host}/api/vms/${encodeURIComponent(vm.name)}/vnc?desktop=1`}
+                viewOnly={locked !== null}
+                className="absolute inset-0 size-full bg-black"
+              />
+            )}
+            {running && desktopUrl !== null && !REMOTE && (
               <iframe
                 key={`${desktopUrl}-${reload}`}
                 ref={frameRef}

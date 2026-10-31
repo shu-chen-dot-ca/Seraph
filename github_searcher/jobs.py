@@ -4,11 +4,14 @@ The user makes a job by assigning an issue to an agent, or a repo to set up (Set
 an agent can make jobs for itself. The app makes follow_up jobs (Agents.follow_up): on a PR or issue of the user's
 that an agent follows (the GitHub tab, agent mode Drafts), someone else wrote or the PR's checks failed. "thread" is
 that PR or issue; the agent suggests a reply or a new version of the PR as a draft, or marks the job done when
-nothing needs an answer.
+nothing needs an answer. The user makes a reproduce_paper job by adding a paper on the Workspace tab's Papers page
+(Agents.reproduce_paper): the agent reads the paper, rebuilds what it describes in the VM, compares its numbers with
+the paper's, checks the claims, and drafts a report for the Inbox. "paper" is the PDF's path in the agent's artifacts.
 Each job is one JSON file, DATA_DIR/jobs/<id>.json:
 
-    {"id": "job_a1b2c3", "kind": "fix_issue" | "set_up_repo" | "task" | "follow_up" | ..., "title", "agent": "<agent id>",
-     "issue": "owner/name#n" | null, "thread": "owner/name#n" (follow_up) | null, "repo": "owner/name" | null, "vm": "vm1" | null,
+    {"id": "job_a1b2c3", "kind": "fix_issue" | "set_up_repo" | "task" | "follow_up" | "reproduce_paper" | ..., "title",
+     "agent": "<agent id>", "issue": "owner/name#n" | null, "thread": "owner/name#n" (follow_up) | null,
+     "paper": "papers/name.pdf" (reproduce_paper) | null, "repo": "owner/name" | null, "vm": "vm1" | null,
      "status": "queued" | "working" | "waiting_on_user" | "done" | "cancelled",
      "instructions": "extra text from the user", "notes": "the agent's progress notes",
      "drafts": ["draft_..."], "evidence": [Evidence, ...], "created_by": "user" | "<agent id>",
@@ -91,6 +94,10 @@ STEPS = {
     # Answer what happened on a PR or issue the agent follows: read it (understand), make the change or write the reply
     # (work), the tests when the PR's code changed (test), then the draft.
     "follow_up": ["understand", "work", "test", "draft"],
+    # Reproduce a paper: read it (read), get its language and data in the VM (set_up), write the method from the paper
+    # alone (rebuild), run it and the authors' own code and line the numbers up (compare), test the claims (check),
+    # then the report.
+    "reproduce_paper": ["read", "set_up", "rebuild", "compare", "check", "report"],
 }
 
 
@@ -117,6 +124,8 @@ class Jobs:
             job.setdefault("tests", {"before": None, "after": None})
             # And from before follow-ups.
             job.setdefault("thread", None)
+            # And from before papers.
+            job.setdefault("paper", None)
             self.jobs[job["id"]] = job
 
     def save(self, job: dict) -> None:
@@ -148,7 +157,8 @@ class Jobs:
             return copy.deepcopy(jobs)
 
     def create(self, kind: str, title: str, agent: str, created_by: str, issue: str | None = None,
-               repo: str | None = None, vm: str | None = None, instructions: str = "", thread: str | None = None) -> dict:
+               repo: str | None = None, vm: str | None = None, instructions: str = "", thread: str | None = None,
+               paper: str | None = None) -> dict:
         # An issue id is "owner/name#n", so it already says the repo. So does a thread's.
         if issue and not repo:
             repo = issue.split("#")[0]
@@ -167,6 +177,7 @@ class Jobs:
                 "agent": agent,
                 "issue": issue,
                 "thread": thread,
+                "paper": paper,
                 "repo": repo,
                 "vm": vm,
                 "status": "queued",
