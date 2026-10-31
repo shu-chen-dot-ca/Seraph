@@ -27,6 +27,9 @@ Notes, Resources or Settings tab is open, so the desktop iframe never reloads: c
 Overview (the tab you were on isn't remembered). The iframe only
 exists while the VM runs; its address comes from GET /api/vms/{name}/viewer?desktop=n, asked again (every 3 s)
 until the VM has one. A VM from a terminal-only image has no desktop: the same area shows its terminal (ttyd).
+Through the remote access domain (a phone) the VM's address can't be reached: the page draws the desktop itself
+(LiveDesktop.tsx, its VNC connection through the backend), without New tab, and the terminal of a terminal-only image
+isn't shown (it opens only on this computer).
 
 The queue buttons map one to one onto the backend, for the desktop shown: Take over, Release (your own hold), Give
 (the desktop goes to that agent now), Front (next in line), Skip (the holding agent steps aside: the next one gets the
@@ -52,6 +55,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import ForkVMDialog from "@/ForkVMDialog";
+import LiveDesktop, { REMOTE } from "@/LiveDesktop";
 import VMNotes from "@/VMNotes";
 import VMResources from "@/VMResources";
 import VMSettings from "@/VMSettings";
@@ -468,8 +472,14 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
       </div>
 
       {/* Hidden, not unmounted, while another tab is open: the desktop keeps its connection.
-          While a divider is dragged the iframe ignores the pointer, or it would swallow the drag. */}
-      <div className={tab === "overview" ? "min-h-0 flex-1 [&:has([data-separator=active])_iframe]:pointer-events-none" : "hidden"}>
+          While a divider is dragged the desktop (iframe or canvas) ignores the pointer, or it would swallow the drag. */}
+      <div
+        className={
+          tab === "overview"
+            ? "min-h-0 flex-1 [&:has([data-separator=active])_canvas]:pointer-events-none [&:has([data-separator=active])_iframe]:pointer-events-none"
+            : "hidden"
+        }
+      >
         <ResizablePanelGroup orientation="vertical">
           <ResizablePanel defaultSize="68" minSize="25">
             <ResizablePanelGroup key={phone ? "phone" : "computer"} orientation={phone ? "vertical" : "horizontal"}>
@@ -535,11 +545,13 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                         <Button variant="ghost" size="xs" title="Connect again" onClick={() => setReload(reload + 1)}>
                           <RotateCw /> Reconnect
                         </Button>
-                        <Button variant="ghost" size="xs" asChild>
-                          <a href={desktopUrl} target="_blank" rel="noreferrer" title="Open it in its own tab">
-                            <ExternalLink /> New tab
-                          </a>
-                        </Button>
+                        {!REMOTE && (
+                          <Button variant="ghost" size="xs" asChild>
+                            <a href={desktopUrl} target="_blank" rel="noreferrer" title="Open it in its own tab">
+                              <ExternalLink /> New tab
+                            </a>
+                          </Button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -549,6 +561,23 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                         const url = desktopUrls[number];
                         if (url === undefined || number > count) {
                           return null;
+                        }
+                        if (REMOTE && terminalOnly) {
+                          return (
+                            <div key={number} className="flex h-full items-center justify-center px-4 text-center text-muted-foreground">
+                              The terminal opens only on this computer.
+                            </div>
+                          );
+                        }
+                        if (REMOTE) {
+                          return (
+                            <LiveDesktop
+                              key={`${number}-${reload}`}
+                              url={`wss://${window.location.host}/api/vms/${encodeURIComponent(name)}/vnc?desktop=${number}`}
+                              viewOnly={(vm.locked_by[number] ?? null) !== null}
+                              className={cn("absolute inset-0 size-full bg-black", number !== shown && "hidden")}
+                            />
+                          );
                         }
                         return (
                           <iframe
