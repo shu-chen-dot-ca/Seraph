@@ -5,8 +5,8 @@ fresh from GitHub, with your sign-in (it may be private), each time a tab opens 
 Refresh reads it again.
 The bar on top: the repo's name (a lock when private; opens it on GitHub), tabs Overview, Issues, Pull requests (with
 how many are open) and Actions (tab=issues|pulls|actions in the address), and on the right Star or Unstar with how many
-stars it has (one click, like on GitHub; a repo you unstar leaves Starred at once, its page stays open until you go)
-and Refresh.
+stars it has (one click, like on GitHub; a repo you unstar leaves Starred at once, its page stays open until you go),
+New issue and Refresh.
 - Overview: the description, stars and forks, the newest commits on the default branch (each with whether its
   checks passed, who made it and when; a click opens it on GitHub), then the README.
 - Issues and Pull requests: tabs Open and Closed (state=closed) with how many, a box that filters by title and number,
@@ -17,6 +17,7 @@ and Refresh.
   comment. Closing the pop-up reads the list again.
 - Actions: the newest GitHub Actions runs: passed, failed, cancelled, running or waiting, the workflow, what it ran
   for, the branch, what started it, who and when. A click opens the run on GitHub.
+New issue opens NewIssueDialog.tsx.
 */
 
 import {
@@ -35,12 +36,14 @@ import {
   Loader2,
   Lock,
   MessageSquare,
+  Plus,
   RefreshCw,
   Star,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
+import NewIssueDialog from "@/NewIssueDialog";
 import ThreadDialog from "@/ThreadDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -129,9 +132,10 @@ export default function Repository(props: { repo: string; tab: string; state: st
   const [runs, setRuns] = useState<{ items: RepoRun[] } | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  // Goes up to read the tab again (Refresh, a closed pop-up).
+  // Goes up to read the tab again (Refresh, a closed pop-up, a new issue).
   const [reload, setReload] = useState(0);
   const [filter, setFilter] = useState("");
+  const [newIssueOpen, setNewIssueOpen] = useState(false);
   const [starring, setStarring] = useState(false);
 
   const tab = TABS.includes(props.tab) ? props.tab : "overview";
@@ -234,6 +238,9 @@ export default function Repository(props: { repo: string; tab: string; state: st
             {starring ? <Loader2 className="animate-spin" /> : <Star className={cn(starred && "fill-current text-warn")} />}
             {starred ? "Unstar" : "Star"}
             <span className="text-xs text-muted-foreground tabular-nums">{stars}</span>
+          </Button>
+          <Button size="sm" variant="outline" disabled={yourRepos.login === null} onClick={() => setNewIssueOpen(true)}>
+            <Plus /> New issue
           </Button>
           <Button size="sm" variant="outline" disabled={loading} onClick={() => setReload((count) => count + 1)}>
             {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />} Refresh
@@ -466,6 +473,17 @@ export default function Repository(props: { repo: string; tab: string; state: st
         onClose={() => {
           window.location.hash = listHash;
           setReload((count) => count + 1);
+        }}
+      />
+      <NewIssueDialog
+        repo={props.repo}
+        login={yourRepos.login ?? ""}
+        open={newIssueOpen}
+        onClose={() => setNewIssueOpen(false)}
+        onOpened={() => {
+          if (tab === "issues") {
+            setReload((count) => count + 1);
+          }
         }}
       />
     </div>

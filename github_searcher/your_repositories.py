@@ -23,8 +23,8 @@ What a repo's page shows is read when it opens (never kept): overview() (the REA
 default branch, each with its checks), issues(state) and pulls(state) (the newest 50 of the Open or Closed tab, and
 how many are in each) and runs() (the newest GitHub Actions runs).
 
-act() is one change you make, as you: Star and Unstar (one click, like on GitHub, on any repo). A refusal raises
-ValueError with what GitHub said.
+act() is one change you make, as you: Star and Unstar (one click, like on GitHub, on any repo) and a new issue (in
+a repo of either list). A refusal raises ValueError with what GitHub said.
 """
 
 import copy
@@ -42,7 +42,7 @@ PUSH = ["ADMIN", "MAINTAIN", "WRITE"]
 LIST_SIZE = 50
 RUNS_SIZE = 30
 COMMITS_SIZE = 10
-ACTIONS = ["star", "unstar"]
+ACTIONS = ["star", "unstar", "new_issue"]
 
 REPOS_QUERY = """
 query {
@@ -347,9 +347,12 @@ class YourRepositories:
 
     def act(self, repo: str, action: str, number: int | None, kind: str, fields: dict) -> dict:
         """One change you make, as you. kind is "issue" or "pr" (what number is). Returns {"done": what happened, in
-        words, "url": None}. ValueError says why not."""
+        words, "url": the new issue's address (new_issue) | None}. ValueError says why not."""
         if action not in ACTIONS:
             raise ValueError(f"Unknown action {action}.")
+        if action == "new_issue" and not self.is_listed(repo):
+            raise ValueError(f"{repo} isn't one of your repositories or stars.")
+        url = None
 
         with self.client() as client:
             if action == "star":
@@ -358,6 +361,15 @@ class YourRepositories:
             elif action == "unstar":
                 response = client.delete(f"/user/starred/{repo}")
                 done = f"Unstarred {repo}"
+            elif action == "new_issue":
+                title = fields.get("title", "").strip()
+                if title == "":
+                    raise ValueError("Give the issue a title.")
+                response = client.post(f"/repos/{repo}/issues", json={"title": title, "body": fields.get("body", "")})
+                done = "Issue opened"
+                if response.status_code == 201:
+                    url = response.json()["html_url"]
+                    done = f"Opened {repo} #{response.json()['number']}"
 
         if response.status_code >= 400:
             message = response.text[:200]
@@ -368,5 +380,6 @@ class YourRepositories:
             raise ValueError(f"GitHub refused: {message}")
         self.wanted = True
         # Star and Unstar show in the left list at once.
-        self.refresh()
-        return {"done": done, "url": None}
+        if action == "star" or action == "unstar":
+            self.refresh()
+        return {"done": done, "url": url}
