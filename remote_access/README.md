@@ -1,6 +1,6 @@
 # Remote access
 
-Open Seraph from your phone, or any device, at your own address (for example `https://seraph.example.com`), signed in with a passkey (Face ID, Touch ID, Windows Hello or a security key). On this computer nothing changes: `http://localhost:5173` needs no sign-in.
+Open Seraph from your phone, or any device, at your own address (for example `https://seraph.example.com`), signed in with a passkey (Face ID, Touch ID, Windows Hello or a security key). On this computer nothing changes: `http://localhost:8001` (the live copy, [deploy/](../deploy/install.sh)) or `http://localhost:5173` (the dev copy, `./run.sh`) needs no sign-in.
 
 ```text
 phone ──► seraph.example.com ──► forwarder (small server) ◄── this computer keeps an SSH line open ──► Caddy ──► Seraph

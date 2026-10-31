@@ -3,6 +3,8 @@
 # through it to Caddy on this computer. It ends when the connection drops (after 45 quiet seconds, e.g. when the
 # network changes); the service that runs it (set_up_laptop.sh) starts it again 5 seconds later.
 cd "$(dirname "$0")/.."
+# data/ is DATA_DIR: ~/seraph/data in the live copy (deploy/), data in the dev copy.
+DATA=$(grep '^DATA_DIR=' .env | cut -d= -f2)
 
 SERVER=$(grep '^REMOTE_ACCESS_SERVER=' .env | cut -d= -f2)
 TUNNEL_USER=$(grep '^REMOTE_ACCESS_SERVER_USER=' .env | cut -d= -f2)
@@ -16,9 +18,9 @@ fi
 
 # The server's own key was learned when set_up_server.sh first logged in, and must match from then on.
 exec ssh -N \
-    -i data/remote_access/tunnel_key \
+    -i "$DATA/remote_access/tunnel_key" \
     -o IdentitiesOnly=yes \
-    -o UserKnownHostsFile=data/remote_access/known_hosts \
+    -o UserKnownHostsFile="$DATA/remote_access/known_hosts" \
     -o StrictHostKeyChecking=yes \
     -o ExitOnForwardFailure=yes \
     -o ServerAliveInterval=15 \

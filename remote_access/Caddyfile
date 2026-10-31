@@ -4,8 +4,9 @@
 # and keeps it in data/remote_access/caddy.
 #
 # /api/* goes straight to the backend, which checks the sign in on every call (backend/app.py). Everything else is
-# the app's own files from the Vite dev server, passed on only when the backend says the request is signed in
-# (GET /api/remote_access/check; otherwise its redirect to the Sign in page goes back instead).
+# the app's own files, passed on only when the backend says the request is signed in (GET /api/remote_access/check;
+# otherwise its redirect to the Sign in page goes back instead). They come from PAGE_PORT (start_caddy.sh): the
+# backend in the live copy (deploy/), which serves its built page, or the Vite dev server in the dev copy.
 {
 	http_port {$REMOTE_ACCESS_HTTP_PORT}
 	https_port {$REMOTE_ACCESS_HTTPS_PORT}
@@ -22,7 +23,7 @@
 			uri /api/remote_access/check
 		}
 		# localhost, not 127.0.0.1: Node often listens on ::1 only.
-		reverse_proxy localhost:5173
+		reverse_proxy localhost:{$PAGE_PORT}
 	}
 }
 
