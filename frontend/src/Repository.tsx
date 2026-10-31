@@ -1,14 +1,21 @@
 /*
 One of your repositories or a repo you starred (#/github/repo?repo=owner/name), opened from Your repositories or
-Starred in the GitHub tab's left list (GitHubNav.tsx): like the repo's page on GitHub, without browsing its code. Read
-fresh from GitHub, with your sign-in (it may be private), each time a tab opens (backend/your_repositories_api.py);
-Refresh reads it again.
-The bar on top: the repo's name (a lock when private; opens it on GitHub), tabs Overview, Issues, Pull requests (with
-how many are open) and Actions (tab=issues|pulls|actions in the address), and on the right Star or Unstar with how many
-stars it has (one click, like on GitHub; a repo you unstar leaves Starred at once, its page stays open until you go),
-New issue and Refresh.
-- Overview: the description, stars and forks, the newest commits on the default branch (each with whether its
-  checks passed, who made it and when; a click opens it on GitHub), then the README.
+Starred in the GitHub tab's left list (GitHubNav.tsx): like the repo's page on GitHub. Read fresh from GitHub, with
+your sign-in (it may be private), each time a tab opens (backend/your_repositories_api.py); Refresh reads it again.
+It only reads, except the buttons that say what they do.
+The bar on top: the repo's name (a lock when private; opens it on GitHub), tabs Code, Issues, Pull requests (with
+how many are open), Commits and Actions (tab=issues|pulls|commits|actions in the address; none is Code), and on the
+right Star or Unstar with how many stars it has (one click, like on GitHub; a repo you unstar leaves Starred at once,
+its page stays open until you go), New issue and Refresh. On a narrow screen (a phone) the bar wraps: the tabs go on
+a line of their own and scroll sideways.
+- Code: the description, stars, forks and website, then the files like on GitHub: the newest commit on the default
+  branch on top (whether its checks passed, who, the message, its id, when; a click opens it on GitHub), where you are
+  (the repo's name, then each folder: a click goes back there), then the folder's folders and files, folders first
+  (.. goes up). A click on a folder goes into it; a click on a file shows it in the same box: code with line numbers,
+  rendered markdown for .md files, or that it is binary or too big, with GitHub (the file there). The README of the
+  repo is under the files, at the top folder. Where you are isn't in the address: a reload starts at the top.
+- Commits: the newest 50 commits on the default branch, each with whether its checks passed, the message, who and
+  when, and its id; a click opens it on GitHub.
 - Issues and Pull requests: tabs Open and Closed (state=closed) with how many, a box that filters by title and number,
   and the newest 50, the newest change first, like GitHub's lists. An issue row: its state, title, labels, number, who
   opened it and when, who it is assigned to, comments. A PR row: its state (open, draft, merged, closed), title,
@@ -31,6 +38,9 @@ import {
   CircleX,
   Clock,
   ExternalLink,
+  File,
+  FileText,
+  Folder,
   GitMerge,
   GitPullRequest,
   GitPullRequestClosed,
@@ -42,7 +52,7 @@ import {
   RefreshCw,
   Star,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import NewIssueDialog from "@/NewIssueDialog";
@@ -117,6 +127,12 @@ type RepoPull = {
 // state: GitHub's conclusion once done (success, failure, cancelled, skipped, ...), else running or waiting.
 type RepoRun = { id: number; workflow: string; title: string; number: number; event: string; branch: string; state: string; actor: string; at: string; url: string };
 
+// The Code tab's files (tree: a folder, blob: a file) and one file (text is null when binary or too big).
+type RepoFiles = { files: { path: string; type: "blob" | "tree"; size: number }[]; truncated: boolean };
+type RepoFileText = { path: string; text: string | null; size: number; binary: boolean; too_big: boolean };
+
+const SIZE = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
+
 const CHECKS_TEXT: Record<string, string> = { passed: "Checks passed", failed: "Checks failed", running: "Checks running", none: "" };
 const CHECKS_COLOR: Record<string, string> = { passed: "text-ok", failed: "text-destructive", running: "text-warn", none: "" };
 const REVIEW_TEXT: Record<string, string> = { approved: "Approved", changes_requested: "Changes asked for", review_required: "Waiting for a review", none: "" };
@@ -134,11 +150,19 @@ const RUN_TEXT: Record<string, string> = {
   waiting: "Waiting",
 };
 const FAILED = ["failure", "timed_out", "startup_failure"];
-const TABS = ["issues", "pulls", "actions"];
+const TABS = ["issues", "pulls", "commits", "actions"];
 
 export default function Repository(props: { repo: string; tab: string; state: string; open: string | null }) {
   const yourRepos = useLive("your_repos");
   const [overview, setOverview] = useState<RepoOverview | null>(null);
+  const [commits, setCommits] = useState<RepoOverview | null>(null);
+  const [files, setFiles] = useState<RepoFiles | null>(null);
+  const [filesError, setFilesError] = useState("");
+  // The Code tab: the folder you are in ("" is the top) and the file shown, if any. Files read stay here.
+  const [folder, setFolder] = useState("");
+  const [openFile, setOpenFile] = useState<string | null>(null);
+  const [fileData, setFileData] = useState<Record<string, RepoFileText>>({});
+  const [fileErrors, setFileErrors] = useState<Record<string, string>>({});
   const [issues, setIssues] = useState<{ items: RepoIssue[]; open: number; closed: number } | null>(null);
   const [pulls, setPulls] = useState<{ items: RepoPull[]; open: number; closed: number } | null>(null);
   const [runs, setRuns] = useState<{ items: RepoRun[] } | null>(null);
@@ -153,14 +177,14 @@ export default function Repository(props: { repo: string; tab: string; state: st
   const [rerunOpen, setRerunOpen] = useState(false);
   const [starring, setStarring] = useState(false);
 
-  const tab = TABS.includes(props.tab) ? props.tab : "overview";
+  const tab = TABS.includes(props.tab) ? props.tab : "code";
   const listed = yourRepos.repos.find((each) => each.name === props.repo) ?? yourRepos.starred.find((each) => each.name === props.repo);
   const starred = listed !== undefined && listed.starred;
   const stars = listed?.stars ?? overview?.stars ?? 0;
   const canPush = listed !== undefined && listed.can_push;
   const base = `#/github/repo?repo=${encodeURIComponent(props.repo)}`;
   let listHash = base;
-  if (tab !== "overview") {
+  if (tab !== "code") {
     listHash += `&tab=${tab}`;
   }
   if (props.state === "closed") {
@@ -173,7 +197,9 @@ export default function Repository(props: { repo: string; tab: string; state: st
     setLoading(true);
     setError("");
     let path = tab;
-    if (tab === "actions") {
+    if (tab === "code") {
+      path = "overview";
+    } else if (tab === "actions") {
       path = "runs";
     }
     api<never>(`/api/your_repositories/${props.repo}/${path}?state=${props.state}`)
@@ -181,8 +207,10 @@ export default function Repository(props: { repo: string; tab: string; state: st
         if (!current) {
           return;
         }
-        if (tab === "overview") {
+        if (tab === "code") {
           setOverview(result);
+        } else if (tab === "commits") {
+          setCommits(result);
         } else if (tab === "issues") {
           setIssues(result);
         } else if (tab === "pulls") {
@@ -202,6 +230,49 @@ export default function Repository(props: { repo: string; tab: string; state: st
       current = false;
     };
   }, [props.repo, tab, props.state, reload]);
+
+  // The Code tab's files, all in one answer: when the tab opens, and on Refresh.
+  useEffect(() => {
+    if (tab !== "code") {
+      return;
+    }
+    let current = true;
+    setFilesError("");
+    api<RepoFiles>(`/api/your_repositories/${props.repo}/tree`)
+      .then((result) => {
+        if (current) {
+          setFiles(result);
+        }
+      })
+      .catch((err) => {
+        if (current) {
+          setFilesError(err instanceof Error ? err.message : String(err));
+        }
+      });
+    return () => {
+      current = false;
+    };
+  }, [props.repo, tab, reload]);
+
+  function showFolder(path: string) {
+    setFolder(path);
+    setOpenFile(null);
+  }
+
+  // Shows a file in the files' box; read once, then kept.
+  async function showFile(path: string) {
+    setOpenFile(path);
+    if (fileData[path] !== undefined) {
+      return;
+    }
+    setFileErrors((current) => ({ ...current, [path]: "" }));
+    try {
+      const data = await api<RepoFileText>(`/api/your_repositories/${props.repo}/file?path=${encodeURIComponent(path)}`);
+      setFileData((current) => ({ ...current, [path]: data }));
+    } catch (err) {
+      setFileErrors((current) => ({ ...current, [path]: err instanceof Error ? err.message : String(err) }));
+    }
+  }
 
   // One click, like on GitHub. The left list follows at once (the backend reads the lists again).
   async function toggleStar() {
@@ -236,9 +307,27 @@ export default function Repository(props: { repo: string; tab: string; state: st
   const pullRows = (pulls?.items ?? []).filter((each) => needle === "" || each.title.toLowerCase().includes(needle) || String(each.number) === needle);
   const counts = tab === "issues" ? issues : pulls;
 
+  // The Code tab: the folder's folders and files (folders first, then by name), where you are, and the file shown.
+  const entries = (files?.files ?? []).filter((each) => (each.path.includes("/") ? each.path.slice(0, each.path.lastIndexOf("/")) : "") === folder);
+  entries.sort((a, b) => (a.type === b.type ? a.path.localeCompare(b.path) : a.type === "tree" ? -1 : 1));
+  const crumbs: { name: string; path: string }[] = [];
+  const folderNames = folder === "" ? [] : folder.split("/");
+  for (let i = 0; i < folderNames.length; i++) {
+    crumbs.push({ name: folderNames[i], path: folderNames.slice(0, i + 1).join("/") });
+  }
+  const shownFile = openFile !== null ? fileData[openFile] : undefined;
+  const shownError = openFile !== null ? (fileErrors[openFile] ?? "") : "";
+  const isMarkdown = openFile !== null && /\.(md|markdown|mdx)$/i.test(openFile);
+  let numbers = "";
+  if (shownFile !== undefined && shownFile.text !== null && !isMarkdown) {
+    const count = shownFile.text.split("\n").length - (shownFile.text.endsWith("\n") ? 1 : 0);
+    numbers = Array.from({ length: count }, (_, i) => i + 1).join("\n");
+  }
+  const latest = overview !== null && overview.commits.length > 0 ? overview.commits[0] : null;
+
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-3 border-b px-3">
+      <div className="flex h-9 shrink-0 items-center gap-3 border-b px-3 max-md:h-auto max-md:flex-wrap max-md:gap-y-1 max-md:py-1">
         <a
           href={`https://github.com/${props.repo}`}
           target="_blank"
@@ -249,16 +338,23 @@ export default function Repository(props: { repo: string; tab: string; state: st
           {listed !== undefined && listed.private ? <Lock className="size-4 shrink-0 text-muted-foreground" /> : <BookMarked className="size-4 shrink-0 text-muted-foreground" />}
           <span className="truncate">{props.repo}</span>
         </a>
-        <Tabs value={tab} onValueChange={(value) => (window.location.hash = value === "overview" ? base : `${base}&tab=${value}`)}>
+        <Tabs
+          value={tab}
+          onValueChange={(value) => (window.location.hash = value === "code" ? base : `${base}&tab=${value}`)}
+          className="max-md:order-last max-md:w-full max-md:overflow-x-auto"
+        >
           <TabsList>
-            <TabsTrigger value="overview" className="px-2.5">
-              Overview
+            <TabsTrigger value="code" className="px-2.5">
+              Code
             </TabsTrigger>
             <TabsTrigger value="issues" className="px-2.5">
               Issues {listed !== undefined && <span className="text-xs text-muted-foreground tabular-nums">{listed.open_issues}</span>}
             </TabsTrigger>
             <TabsTrigger value="pulls" className="px-2.5">
               Pull requests {listed !== undefined && <span className="text-xs text-muted-foreground tabular-nums">{listed.open_prs}</span>}
+            </TabsTrigger>
+            <TabsTrigger value="commits" className="px-2.5">
+              Commits
             </TabsTrigger>
             <TabsTrigger value="actions" className="px-2.5">
               Actions
@@ -304,9 +400,9 @@ export default function Repository(props: { repo: string; tab: string; state: st
       {error !== "" && <div className="shrink-0 border-b bg-destructive/10 px-3 py-1.5 text-destructive">Could not read it from GitHub: {error}</div>}
 
       <div className="min-h-0 flex-1 overflow-auto">
-        {tab === "overview" && overview === null && error === "" && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
-        {tab === "overview" && overview !== null && (
-          <div className="max-w-4xl space-y-4 p-4">
+        {tab === "code" && overview === null && error === "" && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
+        {tab === "code" && overview !== null && (
+          <div className="max-w-5xl space-y-4 p-4 max-md:p-2">
             <div className="space-y-1">
               {overview.description !== "" && <p>{overview.description}</p>}
               <div className="flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
@@ -323,44 +419,146 @@ export default function Repository(props: { repo: string; tab: string; state: st
               </div>
             </div>
 
-            <section>
-              <div className="mb-1 font-medium">Latest commits{overview.default_branch !== "" && ` on ${overview.default_branch}`}</div>
-              {overview.commits.length === 0 && <div className="text-muted-foreground">No commits yet.</div>}
-              <div className="rounded-md border">
-                {overview.commits.map((commit) => (
-                  <a
-                    key={commit.sha}
-                    href={commit.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="flex items-center gap-2 border-b px-3 py-1.5 last:border-b-0 hover:bg-accent/50"
-                  >
-                    {commit.checks === "passed" && <CircleCheck className="size-3.5 shrink-0 text-ok" />}
-                    {commit.checks === "failed" && <CircleX className="size-3.5 shrink-0 text-destructive" />}
-                    {commit.checks === "running" && <CircleDashed className="size-3.5 shrink-0 text-warn" />}
-                    {commit.checks === "none" && <span className="size-3.5 shrink-0" />}
-                    <span className="min-w-0 flex-1 truncate">{commit.message}</span>
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      {commit.login ?? commit.name} · {timeAgo(commit.at)}
-                    </span>
-                    <span className="shrink-0 font-mono text-xs text-muted-foreground">{commit.sha.slice(0, 7)}</span>
-                  </a>
-                ))}
-              </div>
-            </section>
+            <section className="rounded-md border">
+              {/* The newest commit on the default branch, like GitHub's bar over the files. */}
+              {latest !== null && (
+                <a
+                  href={latest.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex min-w-0 items-center gap-2 border-b bg-muted/40 px-3 py-1.5 text-xs hover:bg-accent/50"
+                >
+                  {latest.checks === "passed" && <CircleCheck className="size-3.5 shrink-0 text-ok" />}
+                  {latest.checks === "failed" && <CircleX className="size-3.5 shrink-0 text-destructive" />}
+                  {latest.checks === "running" && <CircleDashed className="size-3.5 shrink-0 text-warn" />}
+                  <span className="shrink-0 font-medium">{latest.login ?? latest.name}</span>
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground">{latest.message}</span>
+                  <span className="shrink-0 font-mono text-muted-foreground max-md:hidden">{latest.sha.slice(0, 7)}</span>
+                  <span className="shrink-0 text-muted-foreground">{timeAgo(latest.at)}</span>
+                </a>
+              )}
 
-            <section>
-              <div className="mb-1 font-medium">README</div>
-              <div className="rounded-md border px-4 py-3">
-                {overview.readme === "" ? (
-                  <span className="text-muted-foreground">No README.</span>
-                ) : (
-                  <Markdown text={overview.readme} repo={props.repo} gitRef={overview.default_branch} base="" issueRefs />
+              {/* Where you are: the repo, then each folder (a click goes back there), then the file shown. */}
+              <div className="flex min-w-0 flex-wrap items-center gap-1 border-b px-3 py-1.5">
+                <button type="button" className="font-medium text-primary hover:underline" onClick={() => showFolder("")}>
+                  {props.repo.slice(props.repo.indexOf("/") + 1)}
+                </button>
+                {crumbs.map((crumb) => (
+                  <Fragment key={crumb.path}>
+                    <span className="text-muted-foreground">/</span>
+                    <button type="button" className="text-primary hover:underline" onClick={() => showFolder(crumb.path)}>
+                      {crumb.name}
+                    </button>
+                  </Fragment>
+                ))}
+                {openFile !== null && (
+                  <>
+                    <span className="text-muted-foreground">/</span>
+                    <span className="font-medium">{openFile.slice(openFile.lastIndexOf("/") + 1)}</span>
+                    <a
+                      href={`https://github.com/${props.repo}/blob/${overview.default_branch}/${openFile}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="ml-auto flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      GitHub <ExternalLink className="size-3" />
+                    </a>
+                  </>
                 )}
               </div>
+
+              {filesError !== "" && <div className="px-3 py-2 text-destructive">Could not read the files: {filesError}</div>}
+              {openFile === null && files === null && filesError === "" && (
+                <div className="flex items-center gap-2 px-3 py-2 text-muted-foreground">
+                  <Loader2 className="size-3.5 animate-spin" /> Loading files…
+                </div>
+              )}
+              {openFile === null && files !== null && files.truncated && (
+                <div className="border-b px-3 py-1 text-xs text-warn">GitHub cut this list short: some files are missing.</div>
+              )}
+              {openFile === null && files !== null && files.files.length === 0 && <div className="px-3 py-2 text-muted-foreground">This repo is empty.</div>}
+              {openFile === null && folder !== "" && (
+                <button
+                  type="button"
+                  className="flex h-8 w-full items-center gap-2 border-b px-3 text-left text-muted-foreground hover:bg-accent/50"
+                  onClick={() => showFolder(folder.includes("/") ? folder.slice(0, folder.lastIndexOf("/")) : "")}
+                >
+                  <Folder className="size-4 shrink-0" /> ..
+                </button>
+              )}
+              {openFile === null &&
+                entries.map((entry) => (
+                  <button
+                    key={entry.path}
+                    type="button"
+                    className="flex h-8 w-full items-center gap-2 border-b px-3 text-left last:border-b-0 hover:bg-accent/50"
+                    onClick={() => (entry.type === "tree" ? showFolder(entry.path) : showFile(entry.path))}
+                  >
+                    {entry.type === "tree" && <Folder className="size-4 shrink-0 text-primary" />}
+                    {entry.type === "blob" && /\.(md|markdown|mdx)$/i.test(entry.path) && <FileText className="size-4 shrink-0 text-muted-foreground" />}
+                    {entry.type === "blob" && !/\.(md|markdown|mdx)$/i.test(entry.path) && <File className="size-4 shrink-0 text-muted-foreground" />}
+                    <span className="truncate">{entry.path.slice(entry.path.lastIndexOf("/") + 1)}</span>
+                    {entry.type === "blob" && <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">{SIZE.format(entry.size)}B</span>}
+                  </button>
+                ))}
+
+              {openFile !== null && shownFile === undefined && shownError === "" && (
+                <div className="flex items-center gap-2 px-3 py-2 text-muted-foreground">
+                  <Loader2 className="size-3.5 animate-spin" /> Loading…
+                </div>
+              )}
+              {openFile !== null && shownError !== "" && <div className="px-3 py-2 text-destructive">Could not read it: {shownError}</div>}
+              {shownFile !== undefined && shownFile.binary && <div className="px-3 py-2 text-muted-foreground">Binary file, {SIZE.format(shownFile.size)}B.</div>}
+              {shownFile !== undefined && shownFile.too_big && (
+                <div className="px-3 py-2 text-muted-foreground">Too big to show here ({SIZE.format(shownFile.size)}B). Open it on GitHub.</div>
+              )}
+              {shownFile !== undefined && shownFile.text !== null && isMarkdown && (
+                <div className="px-6 py-4 max-md:px-3">
+                  <Markdown text={shownFile.text} repo={props.repo} gitRef={overview.default_branch} base={folder} />
+                </div>
+              )}
+              {shownFile !== undefined && shownFile.text !== null && !isMarkdown && (
+                <div className="flex overflow-auto font-mono text-xs leading-[18px]">
+                  <pre className="sticky left-0 shrink-0 border-r bg-muted px-2 py-1 text-right text-muted-foreground select-none">{numbers}</pre>
+                  <pre className="px-3 py-1">{shownFile.text}</pre>
+                </div>
+              )}
             </section>
+
+            {openFile === null && folder === "" && (
+              <section className="rounded-md border">
+                <div className="flex h-9 items-center gap-1.5 border-b px-4 font-medium">
+                  <FileText className="size-4 text-muted-foreground" /> README
+                </div>
+                <div className="px-6 py-4 max-md:px-3">
+                  {overview.readme === "" ? (
+                    <span className="text-muted-foreground">No README.</span>
+                  ) : (
+                    <Markdown text={overview.readme} repo={props.repo} gitRef={overview.default_branch} base="" issueRefs />
+                  )}
+                </div>
+              </section>
+            )}
           </div>
         )}
+
+        {tab === "commits" && commits === null && error === "" && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
+        {tab === "commits" && commits !== null && commits.commits.length === 0 && <div className="px-3 py-2 text-muted-foreground">No commits yet.</div>}
+        {tab === "commits" &&
+          commits !== null &&
+          commits.commits.map((commit) => (
+            <a key={commit.sha} href={commit.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 border-b px-3 py-1.5 hover:bg-accent/50">
+              {commit.checks === "passed" && <CircleCheck className="size-3.5 shrink-0 text-ok" />}
+              {commit.checks === "failed" && <CircleX className="size-3.5 shrink-0 text-destructive" />}
+              {commit.checks === "running" && <CircleDashed className="size-3.5 shrink-0 text-warn" />}
+              {commit.checks === "none" && <span className="size-3.5 shrink-0" />}
+              <span className="min-w-0 flex-1 truncate">{commit.message}</span>
+              <span className="shrink-0 text-xs text-muted-foreground">
+                {commit.login ?? commit.name} · {timeAgo(commit.at)}
+              </span>
+              <span className="shrink-0 font-mono text-xs text-muted-foreground max-md:hidden">{commit.sha.slice(0, 7)}</span>
+            </a>
+          ))}
 
         {tab === "issues" && issues === null && error === "" && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
         {tab === "issues" && issues !== null && issueRows.length === 0 && (

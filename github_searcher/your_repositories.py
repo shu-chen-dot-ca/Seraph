@@ -19,9 +19,11 @@ again at once, so the left list follows.
      "starred": [the same],
      "login": your login | None, "checked_at", "error": why the last read failed | None}
 
-What a repo's page shows is read when it opens (never kept): overview() (the README and the newest commits on the
-default branch, each with its checks), issues(state) and pulls(state) (the newest 50 of the Open or Closed tab, and
-how many are in each), runs() (the newest GitHub Actions runs) and labels() (for the thread pop-up's Labels).
+What a repo's page shows is read when it opens (never kept): overview(count) (the README and the newest count commits
+on the default branch, each with its checks: the Code tab's latest commit, and the Commits tab's 50), tree() (every
+file and folder on the default branch, for the Code tab), file(path) (one file's text, or that it is binary or too
+big), issues(state) and pulls(state) (the newest 50 of the Open or Closed tab, and how many are in each), runs() (the
+newest GitHub Actions runs) and labels() (for the thread pop-up's Labels).
 
 act() is one change you make, as you: Star and Unstar (one click, like on GitHub, on any repo), a new issue (in a
 repo of either list), and, only in a repo you can push to (is_yours), after the browser asked "are you sure?": edit a
@@ -30,6 +32,7 @@ unassign yourself, merge a PR (merge commit, squash or rebase), review a PR (app
 re-run a GitHub Actions run's failed jobs. A refusal raises ValueError with what GitHub said.
 """
 
+import base64
 import copy
 import threading
 from datetime import UTC, datetime
@@ -46,6 +49,8 @@ PUSH = ["ADMIN", "MAINTAIN", "WRITE"]
 LIST_SIZE = 50
 RUNS_SIZE = 30
 COMMITS_SIZE = 10
+# A file bigger than this isn't shown on the Code tab, only said to be too big (GitHub sends no content past 1 MB).
+FILE_BYTES = 1_000_000
 MERGE_METHODS = ["merge", "squash", "rebase"]
 REVIEW_EVENTS = ["APPROVE", "REQUEST_CHANGES", "COMMENT"]
 CLOSE_REASONS = ["completed", "not_planned"]
@@ -233,10 +238,11 @@ class YourRepositories:
             self.data = {"repos": repos, "starred": starred, "login": viewer["login"], "checked_at": datetime.now(UTC).isoformat(), "error": None}
             self.version += 1
 
-    def overview(self, repo: str) -> dict:
-        """A repo's Overview tab: its description, README (markdown, "" when it has none) and newest commits."""
+    def overview(self, repo: str, count: int = COMMITS_SIZE) -> dict:
+        """A repo's Code tab: its description, README (markdown, "" when it has none) and newest count commits (the
+        Commits tab asks for LIST_SIZE)."""
         owner, name = repo.split("/")
-        data = self.graphql(COMMITS_QUERY, {"owner": owner, "name": name, "count": COMMITS_SIZE})["repository"]
+        data = self.graphql(COMMITS_QUERY, {"owner": owner, "name": name, "count": count})["repository"]
         readme = ""
         with self.client() as client:
             response = client.get(f"/repos/{repo}/readme", headers={"Accept": "application/vnd.github.raw+json"})
@@ -272,6 +278,53 @@ class YourRepositories:
             "readme": readme,
             "commits": commits,
         }
+
+    def tree(self, repo: str) -> dict:
+        """The Code tab's files: every file and folder on the default branch in one answer (GitHub's recursive tree).
+        truncated: GitHub cut a very big tree short."""
+        with self.client() as client:
+            response = client.get(f"/repos/{repo}/git/trees/HEAD", params={"recursive": "1"})
+        # An empty repo has no tree yet.
+        if response.status_code == 409:
+            return {"files": [], "truncated": False}
+        if response.status_code != 200:
+            raise ValueError(f"GitHub answered {response.status_code}: {response.text[:200]}")
+        answer = response.json()
+        files = []
+        for item in answer["tree"]:
+            # "commit" items are submodules: nothing to open.
+            if item["type"] in ["blob", "tree"]:
+                files.append({"path": item["path"], "type": item["type"], "size": item.get("size", 0)})
+        return {"files": files, "truncated": answer.get("truncated", False)}
+
+    def file(self, repo: str, path: str) -> dict:
+        """One file on the default branch, for the Code tab. Text comes back as text; a binary or too big file only
+        says what it is."""
+        with self.client() as client:
+            response = client.get(f"/repos/{repo}/contents/{quote(path)}")
+        if response.status_code != 200:
+            raise ValueError(f"GitHub answered {response.status_code}: {response.text[:200]}")
+        data = response.json()
+        if isinstance(data, list):
+            raise ValueError(f"{path} is a folder.")
+        answer = {"path": path, "text": None, "size": data.get("size", 0), "binary": False, "too_big": False}
+        if answer["size"] > FILE_BYTES:
+            answer["too_big"] = True
+            return answer
+        # Symlinks and submodules come back without content: nothing to show, like a binary file.
+        if data.get("encoding") != "base64":
+            answer["binary"] = True
+            return answer
+        content = base64.b64decode(data["content"])
+        # A NUL byte, or bytes that aren't UTF-8, mean a binary file (images, archives, ...).
+        if b"\0" in content:
+            answer["binary"] = True
+            return answer
+        try:
+            answer["text"] = content.decode("utf-8")
+        except UnicodeDecodeError:
+            answer["binary"] = True
+        return answer
 
     def issues(self, repo: str, state: str) -> dict:
         """The Issues tab: the newest LIST_SIZE open or closed issues (the newest change first), and how many of each."""

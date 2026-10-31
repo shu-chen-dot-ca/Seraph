@@ -1,8 +1,9 @@
 """The GitHub tab's Your repositories and Starred (github_searcher/your_repositories.py): one repo's page, read from
 GitHub when it opens, and the changes you make there, as you (Star and Unstar, and a maintainer's in your own).
 
-GET /api/your_repositories/{owner}/{name}/overview, /issues?state=open|closed, /pulls?state=open|closed and /runs
-are its tabs (Overview, Issues, Pull requests, Actions). POST /api/your_repositories/act is one change,
+GET /api/your_repositories/{owner}/{name}/overview (the Code tab's description, README and latest commit), /tree (its
+files), /file?path=... (one file), /issues?state=open|closed, /pulls?state=open|closed, /commits (the newest 50) and
+/runs are its tabs (Code, Issues, Pull requests, Commits, Actions). All of them only read. POST /api/your_repositories/act is one change,
 {"repo", "action", "number", "kind": "issue" | "pr", "fields"}, after an "are you sure?" in the browser; it answers
 {"done": what happened, in words, "url"}. POST /api/your_repositories/refresh reads the list again now (Check now).
 
@@ -19,6 +20,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.shared import github_account, your_repositories
+from github_searcher.your_repositories import LIST_SIZE
 
 router = APIRouter(prefix="/api")
 
@@ -43,7 +45,7 @@ def refresh() -> dict:
 
 
 @router.get("/your_repositories/{owner}/{name}/{tab}")
-def repo_tab(owner: str, name: str, tab: str, state: str = "open") -> dict:
+def repo_tab(owner: str, name: str, tab: str, state: str = "open", path: str = "") -> dict:
     """One tab of one of your repositories, as GitHub has it now."""
     if re.fullmatch(NAME, owner) is None or re.fullmatch(NAME, name) is None:
         raise HTTPException(status_code=400, detail="That isn't a GitHub repo.")
@@ -56,6 +58,12 @@ def repo_tab(owner: str, name: str, tab: str, state: str = "open") -> dict:
     try:
         if tab == "overview":
             return your_repositories.overview(repo)
+        if tab == "commits":
+            return your_repositories.overview(repo, LIST_SIZE)
+        if tab == "tree":
+            return your_repositories.tree(repo)
+        if tab == "file":
+            return your_repositories.file(repo, path)
         if tab == "issues":
             return your_repositories.issues(repo, state)
         if tab == "pulls":

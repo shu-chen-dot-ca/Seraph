@@ -20,7 +20,7 @@ The page lives in the URL hash, so refresh and back/forward work and switching p
          #/github/repo?repo=owner/name (Repository.tsx)
          Pull requests and Issues take ?repo=owner/name (only that repo), state=closed (the Closed tab) and
          open=owner/name%23n (that PR or issue in its pop-up), e.g. #/github/issues?repo=owner/name&open=owner/name%2312
-         One of your repositories takes tab=issues|pulls|actions (none: its Overview), state=closed and open=... the same
+         One of your repositories takes tab=issues|pulls|commits|actions (none: its Code), state=closed and open=... the same
          way; Notifications takes open=... too; Tasks takes state=done (its Done tab), view=recent (its Recent
          tab), task=owner/name%23n (that task in its pop-up) and open=....
 Anything else opens Issues. Links are plain <a href="#/..."> everywhere; App only reads the hash.
