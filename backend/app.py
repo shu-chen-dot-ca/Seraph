@@ -3,7 +3,8 @@
 The pieces are made once in backend/shared.py (the Repos, Issues and Tracked lists,
 jobs, the inbox, your GitHub account, your PRs, the VMs, the VM queue and the agents), and each page has its
 own router in backend/*_api.py (the GitHub tab: github_api.py, its Account page: github_account_api.py, Your
-repositories: your_repositories_api.py, Notifications: notifications_api.py).
+repositories: your_repositories_api.py, Notifications: notifications_api.py, the Workspace tab's Pull requests:
+pull_requests_api.py).
 
 The browser never polls. It keeps one websocket open on /api/live, gets every
 topic when it connects, then only the topics that changed. Every store has a
@@ -39,7 +40,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
-from backend import agents_api, artifacts_api, explore_api, github_account_api, images_api, inbox_api, issues_api, github_api, notifications_api, remote_access_api, repos_api, tracked_api, vms_api, your_repositories_api
+from backend import agents_api, artifacts_api, explore_api, github_account_api, images_api, inbox_api, issues_api, github_api, notifications_api, pull_requests_api, remote_access_api, repos_api, tracked_api, vms_api, your_repositories_api
 from backend.shared import agents, explore, images, inbox, issue_facts, issue_tags, issues, jobs, notifications, pr_tracking, remote_access, repo_signals, repos, resource_usage, tracked, tracked_issues, vms, your_repositories
 from github_searcher.remote_access import COOKIE, DOMAIN as REMOTE_DOMAIN
 from github_searcher.token_balancer import BALANCER
@@ -87,6 +88,7 @@ app.include_router(github_api.router)
 app.include_router(github_account_api.router)
 app.include_router(your_repositories_api.router)
 app.include_router(notifications_api.router)
+app.include_router(pull_requests_api.router)
 app.include_router(issues_api.router)
 app.include_router(repos_api.router)
 app.include_router(explore_api.router)

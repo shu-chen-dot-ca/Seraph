@@ -4,11 +4,12 @@ sidebar (Sidebar.tsx). The Workspace tab is the app's new layout; it uses the sa
 Home and GitHub tabs, nothing works differently there. Every line is a link to a page; the open one is marked:
 - Home (Home.tsx): your repositories as cards, and the open one's page like on GitHub (code, issues, pull requests,
   commits, actions).
+- Pull requests (PullRequests.tsx): your pull requests anywhere on GitHub, open and closed, like github.com/pulls.
 - Settings, pinned at the bottom, opens Settings (SettingsDialog), the same as at the bottom of the Home tab's sidebar.
 On a narrow screen (a phone) the list is a thin column: each line is its icon with its name small under it.
 */
 
-import { House, Settings } from "lucide-react";
+import { GitPullRequest, House, Settings } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -25,6 +26,11 @@ export default function WorkspaceNav(props: { page: string; onOpenSettings: () =
         <a href="#/home" className={cn(row, props.page === "home" && selected)}>
           <House className={icon} />
           Home
+        </a>
+
+        <a href="#/pulls" className={cn(row, props.page === "pulls" && selected)}>
+          <GitPullRequest className={icon} />
+          Pull requests
         </a>
       </div>
 

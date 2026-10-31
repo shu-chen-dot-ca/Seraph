@@ -4,9 +4,10 @@ The header's left has three tabs, the open one in full color with the accent und
 - Home: finding and doing the work, with the sidebar tree (Sidebar.tsx) on the left.
 - GitHub: your work on GitHub, with its own left list (GitHubNav.tsx: Overview, Inbox, Notifications, Pull requests,
   Issues, Tasks, Your repositories, Starred, Account). The tab shows how many drafts wait in the Inbox for your decision.
-- Workspace: the app's new layout, with its own left list (WorkspaceNav.tsx: Home; Settings). Same agents, jobs, VMs
-  and Inbox; only the layout is new. Its page is Home (Home.tsx: your repositories as cards, the open one like on
-  GitHub). A page it doesn't have (Issues, the GitHub tab's Overview, ...) goes to its own tab.
+- Workspace: the app's new layout, with its own left list (WorkspaceNav.tsx: Home, Pull requests; Settings). Same
+  agents, jobs, VMs and Inbox; only the layout is new. Its pages are Home (Home.tsx: your repositories as cards, the
+  open one like on GitHub) and Pull requests (PullRequests.tsx: your pull requests anywhere on GitHub, like
+  github.com/pulls). A page it doesn't have (Issues, the GitHub tab's Overview, ...) goes to its own tab.
 Each tab goes back to the last page you had open under it (Home starts at Issues, GitHub at its Overview, Workspace at
 its Home); a reload forgets that. On its right: Sign in while you aren't signed in to GitHub (straight to GitHub's sign-in page once sign in is
 set up, else the GitHub tab's Account page, which walks you through setting it up), or, signed in, your GitHub picture
@@ -27,6 +28,9 @@ The page lives in the URL hash, so refresh and back/forward work and switching p
          tab), task=owner/name%23n (that task in its pop-up) and open=....
   Workspace: #/home  #/home?repo=owner/name (Home.tsx; the open repo, which takes tab=issues|pulls|commits|actions,
          state=closed and open=owner/name%23n like a repository's page on the GitHub tab)
+         #/pulls (PullRequests.tsx; takes state=closed, view=assigned|mentioned|review-requested,
+         visibility=public|private, repo=owner/name, sort=created-asc|comments-desc|comments-asc|updated-desc|updated-asc
+         and open=owner/name%23n)
 Anything else opens Issues. Links are plain <a href="#/..."> everywhere; App only reads the hash.
 
 A VM page, once visited, stays mounted (hidden) while you are elsewhere, so its desktop iframe keeps its
@@ -48,6 +52,7 @@ import Inbox from "@/Inbox";
 import Issues from "@/Issues";
 import Jobs from "@/Jobs";
 import Notifications from "@/Notifications";
+import PullRequests from "@/PullRequests";
 import Repos from "@/Repos";
 import Resource from "@/Resource";
 import SettingsDialog, { type ThemeMode } from "@/SettingsDialog";
@@ -65,7 +70,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { api, useConnected, useLiveValue, useLoaded, type GithubAccountStatus } from "@/live";
 import { cn } from "@/lib/utils";
 
-const PAGES = ["inbox", "github", "issues", "jobs", "explore", "repos", "tracked", "agents", "vms", "resource", "home"];
+const PAGES = ["inbox", "github", "issues", "jobs", "explore", "repos", "tracked", "agents", "vms", "resource", "home", "pulls"];
 // The GitHub tab's pages under #/github/; anything else there is Pull requests.
 const GITHUB_SECTIONS = ["overview", "notifications", "issues", "tasks", "account", "repo"];
 // This repo on GitHub, or "": vite.config.ts puts it in from git's origin remote.
@@ -142,8 +147,8 @@ export default function App() {
   const query = new URLSearchParams(queryPart ?? "");
   // GitHub's section: "#/github/issues" → "issues", "#/github" → "pulls".
   const section = id !== null && GITHUB_SECTIONS.includes(id) ? id : "pulls";
-  // The Workspace tab's page, then the GitHub tab's pages; everything else is on Home.
-  const onWorkspace = page === "home";
+  // The Workspace tab's pages, then the GitHub tab's pages; everything else is on Home.
+  const onWorkspace = page === "home" || page === "pulls";
   const onGitHub = !onWorkspace && (page === "inbox" || page === "github");
   const onHome = !onWorkspace && !onGitHub;
 
@@ -318,6 +323,17 @@ export default function App() {
                 repo={query.get("repo")}
                 tab={query.get("tab") ?? "code"}
                 state={query.get("state") === "closed" ? "closed" : "open"}
+                open={query.get("open")}
+              />
+            )}
+            {page === "pulls" && (
+              <PullRequests
+                key={query.get("view") ?? "created"}
+                state={query.get("state") === "closed" ? "closed" : "open"}
+                view={query.get("view") ?? "created"}
+                visibility={query.get("visibility") ?? "all"}
+                repo={query.get("repo")}
+                sort={query.get("sort") ?? "created-desc"}
                 open={query.get("open")}
               />
             )}
