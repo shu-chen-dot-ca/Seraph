@@ -973,7 +973,8 @@ class Agents:
             raise ValueError(f"the VM didn't say where desktop 1's home is: {result.stderr.strip()}")
         if vm.exec(f"test -e {shlex.quote(folder)}", 30).returncode == 0:
             return
-        with tempfile.TemporaryDirectory() as temporary:
+        # On this computer's disk, not in /tmp (memory): a big repo can take gigabytes.
+        with tempfile.TemporaryDirectory(dir=DATA_DIR) as temporary:
             target = Path(temporary) / folder
             self.your_repositories.clone(repo, str(target))
             to_vm(vm, str(target), home)
