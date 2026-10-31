@@ -8,8 +8,7 @@ names differ), python, node, docker and steps. The defaults are built mechanical
 Check (while editing) checks without saving: the YAML's keys and values, every step's bash (bash -n: read, never
 run), and that every Docker image can be pulled (its registry is asked, as every build does before it starts). It
 lists what is wrong, or says there are no problems. Save runs the same check without the Docker images, and a
-change that doesn't pass isn't saved. Its answer shows in the row of the buttons, where the hint is otherwise. Sherpa presses Check after it fills
-the YAML in, and fixes what it reports.
+change that doesn't pass isn't saved. Its answer shows in the row of the buttons, where the hint is otherwise.
 
 Comes from GET /api/image-defaults; Save is PUT /api/image-defaults.
 */

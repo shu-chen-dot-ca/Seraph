@@ -757,30 +757,6 @@ export type ImageAgentEntry =
 
 export type ImageAgentChat = { history: ImageAgentEntry[]; busy: boolean; cost_usd: number };
 
-// Sherpa (github_searcher/sherpa.py), from GET /api/sherpa: its chat (entries like the image agent's), and the page
-// action it waits for, done by the browser tab its message came from.
-export type SherpaAction =
-  | { kind: "look" }
-  | { kind: "screenshot"; numbers: boolean }
-  | { kind: "go_to"; address: string }
-  | { kind: "click"; element: number; confirm: boolean }
-  | { kind: "fill"; element: number; text: string }
-  | { kind: "point"; element: number };
-
-export type SherpaChat = {
-  id: string | null; // null: a new chat, kept once its first message is sent
-  history: ImageAgentEntry[];
-  busy: boolean;
-  cost_usd: number;
-  context_used: number; // tokens the chat fills of the context window
-  context_cap: number; // where it is compacted (the agents' cap, 500k)
-  queued: string[]; // messages waiting for the turn to end, oldest first
-  pending: { id: number; tab: string; action: SherpaAction } | null;
-};
-
-// A chat in Sherpa's history (GET /api/sherpa/chats), the newest first. Its title is its first message.
-export type SherpaChatSummary = { id: string; title: string; updated_at: string };
-
 // A build (Build, Rebuild or the image agent), a VM being saved as an image, or an inspect.
 // Tasks that worked disappear once their image is listed; failed ones stay until dismissed.
 export type ImageTask = {

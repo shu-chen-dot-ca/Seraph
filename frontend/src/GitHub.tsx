@@ -511,8 +511,6 @@ export default function GitHub(props: { section: string; repo: string | null; st
                       className="min-w-0 flex-1 font-mono text-xs"
                       placeholder="Client secret"
                       type="password"
-                      // Sherpa never reads it.
-                      data-secret
                       autoComplete="off"
                       spellCheck={false}
                       value={clientSecret}
@@ -554,8 +552,6 @@ export default function GitHub(props: { section: string; repo: string | null; st
                       className="min-w-0 flex-1 font-mono text-xs"
                       placeholder="ghp_…"
                       type="password"
-                      // Sherpa never reads it.
-                      data-secret
                       autoComplete="off"
                       spellCheck={false}
                       value={token}
@@ -598,7 +594,7 @@ export default function GitHub(props: { section: string; repo: string | null; st
               )}
               <p className="mt-2 text-xs text-muted-foreground">
                 Approve in the Inbox sends PRs and comments as this account, after you confirm, and so does Comment on a pull request or issue. It
-                stays on this computer: agents, Sherpa and searches never use it.
+                stays on this computer: agents and searches never use it.
               </p>
             </section>
             {forks.length > 0 && (

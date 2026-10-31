@@ -5,8 +5,7 @@ in every image comes from its own base layer, never from here. The agent writes 
 too. It is built mechanically, so it is checked mechanically: Check (while editing) runs the same check as Save
 without saving, the YAML's keys and values, every step's bash (bash -n: read, never run) and that every Docker
 image can be pulled (its registry is asked, as every build does before it starts), and lists what is wrong (in the
-row of the buttons). Save checks the same without the Docker images; a change that doesn't pass isn't saved. Sherpa presses Check after it fills the
-YAML in. A new image's image.yaml starts as the defaults
+row of the buttons). Save checks the same without the Docker images; a change that doesn't pass isn't saved. A new image's image.yaml starts as the defaults
 (the VMs page's Defaults tab); from then on it is the image's own. Nothing changes in the image until it is
 rebuilt, so when image.yaml differs from what the image was built from, an amber dot shows, its changes can be
 shown, and the top offers Discard (back to what it was built from) and Rebuild.

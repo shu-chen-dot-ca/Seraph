@@ -16,8 +16,7 @@ its Home); a reload forgets that. On its right: Sign in while you aren't signed 
 set up, else the GitHub tab's Account page, which walks you through setting it up), or, signed in, your GitHub picture
 and @login, a link to Account (GitHub.tsx), where Sign out is. Then this repo on GitHub (a new tab, so the app stays open),
 found from git's origin remote (vite.config.ts), so no account name is written here; none when it isn't on GitHub. Reset view is in Settings
-(SettingsDialog), opened from the bottom of Home's sidebar. Sherpa's round button sits at the bottom right of every
-page (Sherpa.tsx).
+(SettingsDialog), opened from the bottom of Home's sidebar.
 
 The page lives in the URL hash, so refresh and back/forward work and switching pages never reloads:
   Home:  #/issues  #/issues?repo=owner/name  #/issues?open=<issue id>  #/jobs  #/jobs/<job id>  #/explore  #/repos  #/tracked
@@ -49,7 +48,6 @@ import GitHub from "@/GitHub";
 import GitHubNav from "@/GitHubNav";
 import GitHubOverview from "@/GitHubOverview";
 import Home from "@/Home";
-import Sherpa from "@/Sherpa";
 import Inbox from "@/Inbox";
 import Issues from "@/Issues";
 import Jobs from "@/Jobs";
@@ -240,7 +238,7 @@ export default function App() {
   }
 
   // The header's tabs, like line tabs (components/ui/tabs.tsx): quiet until hovered; the open one in full color with
-  // the accent under it, over the header's border. Only the open one has aria-current (Sherpa reads it).
+  // the accent under it, over the header's border. Only the open one has aria-current.
   const tab = "relative flex h-full items-center gap-1.5 px-2 font-medium text-muted-foreground hover:text-foreground";
   const currentTab = "text-foreground after:absolute after:inset-x-2 after:-bottom-px after:h-0.5 after:rounded-full after:bg-primary";
 
@@ -331,7 +329,6 @@ export default function App() {
         </header>
 
         <div className="flex min-h-0 flex-1">
-          {/* One <nav> at a time: Sherpa reads the first one as the sidebar. */}
           {onGitHub && <GitHubNav page={page} section={section} repo={query.get("repo")} />}
           {onHome && <Sidebar page={page} id={id} onOpenSettings={() => setSettingsOpen(true)} />}
           {onWorkspace && <WorkspaceNav page={page} vmTab={query.get("tab")} onOpenSettings={() => setSettingsOpen(true)} />}
@@ -394,9 +391,7 @@ export default function App() {
         onAccent={changeAccent}
         onResetView={resetView}
       />
-      {/* Toasts sit above Sherpa's round button. */}
-      <Toaster theme={theme} position="bottom-right" offset={{ bottom: 72 }} />
-      <Sherpa />
+      <Toaster theme={theme} position="bottom-right" />
       <TitleTooltips />
     </TooltipProvider>
   );

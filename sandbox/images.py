@@ -18,7 +18,7 @@ what a VM was made from (its image_fingerprint) is known for good, also after it
 How images come and change. Builds, saves and inspects run in the background, as tasks shown above the list:
 - New image: only saves image.yaml, the defaults with the system, desktop and description picked; nothing is built
   and no agent runs. Until its first build it is listed as not built (unbuilt in the live feed), with Build, Edit
-  image.yaml and Delete. Sherpa helps the user change it (it can fill the YAML in and press Check).
+  image.yaml and Delete.
 - Build (Rebuild once there is an image): image.yaml is built, with no agent (image_build.py, "build" task). Only
   what changed since the last build runs again: its builder VM keeps snapshots between builds. The new build
   replaces the image; VMs made from the old one keep their own disk. Before it starts, image.yaml is checked

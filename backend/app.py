@@ -39,8 +39,8 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
-from backend import agents_api, artifacts_api, explore_api, github_account_api, images_api, inbox_api, issues_api, github_api, notifications_api, remote_access_api, repos_api, sherpa_api, tracked_api, vms_api, your_repositories_api
-from backend.shared import agents, explore, images, inbox, issue_facts, issue_tags, issues, jobs, notifications, pr_tracking, remote_access, repo_signals, repos, resource_usage, sherpa, tracked, tracked_issues, vms, your_repositories
+from backend import agents_api, artifacts_api, explore_api, github_account_api, images_api, inbox_api, issues_api, github_api, notifications_api, remote_access_api, repos_api, tracked_api, vms_api, your_repositories_api
+from backend.shared import agents, explore, images, inbox, issue_facts, issue_tags, issues, jobs, notifications, pr_tracking, remote_access, repo_signals, repos, resource_usage, tracked, tracked_issues, vms, your_repositories
 from github_searcher.remote_access import COOKIE, DOMAIN as REMOTE_DOMAIN
 from github_searcher.token_balancer import BALANCER
 
@@ -61,9 +61,7 @@ async def lifespan(app: FastAPI):
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=THREADS))
     # Agents run on this event loop, so they start here and not at import.
     await agents.start()
-    # Sherpa goes on with a turn the restart cut off.
-    sherpa.resume()
-    # So does an Explore run, when only the code reloaded.
+    # An Explore run the restart cut off goes on, when only the code reloaded.
     explore.resume()
     keepers = [
         # What is left of every GitHub quota, for the Explore page's bars from the start.
@@ -96,7 +94,6 @@ app.include_router(tracked_api.router)
 app.include_router(agents_api.router)
 app.include_router(vms_api.router)
 app.include_router(images_api.router)
-app.include_router(sherpa_api.router)
 app.include_router(artifacts_api.router)
 app.include_router(remote_access_api.router)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)

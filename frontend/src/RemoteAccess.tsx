@@ -9,7 +9,7 @@ passkey and signs it out at once. Opened through the address, the device you are
 out, which ends only its own sign in.
 
 Add a device (only on this computer) makes a one-time link, shown as a QR code to scan with the phone's camera and
-as the link itself (hidden from Sherpa). It works once, for 10 minutes: the phone opens the Add this device page,
+as the link itself. It works once, for 10 minutes: the phone opens the Add this device page,
 makes its passkey with Face ID (or a fingerprint or PIN) and is signed in.
 
 GET /api/remote_access each time Settings opens, and after every change.
@@ -172,8 +172,7 @@ export default function RemoteAccess(props: { open: boolean }) {
               </div>
               <div className="min-w-0 flex-1 space-y-2">
                 <p>Scan it with the phone's camera, then tap Create passkey. It works once, for {link.minutes} minutes.</p>
-                {/* Sherpa never reads it: the link lets a device in. */}
-                <Input readOnly data-secret className="font-mono text-xs" value={link.link} onFocus={(event) => event.target.select()} />
+                <Input readOnly className="font-mono text-xs" value={link.link} onFocus={(event) => event.target.select()} />
                 <Button
                   variant="outline"
                   size="sm"

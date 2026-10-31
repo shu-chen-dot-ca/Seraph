@@ -390,16 +390,3 @@
 .markdown :where(h2) {
   font-size: 1.3em;
 }
-
-/* What Sherpa points at (Sherpa.tsx point): a pulsing ring in the accent color, until the next click outside it. */
-.sherpa-point {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
-  animation: sherpa-pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes sherpa-pulse {
-  50% {
-    outline-color: transparent;
-  }
-}

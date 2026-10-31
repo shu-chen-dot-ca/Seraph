@@ -322,8 +322,6 @@ export default function VMSettings(props: { name: string }) {
                     className="min-w-0 flex-1 font-mono text-xs"
                     placeholder={row.value === "" ? "empty: an agent asked for it, fill it in" : "value"}
                     type={row.shown ? "text" : "password"}
-                    // Sherpa never reads it, shown or not.
-                    data-secret
                     autoComplete="off"
                     spellCheck={false}
                     value={row.value}

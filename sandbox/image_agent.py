@@ -2,7 +2,7 @@
 
 An image is defined by one file, image.yaml (images.py), and the app builds it, mechanically, from official
 sources only (image_build.py). A new image's image.yaml starts as a copy of the defaults (the Defaults tab) with the
-system, desktop and description picked, saved by New image with no agent (Sherpa helps there). Once the image is
+system, desktop and description picked, saved by New image with no agent. Once the image is
 built, the user can ask its agent for changes: it adds and takes out on top of what is there, reads the defaults but
 never changes them, and never builds or publishes anything by hand. Nothing changes in the image until it is
 rebuilt: by the user (Rebuild), or by the agent with build (the same build, as a "build" task) when the user asks

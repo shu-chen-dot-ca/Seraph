@@ -17,7 +17,7 @@ connect() also takes a classic token pasted by hand (Use a token instead).
 
 connect() checks the token with GitHub and keeps it in DATA_DIR/github_account.json, a file only this computer's user
 may read. Sign out (disconnect()) deletes it. The browser only ever gets status(): who you are signed in as, what the
-token may do and whether sign in is set up, never the token or the secret. Agents, Sherpa and the VMs never get them
+token may do and whether sign in is set up, never the token or the secret. Agents and the VMs never get them
 either; only the Inbox's Approve and Send to GitHub (backend/inbox_api.py) and the GitHub tab's buttons
 (backend/github_api.py) use the token. It is kept apart from the search tokens in .env (token_balancer.py), which only
 read.

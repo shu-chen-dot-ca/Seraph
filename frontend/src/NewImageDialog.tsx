@@ -1,8 +1,7 @@
 /*
 New image: saves a new image's image.yaml, nothing more. It is the defaults (the VMs page's Defaults tab) with the
 system and desktop picked here (GNOME by default, KDE Plasma, or none: terminal only; Firefox and what the app needs
-come with every desktop), and the description, if one is written here, as its description field. No agent runs:
-Sherpa helps fill this in and change image.yaml afterwards.
+come with every desktop), and the description, if one is written here, as its description field. No agent runs.
 
 Save only saves it: the image is listed as "not built", with Build and Edit image.yaml, until its first build. Save
 and build also starts that build (minutes; other images may build at the same time).
@@ -101,8 +100,8 @@ export default function NewImageDialog(props: { onClose: () => void }) {
         <DialogHeader>
           <DialogTitle>New image</DialogTitle>
           <DialogDescription>
-            Saves an image.yaml: the defaults (the Defaults tab) on this system and desktop. Change it from the image's row (Sherpa
-            can help), then build it from official sources.
+            Saves an image.yaml: the defaults (the Defaults tab) on this system and desktop. Change it from the image's row, then build
+            it from official sources.
           </DialogDescription>
         </DialogHeader>
 

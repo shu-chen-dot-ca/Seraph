@@ -3,7 +3,7 @@ public and private, and the repos you starred, for the GitHub tab's "Your reposi
 (frontend/src/GitHubNav.tsx, Repository.tsx), and the changes you make in them, as you.
 
 Everything here goes through your sign-in (github_account.py), never the search tokens: those can't see private repos.
-Nothing here runs for an agent or Sherpa; only the GitHub tab's pages and buttons use it.
+Nothing here runs for an agent; only the GitHub tab's pages and buttons use it.
 
 refresh() reads both lists in one GraphQL request: the 100 most recently pushed repos you can push to (not archived;
 viewerPermission ADMIN, MAINTAIN or WRITE) in "repos", and the 100 you starred most recently in "starred" (the ones
