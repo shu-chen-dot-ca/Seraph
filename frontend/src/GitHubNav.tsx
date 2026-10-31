@@ -1,6 +1,7 @@
 /*
 The GitHub tab's left list: App shows it instead of the sidebar tree on the GitHub tab's pages (#/inbox, #/github...),
 with the same look as the sidebar (Sidebar.tsx). Every line is a link to a page; the open one is marked:
+- Overview (GitHubOverview.tsx): everything that waits for you on one page, the GitHub tab's start.
 - Inbox (Inbox.tsx): drafts the agents want to send, with how many wait for your decision (a filled pill, like
   unread mail).
 - Notifications (Notifications.tsx): GitHub's own notifications for you, with how many are unread (a filled pill).
@@ -16,7 +17,7 @@ with the same look as the sidebar (Sidebar.tsx). Every line is a link to a page;
 Counts come straight from the live store, so the list updates itself.
 */
 
-import { Bell, BookMarked, CircleDot, CircleUser, GitPullRequest, Inbox, Lock } from "lucide-react";
+import { Bell, BookMarked, CircleDot, CircleUser, GitPullRequest, Inbox, LayoutDashboard, Lock } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { api, useLive, type GithubAccountStatus } from "@/live";
@@ -63,6 +64,11 @@ export default function GitHubNav(props: { page: string; section: string; repo: 
   return (
     <nav className="flex w-56 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground select-none">
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
+        <a href="#/github/overview" className={cn(row, "pl-6", props.page === "github" && props.section === "overview" && selected)}>
+          <LayoutDashboard className="size-4 text-muted-foreground" />
+          Overview
+        </a>
+
         <a href="#/inbox" className={cn(row, "pl-6", props.page === "inbox" && selected)}>
           <Inbox className="size-4 text-muted-foreground" />
           Inbox

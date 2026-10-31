@@ -2,9 +2,9 @@
 The whole app: a 36px header, a left list and one page on the right.
 The header's left has two tabs, the open one in full color with the accent under it:
 - Home: finding and doing the work, with the sidebar tree (Sidebar.tsx) on the left.
-- GitHub: your work on GitHub, with its own left list (GitHubNav.tsx: Inbox, Notifications, Pull requests,
+- GitHub: your work on GitHub, with its own left list (GitHubNav.tsx: Overview, Inbox, Notifications, Pull requests,
   Issues, Your repositories, Starred, Account). The tab shows how many drafts wait in the Inbox for your decision.
-Each tab goes back to the last page you had open under it (Home starts at Issues, GitHub at the Inbox); a reload
+Each tab goes back to the last page you had open under it (Home starts at Issues, GitHub at its Overview); a reload
 forgets that. On its right: Sign in while you aren't signed in to GitHub (straight to GitHub's sign-in page once sign in is
 set up, else the GitHub tab's Account page, which walks you through setting it up), or, signed in, your GitHub picture
 and @login, a link to Account (GitHub.tsx), where Sign out is. Then this repo on GitHub (a new tab, so the app stays open),
@@ -15,7 +15,7 @@ page (Sherpa.tsx).
 The page lives in the URL hash, so refresh and back/forward work and switching pages never reloads:
   Home:  #/issues  #/issues?repo=owner/name  #/issues?open=<issue id>  #/jobs  #/jobs/<job id>  #/explore  #/repos  #/tracked
          #/agents  #/agents/<agent id>  #/vms  #/vms?tab=images  #/vms?tab=defaults  #/vms/<vm name>  #/vms/<vm name>?tab=notes  #/resource
-  GitHub: #/inbox  #/inbox/<draft id>  #/github/notifications (Notifications.tsx)
+  GitHub: #/github/overview (GitHubOverview.tsx)  #/inbox  #/inbox/<draft id>  #/github/notifications (Notifications.tsx)
          #/github (= #/github/pulls)  #/github/issues  #/github/account
          #/github/repo?repo=owner/name (Repository.tsx)
          Pull requests and Issues take ?repo=owner/name (only that repo), state=closed (the Closed tab) and
@@ -37,6 +37,7 @@ import Agents from "@/Agents";
 import Explore from "@/Explore";
 import GitHub from "@/GitHub";
 import GitHubNav from "@/GitHubNav";
+import GitHubOverview from "@/GitHubOverview";
 import Sherpa from "@/Sherpa";
 import Inbox from "@/Inbox";
 import Issues from "@/Issues";
@@ -59,7 +60,7 @@ import { cn } from "@/lib/utils";
 
 const PAGES = ["inbox", "github", "issues", "jobs", "explore", "repos", "tracked", "agents", "vms", "resource"];
 // The GitHub tab's pages under #/github/; anything else there is Pull requests.
-const GITHUB_SECTIONS = ["notifications", "issues", "account", "repo"];
+const GITHUB_SECTIONS = ["overview", "notifications", "issues", "account", "repo"];
 // This repo on GitHub, or "": vite.config.ts puts it in from git's origin remote.
 declare const __REPO_URL__: string;
 
@@ -82,7 +83,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   // The last address open under each header tab, where its tab goes back to.
   const [lastHome, setLastHome] = useState("#/issues");
-  const [lastGitHub, setLastGitHub] = useState("#/inbox");
+  const [lastGitHub, setLastGitHub] = useState("#/github/overview");
   // Only the names: App re-renders every page under it, and the VM list changes every second.
   const vmNamesText = useLiveValue((topics) => topics.vms.map((vm) => vm.name).join(" "));
   // Only the count, for the GitHub tab.
@@ -267,6 +268,7 @@ export default function App() {
           {!onGitHub && <Sidebar page={page} id={id} onOpenSettings={() => setSettingsOpen(true)} />}
           <main className="relative min-w-0 flex-1 overflow-hidden">
             {page === "inbox" && <Inbox selected={id} />}
+            {page === "github" && section === "overview" && <GitHubOverview />}
             {page === "github" && section === "notifications" && <Notifications open={query.get("open")} />}
             {page === "github" && section === "repo" && (
               <Repository
