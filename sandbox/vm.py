@@ -1,9 +1,22 @@
 """One Incus VM. Knows nothing about records, queues or agents.
 
 Every call runs the `incus` command line. Commands inside the VM run as the
-desktop user (uid 1000) with the image's environment (/etc/environment).
+desktop user with the image's environment (/etc/environment).
 The VM's address comes from the host's DHCP leases, never from what the VM
 itself reports.
+
+A VM has 1 to MAX_DESKTOPS desktops, each with its own user, home folder, screen, mouse and keyboard, so agents on
+different desktops work at the same time without getting in each other's way. VM(name, desktop) runs commands
+as that desktop's user, and they get SANDBOX_DESKTOP (its number):
+- Desktop 1 is the image's own: the uid 1000 user, logged in by the display manager on display :0, its VNC server
+  (x11vnc) on VNC_PORT and noVNC on NOVNC_PORT, the demo service `demo`.
+- Desktop n (2 and up) is set up at every start (set_up_desktops): the user desktop<n> with its own home, a desktop
+  of the same kind (GNOME, KDE) on a TigerVNC screen of its own (display :<10+n>, DESKTOP_SIZE, VNC on 5900+10+n,
+  only inside the VM), noVNC on NOVNC_PORT+n-1, and the demo service `demo-<n>` (its start command in
+  /opt/demo-<n>/run.sh). Logging it out (or out from its own menu) ends only that desktop; it starts again by itself.
+- Every desktop has its own agents' browser (set_up_browser) on BROWSER_PORT+n-1, run as its user, so what the
+  browser saves lands in that desktop's home.
+Users have sudo, so one agent can still change the system for all: the agents' prompt has the rules for that.
 
 Every incus call gets stdin=DEVNULL: `incus exec` reads stdin, and when the
 backend runs in the background of a terminal (run.sh), reading the terminal
@@ -31,8 +44,143 @@ TERMINAL_PORT = int(os.environ["SANDBOX_VM_TERMINAL_PORT"])
 NO_DESKTOP_FILE = "/etc/sandbox-no-desktop"
 # A VM whose agent doesn't answer this long after it was started hung while booting (wait_agent).
 HUNG_BOOT_SECONDS = 180
+# The most desktops a VM can have, and the screen size of desktops 2 and up (desktop 1's comes with the image).
+MAX_DESKTOPS = 3
+DESKTOP_SIZE = "1280x800"
+# Desktops 2 and up, as root at every start (set_up_desktops), with count and size set before it. TigerVNC comes from
+# the system's own packages, the first time. A terminal-only image gets only the users and demo services.
+DESKTOPS_SCRIPT = r"""
+set -e
+main=$(id -nu 1000)
+has_desktop=yes
+if [ -f /etc/sandbox-no-desktop ]; then
+    has_desktop=no
+fi
+if [ $count -gt 1 ] && [ $has_desktop = yes ] && [ ! -x /usr/libexec/tigervncsession-start ] && [ ! -x /usr/libexec/vncsession-start ]; then
+    if command -v apt-get > /dev/null; then
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get -y -o DPkg::Lock::Timeout=600 install tigervnc-standalone-server > /dev/null || {
+            apt-get -o DPkg::Lock::Timeout=600 update > /dev/null
+            apt-get -y -o DPkg::Lock::Timeout=600 install tigervnc-standalone-server > /dev/null
+        }
+    else
+        dnf -y install tigervnc-server > /dev/null
+    fi
+fi
+# Ubuntu's and Debian's TigerVNC, or Fedora's.
+start=/usr/libexec/tigervncsession-start
+pidfile=/run/tigervncsession
+if [ ! -x $start ]; then
+    start=/usr/libexec/vncsession-start
+    pidfile=/run/vncsession
+fi
+# The same kind of desktop as desktop 1, in its X11 session.
+session=""
+for name in ubuntu gnome-xorg gnome plasmax11 plasma; do
+    if [ -z "$session" ] && [ -f /usr/share/xsessions/$name.desktop ]; then
+        session=$name
+    fi
+done
+if [ -z "$session" ] && [ $has_desktop = yes ]; then
+    session=$(basename "$(ls /usr/share/xsessions/*.desktop | head -1)" .desktop)
+fi
+
+for n in $(seq 2 $max); do
+    user=desktop$n
+    display=:$((10 + n))
+    if [ $n -gt $count ]; then
+        # Fewer desktops now: this one stops. Its user and home stay, with everything in them.
+        systemctl disable --now sandbox-desktop-$n sandbox-novnc-$n demo-$n > /dev/null 2>&1 || true
+        continue
+    fi
+    if ! id $user > /dev/null 2>&1; then
+        useradd --create-home --shell /bin/bash $user
+    fi
+    # The same groups as desktop 1's user (docker, ...), and sudo like it.
+    for group in $(id -Gn $main); do
+        if [ $group != $main ]; then
+            usermod -aG $group $user
+        fi
+    done
+    echo "$user ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/91-$user
+    chmod 440 /etc/sudoers.d/91-$user
+    home=$(getent passwd $user | cut -d: -f6)
+
+    # Its own demo service, like desktop 1's demo (sandbox/image/base_layer.sh).
+    mkdir -p /opt/demo-$n
+    if [ ! -f /opt/demo-$n/run.sh ]; then
+        printf '#!/usr/bin/env bash\necho "No demo yet: the agent writes the start command here."\nexit 1\n' > /opt/demo-$n/run.sh
+    fi
+    chmod 755 /opt/demo-$n/run.sh
+    chown -R $user: /opt/demo-$n
+    cat > /etc/systemd/system/demo-$n.service <<EOF
+[Unit]
+Description=Desktop $n's demo, started by its agent
+After=network-online.target docker.service
+
+[Service]
+User=$user
+WorkingDirectory=$home
+EnvironmentFile=/etc/environment
+ExecStart=/opt/demo-$n/run.sh
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    if [ $has_desktop = no ]; then
+        continue
+    fi
+    # Ubuntu's and Debian's TigerVNC read the first file, Fedora's the second.
+    mkdir -p $home/.vnc $home/.config/tigervnc $home/.config/autostart
+    printf '$session = "%s";\n$localhost = "yes";\n$SecurityTypes = "None";\n$geometry = "%s";\n' $session $size > $home/.vnc/tigervnc.conf
+    printf 'session=%s\nlocalhost\nsecuritytypes=none\ngeometry=%s\n' $session $size > $home/.config/tigervnc/config
+    # Desktop 1's VNC server starts with every desktop session (the image's autostart), but not in this one.
+    printf '[Desktop Entry]\nType=Application\nName=x11vnc\nHidden=true\n' > $home/.config/autostart/x11vnc.desktop
+    echo yes > $home/.config/gnome-initial-setup-done
+    chown -R $user: $home/.vnc $home/.config
+    grep -q "^$display=" /etc/tigervnc/vncserver.users || echo "$display=$user" >> /etc/tigervnc/vncserver.users
+    # Like TigerVNC's own service, but it starts again after a log out (from its menu too).
+    cat > /etc/systemd/system/sandbox-desktop-$n.service <<EOF
+[Unit]
+Description=Desktop $n (TigerVNC)
+After=network.target systemd-user-sessions.service
+
+[Service]
+Type=forking
+ExecStart=$start $display
+PIDFile=$pidfile-$display.pid
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    cat > /etc/systemd/system/sandbox-novnc-$n.service <<EOF
+[Unit]
+Description=noVNC for desktop $n
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/websockify --web /usr/share/novnc $((novnc_port + n - 1)) localhost:$((5910 + n))
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable --quiet sandbox-desktop-$n sandbox-novnc-$n
+    systemctl start --no-block sandbox-desktop-$n sandbox-novnc-$n
+done
+systemctl daemon-reload
+"""
 # The agents' browser in the VM (set_up_browser): its folder, and the file it runs (here, and copied in there).
 BROWSER_DIR = "/opt/sandbox-browser"
+# Desktop n's browser listens on BROWSER_PORT + n - 1, on localhost only.
+BROWSER_PORT = 9230
 BROWSER_SERVICE = Path(__file__).resolve().parent / "agent" / "browser_service.py"
 # Run as root before the browser starts: installs what it needs the first time (a few minutes), quick after that.
 # Playwright and its Firefox from their own official places (PyPI, Playwright's downloads), Xvfb (the display
@@ -62,19 +210,23 @@ if command -v apt-get > /dev/null; then
     "$dir/venv/bin/playwright" install-deps firefox || true
 fi
 """
-# As the desktop user (uid 1000), so what it saves is theirs. A failed install (no internet) is tried again
-# every 30 seconds. At most 60% of the VM's memory, so it can't starve the rest.
-BROWSER_UNIT = f"""[Unit]
-Description=The agents' browser (sandbox/agent/browser_service.py)
-After=network-online.target
+# One per desktop, as its user, so what it saves is theirs: sandbox-browser for desktop 1, sandbox-browser-<n> for
+# desktop n, which starts after desktop 1's (so only one installs at a time). The {...} parts are filled in by
+# set_up_browser. A failed install (no internet) is tried again every 30 seconds. At most 60% of the VM's memory,
+# so it can't starve the rest.
+BROWSER_UNIT = """[Unit]
+Description=The agents' browser for desktop {desktop} (sandbox/agent/browser_service.py)
+After=network-online.target {after}
 Wants=network-online.target
 
 [Service]
-User=1000
+User={user}
 WorkingDirectory=~
-Environment=PLAYWRIGHT_BROWSERS_PATH={BROWSER_DIR}/browsers
-ExecStartPre=+{BROWSER_DIR}/install.sh
-ExecStart={BROWSER_DIR}/venv/bin/python {BROWSER_DIR}/browser_service.py
+Environment=PLAYWRIGHT_BROWSERS_PATH={dir}/browsers
+Environment=SANDBOX_BROWSER_PORT={port}
+Environment=SANDBOX_BROWSER_DISPLAY={display}
+ExecStartPre=+{dir}/install.sh
+ExecStart={dir}/venv/bin/python {dir}/browser_service.py
 TimeoutStartSec=20min
 Restart=always
 RestartSec=30
@@ -90,8 +242,10 @@ class VMError(Exception):
 
 
 class VM:
-    def __init__(self, name: str):
+    def __init__(self, name: str, desktop: int = 1):
         self.name = name
+        # Whose commands exec runs: desktop 1's user (uid 1000) or desktop<n>.
+        self.desktop = desktop
 
     def status(self) -> str | None:
         """"Running", "Stopped", ... or None if the VM doesn't exist."""
@@ -188,19 +342,22 @@ class VM:
         return None
 
     def exec(self, command: str, timeout: float = 600, input: str | None = None, tag: str | None = None) -> subprocess.CompletedProcess:
-        """Run a shell command as the desktop user, in their home, with the image's PATH.
+        """Run a shell command as this desktop's user, in their home, with the image's PATH and SANDBOX_DESKTOP set.
 
         input is text for the command's stdin (e.g. a file's content); without it stdin is empty.
         tag runs it in a session of its own, with tag as the last word of its command line, so
         kill_tagged(tag) can end it and everything it started, even while this call still waits.
         Output that isn't valid UTF-8 (binary files, a cut character) comes back with U+FFFD in its place.
         """
-        script = f"set -a; . /etc/environment; set +a; {command}"
+        script = f"set -a; . /etc/environment; set +a; export SANDBOX_DESKTOP={self.desktop}; {command}"
         if tag is not None:
             # --wait: the command's own exit code, and its end, as without setsid.
-            script = f"set -a; . /etc/environment; set +a; exec setsid --wait bash -c {shlex.quote(command)} {shlex.quote(tag)}"
-        # runuser -l: a login shell in the user's home. The user is whoever has uid 1000.
-        as_user = f'exec runuser -l "$(id -nu 1000)" -c {shlex.quote(script)}'
+            script = f"set -a; . /etc/environment; set +a; export SANDBOX_DESKTOP={self.desktop}; exec setsid --wait bash -c {shlex.quote(command)} {shlex.quote(tag)}"
+        # runuser -l: a login shell in the user's home. Desktop 1's user is whoever has uid 1000.
+        user = '"$(id -nu 1000)"'
+        if self.desktop != 1:
+            user = f"desktop{self.desktop}"
+        as_user = f"exec runuser -l {user} -c {shlex.quote(script)}"
         if input is None:
             return subprocess.run(
                 ["incus", "exec", self.name, "--", "bash", "-c", as_user],
@@ -499,31 +656,63 @@ done
         if result.returncode != 0:
             raise VMError(f"Could not set Firefox's graphics card name in {self.name}: {result.stderr.strip()}")
 
-    def set_up_browser(self) -> None:
-        """Put the agents' browser in the VM (sandbox/agent/browser_service.py) and start it. Safe to run again.
+    def set_up_browser(self, desktops: int = 1) -> None:
+        """Put the agents' browser in the VM (sandbox/agent/browser_service.py) and start one for each of its desktops.
+        Safe to run again; a desktop the VM no longer has loses its browser.
 
-        It runs as the systemd service sandbox-browser. The first time in a VM its start installs what it needs
-        (BROWSER_INSTALL), which takes a few minutes and doesn't hold up the VM's start: meanwhile the browser tools
-        say it is still starting. Started again here (not only at boot), so a VM always runs this file's newest
-        version.
+        Each runs as a systemd service: sandbox-browser for desktop 1, sandbox-browser-<n> for desktop n. The first
+        time in a VM the start installs what they need (BROWSER_INSTALL), which takes a few minutes and doesn't hold
+        up the VM's start: meanwhile the browser tools say it is still starting. Started again here (not only at
+        boot), so a VM always runs this file's newest version.
         """
         result = self.exec_root(f"mkdir -p {BROWSER_DIR}", timeout=30)
         if result.returncode != 0:
             raise VMError(f"Could not make {BROWSER_DIR} in {self.name}: {result.stderr.strip()}")
         self.write_file(f"{BROWSER_DIR}/browser_service.py", BROWSER_SERVICE.read_text())
         self.write_file(f"{BROWSER_DIR}/install.sh", BROWSER_INSTALL, "0755")
-        self.write_file("/etc/systemd/system/sandbox-browser.service", BROWSER_UNIT)
-        # Not while it is still installing (it started at boot): a restart then would kill apt halfway.
-        script = """
+        units = []
+        for desktop in range(1, desktops + 1):
+            unit = "sandbox-browser"
+            user = "1000"
+            after = ""
+            if desktop != 1:
+                unit = f"sandbox-browser-{desktop}"
+                user = f"desktop{desktop}"
+                after = "sandbox-browser.service"
+            text = BROWSER_UNIT.format(
+                desktop=desktop,
+                after=after,
+                user=user,
+                dir=BROWSER_DIR,
+                port=BROWSER_PORT + desktop - 1,
+                display=f":{98 + desktop}",
+            )
+            self.write_file(f"/etc/systemd/system/{unit}.service", text)
+            units.append(unit)
+        gone = " ".join([f"sandbox-browser-{desktop}" for desktop in range(desktops + 1, MAX_DESKTOPS + 1)])
+        units = " ".join(units)
+        # Not while one is still installing (it started at boot): a restart then would kill apt halfway.
+        script = f"""
+systemctl disable --now {gone} > /dev/null 2>&1 || true
 systemctl daemon-reload
-systemctl enable --quiet sandbox-browser
-if [ "$(systemctl is-active sandbox-browser)" != activating ]; then
-    systemctl restart --no-block sandbox-browser
-fi
+for unit in {units}; do
+    systemctl enable --quiet $unit
+    if [ "$(systemctl is-active $unit)" != activating ]; then
+        systemctl restart --no-block $unit
+    fi
+done
 """
         result = self.exec_root(script, timeout=60)
         if result.returncode != 0:
             raise VMError(f"Could not start the browser in {self.name}: {result.stderr.strip()}")
+
+    def set_up_desktops(self, desktops: int) -> None:
+        """Make desktops 2 to `desktops` and start them, and stop the ones above that (DESKTOPS_SCRIPT). Safe to run
+        again. The first time it installs TigerVNC (under a minute); it doesn't wait for the desktops to come up."""
+        script = f"count={desktops}\nmax={MAX_DESKTOPS}\nsize={DESKTOP_SIZE}\nnovnc_port={NOVNC_PORT}\n" + DESKTOPS_SCRIPT
+        result = self.exec_root(script, timeout=900)
+        if result.returncode != 0:
+            raise VMError(f"Could not set up the desktops of {self.name}: {result.stderr.strip()[-500:]}")
 
     def guard_shadow_stack(self) -> None:
         """Keep shadow stacks from crashing the VM. Safe to run again; it stays set after reboots.

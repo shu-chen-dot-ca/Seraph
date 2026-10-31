@@ -9,7 +9,8 @@ the background), or starts it in the background at once (background: true). A ru
 checked by the app every few seconds (agents.py, watch_runs), and the agent gets its result in a message.
 
 Every run is tagged with its own id (VM.exec's tag), not with its agent's, so losing the VM (the user took it,
-gave it to another agent or skipped the agent) never kills it.
+gave it to another agent or skipped the agent) never kills it. It runs as the user of its agent's desktop (VM.exec),
+and its output stays in that user's home, so it is checked as that user too.
 
 The run shows live in a terminal window on the desktop (computer_use.WATCH). Each agent has its own window, so
 another agent's run never closes it; the agent's next run does. Its output stays in the VM, in RUNS_DIR/<id>.log,
@@ -17,12 +18,12 @@ and check() reads the end of it. Hiding the user's secrets in it is up to the ca
 
 A run is a dict, kept with its VM (VMQueue.add_run) until it ends:
 
-    {"id": "run_a1b2c3", "agent", "kind": "bash" | "tests", "label": the command, as the user sees it, "log",
-     "started_at", "background": false while a tool call waits for it, "stopped_by_user": bool,
+    {"id": "run_a1b2c3", "agent", "desktop": the desktop it runs on, "kind": "bash" | "tests", "label": the command,
+     as the user sees it, "log", "started_at", "background": false while a tool call waits for it, "stopped_by_user": bool,
      and for a test run what run_tests needs to keep its result: "job", "when", "scope", "command", "base",
      "path", "diff_hash"}
 
-    run = start(record, agent_id, "bash", "pip install -e .", "pip install -e .")
+    run = start(record, agent_id, 2, "bash", "pip install -e .", "pip install -e .")
     result = check(record, run)    # None while it runs, else {"ended", "exit_code", "output", "seconds"}
 """
 
@@ -47,9 +48,9 @@ RUN_LIMIT_SECONDS = 12 * 3600
 OUTPUT_LIMIT = 50_000
 
 
-def start(record: VMRecord, agent_id: str, kind: str, command: str, label: str, folder: str = "") -> dict:
-    """Start command in the VM and return at once with the run. folder: a folder to cd into first (from home).
-    Blocking (an incus call)."""
+def start(record: VMRecord, agent_id: str, desktop: int, kind: str, command: str, label: str, folder: str = "") -> dict:
+    """Start command in the VM, on the agent's desktop, and return at once with the run. folder: a folder to cd into
+    first (from home). Blocking (an incus call)."""
     run_id = "run_" + secrets.token_hex(3)
     log = f"{RUNS_DIR}/{run_id}.log"
     exit_file = f"{RUNS_DIR}/{run_id}.exit"
@@ -67,12 +68,13 @@ def start(record: VMRecord, agent_id: str, kind: str, command: str, label: str, 
         inner = f"cd {folder} && {inner}"
     script += f"{{ {inner}\n}} > {log} 2>&1; echo $? > {exit_file}"
     # setsid -f: a session of its own that outlives this call; the tag is the last word of its command line.
-    result = record.vm.exec(f"setsid -f bash -c {shlex.quote(script)} sandbox-{run_id} < /dev/null > /dev/null 2>&1", 30)
+    result = record.desktop_vm(desktop).exec(f"setsid -f bash -c {shlex.quote(script)} sandbox-{run_id} < /dev/null > /dev/null 2>&1", 30)
     if result.returncode != 0:
         raise ValueError(f"Could not start it: {result.stderr.strip()}")
     return {
         "id": run_id,
         "agent": agent_id,
+        "desktop": desktop,
         "kind": kind,
         "label": label,
         "log": log,
@@ -98,13 +100,15 @@ def check(record: VMRecord, run: dict) -> dict | None:
         f"elif [ -f {exit_file} ]; then echo exit $(cat {exit_file}); tail -c {OUTPUT_LIMIT} {run['log']}; "
         f"else echo gone; tail -c {OUTPUT_LIMIT} {run['log']} 2>/dev/null; fi"
     )
-    result = record.vm.exec(script, 30)
+    # Runs from before desktops have none: they were all on desktop 1.
+    vm = record.desktop_vm(run.get("desktop", 1))
+    result = vm.exec(script, 30)
     first, _, output = result.stdout.partition("\n")
     if first == "running" and seconds < RUN_LIMIT_SECONDS:
         return None
     if first == "running":
         stop(record, run)
-        output = record.vm.exec(f"tail -c {OUTPUT_LIMIT} {run['log']}", 30).stdout
+        output = vm.exec(f"tail -c {OUTPUT_LIMIT} {run['log']}", 30).stdout
         return {"ended": "timeout", "exit_code": None, "output": output, "seconds": seconds}
     if first.startswith("exit "):
         return {"ended": "exit", "exit_code": int(first.split()[1]), "output": output, "seconds": seconds}

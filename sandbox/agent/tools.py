@@ -4,9 +4,11 @@ Only turns tool calls into Computer calls and Computer results into tool
 results. What each action does inside the VM lives in computer_use.py.
 An exception raised here reaches Claude as a failed tool call.
 
-An agent works on one VM, its target VM, and only while it holds it (VMQueue).
+An agent works on one VM, its target VM, and only while it holds one of its desktops (VMQueue). Its tools act on
+that desktop alone: its screen, mouse and keyboard, and commands run as that desktop's user, in its home folder
+(sandbox/vm.py). Agents on the VM's other desktops work at the same time without getting in each other's way.
 Every tool except wait (and the env tools' part for all VMs, below) checks that first and refuses otherwise, so an agent that
-waits in line, or lost the VM to the user, can't touch it. The target can change
+waits in line, or lost the desktop to the user, can't touch it. The target can change
 between jobs, so it is looked up on every call.
 
 Every tool that touches the VM checks it next, so if the VM stops in the middle
@@ -28,15 +30,15 @@ on the desktop (on_desktop), so the user sees long runs and the app being tried,
 A visible command is a run (long_runs.py): it goes on in the VM by itself. bash waits for it up to
 long_runs.FOREGROUND_SECONDS, then leaves it going in the background; background: true returns at once. A run in
 the background is collected by the app (agents.py), which gives the agent its result (bash_result) in a message.
-While another agent's run goes in the VM, vm_stop and vm_restart are refused (they would kill it), unless the VM
-no longer answers.
+While another agent's run goes in the VM, or another agent holds one of its other desktops, vm_stop and vm_restart
+are refused (they would end that work), unless the VM no longer answers.
 
 The browser_* tools are the agent's own web browser in the VM (sandbox/agent/browser_service.py): a Firefox that
 isn't on the desktop, which the agent reads as text with numbered things to click or fill in, instead of
-screenshots and mouse clicks, and which fetches a site's data (JSON) straight into a file. Each agent has its own
-session (tabs, cookies) in it. Page text has the user's secrets hidden like bash output.
+screenshots and mouse clicks, and which fetches a site's data (JSON) straight into a file. Each desktop has its own
+browser service (so files land in that desktop's home), and each agent its own session (tabs, cookies) in it. Page text has the user's secrets hidden like bash output.
 
-The agent may lock the human's mouse and keyboard out of the desktop while it
+The agent may lock the human's mouse and keyboard out of its desktop while it
 works there: once per turn. The user can unlock it any time, and then it stays
 unlocked for the rest of the turn. A lock the agent set ends with its turn
 (Agents calls end_turn after every turn, also one that failed or was cancelled).
@@ -61,7 +63,7 @@ from claude_agent_sdk import tool
 
 from sandbox.agent import long_runs
 from sandbox.agent.computer_use import Computer
-from sandbox.vm import BROWSER_DIR
+from sandbox.vm import BROWSER_DIR, BROWSER_PORT, VM
 from sandbox.vms import VMRecord, VMs, VMsError
 
 # The only waits the agent can pick. Short ones are for things that are about
@@ -71,7 +73,8 @@ WAIT_SECONDS = [1, 3, 10, 30]
 # everything, and values that short are not secrets.
 HIDE_MIN_LENGTH = 4
 NOT_HOLDER = "You don't hold a VM. Call queue_for_vm and wait for the message that it is yours."
-# One call to the agents' browser in the VM: the request on stdin, the answer on stdout (sandbox/agent/browser_service.py).
+# One call to the agents' browser of a desktop in the VM, with its port before it: the request on stdin, the answer
+# on stdout (sandbox/agent/browser_service.py).
 BROWSER_CALL = f"python3 {BROWSER_DIR}/browser_service.py call"
 
 
@@ -87,25 +90,31 @@ class ComputerTools:
         self.history = history
         # Whether lock_desktop was used in this turn (allowed once per turn).
         self.locked_this_turn = False
-        # The VM this agent locked, so end_turn unlocks that one.
+        # The VM and desktop this agent locked, so end_turn unlocks that one.
         self.locked_record: VMRecord | None = None
+        self.locked_desktop = 1
         # Every command it runs in a VM carries this (Computer, VM.exec), so cancel() finds them.
         self.tag = f"sandbox-agent-{agent_id}"
 
     def held_vm(self) -> VMRecord:
-        """The agent's target VM, if the agent holds it. Raises (a failed tool call) otherwise."""
+        """The agent's target VM, if the agent holds one of its desktops. Raises (a failed tool call) otherwise."""
         name = self.get_target_vm()
         if name is None:
             raise ValueError(NOT_HOLDER)
         record = self.vms.get(name)
-        if record.holder != self.agent_id:
+        if record.holding(self.agent_id) is None:
             raise ValueError(NOT_HOLDER)
         return record
 
+    def held_desktop(self) -> VM:
+        """The desktop the agent holds, as a VM that runs commands as its user. Raises (a failed tool call) otherwise."""
+        record = self.held_vm()
+        return record.desktop_vm(record.holding(self.agent_id))
+
     def list(self) -> list:
         return [
-            tool("check", "Check that the VM is running and its desktop can be used.", {})(self.check),
-            tool("screenshot", "See the VM's screen. Coordinates in other tools are pixels of this image.", {})(self.screenshot),
+            tool("check", "Check that the VM is running and your desktop can be used.", {})(self.check),
+            tool("screenshot", "See your desktop's screen. Coordinates in other tools are pixels of this image.", {})(self.screenshot),
             tool(
                 "click",
                 "Click at (x, y). button: left, middle or right. count: 2 for a double click.",
@@ -128,7 +137,7 @@ class ComputerTools:
             )(self.wait),
             tool(
                 "bash",
-                "Run a shell command in the VM as the desktop user, in their home folder. "
+                "Run a shell command in the VM as your desktop's user, in their home folder. "
                 "The user's environment variables are set in it; their values are replaced by [hidden] in the output. "
                 "Only the last 50000 bytes of stdout and of stderr come back. visible: true shows the command live in a terminal "
                 "window on the desktop while it runs, so the user can follow it; use it for anything that takes a while (installs, "
@@ -138,7 +147,7 @@ class ComputerTools:
                 "more than about 5 minutes (a big install, a build): then do what else you have in this VM, or end your turn, "
                 "and the VM goes to whoever waits for it meanwhile; you get it back first once the run is over. "
                 "To start a program or a terminal window on the desktop, prefix it with on_desktop and put it "
-                "in the background with its output in a file, e.g. `on_desktop nohup python app.py > /tmp/app.log 2>&1 &` or "
+                "in the background with its output in a file, e.g. `on_desktop nohup python app.py > ~/app.log 2>&1 &` or "
                 "`on_desktop gnome-terminal -- bash -c 'cd ~/proj && python demo.py; exec bash'` (konsole -e on a KDE desktop).",
                 {
                     "type": "object",
@@ -153,7 +162,8 @@ class ComputerTools:
             )(self.vm_start),
             tool(
                 "vm_stop",
-                "Shut the VM down. Its disk is kept, so vm_start brings everything back except what was running.",
+                "Shut the VM down. Its disk is kept, so vm_start brings everything back except what was running. "
+                "Refused while another agent works on one of its other desktops.",
                 {},
             )(self.vm_stop),
             tool(
@@ -166,13 +176,14 @@ class ComputerTools:
             tool(
                 "vm_restart",
                 "Restart the VM; a frozen one is forced off first. Its disk is kept, but everything running in it ends "
-                "(servers, test runs, open windows). Returns when the desktop is up again.",
+                "(servers, test runs, open windows) on every desktop. Returns when the desktop is up again. Refused while "
+                "another agent works on one of its other desktops, unless the VM stopped answering.",
                 {},
             )(self.vm_restart),
             tool(
                 "desktop_log_out",
-                "Log the desktop user out: the desktop session ends and its windows close. "
-                "Things running in the browser terminals keep going.",
+                "Log your desktop's user out: the desktop session ends and its windows close. "
+                "Things running in the browser terminals keep going, and so do the VM's other desktops.",
                 {},
             )(self.desktop_log_out),
             tool(
@@ -182,7 +193,7 @@ class ComputerTools:
             )(self.desktop_log_in),
             tool(
                 "lock_desktop",
-                "Lock the user's mouse and keyboard out of the desktop and terminals while you control the desktop, "
+                "Lock the user's mouse and keyboard out of your desktop and terminals while you control the desktop, "
                 "so they can't get in your way. Only once per turn; it ends when your turn ends. "
                 "The user can unlock it any time, and then you can't lock it again this turn.",
                 {},
@@ -369,13 +380,13 @@ class ComputerTools:
         return f"Using {name}"
 
     async def check(self, args: dict) -> dict:
-        computer = Computer(self.held_vm().vm, self.tag)
+        computer = Computer(self.held_desktop(), self.tag)
         await asyncio.to_thread(computer.check)
         width, height = await asyncio.to_thread(computer.screen_size)
         return {"content": [{"type": "text", "text": f"The VM is running and its desktop is up ({width}x{height} pixels)."}]}
 
     async def screenshot(self, args: dict) -> dict:
-        computer = Computer(self.held_vm().vm, self.tag)
+        computer = Computer(self.held_desktop(), self.tag)
         await asyncio.to_thread(computer.check)
         width, height = await asyncio.to_thread(computer.screen_size)
         jpeg = await asyncio.to_thread(computer.screenshot)
@@ -387,31 +398,31 @@ class ComputerTools:
         }
 
     async def click(self, args: dict) -> dict:
-        computer = Computer(self.held_vm().vm, self.tag)
+        computer = Computer(self.held_desktop(), self.tag)
         await asyncio.to_thread(computer.check)
         await asyncio.to_thread(computer.click, args["x"], args["y"], args["button"], args["count"])
         return {"content": [{"type": "text", "text": "Clicked."}]}
 
     async def drag(self, args: dict) -> dict:
-        computer = Computer(self.held_vm().vm, self.tag)
+        computer = Computer(self.held_desktop(), self.tag)
         await asyncio.to_thread(computer.check)
         await asyncio.to_thread(computer.drag, args["x1"], args["y1"], args["x2"], args["y2"])
         return {"content": [{"type": "text", "text": "Dragged."}]}
 
     async def type(self, args: dict) -> dict:
-        computer = Computer(self.held_vm().vm, self.tag)
+        computer = Computer(self.held_desktop(), self.tag)
         await asyncio.to_thread(computer.check)
         await asyncio.to_thread(computer.type, args["text"])
         return {"content": [{"type": "text", "text": "Typed."}]}
 
     async def key(self, args: dict) -> dict:
-        computer = Computer(self.held_vm().vm, self.tag)
+        computer = Computer(self.held_desktop(), self.tag)
         await asyncio.to_thread(computer.check)
         await asyncio.to_thread(computer.key, args["keys"])
         return {"content": [{"type": "text", "text": f"Pressed {args['keys']}."}]}
 
     async def scroll(self, args: dict) -> dict:
-        computer = Computer(self.held_vm().vm, self.tag)
+        computer = Computer(self.held_desktop(), self.tag)
         await asyncio.to_thread(computer.check)
         await asyncio.to_thread(computer.scroll, args["x"], args["y"], args["direction"], args["amount"])
         return {"content": [{"type": "text", "text": "Scrolled."}]}
@@ -425,12 +436,13 @@ class ComputerTools:
 
     async def bash(self, args: dict) -> dict:
         record = self.held_vm()
-        computer = Computer(record.vm, self.tag)
+        desktop = record.holding(self.agent_id)
+        computer = Computer(record.desktop_vm(desktop), self.tag)
         await asyncio.to_thread(computer.check)
         if not args.get("visible") and not args.get("background"):
             output = await asyncio.to_thread(computer.bash, args["command"], 600)
-            # The VM may have been taken from it while the command ran: then its output is not its to see.
-            if record.holder != self.agent_id:
+            # The desktop may have been taken from it while the command ran: then its output is not its to see.
+            if record.holding(self.agent_id) != desktop:
                 raise ValueError("You lost the VM while the command ran; it was stopped. " + NOT_HOLDER)
             # Read after the command: the user may have changed them meanwhile.
             # Longest first, so a value that contains another one is hidden whole.
@@ -442,7 +454,7 @@ class ComputerTools:
 
         # A visible or background command is a run (long_runs.py): it goes on in the VM by itself.
         label = args["command"].strip().replace("\n", " ")[:300]
-        run = await asyncio.to_thread(long_runs.start, record, self.agent_id, "bash", args["command"], label)
+        run = await asyncio.to_thread(long_runs.start, record, self.agent_id, desktop, "bash", args["command"], label)
         self.queue.add_run(record.name, run)
         later = (
             f"you get its result in a message when it ends (all its output is in {run['log']} in the VM). If you have more "
@@ -551,10 +563,13 @@ class ComputerTools:
         record = self.held_vm()
         if await asyncio.to_thread(record.vm.status) != "Running":
             return {"content": [{"type": "text", "text": "The VM is already off."}]}
-        # Another agent's run would end with it.
+        # Another agent's run, or its work on another desktop, would end with it.
         others = [run for run in record.runs if run["agent"] != self.agent_id]
         if others:
             raise ValueError(f"Another agent's run is going in this VM (`{others[0]['label'][:100]}`); shutting it down would end it. Leave the VM on.")
+        working = [line["holder"] for line in record.desktops if line["holder"] not in [None, self.agent_id]]
+        if working:
+            raise ValueError("Someone else works on another desktop of this VM; shutting it down would end their work. Leave the VM on.")
         await asyncio.to_thread(record.stop)
         return {"content": [{"type": "text", "text": "The VM is off."}]}
 
@@ -602,48 +617,54 @@ class ComputerTools:
 
     async def vm_restart(self, args: dict) -> dict:
         record = self.held_vm()
-        # Another agent's run would end with it; a VM that no longer answers has lost it anyway.
+        # Another agent's run, or its work on another desktop, would end with it; a VM that no longer answers has lost
+        # them anyway.
         others = [run for run in record.runs if run["agent"] != self.agent_id]
-        if others and await asyncio.to_thread(record.vm.responds):
-            raise ValueError(
-                f"Another agent's run is going in this VM (`{others[0]['label'][:100]}`); a restart would end it. "
-                "Restart only if the VM stops answering (vm_health)."
-            )
+        working = [line["holder"] for line in record.desktops if line["holder"] not in [None, self.agent_id]]
+        if (others or working) and await asyncio.to_thread(record.vm.responds):
+            what = "Someone else works on another desktop of this VM"
+            if others:
+                what = f"Another agent's run is going in this VM (`{others[0]['label'][:100]}`)"
+            raise ValueError(f"{what}; a restart would end it. Restart only if the VM stops answering (vm_health).")
         await asyncio.to_thread(record.restart)
         return {"content": [{"type": "text", "text": "The VM restarted and its desktop is up. Everything that was running in it has ended."}]}
 
     async def desktop_log_out(self, args: dict) -> dict:
-        computer = Computer(self.held_vm().vm, self.tag)
+        computer = Computer(self.held_desktop(), self.tag)
         await asyncio.to_thread(computer.check)
         await asyncio.to_thread(computer.log_out)
         return {"content": [{"type": "text", "text": "Logged out. The desktop shows the login screen until desktop_log_in."}]}
 
     async def desktop_log_in(self, args: dict) -> dict:
-        computer = Computer(self.held_vm().vm, self.tag)
+        computer = Computer(self.held_desktop(), self.tag)
         await asyncio.to_thread(computer.check)
         await asyncio.to_thread(computer.log_in)
         return {"content": [{"type": "text", "text": "Logged in; the desktop is up."}]}
 
     async def lock_desktop(self, args: dict) -> dict:
         record = self.held_vm()
+        desktop = record.holding(self.agent_id)
         if self.locked_this_turn:
             raise ValueError("The desktop was already locked once this turn; it can't be locked again until your next turn")
-        if record.locked_by is not None:
+        if record.locked_by.get(desktop) is not None:
             return {"content": [{"type": "text", "text": "The desktop is already locked (by the user)."}]}
         self.locked_this_turn = True
         self.locked_record = record
-        record.locked_by = "agent"
+        self.locked_desktop = desktop
+        # A new dict, so a reader never sees one half changed.
+        record.locked_by = {**record.locked_by, desktop: "agent"}
         # Not saved (runtime only), so tell the live feed directly.
         self.vms.changed()
         return {"content": [{"type": "text", "text": "Locked. It unlocks when your turn ends, or when the user unlocks it."}]}
 
     async def unlock_desktop(self, args: dict) -> dict:
         record = self.held_vm()
-        if record.locked_by == "user":
+        desktop = record.holding(self.agent_id)
+        if record.locked_by.get(desktop) == "user":
             return {"content": [{"type": "text", "text": "The user locked it themselves; leave it to them."}]}
-        if record.locked_by is None:
+        if record.locked_by.get(desktop) is None:
             return {"content": [{"type": "text", "text": "It isn't locked."}]}
-        record.locked_by = None
+        record.locked_by = {number: who for number, who in record.locked_by.items() if number != desktop}
         self.locked_record = None
         self.vms.changed()
         return {"content": [{"type": "text", "text": "Unlocked. You can't lock again this turn."}]}
@@ -673,13 +694,15 @@ class ComputerTools:
         return await self.browser("close", args)
 
     async def browser(self, action: str, args: dict) -> dict:
-        """One call to the agents' browser in the held VM, in this agent's own session (its id)."""
+        """One call to the agents' browser of the held desktop, in this agent's own session (its id)."""
         record = self.held_vm()
+        desktop = record.holding(self.agent_id)
         request = dict(args)
         request["action"] = action
         request["session"] = self.agent_id
-        result = await asyncio.to_thread(record.vm.exec, BROWSER_CALL, 180, json.dumps(request), self.tag)
-        if record.holder != self.agent_id:
+        call = f"SANDBOX_BROWSER_PORT={BROWSER_PORT + desktop - 1} {BROWSER_CALL}"
+        result = await asyncio.to_thread(record.desktop_vm(desktop).exec, call, 180, json.dumps(request), self.tag)
+        if record.holding(self.agent_id) != desktop:
             raise ValueError("You lost the VM meanwhile. " + NOT_HOLDER)
         if result.returncode != 0 or not result.stdout.strip():
             raise ValueError(f"The browser gave no answer: {result.stderr.strip()[-500:]}")
@@ -688,7 +711,8 @@ class ComputerTools:
 
         # Not answering: still installing (the first time in a VM), starting, or failed (its log says why).
         if answer.get("not_running"):
-            state = await asyncio.to_thread(record.vm.exec_root, "systemctl is-active sandbox-browser; journalctl -u sandbox-browser -n 8 --no-pager -o cat", 30)
+            unit = "sandbox-browser" if desktop == 1 else f"sandbox-browser-{desktop}"
+            state = await asyncio.to_thread(record.vm.exec_root, f"systemctl is-active {unit}; journalctl -u {unit} -n 8 --no-pager -o cat", 30)
             lines = state.stdout.strip().split("\n")
             if lines[0] == "activating":
                 raise ValueError("The browser is still starting. The first time in a VM it installs itself first, which takes a few minutes: wait 30 and try again.")
@@ -722,8 +746,9 @@ class ComputerTools:
 
     def end_turn(self) -> None:
         """The agent's turn is over: undo its lock (not the user's), and allow locking again next turn."""
-        if self.locked_record is not None and self.locked_record.locked_by == "agent":
-            self.locked_record.locked_by = None
+        record = self.locked_record
+        if record is not None and record.locked_by.get(self.locked_desktop) == "agent":
+            record.locked_by = {number: who for number, who in record.locked_by.items() if number != self.locked_desktop}
             self.vms.changed()
         self.locked_record = None
         self.locked_this_turn = False

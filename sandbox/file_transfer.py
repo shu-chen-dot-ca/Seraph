@@ -5,8 +5,8 @@ artifacts folder (github_searcher/artifacts.py: it checks the paths, and cleans 
 the VM); the VM itself can't reach this computer. Otherwise only the backend's endpoints call this
 (backend/vms_api.py), and the backend only listens on 127.0.0.1, for the browser.
 
-Listing a folder, on this computer (as the backend's user) or in the VM (as its desktop user, uid 1000).
-An empty path is that user's home. Both give back:
+Listing a folder, on this computer (as the backend's user) or in the VM (as the user of the VM object's desktop:
+desktop 1's for the Resources tab, the agent's own for its artifacts). An empty path is that user's home. Both give back:
 
     {"path": the folder's absolute path, "parent": its parent folder (None at /),
      "entries": [{"name", "kind": "folder" | "file", "size" (bytes), "modified" (Unix time)}, ...]}
@@ -15,7 +15,7 @@ folders first, then by name. A link counts as what it points to, so a linked fol
 
 Copying never moves and never overwrites: a name that is already in the target folder is refused.
 It waits until the copy is done, so a big folder can take minutes. `incus file push` writes as root in the VM,
-so a copy into the VM is given to the desktop user afterwards. The VM must be running for either.
+so a copy into the VM is given to the desktop's user afterwards. The VM must be running for either.
 """
 
 import os
@@ -96,7 +96,8 @@ def to_vm(vm: VM, source: str, target_dir: str) -> None:
     result = subprocess.run(command, capture_output=True, stdin=subprocess.DEVNULL, text=True)
     if result.returncode != 0:
         raise FileTransferError(f"Could not copy {source_path.name} into the VM: {result.stderr.strip()}")
-    owner = vm.exec_root(f'chown -R "$(id -nu 1000):" {shlex.quote(target)}', 600)
+    user = vm.exec("id -un", 30).stdout.strip()
+    owner = vm.exec_root(f"chown -R {shlex.quote(user)}: {shlex.quote(target)}", 600)
     if owner.returncode != 0:
         raise FileTransferError(f"Copied, but could not give {target} to the VM's user: {owner.stderr.strip()}")
 

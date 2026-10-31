@@ -5,8 +5,16 @@ A VM is a resource, not tied to a repo or an agent. Each one is an Incus VM name
 
     DATA_DIR/vms/<name>.json   {"name", "incus_name", "image", "image_fingerprint", "cpus", "memory_gb",
                                 "disk_gb", "internet", "env", "secrets_in_vm", "autostart", "status",
-                                "created_at", "forked_from", "holder", "priority", "queue", "runs", "traffic",
+                                "created_at", "forked_from", "desktops", "queue", "wants", "runs", "traffic",
                                 "notes"}
+
+"desktops" has one entry per desktop (1 to MAX_DESKTOPS, sandbox/vm.py), each {"holder", "priority"}: who uses it,
+and the agents that stepped aside from it. "queue" is the agents waiting for a desktop of the VM, and "wants" the
+desktop some of them asked for ({agent id: desktop number}); the others take the first one that frees up. Each
+desktop has its own user, home folder, screen, mouse and keyboard, so an agent on one never gets in the way of an
+agent on another; desktop_vm(n) runs commands as desktop n's user. How many
+desktops a VM has is set like its CPUs and memory: when it is made, or later while it is stopped (set_resources).
+Every start sets them up in the VM (VM.set_up_desktops) and gives each its own agents' browser.
 
 "image" is the name of the image it was made from (sandbox/images.py) and "image_fingerprint" the exact
 build, since an image can be rebuilt or renamed later. A fork (a copy of a stopped VM, see VMs.fork) has its
@@ -16,7 +24,10 @@ are written in the VM's files right now, so an image is never saved from a VM th
 "notes" are what is set up in the VM, so the next agent knows before it picks the VM or starts in it (e.g.
 "openclaw cloned in ~/openclaw and built, on main; a plugin added for issue 123"). Oldest first:
 
-    [{"id": "note_a1b2c3", "text", "by": an agent id or "user", "at"}]
+    [{"id": "note_a1b2c3", "text", "by": an agent id or "user", "at", "desktop": the desktop an agent wrote it on}]
+
+An agent's note says its desktop, since each desktop has its own home folder (~/openclaw is a different folder on
+each). The user's notes have none.
 
 The agent holding the VM adds and removes them (work_tools.py), the user on the VM page's Notes tab. Agents can't
 remove the user's. A fork starts with its source's notes, since its disk is a copy.
@@ -31,11 +42,11 @@ sandbox/agent/browser_service.py): a Firefox nobody sees, one session per agent,
 The env variables for all VMs (set in the Settings dialog) are in DATA_DIR/global_env.json, not in vms/
 (every .json there is a VM's record). Every VM gets them, with its own on top (see VMRecord.write_env).
 
-holder, priority, queue and runs belong to VMQueue (vm_queue.py); they live here so they are saved with the VM.
-runs are the long commands agents left going in it (sandbox/agent/long_runs.py).
+desktops, queue, wants and runs belong to VMQueue (vm_queue.py); they live here so they are saved with the VM.
+runs are the long commands agents left going in it (sandbox/agent/long_runs.py), each on its agent's desktop.
 Only kept while the backend runs: usage (on, whether it answers, CPU %, memory and disk in use, internet
 download and upload speed), samples (the last 60 of those, one per second) and locked_by (who locked the
-human out of the desktop).
+human out of which desktop: {desktop number: "user" or "agent"}).
 
 Internet use is counted inside the VM, so the user can watch it on a metered connection (a phone hotspot).
 Counting the VM's network card from outside would also count the desktop and terminals the browser shows,
@@ -75,7 +86,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from sandbox.vm import VM
+from sandbox.vm import MAX_DESKTOPS, VM
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # override: the backend reloads itself on code changes, and .env changes should apply then too.
@@ -97,6 +108,7 @@ DISK_GB_DEFAULT = int(os.environ["SANDBOX_DISK_GB_DEFAULT"])
 DISK_GB_MIN = int(os.environ["SANDBOX_DISK_GB_MIN"])
 DISK_GB_MAX = int(os.environ["SANDBOX_DISK_GB_MAX"])
 MIN_FREE_RAM_GB = int(os.environ["SANDBOX_MIN_FREE_RAM_GB"])
+DESKTOPS_ALLOWED = list(range(1, MAX_DESKTOPS + 1))
 NAME_PATTERN = r"[a-z][a-z0-9-]{0,30}"
 SCAN_SECONDS = 10
 SAMPLES_KEPT = 60
@@ -147,12 +159,15 @@ class VMRecord:
         self.autostart = record["autostart"]
         self.status = record["status"]
         self.created_at = record["created_at"]
-        # Who uses the VM ("user", an agent id or None) and the agents waiting for it. Changed by VMQueue only.
-        self.holder = record["holder"]
-        self.queue = record["queue"]
-        # Agents that stepped aside (checked first for the next turn), and the long runs agents left going in the VM.
-        # Changed by VMQueue only. Records from before stepping aside have neither.
-        self.priority = record.get("priority", [])
+        # Per desktop: who uses it ("user", an agent id or None) and the agents that stepped aside from it (checked first
+        # for its next turn). Then the agents waiting for a desktop, and the desktop some of them asked for. Changed by
+        # VMQueue only. Records from before desktops had one desktop, and none from before stepping aside a priority.
+        self.desktops = []
+        for line in record.get("desktops") or [{"holder": record.get("holder"), "priority": record.get("priority", [])}]:
+            self.desktops.append({"holder": line["holder"], "priority": line["priority"]})
+        self.queue = record.get("queue", [])
+        self.wants = record.get("wants", {})
+        # The long runs agents left going in the VM. Changed by VMQueue only. Records from before runs have none.
         self.runs = record.get("runs", [])
         # The VM this one is a copy of, or "" (records from before forks have none).
         self.forked_from = record.get("forked_from", "")
@@ -190,8 +205,8 @@ class VMRecord:
             "net_up_rate": None,
         }
         self.samples: list[dict] = []
-        # Who locked the human's mouse and keyboard out of the desktop: "user", "agent" or None.
-        self.locked_by: str | None = None
+        # Who locked the human's mouse and keyboard out of which desktop: {desktop number: "user" or "agent"}.
+        self.locked_by: dict[int, str] = {}
         # Why the last create, start or stop failed (None when it worked).
         self.error: str | None = None
         # The last CPU reading (nanoseconds used, time read), to work out CPU % between two reads.
@@ -219,9 +234,9 @@ class VMRecord:
             "autostart": self.autostart,
             "status": self.status,
             "created_at": self.created_at,
-            "holder": self.holder,
-            "priority": list(self.priority),
+            "desktops": [{"holder": line["holder"], "priority": list(line["priority"])} for line in self.desktops],
             "queue": list(self.queue),
+            "wants": dict(self.wants),
             "runs": [dict(run) for run in self.runs],
             "forked_from": self.forked_from,
             "traffic": dict(self.traffic),
@@ -238,6 +253,27 @@ class VMRecord:
             temporary.write_text(json.dumps(self.to_dict(), indent=2))
             temporary.replace(VMS_DIR / f"{self.name}.json")
         self.changed()
+
+    def holding(self, who: str) -> int | None:
+        """The desktop `who` (an agent id or "user") holds, or None."""
+        for number, line in enumerate(self.desktops, start=1):
+            if line["holder"] == who:
+                return number
+        return None
+
+    def desktop_of(self, agent_id: str) -> int | None:
+        """The desktop the agent holds or stepped aside from (its priority line), else the one it waits for if it asked
+        for one, else None."""
+        for number, line in enumerate(self.desktops, start=1):
+            if line["holder"] == agent_id or agent_id in line["priority"]:
+                return number
+        if agent_id in self.queue:
+            return self.wants.get(agent_id)
+        return None
+
+    def desktop_vm(self, desktop: int) -> VM:
+        """The VM, running commands as desktop's user."""
+        return VM(self.incus_name, desktop)
 
     # --- Lifecycle -------------------------------------------------------------
 
@@ -259,7 +295,8 @@ class VMRecord:
             self.vm.guard_shadow_stack()
             self.vm.use_host_timezone()
             self.vm.set_firefox_graphics_name()
-            self.vm.set_up_browser()
+            self.vm.set_up_desktops(len(self.desktops))
+            self.vm.set_up_browser(len(self.desktops))
             self.write_env()
             self.status = "running"
             self.save()
@@ -294,7 +331,8 @@ class VMRecord:
             self.vm.guard_shadow_stack()
             self.vm.use_host_timezone()
             self.vm.set_firefox_graphics_name()
-            self.vm.set_up_browser()
+            self.vm.set_up_desktops(len(self.desktops))
+            self.vm.set_up_browser(len(self.desktops))
             self.write_env()
             self.status = "running"
             self.save()
@@ -332,7 +370,8 @@ class VMRecord:
             self.vm.guard_shadow_stack()
             self.vm.use_host_timezone()
             self.vm.set_firefox_graphics_name()
-            self.vm.set_up_browser()
+            self.vm.set_up_desktops(len(self.desktops))
+            self.vm.set_up_browser(len(self.desktops))
             self.write_env()
             self.status = "running"
             self.save()
@@ -486,12 +525,14 @@ class VMRecord:
             self.traffic["since"] = datetime.now(UTC).isoformat()
         self.save()
 
-    def add_note(self, text: str, by: str) -> dict:
-        """Note what is set up in the VM. by is an agent id or "user"."""
+    def add_note(self, text: str, by: str, desktop: int | None = None) -> dict:
+        """Note what is set up in the VM. by is an agent id or "user"; desktop is the one an agent wrote it on."""
         text = text.strip()
         if not text:
             raise VMsError("The note is empty")
         note = {"id": f"note_{secrets.token_hex(3)}", "text": text, "by": by, "at": datetime.now(UTC).isoformat()}
+        if desktop is not None:
+            note["desktop"] = desktop
         with self.notes_lock:
             # A new list, so a reader never sees one half changed.
             self.notes = self.notes + [note]
@@ -560,7 +601,7 @@ class VMRecord:
         asked for it and nobody filled it in): then the value for all VMs is used.
         They go in VM_ENV_FILE, which login shells read (the browser terminals, the agent).
         Terminals opened on the desktop are not login shells and only read ~/.bashrc,
-        so ~/.bashrc gets a line that reads the file too (once).
+        so ~/.bashrc gets a line that reads the file too (once), on every desktop.
         """
         env = dict(self.global_env)
         for key, value in self.env.items():
@@ -576,9 +617,11 @@ class VMRecord:
         line = f"[ -f {VM_ENV_FILE} ] && . {VM_ENV_FILE}  # sandbox environment variables"
         self.secrets_in_vm = [key for key, value in env.items() if value]
         self.save()
-        result = self.vm.exec(f"grep -qxF {shlex.quote(line)} ~/.bashrc || echo {shlex.quote(line)} >> ~/.bashrc", timeout=30)
-        if result.returncode != 0:
-            raise VMsError(f"Could not add the variables to ~/.bashrc: {result.stderr.strip()}")
+        for desktop in range(1, len(self.desktops) + 1):
+            command = f"grep -qxF {shlex.quote(line)} ~/.bashrc || echo {shlex.quote(line)} >> ~/.bashrc"
+            result = self.desktop_vm(desktop).exec(command, timeout=30)
+            if result.returncode != 0:
+                raise VMsError(f"Could not add the variables to ~/.bashrc on desktop {desktop}: {result.stderr.strip()}")
 
     def set_autostart(self, enabled: bool) -> None:
         """Start the VM when this computer starts."""
@@ -589,21 +632,33 @@ class VMRecord:
         self.autostart = enabled
         self.save()
 
-    def set_resources(self, cpus: int, memory_gb: int) -> None:
-        """Change CPU and memory. Only while the VM is off; they apply when it starts."""
+    def set_resources(self, cpus: int, memory_gb: int, desktops: int) -> None:
+        """Change CPU, memory and the number of desktops. Only while the VM is off; they apply when it starts.
+        A desktop someone holds, stepped aside from, asked for or has a run on can't go. The caller holds VMQueue's
+        lock, so nobody joins a desktop while it goes."""
         if cpus not in CPUS_ALLOWED:
             raise VMsError(f"cpus must be one of {CPUS_ALLOWED}")
         if memory_gb not in MEMORY_GB_ALLOWED:
             raise VMsError(f"memory_gb must be one of {MEMORY_GB_ALLOWED}")
+        if desktops not in DESKTOPS_ALLOWED:
+            raise VMsError(f"desktops must be one of {DESKTOPS_ALLOWED}")
+        for number in range(desktops + 1, len(self.desktops) + 1):
+            line = self.desktops[number - 1]
+            runs = [run for run in self.runs if run.get("desktop", 1) == number]
+            if line["holder"] is not None or line["priority"] or number in self.wants.values() or runs:
+                raise VMsError(f"Desktop {number} is in use (held, waited for, or a run is going on it), so it can't go.")
         if not self.lock.acquire(blocking=False):
             raise VMsError(f"{self.name} is busy")
         try:
             if self.vm.status() == "Running":
-                raise VMsError("Stop the VM first; CPU and memory change while it is off.")
+                raise VMsError("Stop the VM first; CPU, memory and desktops change while it is off.")
             self.vm.set_config("limits.cpu", str(cpus))
             self.vm.set_config("limits.memory", f"{memory_gb}GiB")
             self.cpus = cpus
             self.memory_gb = memory_gb
+            self.desktops = self.desktops[:desktops]
+            while len(self.desktops) < desktops:
+                self.desktops.append({"holder": None, "priority": []})
             self.save()
         except VMsError:
             raise
@@ -694,8 +749,7 @@ class VMs:
                     "autostart": config.get("boot.autostart") == "true",
                     "status": "stopped",
                     "created_at": instance["created_at"],
-                    "holder": None,
-                    "queue": [],
+                    "desktops": [{"holder": None, "priority": []}],
                 },
                 self.changed,
             )
@@ -756,6 +810,7 @@ class VMs:
             "disk_gb_min": DISK_GB_MIN,
             "disk_gb_max": DISK_GB_MAX,
             "disk_gb_default": DISK_GB_DEFAULT,
+            "desktops": DESKTOPS_ALLOWED,
             "next_name": f"vm{number}",
         }
 
@@ -820,7 +875,7 @@ class VMs:
             raise VMsError(f"There is no VM {name}")
         return record
 
-    def create(self, name: str, image: str, cpus: int, memory_gb: int, disk_gb: int) -> VMRecord:
+    def create(self, name: str, image: str, cpus: int, memory_gb: int, disk_gb: int, desktops: int = 1) -> VMRecord:
         """Make a VM from an image (its name). Returns at once with status "creating"; launching takes about a minute in a thread."""
         if not re.fullmatch(NAME_PATTERN, name):
             raise VMsError("The name must start with a letter and have only a-z, 0-9 and -, at most 31 characters")
@@ -830,6 +885,8 @@ class VMs:
             raise VMsError(f"memory_gb must be one of {MEMORY_GB_ALLOWED}")
         if disk_gb < DISK_GB_MIN or disk_gb > DISK_GB_MAX:
             raise VMsError(f"The disk must be {DISK_GB_MIN} to {DISK_GB_MAX} GB")
+        if desktops not in DESKTOPS_ALLOWED:
+            raise VMsError(f"desktops must be one of {DESKTOPS_ALLOWED}")
 
         with self.lock:
             if name in self.records:
@@ -866,8 +923,7 @@ class VMs:
                     "autostart": False,
                     "status": "creating",
                     "created_at": datetime.now(UTC).isoformat(),
-                    "holder": None,
-                    "queue": [],
+                    "desktops": [{"holder": None, "priority": []} for _ in range(desktops)],
                 },
                 self.changed,
             )
@@ -879,7 +935,7 @@ class VMs:
 
     def fork(self, source_name: str, name: str) -> VMRecord:
         """Copy a stopped VM into a new one: its disk (everything installed and cloned in it), CPU, memory, disk size,
-        internet setting and env variables. Returns at once with status "creating"; the copy starts by itself."""
+        desktops, internet setting and env variables. Returns at once with status "creating"; the copy starts by itself."""
         if not re.fullmatch(NAME_PATTERN, name):
             raise VMsError("The name must start with a letter and have only a-z, 0-9 and -, at most 31 characters")
         source = self.get(source_name)
@@ -922,8 +978,8 @@ class VMs:
                     "status": "creating",
                     "created_at": datetime.now(UTC).isoformat(),
                     "forked_from": source_name,
-                    "holder": None,
-                    "queue": [],
+                    # As many desktops as the source; nobody holds or waits for them.
+                    "desktops": [{"holder": None, "priority": []} for _ in source.desktops],
                     # Its disk is a copy, so what was set up in the source is set up in it too.
                     "notes": list(source.notes),
                 },

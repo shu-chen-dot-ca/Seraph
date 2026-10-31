@@ -1,14 +1,14 @@
 """The agents' browser: a Firefox inside the VM that agents use through tools, without the desktop.
 
-Runs inside every VM (not on this machine) as the systemd service sandbox-browser, as the desktop user;
-VM.set_up_browser (sandbox/vm.py) copies this file in and starts it, and installs what it needs the first time.
-The browser_* tools (sandbox/agent/tools.py) talk to it: each call runs `python3 browser_service.py call` in the
-VM, which sends one JSON request to the service on localhost and prints its JSON answer. Nothing outside the VM
-can reach it.
+Runs inside every VM (not on this machine), one for each of its desktops, as that desktop's user: the systemd
+service sandbox-browser for desktop 1, sandbox-browser-<n> for desktop n, each on its own port and display
+(SANDBOX_BROWSER_PORT, SANDBOX_BROWSER_DISPLAY). VM.set_up_browser (sandbox/vm.py) copies this file in and starts
+them, and installs what they need the first time. The browser_* tools (sandbox/agent/tools.py) talk to the one of
+the agent's desktop: each call runs `python3 browser_service.py call` in the VM with that port, which sends one JSON
+request to the service on localhost and prints its JSON answer. Nothing outside the VM can reach it.
 
-One Firefox (Playwright's build of it) serves every agent. Each agent has its own session: a private browser
-context with its own cookies, tabs and logins, which no other agent sees. Up to MAX_SESSIONS at once, for when
-several agents share a VM. A session lives until the agent closes it, IDLE_SECONDS unused, or the service
+One Firefox (Playwright's build of it) serves every agent on that desktop. Each agent has its own session: a private
+browser context with its own cookies, tabs and logins, which no other agent sees. Up to MAX_SESSIONS at once. A session lives until the agent closes it, IDLE_SECONDS unused, or the service
 restarting (the VM restarting). Different agents' calls run at the same time; one agent's calls one after the
 other.
 
@@ -39,9 +39,9 @@ import sys
 import time
 from pathlib import Path
 
-PORT = 9230
-# The display Firefox runs on (Xvfb), and its size.
-DISPLAY = ":99"
+# Where it listens, and the display Firefox runs on (Xvfb), and its size. Each desktop's service has its own.
+PORT = int(os.environ.get("SANDBOX_BROWSER_PORT", "9230"))
+DISPLAY = os.environ.get("SANDBOX_BROWSER_DISPLAY", ":99")
 SCREEN = "1920x1080x24"
 MAX_SESSIONS = 10
 # A session nobody used for this long is closed, so its pages stop using memory.

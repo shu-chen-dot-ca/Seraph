@@ -1,8 +1,10 @@
-"""The desktop of one VM: look at it, click, type, scroll. Knows nothing about agents.
+"""One desktop of a VM: look at it, click, type, scroll. Knows nothing about agents.
 
-Everything runs inside the VM through VM.exec, as the desktop user:
-scrot takes the screenshots and xdotool moves the mouse and presses keys.
-Both need the X11 display of the logged-in desktop (the image uses X11, not Wayland).
+Everything runs inside the VM through VM.exec, as that desktop's user (the VM object says which desktop,
+sandbox/vm.py): scrot takes the screenshots and xdotool moves the mouse and presses keys.
+Both need the X11 display of that desktop (the image uses X11, not Wayland): desktop 1's is the logged-in
+desktop that x11vnc shows, desktop n's its own TigerVNC screen (:<10+n>). So one agent's clicks and keys never
+reach another desktop.
 
 Coordinates are pixels of the VM's screen, the same size as the screenshot.
 
@@ -13,7 +15,7 @@ program or a terminal window there. Long commands (a visible or background bash,
 With a tag, every command runs tagged (VM.exec), so VM.kill_tagged(tag) can stop them all,
 including a long bash command or typing that is still going on.
 
-    computer = Computer(record.vm, "sandbox-agent-agent_a1b2c3")
+    computer = Computer(record.desktop_vm(2), "sandbox-agent-agent_a1b2c3")
     jpeg = computer.screenshot()
     computer.click(400, 300)
     computer.type("hello")
@@ -23,22 +25,32 @@ including a long bash command or typing that is still going on.
 import base64
 import shlex
 import subprocess
+import time
 
 from sandbox.vm import VM
 
-# Use the display of the desktop the human sees: copy DISPLAY and XAUTHORITY from
-# x11vnc, which noVNC shows and which starts inside the desktop session.
+# Use the display of the desktop the human sees. Desktop 1 (SANDBOX_DESKTOP, set by VM.exec): copy DISPLAY and
+# XAUTHORITY from x11vnc, which noVNC shows and which starts inside the desktop session. Desktop n: its own screen.
 X11 = (
+    'if [ "$SANDBOX_DESKTOP" = 1 ]; then '
     'pid=$(pgrep -o -u "$(id -u)" x11vnc); '
     '[ -n "$pid" ] || { echo "The desktop is not up yet (x11vnc is not running)." >&2; exit 1; }; '
     "export $(tr '\\0' '\\n' < /proc/$pid/environ | grep -E '^(DISPLAY|XAUTHORITY)='); "
+    'else '
+    'export DISPLAY=":$((10 + SANDBOX_DESKTOP))" XAUTHORITY="$HOME/.Xauthority"; '
+    '[ -S "/tmp/.X11-unix/X$((10 + SANDBOX_DESKTOP))" ] || { echo "The desktop is not up yet (its screen is not running)." >&2; exit 1; }; '
+    'fi; '
 )
 # The desktop's display and session bus, for starting windows on it from outside the session (a terminal, an app).
 # Unlike X11 it never fails: with no desktop up, DISPLAY stays unset. Only ever inside a subshell or a function, so
 # the commands around it (a test suite) still run without a display, as in CI.
 DESKTOP_ENV = (
+    'if [ "$SANDBOX_DESKTOP" = 1 ]; then '
     'desktop_pid=$(pgrep -o -u "$(id -u)" x11vnc); '
     "[ -z \"$desktop_pid\" ] || export $(tr '\\0' '\\n' < /proc/$desktop_pid/environ | grep -E '^(DISPLAY|XAUTHORITY|DBUS_SESSION_BUS_ADDRESS)='); "
+    'elif [ -S "/tmp/.X11-unix/X$((10 + SANDBOX_DESKTOP))" ]; then '
+    'export DISPLAY=":$((10 + SANDBOX_DESKTOP))" XAUTHORITY="$HOME/.Xauthority"; '
+    'fi; '
     'export XDG_RUNTIME_DIR="/run/user/$(id -u)"; '
     '[ -n "$DBUS_SESSION_BUS_ADDRESS" ] || export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"; '
 )
@@ -57,12 +69,13 @@ WATCH = (
     ") > /dev/null 2>&1; "
 )
 # JPEG, not PNG: a PNG of the screen is over 1MB, too big for one message to Claude.
-SCREENSHOT_PATH = "/tmp/computer-use-screen.jpg"
+# One file per desktop: /tmp is shared by the VM's desktops, and another desktop's user can't overwrite this one's.
+SCREENSHOT_PATH = "/tmp/computer-use-screen-$SANDBOX_DESKTOP.jpg"
 SCREENSHOT_QUALITY = 60
 # The VMs overview's small picture (preview): its own file, so it never swaps an agent's screenshot.
 # scrot writes the small copy next to the full one, with -thumb in its name.
-PREVIEW_PATH = "/tmp/computer-use-preview.jpg"
-PREVIEW_THUMB_PATH = "/tmp/computer-use-preview-thumb.jpg"
+PREVIEW_PATH = "/tmp/computer-use-preview-$SANDBOX_DESKTOP.jpg"
+PREVIEW_THUMB_PATH = "/tmp/computer-use-preview-$SANDBOX_DESKTOP-thumb.jpg"
 PREVIEW_PERCENT = 25
 # bash gives back at most this many bytes of stdout and of stderr: the last ones, where errors
 # and summaries are. Cut inside the VM, so a command that prints without end can't fill this
@@ -167,7 +180,13 @@ class Computer:
             raise ComputerError(f"Could not scroll: {result.stderr.strip()}")
 
     def log_out(self) -> None:
-        """End the desktop session (open windows close). Browser terminals and what runs in them keep going."""
+        """End the desktop session (open windows close). Browser terminals and what runs in them keep going.
+        Only this desktop: the VM's other desktops go on."""
+        if self.vm.desktop != 1:
+            result = self.vm.exec_root(f"systemctl stop sandbox-desktop-{self.vm.desktop}", timeout=60)
+            if result.returncode != 0:
+                raise ComputerError(f"Could not log out: {result.stderr.strip()}")
+            return
         # The desktop's own login session is the one on seat0 (terminals have none).
         command = (
             "id=$(loginctl list-sessions --no-legend | awk '$4 == \"seat0\" {print $1; exit}'); "
@@ -180,6 +199,17 @@ class Computer:
 
     def log_in(self) -> None:
         """Log the desktop user in again (the login screen does it by itself), and wait until the desktop is up."""
+        if self.vm.desktop != 1:
+            result = self.vm.exec_root(f"systemctl start sandbox-desktop-{self.vm.desktop}", timeout=60)
+            if result.returncode != 0:
+                raise ComputerError(f"Could not log in: {result.stderr.strip()}")
+            # Its screen is up within seconds; the desktop on it a few seconds after that.
+            for _ in range(60):
+                if self.vm.exec(f"{X11} xdotool getdisplaygeometry", timeout=30).returncode == 0:
+                    time.sleep(5)
+                    return
+                time.sleep(2)
+            raise ComputerError("Logged in, but the desktop did not come up within two minutes.")
         result = self.vm.exec_root("systemctl restart gdm3", timeout=60)
         if result.returncode != 0:
             raise ComputerError(f"Could not log in: {result.stderr.strip()}")
@@ -192,7 +222,7 @@ class Computer:
         """Run a shell command as the desktop user. Returns what it printed and its exit code.
 
         The command can use on_desktop to start something on the desktop the user watches, e.g.
-        `on_desktop nohup python app.py > /tmp/app.log 2>&1 &`.
+        `on_desktop nohup python app.py > ~/app.log 2>&1 &`.
         """
         desktop = f"on_desktop() {{ ( {DESKTOP_ENV}\"$@\" ) }}; "
         # The newline ends a comment on the command's last line. tail never stops the command, it only keeps the end.
