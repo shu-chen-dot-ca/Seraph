@@ -7,7 +7,8 @@ other views never see secrets): they come from GET /api/vms/{name}/settings, fet
 the names change (an agent can add or remove empty ones) unless you have unsaved edits. Once you save a value for an
 empty one, the agent that added it is told and carries on.
 
-CPU, memory and desktops only change while the VM is stopped; they apply on the next start. Desktops is how many
+CPU, memory and desktops only change here while the VM is stopped; they apply on the next start (the + and × above
+the desktop on the Overview add or remove one at any time). Desktops is how many
 agents can work in the VM at the same time, each on its own desktop (screen, mouse, keyboard and home folder). A
 desktop someone holds or waits for can't go; one that goes keeps its home folder, and comes back with it.
 Rename works running or not; the page moves to the new name (#/vms/<new name>).

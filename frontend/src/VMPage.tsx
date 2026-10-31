@@ -8,10 +8,12 @@ Overview is three areas with draggable dividers:
 In phone mode (App.tsx, a screen under 768px wide) the queue is under the desktop instead, and stats and jobs take
 half the width each.
 
-A VM has one to three desktops (set in Settings > Resources while it is stopped). Each has its own screen, mouse,
-keyboard and home folder, so agents on different desktops work at the same time without getting in each other's
-way. With more than one, buttons Desktop 1, Desktop 2, ... above the desktop pick which one the desktop area, its
-Lock, and the queue panel (its holder, Priority and Runs) are about; each button's tooltip says who holds it. Waiting
+A VM has one to three desktops. Each has its own screen, mouse, keyboard and home folder, so agents on different
+desktops work at the same time without getting in each other's way. With more than one, buttons Desktop 1,
+Desktop 2, ... above the desktop pick which one the desktop area, its Lock, and the queue panel (its holder, Priority
+and Runs) are about; each button's tooltip says who holds it. + after them adds a desktop and shows it once it is up
+(while the VM runs it is set up right away: under a minute the first time), and × after the last one removes that
+one (it asks first; its home folder stays). Both work running or not; Settings > Resources sets the number too. Waiting
 is one line for the whole VM: the next agent gets the first desktop that frees up, unless it asked for one ("for
 desktop 2"); Give hands the desktop shown to that agent. A desktop's iframe stays mounted once opened, so switching
 back is instant.
@@ -45,7 +47,7 @@ Internet used is what the VM downloaded and uploaded since the last Reset, for w
 What the backend itself uses (the agents talking to Claude and GitHub) isn't in it.
 */
 
-import { Copy, ExternalLink, Loader2, Lock, Monitor, Play, Power, RotateCw, Square, Unlock, User, X } from "lucide-react";
+import { Copy, ExternalLink, Loader2, Lock, Monitor, Play, Plus, Power, RotateCw, Square, Unlock, User, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -104,6 +106,9 @@ function formatBytes(bytes: number): string {
 // The internet chart never scales below this, so an idle VM's few packets don't look like a busy line.
 const INTERNET_CHART_MIN = 100_000;
 
+// The most desktops a VM can have (MAX_DESKTOPS in sandbox/vm.py).
+const MAX_DESKTOPS = 3;
+
 export default function VMPage(props: { name: string; active: boolean; tab: string | null }) {
   const vms = useLive("vms");
   const loaded = useLoaded("vms");
@@ -136,6 +141,8 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
   const [busy, setBusy] = useState("");
   const [hover, setHover] = useState<{ chart: string; index: number } | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
+  // × after the last desktop asks "are you sure?" now.
+  const [confirmRemove, setConfirmRemove] = useState(false);
   // The run whose Stop asks "are you sure?" now.
   const [stopRun, setStopRun] = useState<VMRun | null>(null);
   const frameRef = useRef<HTMLIFrameElement>(null);
@@ -384,6 +391,29 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
     }
   }
 
+  // Answers once the new desktop is up, then shows it.
+  async function addDesktop() {
+    const number = count + 1;
+    setBusy("add_desktop");
+    try {
+      await api(`/api/vms/${encodeURIComponent(name)}/desktops`, { method: "POST" });
+      showDesktop(number);
+    } catch (err) {
+      toast.error(`Could not add desktop ${number}: ${err instanceof Error ? err.message : err}`);
+    }
+    setBusy("");
+  }
+
+  async function removeDesktop(number: number) {
+    setBusy("remove_desktop");
+    try {
+      await api(`/api/vms/${encodeURIComponent(name)}/desktops/${number}`, { method: "DELETE" });
+    } catch (err) {
+      toast.error(`Could not remove desktop ${number}: ${err instanceof Error ? err.message : err}`);
+    }
+    setBusy("");
+  }
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3 max-md:h-auto max-md:min-h-9 max-md:flex-wrap max-md:py-1">
@@ -470,6 +500,30 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                           </Button>
                         );
                       })}
+                    {!terminalOnly && count > 1 && (
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        title={`Remove desktop ${count}`}
+                        aria-label={`Remove desktop ${count}`}
+                        disabled={busy !== ""}
+                        onClick={() => setConfirmRemove(true)}
+                      >
+                        {busy === "remove_desktop" ? <Loader2 className="animate-spin" /> : <X />}
+                      </Button>
+                    )}
+                    {!terminalOnly && count < MAX_DESKTOPS && (
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        title={busy === "add_desktop" ? `Setting up desktop ${count + 1}…` : "New desktop"}
+                        aria-label="New desktop"
+                        disabled={busy !== ""}
+                        onClick={addDesktop}
+                      >
+                        {busy === "add_desktop" ? <Loader2 className="animate-spin" /> : <Plus />}
+                      </Button>
+                    )}
                     {running && desktopUrl !== null && (
                       <div className="ml-auto flex items-center gap-0.5">
                         {!terminalOnly && (
@@ -968,6 +1022,22 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={resetTraffic}>Reset</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={confirmRemove} onOpenChange={setConfirmRemove}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove desktop {count} of {vm.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {running && "Its windows close. "}
+              Its home folder stays, with everything in it, and comes back with a new desktop {count}.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => removeDesktop(count)}>Remove</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

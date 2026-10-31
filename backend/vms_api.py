@@ -6,7 +6,8 @@ Resources tab, desktop 1's home; only the user can, see sandbox/file_transfer.py
 A VM has one to three desktops (sandbox/vm.py), each with its own holder and priority line, and one waiting line for
 them all: the viewer, the screen picture, the lock, Take over, Release and Give name the desktop (1 when left out);
 Front, Skip and Remove name an agent. The number of desktops is set with CPU and memory (Resources, only while the VM
-is stopped); a desktop in use can't go, and new ones go to the agents waiting.
+is stopped), or one at a time at any time (the desktop bar's + and ×: add one, or remove the last); a desktop in use
+can't go, and new ones go to the agents waiting.
 
 Create, start, stop and restart run in background threads inside
 sandbox/vms.py and answer at once; the browser follows the state through
@@ -352,6 +353,36 @@ def set_resources(name: str, body: ResourcesRequest) -> dict:
         raise HTTPException(status_code=409, detail=str(error))
     except VMError as error:
         raise HTTPException(status_code=500, detail=str(error))
+    return {}
+
+
+@router.post("/vms/{name}/desktops")
+def add_desktop(name: str) -> dict:
+    """One more desktop, running or not. While the VM runs it is set up first: under a minute the first time."""
+    try:
+        record = vms.get(name)
+    except VMsError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    try:
+        record.add_desktop(queue.lock)
+        # The new desktop goes to the agents waiting.
+        queue.fill(name)
+    except VMsError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    return {}
+
+
+@router.delete("/vms/{name}/desktops/{number}")
+def remove_desktop(name: str, number: int) -> dict:
+    """Take the last desktop away, running or not. A desktop in use can't go."""
+    try:
+        record = vms.get(name)
+    except VMsError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    try:
+        record.remove_desktop(number, queue.lock)
+    except VMsError as error:
+        raise HTTPException(status_code=409, detail=str(error))
     return {}
 
 
