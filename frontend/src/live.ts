@@ -7,7 +7,8 @@ One websocket to /api/live. On connect the server sends every topic, then only t
 "data": ...}.
 Each message replaces that topic in the store, and components read it with useLive(topic), so the page never
 polls and never re-fetches lists. When the socket drops it reconnects after a second, and the server sends
-everything again.
+everything again. Through the remote access address without a sign in, the server closes it with 4401 and the page
+opens the Sign in page instead (backend/app.py).
 
 The page sends one thing back: {"watch_resource": true | false}, whether a Resource page is open
 (useWatchResource). Only then does the backend ask the NVIDIA GPU for its numbers, so it can sleep otherwise.
@@ -987,7 +988,12 @@ function connect() {
   };
 
   // onclose also follows onerror, so this is the one place that reconnects.
-  socket.onclose = () => {
+  socket.onclose = (event) => {
+    // Through the remote access address without a sign in (or this device was removed): the Sign in page instead.
+    if (event.code === 4401) {
+      window.location.href = "/api/remote_access/sign_in";
+      return;
+    }
     liveSocket = null;
     if (store.connected) {
       store.connected = false;
@@ -1042,6 +1048,7 @@ export function useConnected(): boolean {
 // api("/api/repos/undo", { method: "POST" }), api<RepoTree>(`/api/repos/tree?name=${...}`).
 // Sends body as JSON. Returns the parsed JSON (or the text for non-JSON answers).
 // Throws Error(detail) on a non-2xx answer, with the backend's HTTPException detail as the message.
+// A 401 with sign_in: true (through the remote access address, signed out) opens the Sign in page.
 export async function api<T = unknown>(path: string, options: { method?: string; body?: unknown } = {}): Promise<T> {
   const init: RequestInit = { method: options.method ?? "GET" };
   if (options.body !== undefined) {
@@ -1054,6 +1061,9 @@ export async function api<T = unknown>(path: string, options: { method?: string;
     let detail = `${response.status} ${response.statusText}`;
     if (isJson) {
       const body = await response.json().catch(() => null);
+      if (response.status === 401 && body && body.sign_in === true) {
+        window.location.href = "/api/remote_access/sign_in";
+      }
       if (body && typeof body.detail === "string") {
         detail = body.detail;
       } else if (body && body.detail !== undefined) {

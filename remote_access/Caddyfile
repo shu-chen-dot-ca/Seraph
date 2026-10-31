@@ -1,0 +1,33 @@
+# Caddy on this computer, for remote access (README.md here). start_caddy.sh runs it and fills in the {$...} values
+# from .env. It listens only on this computer: the forwarder's ports 443 and 80 arrive here through the SSH
+# connection (start_tunnel.sh), still encrypted. It gets and renews the domain's certificate itself (Let's Encrypt)
+# and keeps it in data/remote_access/caddy.
+#
+# /api/* goes straight to the backend, which checks the sign in on every call (backend/app.py). Everything else is
+# the app's own files from the Vite dev server, passed on only when the backend says the request is signed in
+# (GET /api/remote_access/check; otherwise its redirect to the Sign in page goes back instead).
+{
+	http_port {$REMOTE_ACCESS_HTTP_PORT}
+	https_port {$REMOTE_ACCESS_HTTPS_PORT}
+	default_bind 127.0.0.1
+	admin off
+}
+
+{$REMOTE_ACCESS_DOMAIN} {
+	handle /api/* {
+		reverse_proxy 127.0.0.1:{$BACKEND_PORT}
+	}
+	handle {
+		forward_auth 127.0.0.1:{$BACKEND_PORT} {
+			uri /api/remote_access/check
+		}
+		# localhost, not 127.0.0.1: Node often listens on ::1 only.
+		reverse_proxy localhost:5173
+	}
+}
+
+# Plain http:// only sends you on to https://. Caddy's own redirect would name the https_port above, which only
+# exists on this computer.
+http://{$REMOTE_ACCESS_DOMAIN} {
+	redir https://{host}{uri} permanent
+}

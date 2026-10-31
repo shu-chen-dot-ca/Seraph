@@ -5,7 +5,8 @@ lists (and the facts, difficulty and signals about their issues and repos), the 
 Explore, jobs, inbox, your GitHub account (which sends what you approve in the Inbox), your PRs and issues on GitHub
 and how each stands, with the agent that follows each (the GitHub tab), your repositories and your GitHub notifications
 (read with your sign-in), VMs, their
-images (and the images' agents), VM queue, the agents' artifacts, agents, Sherpa and this computer's use (the Resource page). The order matters: the Issues list asks jobs which issues an agent
+images (and the images' agents), VM queue, the agents' artifacts, agents, Sherpa, this computer's use (the Resource page)
+and remote access (the devices that may sign in from elsewhere). The order matters: the Issues list asks jobs which issues an agent
 is working on (those can't be removed), the queue
 keeps its state on the VM records, and Agents needs everything else (it also
 sets the queue's on_grant / on_kick callbacks). Agents only starts its worker
@@ -27,6 +28,7 @@ from github_searcher.notifications import Notifications
 from github_searcher.pr_tracking import PRTracking
 from github_searcher.repo_list import RepoList
 from github_searcher.repo_signals import RepoSignals
+from github_searcher.remote_access import RemoteAccess
 from github_searcher.tracked_issues import TrackedIssues
 from github_searcher.your_repositories import YourRepositories
 from sandbox.image_agent import ImageAgents
@@ -57,3 +59,4 @@ sherpa = Sherpa(repo_signals)
 artifacts = Artifacts()
 agents = Agents(repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, repo_signals, issue_tags, explore, artifacts)
 resource_usage = ResourceUsage()
+remote_access = RemoteAccess()

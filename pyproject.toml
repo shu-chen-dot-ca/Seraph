@@ -5,6 +5,8 @@ description = "Agents find and fix GitHub good first issues in sandbox VMs; you 
 requires-python = ">=3.11"
 dependencies = [
     "claude-agent-sdk>=0.2.160",
+    # Checks passkey signatures for remote access (github_searcher/remote_access.py).
+    "cryptography>=44",
     "fastapi>=0.143.1",
     "httpx>=0.28",
     "pydantic>=2.7",

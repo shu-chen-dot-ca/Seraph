@@ -18,6 +18,11 @@ Only this machine's own pages may use the API: the Host must be localhost or
 come from a page on localhost or 127.0.0.1 (the Vite dev server, on whatever
 port it picked). Pages from anywhere else, like a VM's desktop page (which the
 agent controls) or another website, get 403.
+
+The one exception is remote access (github_searcher/remote_access.py), once REMOTE_ACCESS_DOMAIN is set: pages at
+that domain may use the API too, but only signed in with a passkey. A request through the domain without a session
+gets 401 {"detail", "sign_in": true} (except the sign-in pages, remote_access_api.OPEN_PATHS), and the live
+websocket closes with 4401, also as soon as the device is removed or signed out. The page then opens the Sign in page.
 """
 
 import asyncio
@@ -34,14 +39,17 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
-from backend import agents_api, artifacts_api, explore_api, github_account_api, images_api, inbox_api, issues_api, github_api, notifications_api, repos_api, sherpa_api, tracked_api, vms_api, your_repositories_api
-from backend.shared import agents, explore, images, inbox, issue_facts, issue_tags, issues, jobs, notifications, pr_tracking, repo_signals, repos, resource_usage, sherpa, tracked, tracked_issues, vms, your_repositories
+from backend import agents_api, artifacts_api, explore_api, github_account_api, images_api, inbox_api, issues_api, github_api, notifications_api, remote_access_api, repos_api, sherpa_api, tracked_api, vms_api, your_repositories_api
+from backend.shared import agents, explore, images, inbox, issue_facts, issue_tags, issues, jobs, notifications, pr_tracking, remote_access, repo_signals, repos, resource_usage, sherpa, tracked, tracked_issues, vms, your_repositories
+from github_searcher.remote_access import COOKIE, DOMAIN as REMOTE_DOMAIN
 from github_searcher.token_balancer import BALANCER
 
 # override: the backend reloads itself on code changes, and .env changes should apply then too.
 load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 
 LOCAL_HOSTS = ["localhost", "127.0.0.1"]
+# The hosts the API answers: this computer, and the remote access domain once it is set up.
+ALLOWED_HOSTS = LOCAL_HOSTS + ([REMOTE_DOMAIN] if REMOTE_DOMAIN != "" else [])
 THREADS = 64
 
 
@@ -90,15 +98,20 @@ app.include_router(vms_api.router)
 app.include_router(images_api.router)
 app.include_router(sherpa_api.router)
 app.include_router(artifacts_api.router)
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=LOCAL_HOSTS)
+app.include_router(remote_access_api.router)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 
 
 @app.middleware("http")
 async def check_origin(request: Request, call_next):
-    """Browsers send Origin with every POST, PUT and DELETE (also no-cors ones): only local pages may call."""
+    """Browsers send Origin with every POST, PUT and DELETE (also no-cors ones): only local pages (and the remote
+    access domain's) may call. Through the domain, every call needs a sign in, except the sign-in pages."""
     origin = request.headers.get("origin")
-    if origin is not None and urlsplit(origin).hostname not in LOCAL_HOSTS:
+    if origin is not None and urlsplit(origin).hostname not in ALLOWED_HOSTS:
         return JSONResponse(status_code=403, content={"detail": "Only pages on this machine may use the API."})
+    if remote_access.from_outside(request.headers) and request.url.path not in remote_access_api.OPEN_PATHS:
+        if remote_access.device_for(request.cookies.get(COOKIE)) is None:
+            return JSONResponse(status_code=401, content={"detail": "Sign in first.", "sign_in": True})
     return await call_next(request)
 
 
@@ -117,8 +130,13 @@ async def live(websocket: WebSocket) -> None:
     """Sends every topic once, then each topic again whenever its version changes."""
     # Websockets skip the http middleware, and browsers let any page open one: checked here.
     origin = websocket.headers.get("origin")
-    if origin is not None and urlsplit(origin).hostname not in LOCAL_HOSTS:
+    if origin is not None and urlsplit(origin).hostname not in ALLOWED_HOSTS:
         await websocket.close(code=1008)
+        return
+    # Through the remote access domain only signed in. Accepted first, so the page sees the 4401 and opens Sign in.
+    if remote_access.from_outside(websocket.headers) and remote_access.device_for(websocket.cookies.get(COOKIE)) is None:
+        await websocket.accept()
+        await websocket.close(code=4401)
         return
     await websocket.accept()
     # Whether this browser counts as one of resource_usage.watchers now: counted out again however the feed ends.
@@ -134,7 +152,13 @@ async def feed(websocket: WebSocket, watch: dict) -> None:
     """The live feed of one browser, until it goes away."""
     # The version of each topic this browser has; None until it is sent.
     sent = {"repos": None, "issues": None, "tracked": None, "explore": None, "github": None, "jobs": None, "inbox": None, "prs": None, "your_repos": None, "notifications": None, "agents": None, "vms": None, "images": None, "resource": None}
+    outside = remote_access.from_outside(websocket.headers)
+    cookie = websocket.cookies.get(COOKIE)
     while True:
+        # A device removed or signed out in the meantime (or its session over) stops getting the feed at once.
+        if outside and remote_access.device_for(cookie) is None:
+            await websocket.close(code=4401)
+            return
         # The version is noted before the data is read: a change in between is sent again next tick, never lost.
         messages = []
         # Repos carry their signals (repo_signals.py).

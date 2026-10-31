@@ -18,10 +18,12 @@ try {
 }
 
 export default defineConfig(({ mode }) => {
-  // Read BACKEND_PORT from the project's .env (one folder up), the same file the backend reads.
-  // Only BACKEND_* variables are loaded, so no secrets end up here.
-  const env = loadEnv(mode, "..", "BACKEND_");
+  // Read BACKEND_PORT and REMOTE_ACCESS_DOMAIN from the project's .env (one folder up), the same file the backend reads.
+  // Only BACKEND_* and REMOTE_ACCESS_* variables are loaded, so no secrets end up here.
+  const env = loadEnv(mode, "..", ["BACKEND_", "REMOTE_ACCESS_"]);
   const backendPort = env.BACKEND_PORT || "8000";
+  // Remote access (remote_access/README.md): Caddy passes the app's files on from that address, after a sign in.
+  const remoteDomain = (env.REMOTE_ACCESS_DOMAIN || "").trim();
 
   return {
     plugins: [react(), tailwindcss()],
@@ -33,6 +35,8 @@ export default defineConfig(({ mode }) => {
     // One bundle for a local app is fine; don't warn about its size.
     build: { chunkSizeWarningLimit: 2000 },
     server: {
+      // localhost always; the remote access address too, once it is set.
+      allowedHosts: remoteDomain === "" ? [] : [remoteDomain],
       // Forward /api/* to the backend, so the browser sees one origin (no CORS).
       // ws: true also forwards the /api/live websocket.
       // 127.0.0.1, not localhost: Node may resolve localhost to IPv6 (::1), where the backend isn't listening.
