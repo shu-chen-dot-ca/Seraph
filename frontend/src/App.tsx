@@ -4,13 +4,9 @@ The header's left has three tabs, the open one in full color with the accent und
 - Home: finding and doing the work, with the sidebar tree (Sidebar.tsx) on the left.
 - GitHub: your work on GitHub, with its own left list (GitHubNav.tsx: Overview, Inbox, Notifications, Pull requests,
   Issues, Tasks, Your repositories, Starred, Account). The tab shows how many drafts wait in the Inbox for your decision.
-- Workspace: the app's new layout, with its own left list (WorkspaceNav.tsx: Home; Explore, Repos, Issues, Tracked;
-  VMs, Images, Resource; Settings). Same agents, jobs, VMs and Inbox; only the layout is new. Its own page is Home
-  (Home.tsx: your repositories as cards, the open one like on GitHub); the others it shares with the Home tab
-  (WORKSPACE_SHARED), and a shared page opened while it is open stays in it (also from
-  a link or button inside a page). A page it doesn't have (the GitHub tab's Overview, Account, ...) goes to its own tab.
-  Clicking Home or GitHub leaves it. Whether it is open is kept for this browser tab (sessionStorage), so a reload,
-  which phones do often, stays in it.
+- Workspace: the app's new layout, with its own left list (WorkspaceNav.tsx: Home; Settings). Same agents, jobs, VMs
+  and Inbox; only the layout is new. Its page is Home (Home.tsx: your repositories as cards, the open one like on
+  GitHub). A page it doesn't have (Issues, the GitHub tab's Overview, ...) goes to its own tab.
 Each tab goes back to the last page you had open under it (Home starts at Issues, GitHub at its Overview, Workspace at
 its Home); a reload forgets that. On its right: Sign in while you aren't signed in to GitHub (straight to GitHub's sign-in page once sign in is
 set up, else the GitHub tab's Account page, which walks you through setting it up), or, signed in, your GitHub picture
@@ -70,8 +66,6 @@ import { api, useConnected, useLiveValue, useLoaded, type GithubAccountStatus } 
 import { cn } from "@/lib/utils";
 
 const PAGES = ["inbox", "github", "issues", "jobs", "explore", "repos", "tracked", "agents", "vms", "resource", "home"];
-// The Home tab's pages the Workspace tab shows too: the ones in its left list.
-const WORKSPACE_SHARED = ["issues", "explore", "repos", "tracked", "vms", "resource"];
 // The GitHub tab's pages under #/github/; anything else there is Pull requests.
 const GITHUB_SECTIONS = ["overview", "notifications", "issues", "tasks", "account", "repo"];
 // This repo on GitHub, or "": vite.config.ts puts it in from git's origin remote.
@@ -98,15 +92,6 @@ export default function App() {
   const [lastHome, setLastHome] = useState("#/issues");
   const [lastGitHub, setLastGitHub] = useState("#/github/overview");
   const [lastWorkspace, setLastWorkspace] = useState("#/home");
-  // Whether the Workspace tab is open, kept for this browser tab so a reload stays in it.
-  const [workspace, setWorkspace] = useState(() => {
-    try {
-      return sessionStorage.getItem("workspace") === "open";
-    } catch {
-      // Storage blocked (private window): a reload goes back to Home or GitHub.
-      return false;
-    }
-  });
   // Only the names: App re-renders every page under it, and the VM list changes every second.
   const vmNamesText = useLiveValue((topics) => topics.vms.map((vm) => vm.name).join(" "));
   // Only the count, for the GitHub tab.
@@ -157,16 +142,12 @@ export default function App() {
   const query = new URLSearchParams(queryPart ?? "");
   // GitHub's section: "#/github/issues" → "issues", "#/github" → "pulls".
   const section = id !== null && GITHUB_SECTIONS.includes(id) ? id : "pulls";
-  // The Workspace tab: its own page always, and the pages it shares while it is open (setting state while rendering,
-  // like visitedVMs below). Then the GitHub tab's pages; everything else is on Home.
-  const onWorkspace = page === "home" || (workspace && WORKSPACE_SHARED.includes(page));
-  if (onWorkspace !== workspace) {
-    setWorkspace(onWorkspace);
-  }
+  // The Workspace tab's page, then the GitHub tab's pages; everything else is on Home.
+  const onWorkspace = page === "home";
   const onGitHub = !onWorkspace && (page === "inbox" || page === "github");
   const onHome = !onWorkspace && !onGitHub;
 
-  // Keep the address for its tab. No hash at all is Issues.
+  // Keep the address for its tab (setting state while rendering, like visitedVMs below). No hash at all is Issues.
   if (onWorkspace && hash !== "" && hash !== lastWorkspace) {
     setLastWorkspace(hash);
   }
@@ -176,14 +157,6 @@ export default function App() {
   if (onHome && hash !== "" && hash !== lastHome) {
     setLastHome(hash);
   }
-
-  useEffect(() => {
-    try {
-      sessionStorage.setItem("workspace", workspace ? "open" : "closed");
-    } catch {
-      // Storage blocked (private window): a reload goes back to Home or GitHub.
-    }
-  }, [workspace]);
 
   // Remember every VM page opened, so it stays mounted. (Setting state while rendering is React's
   // pattern for state derived from props; it re-renders at once, before anything is shown.)
@@ -247,25 +220,11 @@ export default function App() {
       <div className="flex h-full flex-col">
         <header className="flex h-9 shrink-0 items-center gap-3 border-b bg-sidebar px-3">
           <div className="flex h-full items-center">
-            {/* A tab's click sets its tab and hash at once, so the page under the click (a Workspace one) can't keep
-                the Workspace tab open before the hashchange comes. */}
-            <a
-              href={lastHome}
-              onClick={() => {
-                setWorkspace(false);
-                setHash(lastHome);
-              }}
-              aria-current={onHome ? "page" : undefined}
-              className={cn(tab, onHome && currentTab)}
-            >
+            <a href={lastHome} aria-current={onHome ? "page" : undefined} className={cn(tab, onHome && currentTab)}>
               Home
             </a>
             <a
               href={lastGitHub}
-              onClick={() => {
-                setWorkspace(false);
-                setHash(lastGitHub);
-              }}
               aria-current={onGitHub ? "page" : undefined}
               className={cn(tab, onGitHub && currentTab)}
               title={pending > 0 ? `${pending} ${pending === 1 ? "draft waits" : "drafts wait"} in the Inbox for your decision` : undefined}
@@ -278,15 +237,7 @@ export default function App() {
                 </span>
               )}
             </a>
-            <a
-              href={lastWorkspace}
-              onClick={() => {
-                setWorkspace(true);
-                setHash(lastWorkspace);
-              }}
-              aria-current={onWorkspace ? "page" : undefined}
-              className={cn(tab, onWorkspace && currentTab)}
-            >
+            <a href={lastWorkspace} aria-current={onWorkspace ? "page" : undefined} className={cn(tab, onWorkspace && currentTab)}>
               Workspace
             </a>
           </div>
@@ -331,7 +282,7 @@ export default function App() {
         <div className="flex min-h-0 flex-1">
           {onGitHub && <GitHubNav page={page} section={section} repo={query.get("repo")} />}
           {onHome && <Sidebar page={page} id={id} onOpenSettings={() => setSettingsOpen(true)} />}
-          {onWorkspace && <WorkspaceNav page={page} vmTab={query.get("tab")} onOpenSettings={() => setSettingsOpen(true)} />}
+          {onWorkspace && <WorkspaceNav page={page} onOpenSettings={() => setSettingsOpen(true)} />}
           <main className="relative min-w-0 flex-1 overflow-hidden">
             {page === "inbox" && <Inbox selected={id} />}
             {page === "github" && section === "overview" && <GitHubOverview />}
