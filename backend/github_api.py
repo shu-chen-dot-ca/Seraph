@@ -7,7 +7,9 @@ your sign-in when it is in one of your repositories or stars, which may be priva
 description, the newest 100 timeline items (comments, reviews with their code comments, commits, and events in plain
 words; "hidden" says how many earlier ones are left out), and for a PR its branch, commits, the newest commit's checks
 (with GitHub Actions runs that wait for a maintainer to approve them) and files changed. "you" is your signed-in login,
-and "mine" marks your comments.
+and "mine" marks your comments. "yours" says it is in one of your repositories, where the pop-up offers what a
+maintainer does there (backend/your_repositories_api.py); "repo_labels" are then every label the repo has,
+and "failed_runs" a PR's newest commit's failed GitHub Actions runs (to run their failed jobs again).
 
 POST /api/github/agent sets one followed PR's or issue's agent: drafts (with an agent; none makes a new one) or off.
 Turning drafts on checks the thread at once. keep_prs(), which the app runs in the background, reads the PRs and
@@ -92,6 +94,7 @@ async def thread_details(id: str) -> dict:
     name = match.group(2)
     number = int(match.group(3))
     # One of your repositories or stars: read with your sign-in, as it may be private.
+    yours = your_repositories.is_yours(f"{owner}/{name}")
     own_token = None
     if your_repositories.is_listed(f"{owner}/{name}"):
         own_token = your_repositories.token()
@@ -123,6 +126,9 @@ async def thread_details(id: str) -> dict:
             asyncio.to_thread(get_action_runs, owner, name, sha, own_token),
             asyncio.to_thread(get_pr_files, owner, name, number, own_token),
         )
+    repo_labels = []
+    if yours:
+        repo_labels = await asyncio.to_thread(your_repositories.labels, f"{owner}/{name}")
 
     checks = []
     for run in check_runs:
@@ -140,6 +146,12 @@ async def thread_details(id: str) -> dict:
     for run in runs:
         if run["conclusion"] == "action_required":
             checks.append({"name": run["name"], "state": "waiting", "summary": "Waits for a maintainer to approve running it.", "url": run["html_url"], "app": "GitHub Actions"})
+
+    # In one of your repositories: the newest commit's failed GitHub Actions runs, for the Checks tab's Re-run.
+    failed_runs = []
+    for run in runs:
+        if yours and run["conclusion"] in ["failure", "timed_out", "startup_failure", "cancelled"]:
+            failed_runs.append({"id": run["id"], "name": run["name"], "url": run["html_url"]})
 
     # patch is missing for a binary or very big file.
     files = []
@@ -317,6 +329,9 @@ async def thread_details(id: str) -> dict:
         "checks": checks,
         "files": files,
         "you": you,
+        "yours": yours,
+        "repo_labels": repo_labels,
+        "failed_runs": failed_runs,
     }
 
 

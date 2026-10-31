@@ -1,10 +1,10 @@
 """The GitHub tab's Your repositories and Starred (github_searcher/your_repositories.py): one repo's page, read from
-GitHub when it opens, and the changes you make there, as you (Star and Unstar).
+GitHub when it opens, and the changes you make there, as you (Star and Unstar, and a maintainer's in your own).
 
 GET /api/your_repositories/{owner}/{name}/overview, /issues?state=open|closed, /pulls?state=open|closed and /runs
 are its tabs (Overview, Issues, Pull requests, Actions). POST /api/your_repositories/act is one change,
-{"repo", "action", "number", "kind": "issue" | "pr", "fields"}; it answers {"done": what happened, in words, "url"}.
-POST /api/your_repositories/refresh reads the list again now (Check now).
+{"repo", "action", "number", "kind": "issue" | "pr", "fields"}, after an "are you sure?" in the browser; it answers
+{"done": what happened, in words, "url"}. POST /api/your_repositories/refresh reads the list again now (Check now).
 
 keep_your_repositories(), which the app runs in the background, reads the list every REFRESH_SECONDS, at once when
 you sign in or out, and soon after a change made here. The list reaches the browser through /api/live (topic

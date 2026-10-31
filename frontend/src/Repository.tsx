@@ -14,9 +14,11 @@ New issue and Refresh.
   opened it and when, who it is assigned to, comments. A PR row: its state (open, draft, merged, closed), title,
   labels, number, author, branch, checks (passed, failed, running), review (approved, changes asked for, waiting for a
   review) and comments. A click opens it in the thread pop-up (ThreadDialog.tsx, open=owner/name%23n), where you
-  comment. Closing the pop-up reads the list again.
+  comment, and in your own repositories do what a maintainer does: review, merge, close, label, assign, edit, each
+  after an "are you sure?". Closing the pop-up reads the list again.
 - Actions: the newest GitHub Actions runs: passed, failed, cancelled, running or waiting, the workflow, what it ran
-  for, the branch, what started it, who and when. A click opens the run on GitHub.
+  for, the branch, what started it, who and when. A click opens the run on GitHub. In your own repositories a failed
+  run has Re-run failed jobs, after an "are you sure?".
 New issue opens NewIssueDialog.tsx.
 */
 
@@ -45,6 +47,16 @@ import { toast } from "sonner";
 
 import NewIssueDialog from "@/NewIssueDialog";
 import ThreadDialog from "@/ThreadDialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -132,16 +144,20 @@ export default function Repository(props: { repo: string; tab: string; state: st
   const [runs, setRuns] = useState<{ items: RepoRun[] } | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  // Goes up to read the tab again (Refresh, a closed pop-up, a new issue).
+  // Goes up to read the tab again (Refresh, a closed pop-up, a new issue, a re-run).
   const [reload, setReload] = useState(0);
   const [filter, setFilter] = useState("");
   const [newIssueOpen, setNewIssueOpen] = useState(false);
+  // The run whose failed jobs Re-run would start again, while its "are you sure?" is open.
+  const [rerun, setRerun] = useState<RepoRun | null>(null);
+  const [rerunOpen, setRerunOpen] = useState(false);
   const [starring, setStarring] = useState(false);
 
   const tab = TABS.includes(props.tab) ? props.tab : "overview";
   const listed = yourRepos.repos.find((each) => each.name === props.repo) ?? yourRepos.starred.find((each) => each.name === props.repo);
   const starred = listed !== undefined && listed.starred;
   const stars = listed?.stars ?? overview?.stars ?? 0;
+  const canPush = listed !== undefined && listed.can_push;
   const base = `#/github/repo?repo=${encodeURIComponent(props.repo)}`;
   let listHash = base;
   if (tab !== "overview") {
@@ -197,6 +213,22 @@ export default function Repository(props: { repo: string; tab: string; state: st
       toast.error(`Could not ${starred ? "unstar" : "star"} it: ${err instanceof Error ? err.message : err}`);
     }
     setStarring(false);
+  }
+
+  async function rerunFailed() {
+    if (rerun === null) {
+      return;
+    }
+    try {
+      const result = await api<{ done: string }>("/api/your_repositories/act", {
+        method: "POST",
+        body: { repo: props.repo, action: "rerun_failed", fields: { run_id: rerun.id } },
+      });
+      toast.success(result.done);
+      setReload((count) => count + 1);
+    } catch (err) {
+      toast.error(`Could not run it again: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   const needle = filter.trim().toLowerCase().replace(/^#/, "");
@@ -463,6 +495,20 @@ export default function Repository(props: { repo: string; tab: string; state: st
                     </span>
                   </div>
                 </div>
+                {canPush && FAILED.includes(run.state) && (
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    className="shrink-0"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setRerun(run);
+                      setRerunOpen(true);
+                    }}
+                  >
+                    Re-run failed jobs
+                  </Button>
+                )}
               </div>
             );
           })}
@@ -486,6 +532,18 @@ export default function Repository(props: { repo: string; tab: string; state: st
           }
         }}
       />
+      <AlertDialog open={rerunOpen} onOpenChange={setRerunOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Re-run the failed jobs of {rerun?.workflow} #{rerun?.number}?</AlertDialogTitle>
+            <AlertDialogDescription>GitHub runs its failed jobs again, as you. It uses your repo's GitHub Actions minutes.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={rerunFailed}>Re-run failed jobs</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

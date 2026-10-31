@@ -21,15 +21,19 @@ again at once, so the left list follows.
 
 What a repo's page shows is read when it opens (never kept): overview() (the README and the newest commits on the
 default branch, each with its checks), issues(state) and pulls(state) (the newest 50 of the Open or Closed tab, and
-how many are in each) and runs() (the newest GitHub Actions runs).
+how many are in each), runs() (the newest GitHub Actions runs) and labels() (for the thread pop-up's Labels).
 
-act() is one change you make, as you: Star and Unstar (one click, like on GitHub, on any repo) and a new issue (in
-a repo of either list). A refusal raises ValueError with what GitHub said.
+act() is one change you make, as you: Star and Unstar (one click, like on GitHub, on any repo), a new issue (in a
+repo of either list), and, only in a repo you can push to (is_yours), after the browser asked "are you sure?": edit a
+title and description, close (an issue as completed or as not planned) or reopen, add or remove a label, assign or
+unassign yourself, merge a PR (merge commit, squash or rebase), review a PR (approve, request changes, or comment),
+re-run a GitHub Actions run's failed jobs. A refusal raises ValueError with what GitHub said.
 """
 
 import copy
 import threading
 from datetime import UTC, datetime
+from urllib.parse import quote
 
 import httpx
 
@@ -42,7 +46,10 @@ PUSH = ["ADMIN", "MAINTAIN", "WRITE"]
 LIST_SIZE = 50
 RUNS_SIZE = 30
 COMMITS_SIZE = 10
-ACTIONS = ["star", "unstar", "new_issue"]
+MERGE_METHODS = ["merge", "squash", "rebase"]
+REVIEW_EVENTS = ["APPROVE", "REQUEST_CHANGES", "COMMENT"]
+CLOSE_REASONS = ["completed", "not_planned"]
+ACTIONS = ["star", "unstar", "new_issue", "edit", "close", "reopen", "add_label", "remove_label", "assign_me", "unassign_me", "merge", "review", "rerun_failed"]
 
 REPOS_QUERY = """
 query {
@@ -345,6 +352,14 @@ class YourRepositories:
             })
         return {"items": items}
 
+    def labels(self, repo: str) -> list[dict]:
+        """Every label of the repo, for the thread pop-up's Labels."""
+        with self.client() as client:
+            response = client.get(f"/repos/{repo}/labels", params={"per_page": 100})
+        if response.status_code != 200:
+            return []
+        return [{"name": label["name"], "color": label["color"]} for label in response.json()]
+
     def act(self, repo: str, action: str, number: int | None, kind: str, fields: dict) -> dict:
         """One change you make, as you. kind is "issue" or "pr" (what number is). Returns {"done": what happened, in
         words, "url": the new issue's address (new_issue) | None}. ValueError says why not."""
@@ -352,6 +367,20 @@ class YourRepositories:
             raise ValueError(f"Unknown action {action}.")
         if action == "new_issue" and not self.is_listed(repo):
             raise ValueError(f"{repo} isn't one of your repositories or stars.")
+        if action not in ["star", "unstar", "new_issue"] and not self.is_yours(repo):
+            raise ValueError(f"{repo} isn't one of your repositories.")
+        if action not in ["star", "unstar", "new_issue", "rerun_failed"] and number is None:
+            raise ValueError("Which issue or PR?")
+        account = self.github_account.load()
+        if account is None:
+            raise ValueError("Sign in with GitHub first: the GitHub tab, Account.")
+        login = account["login"]
+        what = f"{repo} #{number}"
+        # Issues and PRs share GitHub's issue address for what both have (labels, assignees); state, title and
+        # description of a PR go through its own.
+        place = f"/repos/{repo}/issues/{number}"
+        if kind == "pr":
+            place = f"/repos/{repo}/pulls/{number}"
         url = None
 
         with self.client() as client:
@@ -370,6 +399,59 @@ class YourRepositories:
                 if response.status_code == 201:
                     url = response.json()["html_url"]
                     done = f"Opened {repo} #{response.json()['number']}"
+            elif action == "edit":
+                title = fields.get("title", "").strip()
+                if title == "":
+                    raise ValueError("The title can't be empty.")
+                response = client.patch(place, json={"title": title, "body": fields.get("body", "")})
+                done = f"Saved {what}"
+            elif action == "close":
+                change = {"state": "closed"}
+                done = f"Closed {what}"
+                if kind == "issue":
+                    reason = fields.get("reason", "completed")
+                    if reason not in CLOSE_REASONS:
+                        raise ValueError(f"Unknown reason {reason}.")
+                    change["state_reason"] = reason
+                    if reason == "not_planned":
+                        done = f"Closed {what} as not planned"
+                response = client.patch(place, json=change)
+            elif action == "reopen":
+                response = client.patch(place, json={"state": "open"})
+                done = f"Reopened {what}"
+            elif action == "add_label":
+                label = fields.get("label", "")
+                response = client.post(f"/repos/{repo}/issues/{number}/labels", json={"labels": [label]})
+                done = f"Added the label {label}"
+            elif action == "remove_label":
+                label = fields.get("label", "")
+                response = client.delete(f"/repos/{repo}/issues/{number}/labels/{quote(label, safe='')}")
+                done = f"Removed the label {label}"
+            elif action == "assign_me":
+                response = client.post(f"/repos/{repo}/issues/{number}/assignees", json={"assignees": [login]})
+                done = f"Assigned you to {what}"
+            elif action == "unassign_me":
+                response = client.request("DELETE", f"/repos/{repo}/issues/{number}/assignees", json={"assignees": [login]})
+                done = f"Unassigned you from {what}"
+            elif action == "merge":
+                method = fields.get("method", "merge")
+                if method not in MERGE_METHODS:
+                    raise ValueError(f"Unknown merge method {method}.")
+                response = client.put(f"/repos/{repo}/pulls/{number}/merge", json={"merge_method": method})
+                done = f"Merged {what}"
+            elif action == "review":
+                event = fields.get("event", "")
+                body = fields.get("body", "")
+                if event not in REVIEW_EVENTS:
+                    raise ValueError(f"Unknown review {event}.")
+                if event != "APPROVE" and body.strip() == "":
+                    raise ValueError("Write what you think first.")
+                response = client.post(f"/repos/{repo}/pulls/{number}/reviews", json={"event": event, "body": body})
+                done = {"APPROVE": f"Approved {what}", "REQUEST_CHANGES": f"Asked for changes on {what}", "COMMENT": f"Reviewed {what}"}[event]
+            else:
+                run_id = int(fields.get("run_id", 0))
+                response = client.post(f"/repos/{repo}/actions/runs/{run_id}/rerun-failed-jobs")
+                done = "Its failed jobs run again"
 
         if response.status_code >= 400:
             message = response.text[:200]

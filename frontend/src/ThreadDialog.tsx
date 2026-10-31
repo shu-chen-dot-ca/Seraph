@@ -27,11 +27,19 @@ GitHub account connected it asks "Post this comment as @you?" and posts it; with
 Inbox). A PR draft (a new PR, or new commits for this one) is one line with Review, which opens it in the Inbox.
 With no comment draft: Leave a comment and Comment, posted as you (needs you signed in: Account on the GitHub tab;
 until then a "sign in with GitHub" link to it).
+In one of your repositories (Your repositories in the left list, Repository.tsx; read with your sign-in, as it
+may be private) you also do what a maintainer does: next to the labels, Labels (tick or untick one of the repo's
+labels), Assign yourself or Unassign yourself, and Edit (the title and description, then Save or Cancel); in the bar,
+Close issue (as completed or as not planned), Reopen, Merge (Create a merge commit, Squash and merge, Rebase and merge)
+and Close PR; on Checks, Re-run failed jobs for each failed GitHub Actions run of the newest commit; and on someone
+else's open PR, Request changes and Approve next to Comment, with what you wrote as the review's text (Approve needs
+none).
 Every button that changes something on GitHub asks "are you sure?" first (Enter confirms), then acts as you.
 */
 
 import {
   Check,
+  ChevronDown,
   ChevronRight,
   CircleCheck,
   CircleDot,
@@ -45,10 +53,14 @@ import {
   Loader2,
   MessageSquare,
   MessagesSquare,
+  Pencil,
   RefreshCw,
   RotateCcw,
   Send,
+  Tag,
   Trash2,
+  UserMinus,
+  UserPlus,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -67,6 +79,8 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
 import { Markdown } from "@/components/ui/markdown";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AGENT_TONE, StatusDot, type Tone } from "@/components/ui/status-dot";
@@ -146,13 +160,25 @@ type ThreadDetail = {
   checks: ThreadCheck[]; // PR, the newest commit's
   files: ThreadFile[]; // PR
   you: string | null;
+  yours: boolean; // in one of your repositories: the maintainer's buttons
+  repo_labels: { name: string; color: string }[]; // yours: every label the repo has
+  failed_runs: { id: number; name: string; url: string }[]; // yours, a PR: the newest commit's failed Actions runs
 };
 
 type DiffLine = { kind: "hunk" | "add" | "del" | "context" | "note"; text: string; oldNo: number | null; newNo: number | null };
 
 // What a button does, waiting for its "are you sure?": approve the comment draft and post it, post your own
-// comment, or POST to path (close, reopen, delete branch, delete a comment).
-type Confirm = { title: string; text: string; label: string; destructive: boolean; action: "approve" | "comment" | "path"; path: string };
+// comment, or POST body to path (close, reopen, delete branch, delete a comment, and in your repositories every
+// maintainer's button; edit and review also end editing and empty the comment box).
+type Confirm = {
+  title: string;
+  text: string;
+  label: string;
+  destructive: boolean;
+  action: "approve" | "comment" | "path" | "edit" | "review";
+  path: string;
+  body?: unknown;
+};
 
 // GitHub's role for someone in the project, in plain words. Other roles get no tag.
 const ROLE_LABEL: Record<string, string> = { OWNER: "Maintainer", MEMBER: "Maintainer", COLLABORATOR: "Maintainer" };
@@ -213,6 +239,10 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
   // The last button clicked stays set while its "are you sure?" fades out, so the text doesn't blank.
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // Edit (in your repositories): the title and description being changed.
+  const [editing, setEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
+  const [editBody, setEditBody] = useState("");
 
   // Another thread opened: nothing shows until its own answer comes. (On close the last one stays while it fades.)
   useEffect(() => {
@@ -222,6 +252,7 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
     setThread(null);
     setError("");
     setTab("conversation");
+    setEditing(false);
   }, [props.id]);
 
   // Read fresh from GitHub each time it opens, and on Refresh. A late answer for a thread no longer open is dropped.
@@ -406,6 +437,10 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
   }
   // Close, reopen and delete the branch only on a PR you opened.
   const isMine = thread !== null && thread.kind === "pr" && pr !== undefined && pr.relation === "author";
+  // In one of your repositories, signed in: the maintainer's buttons. They all go to the same address.
+  const maintain = thread !== null && thread.yours && connected;
+  const actPath = "/api/your_repositories/act";
+  const assignedToYou = thread !== null && thread.you !== null && thread.assignees.includes(thread.you);
   let totalAdded = 0;
   let totalRemoved = 0;
   for (const each of files) {
@@ -582,10 +617,18 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
       return;
     }
     const title = confirm.title;
+    const action = confirm.action;
+    const target = props.id ?? "";
     setBusy("act");
     try {
-      const result = await api<{ done: string }>(confirm.path, { method: "POST" });
+      const result = await api<{ done: string }>(confirm.path, { method: "POST", body: confirm.body });
       toast.success(result.done);
+      if (action === "edit") {
+        setEditing(false);
+      }
+      if (action === "review") {
+        setComments((current) => ({ ...current, [target]: "" }));
+      }
       setReload((count) => count + 1);
     } catch (err) {
       toast.error(`${title.replace("?", "")}: ${err instanceof Error ? err.message : err}`);
@@ -642,7 +685,35 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
                   )}
                 </div>
                 <DialogTitle className="leading-normal">{thread.title}</DialogTitle>
-                {(thread.head !== null || thread.labels.length > 0 || thread.assignees.length > 0) && (
+                {editing && (
+                  <div className="space-y-1.5">
+                    <Input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} />
+                    <Textarea className="max-h-72 min-h-32" value={editBody} onChange={(event) => setEditBody(event.target.value)} />
+                    <div className="flex items-center gap-1.5">
+                      <Button
+                        size="sm"
+                        disabled={editTitle.trim() === "" || busy !== ""}
+                        onClick={() =>
+                          ask({
+                            title: `Save your changes to ${thread.repo} #${thread.number}?`,
+                            text: "Its title and description change on GitHub, as you. Everyone who can see it sees the new ones.",
+                            label: "Save",
+                            destructive: false,
+                            action: "edit",
+                            path: actPath,
+                            body: { repo: thread.repo, action: "edit", number: thread.number, kind: thread.kind, fields: { title: editTitle, body: editBody } },
+                          })
+                        }
+                      >
+                        Save
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                {(thread.head !== null || thread.labels.length > 0 || thread.assignees.length > 0 || maintain) && (
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                     {thread.head !== null && thread.base !== null && (
                       <span>
@@ -658,6 +729,75 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
                       </Badge>
                     ))}
                     {thread.assignees.length > 0 && <span>Assigned to {thread.assignees.join(", ")}</span>}
+                    {maintain && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="xs" disabled={busy !== ""}>
+                            <Tag /> Labels
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start" className="max-h-72 overflow-y-auto">
+                          {thread.repo_labels.length === 0 && <DropdownMenuItem disabled>This repo has no labels</DropdownMenuItem>}
+                          {thread.repo_labels.map((label) => {
+                            const on = thread.labels.some((each) => each.name === label.name);
+                            return (
+                              <DropdownMenuCheckboxItem
+                                key={label.name}
+                                checked={on}
+                                onSelect={() =>
+                                  ask({
+                                    title: on ? `Remove the label ${label.name}?` : `Add the label ${label.name}?`,
+                                    text: `It is ${on ? "taken off" : "put on"} ${thread.repo} #${thread.number} on GitHub, as you.`,
+                                    label: on ? "Remove label" : "Add label",
+                                    destructive: false,
+                                    action: "path",
+                                    path: actPath,
+                                    body: { repo: thread.repo, action: on ? "remove_label" : "add_label", number: thread.number, kind: thread.kind, fields: { label: label.name } },
+                                  })
+                                }
+                              >
+                                <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: `#${label.color}` }} />
+                                {label.name}
+                              </DropdownMenuCheckboxItem>
+                            );
+                          })}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
+                    {maintain && (
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        disabled={busy !== ""}
+                        onClick={() =>
+                          ask({
+                            title: assignedToYou ? `Unassign yourself from ${thread.repo} #${thread.number}?` : `Assign yourself to ${thread.repo} #${thread.number}?`,
+                            text: assignedToYou ? "GitHub no longer shows you as assigned to it." : "GitHub shows you as assigned to it.",
+                            label: assignedToYou ? "Unassign yourself" : "Assign yourself",
+                            destructive: false,
+                            action: "path",
+                            path: actPath,
+                            body: { repo: thread.repo, action: assignedToYou ? "unassign_me" : "assign_me", number: thread.number, kind: thread.kind },
+                          })
+                        }
+                      >
+                        {assignedToYou ? <UserMinus /> : <UserPlus />}
+                        {assignedToYou ? "Unassign yourself" : "Assign yourself"}
+                      </Button>
+                    )}
+                    {maintain && !editing && (
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => {
+                          setEditTitle(thread.title);
+                          setEditBody(thread.body);
+                          setEditing(true);
+                        }}
+                      >
+                        <Pencil /> Edit
+                      </Button>
+                    )}
                   </div>
                 )}
                 {pr !== undefined && pr.state === "open" && pr.checks === "waiting" && (
@@ -799,6 +939,120 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
                   >
                     Delete branch
                   </Button>
+                )}
+                {maintain && thread.kind === "issue" && thread.state === "open" && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="sm" disabled={busy !== ""}>
+                        Close issue <ChevronDown />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        onSelect={() =>
+                          ask({
+                            title: `Close ${thread.repo} #${thread.number} as completed?`,
+                            text: "It closes on GitHub, as you, as done. You can reopen it later.",
+                            label: "Close issue",
+                            destructive: false,
+                            action: "path",
+                            path: actPath,
+                            body: { repo: thread.repo, action: "close", number: thread.number, kind: "issue", fields: { reason: "completed" } },
+                          })
+                        }
+                      >
+                        <CircleCheck /> Close as completed
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onSelect={() =>
+                          ask({
+                            title: `Close ${thread.repo} #${thread.number} as not planned?`,
+                            text: "It closes on GitHub, as you, as something that won't be done. You can reopen it later.",
+                            label: "Close issue",
+                            destructive: false,
+                            action: "path",
+                            path: actPath,
+                            body: { repo: thread.repo, action: "close", number: thread.number, kind: "issue", fields: { reason: "not_planned" } },
+                          })
+                        }
+                      >
+                        <CircleSlash /> Close as not planned
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+                {maintain && thread.state === "closed" && !isMine && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={busy !== ""}
+                    onClick={() =>
+                      ask({
+                        title: `Reopen ${thread.repo} #${thread.number}?`,
+                        text: "It opens again on GitHub, as you.",
+                        label: "Reopen",
+                        destructive: false,
+                        action: "path",
+                        path: actPath,
+                        body: { repo: thread.repo, action: "reopen", number: thread.number, kind: thread.kind },
+                      })
+                    }
+                  >
+                    Reopen
+                  </Button>
+                )}
+                {maintain && thread.kind === "pr" && thread.state === "open" && !isMine && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={busy !== ""}
+                    onClick={() =>
+                      ask({
+                        title: `Close ${thread.repo} #${thread.number}?`,
+                        text: "It closes on GitHub, as you, without merging. You can reopen it later.",
+                        label: "Close PR",
+                        destructive: true,
+                        action: "path",
+                        path: actPath,
+                        body: { repo: thread.repo, action: "close", number: thread.number, kind: "pr" },
+                      })
+                    }
+                  >
+                    Close PR
+                  </Button>
+                )}
+                {maintain && thread.kind === "pr" && thread.state === "open" && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button size="sm" disabled={busy !== "" || thread.draft} title={thread.draft ? "A draft PR can't be merged until it is marked ready for review" : undefined}>
+                        <GitMerge /> Merge <ChevronDown />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      {[
+                        { method: "merge", label: "Create a merge commit", text: `Its commits go into ${thread.base ?? "the base branch"} as they are, with a merge commit.` },
+                        { method: "squash", label: "Squash and merge", text: `Its commits become one commit on ${thread.base ?? "the base branch"}.` },
+                        { method: "rebase", label: "Rebase and merge", text: `Its commits go on top of ${thread.base ?? "the base branch"}, one by one.` },
+                      ].map((each) => (
+                        <DropdownMenuItem
+                          key={each.method}
+                          onSelect={() =>
+                            ask({
+                              title: `Merge ${thread.repo} #${thread.number}?`,
+                              text: `${each.text} It is merged on GitHub, as you, and can't be undone from here.`,
+                              label: each.label,
+                              destructive: false,
+                              action: "path",
+                              path: actPath,
+                              body: { repo: thread.repo, action: "merge", number: thread.number, kind: "pr", fields: { method: each.method } },
+                            })
+                          }
+                        >
+                          {each.label}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 )}
                 <Button variant="ghost" size="sm" disabled={loading} onClick={() => setReload((count) => count + 1)}>
                   {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />} Refresh
@@ -965,6 +1219,31 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
                   </div>
                 ))}
 
+              {shownTab === "checks" && maintain && thread.failed_runs.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 border-b px-4 py-1.5">
+                  {thread.failed_runs.map((run) => (
+                    <Button
+                      key={run.id}
+                      variant="outline"
+                      size="xs"
+                      disabled={busy !== ""}
+                      onClick={() =>
+                        ask({
+                          title: `Re-run the failed jobs of ${run.name}?`,
+                          text: "GitHub runs its failed jobs again, as you. It uses your repo's GitHub Actions minutes.",
+                          label: "Re-run failed jobs",
+                          destructive: false,
+                          action: "path",
+                          path: actPath,
+                          body: { repo: thread.repo, action: "rerun_failed", fields: { run_id: run.id } },
+                        })
+                      }
+                    >
+                      <RotateCcw /> Re-run failed jobs: {run.name}
+                    </Button>
+                  ))}
+                </div>
+              )}
               {shownTab === "checks" && thread.checks.length === 0 && <div className="px-4 py-3 text-muted-foreground">No checks on the newest commit.</div>}
               {shownTab === "checks" &&
                 thread.checks.map((check, index) => (
@@ -1119,6 +1398,49 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
                     <Button size="sm" className="ml-auto" disabled={busy !== "" || comment.trim() === ""} onClick={askComment}>
                       {busy === "comment" ? <Loader2 className="animate-spin" /> : <Send />} Comment
                     </Button>
+                    {maintain && thread.kind === "pr" && thread.state === "open" && thread.author !== thread.you && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={busy !== "" || comment.trim() === ""}
+                          onClick={() =>
+                            ask({
+                              title: `Ask for changes on ${thread.repo} #${thread.number} as @${account?.login}?`,
+                              text: "Your review, with the text you wrote, goes on the PR on GitHub. Its author is asked to change it before it is merged.",
+                              label: "Request changes",
+                              destructive: false,
+                              action: "review",
+                              path: actPath,
+                              body: { repo: thread.repo, action: "review", number: thread.number, kind: "pr", fields: { event: "REQUEST_CHANGES", body: comment } },
+                            })
+                          }
+                        >
+                          Request changes
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={busy !== ""}
+                          onClick={() =>
+                            ask({
+                              title: `Approve ${thread.repo} #${thread.number} as @${account?.login}?`,
+                              text:
+                                comment.trim() === ""
+                                  ? "Your approval goes on the PR on GitHub. Everyone who can see the repo can see it."
+                                  : "Your approval, with the text you wrote, goes on the PR on GitHub. Everyone who can see the repo can see it.",
+                              label: "Approve",
+                              destructive: false,
+                              action: "review",
+                              path: actPath,
+                              body: { repo: thread.repo, action: "review", number: thread.number, kind: "pr", fields: { event: "APPROVE", body: comment } },
+                            })
+                          }
+                        >
+                          <Check /> Approve
+                        </Button>
+                      </>
+                    )}
                   </div>
                 </>
               )}
