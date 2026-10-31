@@ -24,6 +24,9 @@ The one exception is remote access (github_searcher/remote_access.py), once REMO
 that domain may use the API too, but only signed in with a passkey. A request through the domain without a session
 gets 401 {"detail", "sign_in": true} (except the sign-in pages, remote_access_api.OPEN_PATHS), and the live
 websocket closes with 4401, also as soon as the device is removed or signed out. The page then opens the Sign in page.
+
+The page itself comes from Vite in the dev copy (./run.sh). The live copy (deploy/, SERAPH_HOME set) serves its own
+built page (frontend/dist) from here, at /, so it needs no Vite.
 """
 
 import asyncio
@@ -38,12 +41,14 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
-from backend import agents_api, artifacts_api, explore_api, github_account_api, images_api, inbox_api, issues_api, github_api, notifications_api, pull_requests_api, remote_access_api, repo_live_api, repos_api, tracked_api, vms_api, your_repositories_api
-from backend.shared import agents, explore, images, inbox, issue_drafts, issue_facts, issue_tags, issues, jobs, notifications, pr_tracking, remote_access, repo_signals, repos, resource_usage, tracked, tracked_issues, vms, your_repositories
+from backend import agents_api, artifacts_api, explore_api, github_account_api, images_api, inbox_api, issues_api, github_api, notifications_api, pull_requests_api, remote_access_api, repo_live_api, repos_api, tracked_api, updates_api, vms_api, your_repositories_api
+from backend.shared import agents, explore, images, inbox, issue_drafts, issue_facts, issue_tags, issues, jobs, notifications, pr_tracking, remote_access, repo_signals, repos, resource_usage, tracked, tracked_issues, updates, vms, your_repositories
 from github_searcher.remote_access import COOKIE, DOMAIN as REMOTE_DOMAIN
 from github_searcher.token_balancer import BALANCER
+from github_searcher.updates import HOME
 
 # override: the backend reloads itself on code changes, and .env changes should apply then too.
 load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
@@ -74,6 +79,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(github_api.keep_prs()),
         asyncio.create_task(your_repositories_api.keep_your_repositories()),
         asyncio.create_task(notifications_api.keep_notifications()),
+        asyncio.create_task(updates_api.keep_updates()),
     ]
     yield
     explore.save_for_restart()
@@ -99,6 +105,7 @@ app.include_router(images_api.router)
 app.include_router(artifacts_api.router)
 app.include_router(remote_access_api.router)
 app.include_router(repo_live_api.router)
+app.include_router(updates_api.router)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 
 
@@ -151,7 +158,7 @@ async def live(websocket: WebSocket) -> None:
 async def feed(websocket: WebSocket, watch: dict) -> None:
     """The live feed of one browser, until it goes away."""
     # The version of each topic this browser has; None until it is sent.
-    sent = {"repos": None, "issues": None, "tracked": None, "explore": None, "github": None, "jobs": None, "inbox": None, "issue_drafts": None, "prs": None, "your_repos": None, "notifications": None, "agents": None, "vms": None, "images": None, "resource": None}
+    sent = {"repos": None, "issues": None, "tracked": None, "explore": None, "github": None, "jobs": None, "inbox": None, "issue_drafts": None, "prs": None, "your_repos": None, "notifications": None, "agents": None, "vms": None, "images": None, "resource": None, "updates": None}
     outside = remote_access.from_outside(websocket.headers)
     cookie = websocket.cookies.get(COOKIE)
     while True:
@@ -244,6 +251,10 @@ async def feed(websocket: WebSocket, watch: dict) -> None:
         if sent["resource"] != resource_usage.version:
             sent["resource"] = resource_usage.version
             messages.append({"topic": "resource", "data": resource_usage.summary()})
+        # The live copy's updates (updates_api.py): the version that runs, and a newer one that is ready.
+        if sent["updates"] != updates.version:
+            sent["updates"] = updates.version
+            messages.append({"topic": "updates", "data": updates.summary()})
 
         try:
             for message in messages:
@@ -266,3 +277,19 @@ async def feed(websocket: WebSocket, watch: dict) -> None:
         if message.get("watch_resource") is False and watch["resource"]:
             watch["resource"] = False
             resource_usage.watchers -= 1
+
+
+class Page(StaticFiles):
+    """The live copy's built page. index.html is asked for again on every load (no-cache), so the reload after an
+    update gets the new one; the files in assets/ have a hash of their content in their names."""
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if not path.startswith("assets/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+# Last, so every /api route comes first.
+if HOME != "":
+    app.mount("/", Page(directory=Path(__file__).resolve().parent.parent / "frontend" / "dist", html=True), name="page")

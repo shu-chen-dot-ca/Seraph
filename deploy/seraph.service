@@ -1,0 +1,17 @@
+# The live copy of Seraph, ~/seraph/current (deploy/install.sh puts this file in ~/.config/systemd/user).
+# deploy/switch.sh restarts it on another release; nothing else does, so a save in the dev copy never touches it.
+[Unit]
+Description=Seraph (the live copy, ~/seraph/current)
+After=network-online.target
+
+[Service]
+Environment=SERAPH_HOME=%h/seraph
+# uv, npm and node (making an update ready) are in ~/.local/bin.
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=%h/seraph/current
+ExecStart=%h/seraph/current/.venv/bin/serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

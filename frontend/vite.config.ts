@@ -7,7 +7,8 @@ import { defineConfig, loadEnv } from "vite";
 
 // This repo on GitHub, for the header's link (App.tsx), from git's origin remote: no account name written in the code.
 // git@github.com:owner/name.git and https://github.com/owner/name.git both become https://github.com/owner/name.
-// "" when there is no origin remote, or it isn't on GitHub: the header has no link then.
+// "" when there is no origin remote, or it isn't on GitHub: the header has no link then. A release of the live copy
+// (deploy/) isn't a git checkout: SERAPH_REPO from its .env (owner/name) gives the link there.
 let repoUrl = "";
 try {
   const remote = execSync("git remote get-url origin", { cwd: import.meta.dirname, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
@@ -18,16 +19,16 @@ try {
 }
 
 export default defineConfig(({ mode }) => {
-  // Read BACKEND_PORT and REMOTE_ACCESS_DOMAIN from the project's .env (one folder up), the same file the backend reads.
-  // Only BACKEND_* and REMOTE_ACCESS_* variables are loaded, so no secrets end up here.
-  const env = loadEnv(mode, "..", ["BACKEND_", "REMOTE_ACCESS_"]);
+  // Read BACKEND_PORT, REMOTE_ACCESS_DOMAIN and SERAPH_REPO from the project's .env (one folder up), the same file the
+  // backend reads. Only BACKEND_*, REMOTE_ACCESS_* and SERAPH_* variables are loaded, so no secrets end up here.
+  const env = loadEnv(mode, "..", ["BACKEND_", "REMOTE_ACCESS_", "SERAPH_"]);
   const backendPort = env.BACKEND_PORT || "8000";
   // Remote access (remote_access/README.md): Caddy passes the app's files on from that address, after a sign in.
   const remoteDomain = (env.REMOTE_ACCESS_DOMAIN || "").trim();
 
   return {
     plugins: [react(), tailwindcss()],
-    define: { __REPO_URL__: JSON.stringify(repoUrl) },
+    define: { __REPO_URL__: JSON.stringify(repoUrl !== "" || !env.SERAPH_REPO ? repoUrl : `https://github.com/${env.SERAPH_REPO}`) },
     resolve: {
       // "@/live" means "src/live", the same alias tsconfig.json declares.
       alias: { "@": path.resolve(import.meta.dirname, "src") },

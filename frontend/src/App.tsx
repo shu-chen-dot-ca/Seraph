@@ -11,7 +11,8 @@ The header's left has three tabs, the open one in full color with the accent und
 Each tab goes back to the last page you had open under it (Home starts at Issues, GitHub at its Overview, Workspace at
 its Home); a reload forgets that. On its right: Sign in while you aren't signed in to GitHub (straight to GitHub's sign-in page once sign in is
 set up, else the GitHub tab's Account page, which walks you through setting it up), or, signed in, your GitHub picture
-and @login, a link to Account (GitHub.tsx), where Sign out is. Then this repo on GitHub (a new tab, so the app stays open),
+and @login, a link to Account (GitHub.tsx), where Sign out is. Before those, in the live copy: Update once a newer
+release is ready (UpdateDialog.tsx), and Restarting… while the app restarts on it. Then this repo on GitHub (a new tab, so the app stays open),
 found from git's origin remote (vite.config.ts), so no account name is written here; none when it isn't on GitHub. Reset view is in Settings
 (SettingsDialog), opened from the bottom of Home's sidebar.
 
@@ -37,7 +38,7 @@ A VM page, once visited, stays mounted (hidden) while you are elsewhere, so its 
 connection and coming back is instant. It is dropped when that VM no longer exists.
 */
 
-import { WifiOff } from "lucide-react";
+import { Loader2, WifiOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -59,6 +60,7 @@ import SettingsDialog, { type ThemeMode } from "@/SettingsDialog";
 import Sidebar from "@/Sidebar";
 import Tasks from "@/Tasks";
 import Tracked from "@/Tracked";
+import UpdateDialog from "@/UpdateDialog";
 import VMPage from "@/VMPage";
 import VMs from "@/VMs";
 import Repository from "@/Repository";
@@ -67,7 +69,7 @@ import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import TitleTooltips from "@/components/ui/title-tooltips";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { api, useConnected, useLiveValue, useLoaded, type GithubAccountStatus } from "@/live";
+import { api, useConnected, useLive, useLiveValue, useLoaded, type GithubAccountStatus } from "@/live";
 import { cn } from "@/lib/utils";
 
 const PAGES = ["inbox", "github", "issues", "jobs", "explore", "repos", "tracked", "agents", "vms", "resource", "home", "pulls"];
@@ -93,6 +95,7 @@ export default function App() {
   });
   const [accent, setAccent] = useState(document.documentElement.dataset.accent ?? "blue");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [updateOpen, setUpdateOpen] = useState(false);
   // The last address open under each header tab, where its tab goes back to.
   const [lastHome, setLastHome] = useState("#/issues");
   const [lastGitHub, setLastGitHub] = useState("#/github/overview");
@@ -103,6 +106,8 @@ export default function App() {
   const pending = useLiveValue((topics) => topics.inbox.filter((draft) => draft.status === "pending").length);
   const vmsLoaded = useLoaded("vms");
   const connected = useConnected();
+  // Changes only on a check or an update, so App re-renders seldom for it.
+  const updates = useLive("updates");
   // Who you are signed in to GitHub as, for the header's right. The Account page (GitHub.tsx) signs you in and out.
   const [account, setAccount] = useState<GithubAccountStatus | null>(null);
 
@@ -247,7 +252,17 @@ export default function App() {
             </a>
           </div>
           <div className="ml-auto flex items-center gap-1">
-            {!connected && (
+            {updates.restarting && (
+              <span className="mr-2 flex items-center gap-1.5 text-muted-foreground">
+                <Loader2 className="size-3.5 animate-spin" /> Restarting…
+              </span>
+            )}
+            {updates.ready !== null && !updates.restarting && (
+              <Button size="xs" className="mr-1" onClick={() => setUpdateOpen(true)} title={`${updates.ready} is ready`}>
+                Update
+              </Button>
+            )}
+            {!connected && !updates.restarting && (
               <span className="mr-2 flex items-center gap-1.5 text-destructive">
                 <WifiOff className="size-3.5" /> Offline, reconnecting
               </span>
@@ -358,6 +373,7 @@ export default function App() {
         onAccent={changeAccent}
         onResetView={resetView}
       />
+      <UpdateDialog open={updateOpen} onOpenChange={setUpdateOpen} />
       <Toaster theme={theme} position="bottom-right" />
       <TitleTooltips />
     </TooltipProvider>

@@ -3,11 +3,12 @@ Live data from the backend, and the one fetch helper.
 
 One websocket to /api/live. On connect the server sends every topic, then only the topics that changed:
 {"topic": "repos" | "issues" | "tracked" | "explore" | "github" | "jobs" | "inbox" | "issue_drafts" | "prs" | "your_repos" | "notifications" | "agents"
-| "vms" | "images" | "resource",
+| "vms" | "images" | "resource" | "updates",
 "data": ...}.
 Each message replaces that topic in the store, and components read it with useLive(topic), so the page never
 polls and never re-fetches lists. When the socket drops it reconnects after a second, and the server sends
-everything again. Through the remote access address without a sign in, the server closes it with 4401 and the page
+everything again. When the app that answers is another version than this page's (an update restarted it, see
+UpdateDialog.tsx), the page reloads into the new version, at the same place (the page is in the URL). Through the remote access address without a sign in, the server closes it with 4401 and the page
 opens the Sign in page instead (backend/app.py).
 
 The page sends one thing back: {"watch_resource": true | false}, whether a Resource page is open
@@ -916,6 +917,22 @@ export type ResourceUsage = {
   samples: ResourceSample[]; // the last 60, one a second
 };
 
+// The live copy's updates (github_searcher/updates.py): the version that runs, and a newer release that is ready.
+export type UpdatesData = {
+  live: boolean; // false in the dev copy (./run.sh): no updates there
+  running: string; // the release that runs, e.g. "v0.1.0", or "dev"
+  latest: { tag: string; name: string; notes: string; published_at: string; url: string } | null; // on GitHub
+  ready: string | null; // a newer release, downloaded and ready: Update in the header
+  preparing: string | null; // the release being made ready now
+  checking: boolean;
+  checked_at: string | null;
+  error: string;
+  previous: string | null; // the release before this one (Previous version)
+  switched_at: string | null; // when this one went live
+  failed: string | null; // the release the last update went to, when it didn't start
+  restarting: boolean;
+};
+
 // ---- The live store ----
 
 export type Topics = {
@@ -935,6 +952,7 @@ export type Topics = {
   vms: VMSummary[];
   images: ImagesData;
   resource: ResourceUsage | null; // null until the backend's first reading
+  updates: UpdatesData;
 };
 
 // Empty until the first message, so components never deal with "not loaded yet".
@@ -956,6 +974,20 @@ const store = {
     vms: [],
     images: { images: [], unbuilt: [], default: "", tasks: [] },
     resource: null,
+    updates: {
+      live: false,
+      running: "dev",
+      latest: null,
+      ready: null,
+      preparing: null,
+      checking: false,
+      checked_at: null,
+      error: "",
+      previous: null,
+      switched_at: null,
+      failed: null,
+      restarting: false,
+    },
   } as Topics,
   loaded: {} as Partial<Record<keyof Topics, boolean>>,
   connected: false,
@@ -966,6 +998,8 @@ const listeners = new Set<() => void>();
 // The open socket, and how many Resource pages this tab shows (useWatchResource).
 let liveSocket: WebSocket | null = null;
 let resourceWatchers = 0;
+// The version of the app this page came from: the first one the backend says it runs.
+let pageVersion: string | null = null;
 
 function subscribe(listener: () => void) {
   listeners.add(listener);
@@ -994,6 +1028,15 @@ function connect() {
     store.topics = { ...store.topics, [message.topic]: message.data };
     store.loaded = { ...store.loaded, [message.topic]: true };
     listeners.forEach((listener) => listener());
+    // Another version answers now (an update or Previous version restarted the app): load its page.
+    if (message.topic === "updates") {
+      const running = (message.data as UpdatesData).running;
+      if (pageVersion === null) {
+        pageVersion = running;
+      } else if (running !== pageVersion) {
+        window.location.reload();
+      }
+    }
   };
 
   // onclose also follows onerror, so this is the one place that reconnects.

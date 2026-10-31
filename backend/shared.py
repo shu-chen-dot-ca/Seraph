@@ -7,7 +7,7 @@ and how each stands, with the agent that follows each (the GitHub tab), your rep
 (read with your sign-in), VMs, their
 images (and the images' agents), VM queue, the agents' artifacts, the issues repository agents draft (the Workspace
 tab's Live), agents, this computer's use (the Resource page)
-and remote access (the devices that may sign in from elsewhere). The order matters: the Issues list asks jobs which issues an agent
+and remote access (the devices that may sign in from elsewhere), and updates (the live copy's new releases). The order matters: the Issues list asks jobs which issues an agent
 is working on (those can't be removed), the queue
 keeps its state on the VM records, and Agents needs everything else (it also
 sets the queue's on_grant / on_kick callbacks). Agents only starts its worker
@@ -31,6 +31,7 @@ from github_searcher.repo_list import RepoList
 from github_searcher.repo_signals import RepoSignals
 from github_searcher.remote_access import RemoteAccess
 from github_searcher.tracked_issues import TrackedIssues
+from github_searcher.updates import Updates
 from github_searcher.your_repositories import YourRepositories
 from sandbox.image_agent import ImageAgents
 from sandbox.images import Images
@@ -61,3 +62,4 @@ issue_drafts = IssueDrafts()
 agents = Agents(repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, repo_signals, issue_tags, explore, artifacts, your_repositories, issue_drafts)
 resource_usage = ResourceUsage()
 remote_access = RemoteAccess()
+updates = Updates(github_account)
