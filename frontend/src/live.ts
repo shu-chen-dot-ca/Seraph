@@ -2,7 +2,7 @@
 Live data from the backend, and the one fetch helper.
 
 One websocket to /api/live. On connect the server sends every topic, then only the topics that changed:
-{"topic": "repos" | "issues" | "tracked" | "explore" | "github" | "jobs" | "inbox" | "prs" | "your_repos" | "agents"
+{"topic": "repos" | "issues" | "tracked" | "explore" | "github" | "jobs" | "inbox" | "prs" | "your_repos" | "notifications" | "agents"
 | "vms" | "images" | "resource",
 "data": ...}.
 Each message replaces that topic in the store, and components read it with useLive(topic), so the page never
@@ -551,6 +551,26 @@ export type YourReposData = {
   error: string | null;
 };
 
+// One of GitHub's own notifications for you (github_searcher/notifications.py). reason and type are GitHub's words.
+export type GithubNotification = {
+  id: string;
+  unread: boolean;
+  reason: string; // mention, review_requested, assign, author, comment, ci_activity, state_change, subscribed, ...
+  updated_at: string;
+  title: string;
+  type: string; // Issue, PullRequest, Release, CheckSuite, Discussion, Commit, ...
+  repo: string;
+  number: number | null; // an issue's or PR's
+  url: string;
+};
+
+export type NotificationsData = {
+  items: GithubNotification[]; // the newest first
+  login: string | null;
+  checked_at: string | null;
+  error: string | null;
+};
+
 // Your GitHub account (GET /api/github_account, the GitHub tab's Account page), the one that sends what you approve
 // and that the GitHub tab's buttons act as. Never the token.
 export type GithubAccountStatus = {
@@ -901,6 +921,7 @@ export type Topics = {
   inbox: Draft[];
   prs: PRsData;
   your_repos: YourReposData;
+  notifications: NotificationsData;
   agents: AgentSummary[];
   vms: VMSummary[];
   images: ImagesData;
@@ -920,6 +941,7 @@ const store = {
     inbox: [],
     prs: { items: [], issues: [], checked_at: null, error: null, refreshing: false },
     your_repos: { repos: [], starred: [], login: null, checked_at: null, error: null },
+    notifications: { items: [], login: null, checked_at: null, error: null },
     agents: [],
     vms: [],
     images: { images: [], unbuilt: [], default: "", tasks: [] },

@@ -3,6 +3,7 @@ The GitHub tab's left list: App shows it instead of the sidebar tree on the GitH
 with the same look as the sidebar (Sidebar.tsx). Every line is a link to a page; the open one is marked:
 - Inbox (Inbox.tsx): drafts the agents want to send, with how many wait for your decision (a filled pill, like
   unread mail).
+- Notifications (Notifications.tsx): GitHub's own notifications for you, with how many are unread (a filled pill).
 - Pull requests and Issues (GitHub.tsx): your PRs and issues on other people's projects, each with how many are open.
 - Your repositories: every repo you can push to, public and private (a lock), most recently pushed first, with how
   many issues and PRs are open (hover for each, and whether its checks passed; the icon is red when they failed).
@@ -15,7 +16,7 @@ with the same look as the sidebar (Sidebar.tsx). Every line is a link to a page;
 Counts come straight from the live store, so the list updates itself.
 */
 
-import { BookMarked, CircleDot, CircleUser, GitPullRequest, Inbox, Lock } from "lucide-react";
+import { Bell, BookMarked, CircleDot, CircleUser, GitPullRequest, Inbox, Lock } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { api, useLive, type GithubAccountStatus } from "@/live";
@@ -25,6 +26,7 @@ export default function GitHubNav(props: { page: string; section: string; repo: 
   const inbox = useLive("inbox");
   const prs = useLive("prs");
   const yourRepos = useLive("your_repos");
+  const notifications = useLive("notifications");
   const [account, setAccount] = useState<GithubAccountStatus | null>(null);
 
   // Who the account is: at first, and again when you sign in or out (the Account page tells).
@@ -50,6 +52,7 @@ export default function GitHubNav(props: { page: string; section: string; repo: 
   }, []);
 
   const pending = inbox.filter((draft) => draft.status === "pending").length;
+  const unread = notifications.items.filter((item) => item.unread).length;
   const openPRs = prs.items.filter((pr) => pr.state === "open").length;
   const openIssues = prs.issues.filter((issue) => issue.state === "open").length;
 
@@ -73,6 +76,21 @@ export default function GitHubNav(props: { page: string; section: string; repo: 
             {pending}
           </span>
         </a>
+
+        <a href="#/github/notifications" className={cn(row, "pl-6", props.page === "github" && props.section === "notifications" && selected)}>
+          <Bell className="size-4 text-muted-foreground" />
+          Notifications
+          <span
+            className={cn(
+              "ml-auto tabular-nums",
+              unread > 0 ? "min-w-4.5 rounded-full bg-primary px-1.5 text-center text-xs leading-4.5 font-medium text-primary-foreground" : "text-muted-foreground",
+            )}
+          >
+            {unread}
+          </span>
+        </a>
+
+        <div className="mx-1 my-2 border-t" />
 
         <a href="#/github/pulls" className={cn(row, "pl-6", props.page === "github" && props.section === "pulls" && props.repo === null && selected)}>
           <GitPullRequest className="size-4 text-muted-foreground" />
