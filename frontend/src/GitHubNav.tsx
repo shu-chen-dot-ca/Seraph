@@ -6,6 +6,7 @@ with the same look as the sidebar (Sidebar.tsx). Every line is a link to a page;
   unread mail).
 - Notifications (Notifications.tsx): GitHub's own notifications for you, with how many are unread (a filled pill).
 - Pull requests and Issues (GitHub.tsx): your PRs and issues on other people's projects, each with how many are open.
+- Tasks (Tasks.tsx): every piece of work on GitHub and how far it got (issue, agent, draft, PR, merged), by repo.
 - Your repositories: every repo you can push to, public and private (a lock), most recently pushed first, with how
   many issues and PRs are open (hover for each, and whether its checks passed; the icon is red when they failed).
   A click opens its page (Repository.tsx). While you aren't signed in, a line says to sign in for them.
@@ -17,7 +18,7 @@ with the same look as the sidebar (Sidebar.tsx). Every line is a link to a page;
 Counts come straight from the live store, so the list updates itself.
 */
 
-import { Bell, BookMarked, CircleDot, CircleUser, GitPullRequest, Inbox, LayoutDashboard, Lock } from "lucide-react";
+import { Bell, BookMarked, CircleDot, CircleUser, GitPullRequest, Inbox, LayoutDashboard, ListTodo, Lock } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { api, useLive, type GithubAccountStatus } from "@/live";
@@ -108,6 +109,11 @@ export default function GitHubNav(props: { page: string; section: string; repo: 
           <CircleDot className="size-4 text-muted-foreground" />
           Issues
           <span className="ml-auto text-muted-foreground tabular-nums">{openIssues}</span>
+        </a>
+
+        <a href="#/github/tasks" className={cn(row, "pl-6", props.page === "github" && props.section === "tasks" && selected)}>
+          <ListTodo className="size-4 text-muted-foreground" />
+          Tasks
         </a>
 
         <div className="mx-1 my-2 border-t" />
