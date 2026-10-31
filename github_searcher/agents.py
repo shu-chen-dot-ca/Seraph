@@ -37,6 +37,9 @@ with them after the restart; one cut off in the middle of a turn gets one more s
 
 After each turn the worker enforces the VM rule: an agent never holds a VM it has nothing to do in.
 - Holding a VM with no queued or working job for it: the VM is released for it.
+- Holding one while only its run goes there (a test suite or build it left going, sandbox/agent/long_runs.py): it
+  steps aside (VMQueue.step_aside). The next one gets the VM, and the agent waits in the VM's priority line, which
+  comes before its waiting line: it gets the VM back as soon as its run is over and the VM is free.
 - Holding one with open jobs there: it is reminded to go on with them now, not to wait for an answer in chat. After
   MAX_NUDGES reminders in a row with no change to its jobs, the VM is released for it.
 - In no queue but with queued jobs for a VM: it is reminded to queue_for_vm (MAX_NUDGES times at most).
@@ -44,7 +47,12 @@ The VM queue (sandbox/vm_queue.py) tells Agents when an agent's turn comes (on_g
 that wakes it, with the VM's notes on what earlier agents set up in it, or the VM passes on at once
 if it has no open jobs there anymore) and when the
 user took the VM or its place away (on_kick: it is interrupted, and what it still ran in that
-VM is killed).
+VM is killed, except its runs).
+
+Runs nobody waits for anymore (the agent's turn ended, or the backend restarted) are checked every
+RUN_CHECK_SECONDS (watch_runs). When one ends, its agent gets the result (bash: ComputerTools.bash_result; tests:
+WorkTools.finish_tests, which keeps it on the job). An agent in that VM's priority line gets it together with the
+message that the VM is its again; any other agent right away. Archiving or deleting an agent stops its runs.
 
 The user's side: assign() turns an issue into a job for an agent, set_up_repo() a repo from the
 Repos list (its Set up button) into a set_up_repo job: the agent reads the README and docs, sets an
@@ -92,6 +100,7 @@ from dotenv import load_dotenv
 from github_searcher import search
 from github_searcher.agent.agent import Agent
 from github_searcher.agent.work_tools import WorkTools
+from sandbox.agent import long_runs
 from sandbox.agent.tools import ComputerTools
 from sandbox.vms import VMsError
 
@@ -108,6 +117,8 @@ MAX_QUEUED = 10
 DEMO_DIR = os.environ["SANDBOX_VM_DEMO_DIR"]
 # While an agent works, its record is saved this often (and after every turn).
 SAVE_SECONDS = 5
+# How often the runs nobody waits for are checked.
+RUN_CHECK_SECONDS = 10
 OPEN_STATUSES = ["queued", "working"]
 
 
@@ -145,6 +156,7 @@ class Agents:
         self.loop = None
         self.loop_thread = None
         self.saver = None
+        self.run_watcher = None
         queue.on_grant = self.on_grant
         queue.on_kick = self.on_kick
         # Every place in a queue shows in the agent list.
@@ -158,7 +170,7 @@ class Agents:
         for path in sorted(self.folder.glob("*.json")):
             record = json.loads(path.read_text())
             # partial, not a lambda: the target VM is read from this record each time, not from the loop variable.
-            computer_tools = ComputerTools(self.vms, record["id"], functools.partial(record.get, "target_vm"), record["history"])
+            computer_tools = ComputerTools(self.vms, self.queue, record["id"], functools.partial(record.get, "target_vm"), record["history"])
             agent = Agent(record, computer_tools, WorkTools(self, record), self.changed)
             self.agents[agent.id] = agent
             # Messages that waited when the backend stopped. Only an agent that had a turn to run
@@ -175,7 +187,7 @@ class Agents:
 
         # The queues are saved with the VMs: take out agents whose record is gone.
         for vm_record in self.vms.list():
-            for agent_id in [vm_record.holder] + list(vm_record.queue):
+            for agent_id in [vm_record.holder] + list(vm_record.priority) + list(vm_record.queue):
                 if agent_id is None or agent_id == "user" or agent_id in self.agents:
                     continue
                 self.queue.leave_all(agent_id)
@@ -187,11 +199,16 @@ class Agents:
                 continue
             self.notify(agent_id, f"The backend restarted; you still hold {vm_name}. Check where your jobs for it stand (my_jobs), finish them, then release_vm.")
 
+        # No tool call waits for a run anymore after a restart: they are all collected by watch_runs now.
+        self.queue.to_background()
         self.saver = asyncio.create_task(self.autosave())
+        self.run_watcher = asyncio.create_task(self.watch_runs())
 
     async def stop(self) -> None:
         if self.saver is not None:
             self.saver.cancel()
+        if self.run_watcher is not None:
+            self.run_watcher.cancel()
         for worker in self.workers.values():
             worker.cancel()
         for agent in self.agents.values():
@@ -285,6 +302,8 @@ class Agents:
             agent.busy = False
             self.save(agent)
             self.version += 1
+            # Runs it left going have no tool call waiting for them anymore: watch_runs collects them.
+            self.queue.to_background(agent.id)
 
             # The VM rule. Reminders count again from 0 whenever its place in a queue or a job's status
             # changes. Not on new notes: rewriting them is not progress.
@@ -311,6 +330,22 @@ class Agents:
                 continue
             # Interrupted by the user: it waits for them. More messages waiting: it goes on anyway.
             if agent.stopped or self.wake[agent.id].is_set():
+                continue
+
+            # Only its run goes in the VM now: it steps aside, so whoever waits gets the VM meanwhile.
+            runs = []
+            for vm_record in self.vms.list():
+                if place == 0 and vm_record.name == vm_name:
+                    runs = [run for run in vm_record.runs if run["agent"] == agent.id]
+            if runs:
+                try:
+                    self.queue.step_aside(vm_name, agent.id)
+                except (ValueError, VMsError):
+                    continue
+                text = f"Stepped aside from {vm_name} while its run goes; it gets the VM back first once the run is over"
+                agent.history.append({"type": "system", "text": text, "time": datetime.now(UTC).isoformat()})
+                self.save(agent)
+                self.version += 1
                 continue
 
             if place == 0 and nudge["count"] >= MAX_NUDGES:
@@ -352,6 +387,10 @@ class Agents:
                 status = "working"
             if place is not None and place > 0:
                 status = "in_queue"
+            # In a VM's priority line: it stepped aside while its run goes, and gets the VM back first.
+            for vm_record in self.vms.list():
+                if agent.id in vm_record.priority:
+                    status = "in_priority"
             if place == 0:
                 status = "using_vm"
             # The last thing it did, for the one-line activity column.
@@ -432,7 +471,7 @@ class Agents:
             "archived_at": None,
             "name_by": name_by,
         }
-        computer_tools = ComputerTools(self.vms, agent_id, functools.partial(record.get, "target_vm"), record["history"])
+        computer_tools = ComputerTools(self.vms, self.queue, agent_id, functools.partial(record.get, "target_vm"), record["history"])
         agent = Agent(record, computer_tools, WorkTools(self, record), self.changed)
         self.agents[agent_id] = agent
         self.pending[agent_id] = []
@@ -484,6 +523,7 @@ class Agents:
         self.jobs.delete_for_agent(agent_id)
         self.version += 1
         await agent.stop()
+        await self.stop_runs(agent_id)
         # Its desktop lock and whatever it still runs in the VM end with it.
         agent.computer_tools.end_turn()
         if vm_name is not None:
@@ -508,6 +548,7 @@ class Agents:
         agent.record["archived_at"] = datetime.now(UTC).isoformat()
         agent.history.append({"type": "system", "text": "Archived: its open jobs were cancelled", "time": agent.record["archived_at"]})
         agent.computer_tools.end_turn()
+        await self.stop_runs(agent_id)
         if vm_name is not None:
             await asyncio.to_thread(agent.computer_tools.cancel, vm_name)
         self.save(agent)
@@ -980,6 +1021,64 @@ class Agents:
         except (ValueError, VMsError):
             # The user took it, or deleted the VM, in the meantime.
             pass
+
+    async def watch_runs(self) -> None:
+        """Every RUN_CHECK_SECONDS: the runs no tool call waits for. One that ended goes to its agent (run_ended)."""
+        while True:
+            await asyncio.sleep(RUN_CHECK_SECONDS)
+            runs = []
+            for vm_record in self.vms.list():
+                runs += [(vm_record, run) for run in vm_record.runs if run["background"]]
+            for vm_record, run in runs:
+                try:
+                    ended = await asyncio.to_thread(long_runs.check, vm_record, run)
+                except Exception:
+                    # The VM doesn't answer right now: look again next time.
+                    continue
+                if ended is None or not self.queue.claim_run(run["id"]):
+                    continue
+                try:
+                    await self.run_ended(vm_record, run, ended)
+                except Exception as error:
+                    # Never lose the run: it is gone from the VM either way, and the agent hears why.
+                    self.notify(run["agent"], f"Your run {run['id']} in {vm_record.name} ended, but its result couldn't be read: {error}")
+                try:
+                    self.queue.finish_run(vm_record.name, run["id"])
+                except VMsError:
+                    # The VM was deleted meanwhile.
+                    pass
+
+    async def run_ended(self, vm_record, run: dict, ended: dict) -> None:
+        """A run in the background ended: its agent gets the result. One that stepped aside from this VM gets it with
+        the message that the VM is its again (finish_run, right after this, may give it the VM at once), so it starts
+        one turn with both; any other agent is woken now."""
+        agent = self.agents.get(run["agent"])
+        if agent is None:
+            return
+        if run["kind"] == "tests":
+            answer = await agent.work_tools.finish_tests(vm_record, run, ended)
+            text = f"Your test run {run['id']} for {run['job']} ended. " + answer["content"][0]["text"]
+        else:
+            text = f"Your run {run['id']} in {vm_record.name} ended: `{run['label'][:200]}`, " + agent.computer_tools.bash_result(vm_record, run, ended)
+        agent.history.append({"type": "system", "text": f"Its run in {vm_record.name} ended: {run['label'][:120]}", "time": datetime.now(UTC).isoformat()})
+        if agent.id not in vm_record.priority:
+            self.notify(agent.id, text)
+            return
+        text += f"\nYou get {vm_record.name} back first, with a message, as soon as it is free; until then end your turn."
+        self.pending[agent.id].append({"from": "System", "text": text, "shown": False})
+        self.save(agent)
+        self.version += 1
+
+    async def stop_runs(self, agent_id: str) -> None:
+        """The agent was archived or deleted: its runs end too (watch_runs then takes them off their VMs)."""
+        self.queue.to_background(agent_id)
+        for vm_record in self.vms.list():
+            for run in [run for run in vm_record.runs if run["agent"] == agent_id]:
+                try:
+                    await asyncio.to_thread(long_runs.stop, vm_record, run)
+                except Exception:
+                    # The VM is off or doesn't answer: the run isn't going there then.
+                    pass
 
     def on_kick(self, vm_name: str, agent_id: str, reason: str) -> None:
         """The user took the VM or the agent's queue place away. It is interrupted, not woken. Any thread."""

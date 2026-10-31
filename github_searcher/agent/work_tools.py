@@ -46,6 +46,11 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   Two scopes: focused, the basic checks (the tests that cover the change, when the rules ask for no
   more), and full, the project's official checks (what its rules ask to run before a PR), run however
   long they take (up to TEST_TIMEOUT). It refuses until the agent read the rules (contributing_guide).
+  The suite is a run (sandbox/agent/long_runs.py): run_tests waits for it up to long_runs.FOREGROUND_SECONDS, then
+  it goes on in the background (background: true starts it that way). The agent can work on, or end its turn and
+  step aside, so another agent uses the VM meanwhile (sandbox/vm_queue.py). When it ends, finish_tests keeps the
+  result on the job (agents.py calls it for a run in the background); an after run counts only if the code is still
+  the code it started on.
   A passing before is needed to go past set_up and an after for a PR draft; an official before of
   another job on the same repo and VM counts too (job_progress carries it over; for a follow_up job at its
   test step), so a project already set up isn't set up again.
@@ -57,7 +62,8 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   a name the user gave is never changed (agents.py, name_by).
 - VMs: the agent sees every VM with what its image has (sandbox/images.py lists each image once) and
   its notes, and picks the one that suits its jobs as its target VM (the user can set it too). It can't make VMs.
-  It joins its target VM's queue (sandbox/vm_queue.py) and releases the VM when its jobs there are done.
+  It joins its target VM's queue (sandbox/vm_queue.py) and releases the VM when its jobs there are done. While
+  only its run goes (a test suite, a build), it steps aside instead (agents.py): it is in the VM's priority line then.
   The notes (sandbox/vms.py) say what agents and the user set up in a VM since it was made, so the next
   agent knows (e.g. that a project is already cloned and built there, and what was added on top). Only the
   agent holding the VM adds or removes them (vm_note_add, vm_note_remove), never the user's own. They come
@@ -82,7 +88,6 @@ import re
 import secrets
 import shlex
 import subprocess
-import time
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -91,7 +96,8 @@ from claude_agent_sdk import tool
 from github_searcher.artifacts import ArtifactsError
 from github_searcher.jobs import EVIDENCE_DIR
 from github_searcher.search import get_contents, get_merged_prs, get_pr_status, get_readme, get_repository, get_thread, get_tree
-from sandbox.agent.computer_use import WATCH, Computer, ComputerError
+from sandbox.agent import long_runs
+from sandbox.agent.computer_use import Computer, ComputerError
 from sandbox.agent.tools import HIDE_MIN_LENGTH
 from sandbox.file_transfer import FileTransferError, to_vm
 from sandbox.images import load_inventory
@@ -117,7 +123,7 @@ TAIL_LINES = 20
 TAIL_CHARS = 2000
 # A test run may take this long; then it is stopped and counts as failed. Long on purpose: the project's official
 # checks are run however long they take.
-TEST_TIMEOUT = 12 * 3600
+TEST_TIMEOUT = long_runs.RUN_LIMIT_SECONDS
 # A fix_issue job can't go past set_up until its tests passed on the unchanged code.
 STEPS_AFTER_SETUP = ["reproduce", "fix", "test", "draft"]
 # What a test run covers: focused, the basic checks (the tests that cover the change: the default), or full, the
@@ -169,8 +175,6 @@ GUIDE_CHARS = 30_000
 GUIDE_TOTAL_CHARS = 120_000
 # A picture made with matplotlib says so in its file ("Software: Matplotlib version ..."): the agent drew it.
 MATPLOTLIB_MARK = b"matplotlib"
-# Where run_tests's output goes for the terminal window on the desktop.
-TESTS_LOG = "~/.cache/sandbox-tests.log"
 # The overview's wording, said once for every tool that takes one.
 PLAIN = (
     "Plain words for someone who has never seen this project or its code: no function or file names, "
@@ -352,7 +356,11 @@ class WorkTools:
                 "unchanged code: the folder must not differ from base; it has to pass before you change anything), or after (on "
                 "your finished change, with exactly the same command and scope; it has to pass before draft_pr). A PR draft is "
                 "refused unless the last after run passed on exactly the code being drafted. "
-                f"Takes as long as the tests; stopped after {TEST_TIMEOUT // 60} minutes.",
+                f"Waits for the tests up to {long_runs.FOREGROUND_SECONDS // 60} minutes; still running then, they go on in the "
+                "background and you get the result in a message when they end. background: true starts them that way at once, "
+                "for a run you expect to take more than about 5 minutes (most full runs): then do what else you have in this VM "
+                "(not in the repo folder), or end your turn, and the VM goes to whoever waits meanwhile; you get it back first "
+                f"once the run is over. Stopped after {TEST_TIMEOUT // 3600} hours.",
                 {
                     "type": "object",
                     "properties": {
@@ -362,6 +370,7 @@ class WorkTools:
                         "command": {"type": "string"},
                         "scope": {"type": "string", "enum": TEST_SCOPES},
                         "when": {"type": "string", "enum": ["before", "after"]},
+                        "background": {"type": "boolean"},
                     },
                     "required": ["job_id", "path", "base", "command", "scope", "when"],
                 },
@@ -603,7 +612,9 @@ class WorkTools:
             tool(
                 "release_vm",
                 "Give your VM back so the next agent in line can use it. Do it as soon as your jobs for it are done or waiting on the user. "
-                "While you wait in a VM's queue, it takes you out of the queue instead (e.g. when your jobs there were cancelled).",
+                "While you wait in a VM's queue, it takes you out of the queue instead (e.g. when your jobs there were cancelled). "
+                "Not while you wait on a run you need the result of: then just end your turn, and the app lets the next agent "
+                "in and gives the VM back to you first once the run is over.",
                 {},
             )(self.release_vm),
             tool(
@@ -660,6 +671,8 @@ class WorkTools:
         if name == "run_tests":
             tests = "the basic checks" if args.get("scope") == "focused" else "the project's official checks"
             code = "on the unchanged code" if args.get("when") == "before" else "with the change"
+            if args.get("background"):
+                return f"Running {tests} {code} in the background: `{args.get('command')}`"
             return f"Running {tests} {code}: `{args.get('command')}`"
         if name == "draft_comment":
             return f"Drafting a comment on {args.get('target')}"
@@ -2267,9 +2280,9 @@ class WorkTools:
             text = "You don't hold a VM. Call queue_for_vm and wait for the message that it is yours."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
 
-        # The same tag as the agent's VM tools (ComputerTools), so losing the VM stops the run too.
+        # The diff is read with the tag of the agent's VM tools (ComputerTools), so losing the VM stops that. The suite
+        # itself is a run (long_runs.py) with a tag of its own: it goes on when the agent steps aside or loses the VM.
         tag = f"sandbox-agent-{self.agent_id}"
-        hidden = [value for value in sorted(list(vm_record.global_env.values()) + list(vm_record.env.values()), key=len, reverse=True) if len(value) >= HIDE_MIN_LENGTH]
         # Commands run in the user's home, so ~/click and click are the same folder.
         folder = shlex.quote(args["path"].strip().removeprefix("~/"))
         base = shlex.quote(args["base"].strip())
@@ -2289,8 +2302,9 @@ class WorkTools:
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         if result.returncode != 0:
             text = f"Could not compare {args['path']} with {args['base']}: {result.stderr.strip()}"
-            for value in hidden:
-                text = text.replace(value, "[hidden]")
+            for value in sorted(list(vm_record.global_env.values()) + list(vm_record.env.values()), key=len, reverse=True):
+                if len(value) >= HIDE_MIN_LENGTH:
+                    text = text.replace(value, "[hidden]")
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         if when == "before" and diff.strip():
             text = (
@@ -2311,43 +2325,90 @@ class WorkTools:
         if fields:
             self.agents.jobs.update(job["id"], **fields)
 
-        # Output and errors together, as in a terminal. tail keeps the end (the summary and the failures) and never
-        # stops the suite; pipefail makes the exit code the suite's. The newline ends a comment on the command's last line.
-        # The user follows the run live in a terminal window on the VM's desktop (WATCH), which shows TESTS_LOG; Python
-        # prints as it goes there instead of in chunks.
-        capped = (
-            f"set -o pipefail; mkdir -p ~/.cache; : > {TESTS_LOG}; {WATCH.format(log=TESTS_LOG)}export PYTHONUNBUFFERED=1; "
-            f"cd {folder} && {{ {command}\n}} 2>&1 | tee {TESTS_LOG} | tail -c {OUTPUT_LIMIT}"
-        )
-        started = time.monotonic()
+        # The user follows the run live in a terminal window on the VM's desktop (long_runs.py). The newline in the label
+        # would break the VM page's one line.
+        label = f"{TESTS_TOPICS[scope].capitalize()}, {'before the change' if when == 'before' else 'with the change'}: {command}"
         try:
-            result = await asyncio.to_thread(vm_record.vm.exec, capped, TEST_TIMEOUT, None, tag)
-            exit_code = result.returncode
-            output = result.stdout
-        except subprocess.TimeoutExpired:
-            # Stop what still runs in the VM, or it keeps the VM busy.
-            await asyncio.to_thread(vm_record.vm.kill_tagged, tag)
-            exit_code = None
-            output = f"Stopped after {TEST_TIMEOUT // 60} minutes."
-        seconds = round(time.monotonic() - started)
-        for value in hidden:
-            output = output.replace(value, "[hidden]")
-            command = command.replace(value, "[hidden]")
-        passed = exit_code == 0
+            run = await asyncio.to_thread(long_runs.start, vm_record, self.agent_id, "tests", command, label.replace("\n", " ")[:300], folder)
+        except Exception as error:
+            return {"content": [{"type": "text", "text": f"Could not start the tests: {error}"}], "is_error": True}
+        # What finish_tests needs to keep the result, also after a backend restart.
+        run["job"] = job["id"]
+        run["when"] = when
+        run["scope"] = scope
+        run["command"] = command
+        run["base"] = args["base"].strip()
+        run["path"] = args["path"].strip()
+        run["diff_hash"] = hashlib.sha256(diff.encode()).hexdigest()
+        self.agents.queue.add_run(vm_name, run)
 
-        # The VM may have been taken from it, or the job cancelled, while the tests ran.
-        if vm_record.holder != self.agent_id:
-            return {"content": [{"type": "text", "text": "You lost the VM while the tests ran; the run doesn't count."}], "is_error": True}
-        job = self.agents.jobs.get(job["id"])
+        later = (
+            f"you get the result in a message when it ends, and it is kept on {job['id']} then. Leave {args['path']} alone "
+            f"until then: the tests run on what is in it. If you have more to do in {vm_name}, do it; otherwise end your turn: "
+            f"whoever waits gets {vm_name} meanwhile, and you get it back first once the run is over."
+        )
+        if args.get("background"):
+            return {"content": [{"type": "text", "text": f"Started the tests in the background as {run['id']}: " + later}]}
+        ended = await long_runs.wait(vm_record, run, long_runs.FOREGROUND_SECONDS)
+        if ended is None or not self.agents.queue.claim_run(run["id"]):
+            text = f"Still running after {long_runs.FOREGROUND_SECONDS // 60} minutes, so the tests go on in the background as {run['id']}: " + later
+            return {"content": [{"type": "text", "text": text}]}
+        answer = await self.finish_tests(vm_record, run, ended)
+        try:
+            self.agents.queue.finish_run(vm_name, run["id"])
+        except VMsError:
+            # The VM was deleted meanwhile; its runs went with it.
+            pass
+        return answer
+
+    async def finish_tests(self, vm_record, run: dict, ended: dict) -> dict:
+        """Keep a test run that ended (long_runs.check's result) on its job, as its before or after and as evidence, and
+        say what's next. Also for a run in the background, which agents.py collects: the agent may not hold the VM then."""
+        when = run["when"]
+        scope = run["scope"]
+        command = run["command"]
+        if ended["ended"] == "gone":
+            why = "the user stopped it" if run["stopped_by_user"] else "the VM stopped or restarted"
+            text = f"The test run ended without finishing ({why}), so it doesn't count. Run it again."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        try:
+            job = self.agents.jobs.get(run["job"])
+        except KeyError:
+            return {"content": [{"type": "text", "text": f"{run['job']} is gone, so the run wasn't kept."}], "is_error": True}
         if job["status"] in CLOSED_STATUSES:
             text = f"{job['id']} is {job['status']} now (the user may have cancelled it): the run wasn't kept. Move on."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        # An after run counts only for the code it started on (draft_pr checks the drafted code against that), so that
+        # code must still be there: it may have changed while the tests ran.
+        if when == "after":
+            folder = shlex.quote(run["path"].removeprefix("~/"))
+            diff_command = f"set -o pipefail; cd {folder} && git add -A -N . && git diff {shlex.quote(run['base'])} | head -c {DIFF_LIMIT + 1}"
+            try:
+                result = await asyncio.to_thread(vm_record.vm.exec, diff_command, 120)
+            except Exception as error:
+                text = f"Could not reach the VM to check the code the tests ran on ({error}), so the run doesn't count. Run it again."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+            if hashlib.sha256(result.stdout.encode()).hexdigest() != run["diff_hash"]:
+                text = f"{run['path']} changed while the tests ran, so the run doesn't count. Run them again, and leave the folder alone until they end."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        exit_code = ended["exit_code"]
+        output = ended["output"][-OUTPUT_LIMIT:]
+        seconds = ended["seconds"]
+        for value in sorted(list(vm_record.global_env.values()) + list(vm_record.env.values()), key=len, reverse=True):
+            if len(value) >= HIDE_MIN_LENGTH:
+                output = output.replace(value, "[hidden]")
+                command = command.replace(value, "[hidden]")
+        passed = exit_code == 0
+        if ended["ended"] == "timeout":
+            output = f"Stopped after {TEST_TIMEOUT // 60} minutes.\n{output}"
 
         # The output goes to the user as evidence: this run's before or after of the suite.
         minutes = f"{seconds // 60}m {seconds % 60}s" if seconds >= 60 else f"{seconds}s"
         tests = "the tests that cover the change" if scope == "focused" else "the project's official checks"
         caption = f"{'Passed' if passed else 'Failed'}: {tests} {'on the code as it was' if when == 'before' else 'with the change'}, in {minutes}"
-        if exit_code is None:
+        if ended["ended"] == "timeout":
             caption = f"Stopped: {tests} took over {TEST_TIMEOUT // 60} minutes"
         evidence_id = "ev_" + secrets.token_hex(3)
         tail = "\n".join(output.rstrip("\n").split("\n")[-TAIL_LINES:])
@@ -2373,19 +2434,19 @@ class WorkTools:
         await asyncio.to_thread(temporary.replace, EVIDENCE_DIR / f"{evidence_id}.txt")
         self.agents.jobs.add_evidence(job["id"], item)
 
-        run = {
+        tests_run = {
             "command": command,
             "scope": scope,
-            "base": args["base"].strip(),
+            "base": run["base"],
             "exit_code": exit_code,
             "passed": passed,
-            "diff_hash": hashlib.sha256(diff.encode()).hexdigest() if when == "after" else "",
+            "diff_hash": run["diff_hash"] if when == "after" else "",
             "evidence": evidence_id,
             "seconds": seconds,
             "at": datetime.now(UTC).isoformat(),
         }
         tests = {"before": job["tests"]["before"], "after": job["tests"]["after"]}
-        tests[when] = run
+        tests[when] = tests_run
         # A new run on the unchanged code starts over: an after from before it may have used another command.
         if when == "before":
             tests["after"] = None
@@ -2501,6 +2562,12 @@ class WorkTools:
         except (ValueError, VMsError) as error:
             return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
 
+        if place > 0 and self.agent_id in vm_record.priority:
+            text = (
+                f"You stepped aside from {vm_name} and are number {place} in its priority line: you get it back before the "
+                "agents waiting in its queue, once your run there is over. End your turn; you'll get a message when it's yours."
+            )
+            return {"content": [{"type": "text", "text": text}]}
         if place > 0:
             text = f"You are number {place} in {vm_name}'s queue. End your turn; you'll get a message when it's yours."
             return {"content": [{"type": "text", "text": text}]}
@@ -2577,7 +2644,12 @@ class WorkTools:
                 vm_record = self.agents.vms.get(self.record["target_vm"])
             except VMsError as error:
                 return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+            if self.agent_id in vm_record.priority:
+                status["you"] = f"number {place} in {vm_name}'s priority line (you stepped aside; you get it back first)"
             status["vm_status"] = vm_record.status
             status["holder"] = vm_record.holder
+            status["priority"] = list(vm_record.priority)
             status["queue"] = list(vm_record.queue)
+            # The long runs going in it (yours and other agents'): leave their folders alone.
+            status["runs"] = [{"id": run["id"], "by": run["agent"], "what": run["label"], "started_at": run["started_at"][:16]} for run in vm_record.runs]
         return {"content": [{"type": "text", "text": json.dumps(status)}]}
