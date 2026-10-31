@@ -8,8 +8,9 @@ Nothing here runs for an agent or Sherpa; only the GitHub tab's pages and button
 refresh() reads both lists in one GraphQL request: the 100 most recently pushed repos you can push to (not archived;
 viewerPermission ADMIN, MAINTAIN or WRITE) in "repos", and the 100 you starred most recently in "starred" (the ones
 you can push to are under "repos" only). Per repo: whether the newest commit on its default branch passed its checks,
-how many issues and PRs are open, its stars and whether you starred it. It is kept in memory only (read again at
-start) and goes to the browser as the live topic "your_repos". backend/your_repositories_api.py reads it every
+how many issues and PRs are open, its stars and whether you starred it. It goes to the browser as the live topic
+"your_repos", and is kept in DATA_DIR/your_repositories.json too (save_list), so after a restart the page shows the
+last list at once instead of "not signed in" until GitHub answers; it is read again right after. backend/your_repositories_api.py reads it every
 minute, at once when you sign in or out, and soon after a change you made here (wanted); Star and Unstar read it
 again at once, so the left list follows.
 
@@ -62,6 +63,8 @@ RUNS_SIZE = 30
 COMMITS_SIZE = 10
 # A file bigger than this isn't shown on the Code tab, only said to be too big (GitHub sends no content past 1 MB).
 FILE_BYTES = 1_000_000
+# The list as last read (save_list).
+LIST_PATH = DATA_DIR / "your_repositories.json"
 # The kept copy of each repo page you opened, and the files you opened, by their git id.
 PAGES_DIR = DATA_DIR / "repo_pages"
 FILES_DIR = PAGES_DIR / "files"
@@ -152,6 +155,8 @@ class YourRepositories:
         self.lock = threading.Lock()
         self.version = 0
         self.data = {"repos": [], "starred": [], "login": None, "checked_at": None, "error": None}
+        if LIST_PATH.exists():
+            self.data = json.loads(LIST_PATH.read_text())
         # A change you made here: backend/your_repositories_api.py reads the list again soon.
         self.wanted = False
         # One write at a time to a kept page.
@@ -208,6 +213,7 @@ class YourRepositories:
             with self.lock:
                 self.data = {"repos": [], "starred": [], "login": None, "checked_at": None, "error": None}
                 self.version += 1
+            self.save_list()
             return
         try:
             viewer = self.graphql(REPOS_QUERY, {})["viewer"]
@@ -255,6 +261,16 @@ class YourRepositories:
         with self.lock:
             self.data = {"repos": repos, "starred": starred, "login": viewer["login"], "checked_at": datetime.now(UTC).isoformat(), "error": None}
             self.version += 1
+        self.save_list()
+
+    def save_list(self) -> None:
+        """Keeps the list in LIST_PATH: written whole, then put in place. A failed read isn't kept (it keeps the list)."""
+        with self.lock:
+            text = json.dumps(self.data)
+        LIST_PATH.parent.mkdir(parents=True, exist_ok=True)
+        temporary = LIST_PATH.with_suffix(".tmp")
+        temporary.write_text(text)
+        temporary.replace(LIST_PATH)
 
     def overview(self, repo: str, count: int = COMMITS_SIZE) -> dict:
         """A repo's Code tab: its description, README (markdown, "" when it has none) and newest count commits (the

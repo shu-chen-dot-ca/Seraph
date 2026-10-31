@@ -3,8 +3,9 @@
 checks on your repos, releases, ...
 
 Read with your sign-in (github_account.py), never the search tokens. refresh() reads the newest PAGE_SIZE, read and
-unread (GitHub's own inbox keeps read ones until you mark them done), kept in memory only and sent to the browser as
-the live topic "notifications". backend/notifications_api.py reads them every REFRESH_SECONDS (GitHub asks for no
+unread (GitHub's own inbox keeps read ones until you mark them done), sent to the browser as the live topic
+"notifications" and kept in DATA_DIR/notifications.json too (save), so after a restart the page shows the last ones at
+once instead of "not signed in" until GitHub answers; they are read again right after. backend/notifications_api.py reads them every REFRESH_SECONDS (GitHub asks for no
 more than once a minute) and at once when you sign in or out.
 
     {"items": [{"id": GitHub's thread id, "unread", "reason": GitHub's word (mention, review_requested, assign,
@@ -18,14 +19,19 @@ mark_all_read() marks every one read. Each changes the kept list at once, so the
 """
 
 import copy
+import json
 import threading
 from datetime import UTC, datetime
 
 import httpx
 
+from github_searcher.github_account import DATA_DIR
+
 API = "https://api.github.com"
 PAGE_SIZE = 50
 REFRESH_SECONDS = 60
+# The list as last read (save).
+PATH = DATA_DIR / "notifications.json"
 
 
 class Notifications:
@@ -34,6 +40,8 @@ class Notifications:
         self.lock = threading.Lock()
         self.version = 0
         self.data = {"items": [], "login": None, "checked_at": None, "error": None}
+        if PATH.exists():
+            self.data = json.loads(PATH.read_text())
 
     def summary(self) -> dict:
         with self.lock:
@@ -54,6 +62,7 @@ class Notifications:
             with self.lock:
                 self.data = {"items": [], "login": None, "checked_at": None, "error": None}
                 self.version += 1
+            self.save()
             return
         try:
             with self.client() as client:
@@ -108,6 +117,16 @@ class Notifications:
         with self.lock:
             self.data = {"items": items, "login": account["login"], "checked_at": datetime.now(UTC).isoformat(), "error": None}
             self.version += 1
+        self.save()
+
+    def save(self) -> None:
+        """Keeps the list in PATH: written whole, then put in place. A failed read isn't kept (it keeps the list)."""
+        with self.lock:
+            text = json.dumps(self.data)
+        PATH.parent.mkdir(parents=True, exist_ok=True)
+        temporary = PATH.with_suffix(".tmp")
+        temporary.write_text(text)
+        temporary.replace(PATH)
 
     def mark_read(self, thread_id: str) -> None:
         with self.client() as client:
