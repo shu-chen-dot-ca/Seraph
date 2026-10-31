@@ -10,3 +10,4 @@ __pycache__/
 
 # Runtime data (repos, issues, jobs, inbox, agents, VMs)
 data/
+save.sh
