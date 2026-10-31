@@ -136,6 +136,19 @@ Open **http://localhost:5173**. Then:
 6. **GitHub → Account.** Sign in with GitHub, so Approve can open PRs as you.
 7. Decide on its drafts in **GitHub → Inbox**.
 
+### 4. Live copy and updates (optional)
+
+`./run.sh` runs the app from the folder you edit, and restarts it on every save. To keep one copy that only changes when you say so, make a release on GitHub (Releases → Draft a new release, a tag like `v0.1.0`), then, with `./run.sh` stopped:
+
+```bash
+git fetch --tags
+deploy/install.sh v0.1.0
+```
+
+The live copy runs as the user service `seraph` from `~/seraph` and opens at **http://localhost:8001** (remote access follows it). Your `data/` and `.env` move there, and the agents keep their conversations. This folder becomes the dev copy: `./run.sh` on http://localhost:5173 with an empty `data/`, backend port 8002 and VMs named `dev-…`, so it never touches the live copy's VMs.
+
+From then on the live copy checks GitHub for a newer release every 15 minutes and gets it ready in the background. **Update** appears in the header: it shows the release notes, and **Restart** switches to it. The app waits for a moment when no agent is in the middle of a tool call (up to a minute), copies `data/` to `~/seraph/backups`, and restarts on the new release. VMs and their runs keep going, agents carry on, and open pages reload at the same place. If the new release doesn't start within a minute, it goes back by itself. **Settings → About** has the version, **Check for updates** and **Previous version** (back to the release before, with `data/` from before the update).
+
 ## Configuration
 
 Everything is set in `.env`; [.env.example](.env.example) lists every option.
@@ -187,6 +200,7 @@ sandbox/          Incus VMs, the VM queue, images, the agent's VM tools, and thi
   image/          what every image gets (base_layer.sh), and listing what an image has (inspect.sh, inventory.py)
 docs/             architecture and diagrams
 remote_access/    opening the app from other devices: Caddy's config, the SSH tunnel, the one-time setup
+deploy/           the live copy: install.sh (once), switch.sh (an update), the systemd service
 data/             runtime state, not in git
 ```
 

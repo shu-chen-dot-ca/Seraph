@@ -74,3 +74,22 @@ device ──► your address ──► forwarder ◄── SSH, opened from thi
 - The forwarder passes the address's ports 443 and 80 back through the SSH connection that this computer keeps open. TLS ends at Caddy on this computer, so the forwarder sees only encrypted traffic. Its tunnel key may open those two ports and nothing else.
 - Every request through the address needs a passkey session: the backend checks every API call and the live websocket (a request counts as through the address when its Host is the address or it carries X-Forwarded-For, which Caddy adds), and Caddy asks it before passing on the app's own files. Only the Sign in and Add this device pages are open.
 - Devices are added only on this computer, with a one-time link (Settings → Remote access → Add a device). Remove signs a device out at once, including its open live feed. The passkeys' public keys and the sessions (only their hashes) are in `data/remote_access.json`. The tunnel key, the server's fingerprint and the certificate are in `data/remote_access/`.
+
+## Live copy and updates
+
+`deploy/install.sh` makes a live copy of the app in `~/seraph`, apart from the folder you edit (the dev copy, `./run.sh`):
+
+```text
+~/seraph/
+├── current -> releases/v0.1.0    the release that runs (the user service seraph starts it)
+├── releases/<tag>/               a release: its code, .venv, its built page, VERSION; any of them can be deleted and got again
+├── backups/<time>-<tag>/         data/ as it was before each switch (the last 10)
+├── data/                         yours, the same for every release
+└── .env
+```
+
+- The live copy's backend doesn't reload on code changes, and serves its own built page at `/` (no Vite). Its version is the release's tag (`VERSION`); the dev copy's is `dev`, and it has no updates.
+- `github_searcher/updates.py` asks GitHub for the latest release of `SERAPH_REPO` every 15 minutes, with your GitHub sign in. A newer one is made ready in the background: its code from GitHub's archive, `uv sync`, `npm ci` and `npm run build`. Nothing restarts by itself: **Update** in the header shows it.
+- **Restart** waits for a moment when no agent is in the middle of a tool call (at most a minute), then runs `deploy/switch.sh` outside the app with `systemd-run`: stop the app, copy `data/` to `backups/`, point `current` at the release, start it, and wait for `/api/health`. A release that doesn't answer within a minute: `data/` and `current` go back, and the release before starts again.
+- What a restart doesn't touch: VMs and their runs (Incus), the VM queue (saved with the VMs) and the agents' conversations (Claude Code keeps them by the path of `data/agent_home`, which stays the same). An agent's turn that is cut off carries on after the restart, as after any restart.
+- Open pages notice another version on the live feed (topic `updates`) and reload at the same place: the page is in the URL.
