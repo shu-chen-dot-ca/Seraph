@@ -1,5 +1,6 @@
-"""The GitHub tab's Your repositories and Starred (github_searcher/your_repositories.py): one repo's page, read from
-GitHub when it opens, and the changes you make there, as you (Star and Unstar, and a maintainer's in your own).
+"""The GitHub tab's Your repositories and Starred, and the Workspace tab's Home (github_searcher/your_repositories.py):
+one repo's page, read from GitHub when it opens, and the changes you make there, as you (Star and Unstar, and a
+maintainer's in your own).
 
 GET /api/your_repositories/{owner}/{name}/overview (the Code tab's description, README and latest commit), /tree (its
 files), /file?path=... (one file), /issues?state=open|closed, /pulls?state=open|closed, /commits (the newest 50) and

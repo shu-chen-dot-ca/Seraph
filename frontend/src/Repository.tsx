@@ -1,8 +1,9 @@
 /*
-One of your repositories or a repo you starred (#/github/repo?repo=owner/name), opened from Your repositories or
-Starred in the GitHub tab's left list (GitHubNav.tsx): like the repo's page on GitHub. Read fresh from GitHub, with
-your sign-in (it may be private), each time a tab opens (backend/your_repositories_api.py); Refresh reads it again.
-It only reads, except the buttons that say what they do.
+One of your repositories or a repo you starred, like the repo's page on GitHub: on the GitHub tab
+(#/github/repo?repo=owner/name, opened from Your repositories or Starred in its left list, GitHubNav.tsx) and on the
+Workspace tab's Home (#/home?repo=owner/name, Home.tsx; base is that address, and every tab and pop-up below keeps
+it). Read fresh from GitHub, with your sign-in (it may be private), each time a tab opens
+(backend/your_repositories_api.py); Refresh reads it again. It only reads, except the buttons that say what they do.
 The bar on top: the repo's name (a lock when private; opens it on GitHub), tabs Code, Issues, Pull requests (with
 how many are open), Commits and Actions (tab=issues|pulls|commits|actions in the address; none is Code), and on the
 right Star or Unstar with how many stars it has (one click, like on GitHub; a repo you unstar leaves Starred at once,
@@ -152,7 +153,7 @@ const RUN_TEXT: Record<string, string> = {
 const FAILED = ["failure", "timed_out", "startup_failure"];
 const TABS = ["issues", "pulls", "commits", "actions"];
 
-export default function Repository(props: { repo: string; tab: string; state: string; open: string | null }) {
+export default function Repository(props: { repo: string; tab: string; state: string; open: string | null; base?: string }) {
   const yourRepos = useLive("your_repos");
   const [overview, setOverview] = useState<RepoOverview | null>(null);
   const [commits, setCommits] = useState<RepoOverview | null>(null);
@@ -182,7 +183,7 @@ export default function Repository(props: { repo: string; tab: string; state: st
   const starred = listed !== undefined && listed.starred;
   const stars = listed?.stars ?? overview?.stars ?? 0;
   const canPush = listed !== undefined && listed.can_push;
-  const base = `#/github/repo?repo=${encodeURIComponent(props.repo)}`;
+  const base = props.base ?? `#/github/repo?repo=${encodeURIComponent(props.repo)}`;
   let listHash = base;
   if (tab !== "code") {
     listHash += `&tab=${tab}`;
