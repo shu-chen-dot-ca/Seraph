@@ -3,7 +3,9 @@ public and private, and the repos you starred, for the GitHub tab's "Your reposi
 (frontend/src/GitHubNav.tsx, Repository.tsx), and the changes you make in them, as you.
 
 Everything here goes through your sign-in (github_account.py), never the search tokens: those can't see private repos.
-Nothing here runs for an agent; only the GitHub tab's pages and buttons use it.
+The GitHub tab's pages and buttons use it, and so does a repository's own agent (the Workspace tab's Live): its
+repo_* tools (github_searcher/agent/repo_tools.py) read only its own repo through it, from this computer, and clone()
+puts that repo's code in its VM (agents.py). The token itself never reaches an agent or a VM.
 
 refresh() reads both lists in one GraphQL request: the 100 most recently pushed repos you can push to (not archived;
 viewerPermission ADMIN, MAINTAIN or WRITE) in "repos", and the 100 you starred most recently in "starred" (the ones
@@ -34,8 +36,13 @@ refresh_pages() reads every kept page again (backend/your_repositories_api.py, e
 page of a repo that is no longer yours or starred. Files are kept by their git id (DATA_DIR/repo_pages/files/<sha>.json):
 that id names the content, so a kept file is never out of date.
 
+clone(repo, folder) clones a repo (its default branch, with its history) into a folder on this computer, with your
+sign-in, for the Live tab's VM. The token goes to git for that one command only, in its environment: the clone's own
+settings (its origin is plain https://github.com/owner/name) never have it.
+
 act() is one change you make, as you: Star and Unstar (one click, like on GitHub, on any repo), a new issue (in a
-repo of either list), and, only in a repo you can push to (is_yours), after the browser asked "are you sure?": edit a
+repo of either list; with labels, the repo's own, when it comes from an issue draft), and, only in a repo you can
+push to (is_yours), after the browser asked "are you sure?": edit a
 title and description, close (an issue as completed or as not planned) or reopen, add or remove a label, assign or
 unassign yourself, merge a PR (merge commit, squash or rebase), review a PR (approve, request changes, or comment),
 re-run a GitHub Actions run's failed jobs. A refusal raises ValueError with what GitHub said.
@@ -45,13 +52,14 @@ import base64
 import copy
 import json
 import re
+import subprocess
 import threading
 from datetime import UTC, datetime
 from urllib.parse import quote
 
 import httpx
 
-from github_searcher.github_account import DATA_DIR
+from github_searcher.github_account import DATA_DIR, GIT_ENV
 from github_searcher.pr_tracking import ROLLUP
 
 API = "https://api.github.com"
@@ -70,6 +78,8 @@ PAGES_DIR = DATA_DIR / "repo_pages"
 FILES_DIR = PAGES_DIR / "files"
 # A page's tabs as kept: the Code tab is overview and tree; Issues and Pull requests have Open and Closed.
 PAGE_TABS = ["overview", "tree", "issues:open", "issues:closed", "pulls:open", "pulls:closed", "commits", "runs"]
+# A clone may take this long (a big repo on a slow connection).
+CLONE_SECONDS = 30 * 60
 MERGE_METHODS = ["merge", "squash", "rebase"]
 REVIEW_EVENTS = ["APPROVE", "REQUEST_CHANGES", "COMMENT"]
 CLOSE_REASONS = ["completed", "not_planned"]
@@ -368,6 +378,33 @@ class YourRepositories:
             kept.write_text(json.dumps(answer))
         return answer
 
+    def clone(self, repo: str, folder: str) -> None:
+        """Clones repo into folder (a path that doesn't exist yet) with your sign-in. ValueError says why not."""
+        token = self.token()
+        if token is None:
+            raise ValueError("Sign in with GitHub first: the GitHub tab, Account.")
+        # git's own settings from the environment (GIT_CONFIG_COUNT): for this command only, and not on its command
+        # line, where other programs could read it. Any user name works with a token as the password.
+        basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+        env = dict(GIT_ENV)
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GIT_CONFIG_COUNT"] = "1"
+        env["GIT_CONFIG_KEY_0"] = "http.https://github.com/.extraheader"
+        env["GIT_CONFIG_VALUE_0"] = f"Authorization: Basic {basic}"
+        try:
+            result = subprocess.run(
+                ["git", "clone", "--quiet", f"https://github.com/{repo}.git", folder],
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                env=env,
+                timeout=CLONE_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            raise ValueError(f"Cloning {repo} took over {CLONE_SECONDS // 60} minutes.")
+        if result.returncode != 0:
+            raise ValueError(f"git clone failed: {result.stderr.strip()[-500:]}")
+
     def load_page(self, repo: str) -> dict:
         """The kept copy of a repo's page: {tab: {"data", "at"}}, {} when there is none."""
         path = PAGES_DIR / f"{repo.replace('/', '__')}.json"
@@ -562,7 +599,10 @@ class YourRepositories:
                 title = fields.get("title", "").strip()
                 if title == "":
                     raise ValueError("Give the issue a title.")
-                response = client.post(f"/repos/{repo}/issues", json={"title": title, "body": fields.get("body", "")})
+                change = {"title": title, "body": fields.get("body", "")}
+                if fields.get("labels"):
+                    change["labels"] = fields["labels"]
+                response = client.post(f"/repos/{repo}/issues", json=change)
                 done = "Issue opened"
                 if response.status_code == 201:
                     url = response.json()["html_url"]

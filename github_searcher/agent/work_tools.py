@@ -73,7 +73,8 @@ Each tool returns its result as text; a bad call returns is_error, so Claude see
 A job that is done or cancelled (often by the user, while the agent was busy) can't change
 anymore: no status, notes or drafts, so the user's cancel is never undone. The list stores
 write a file on every change, so they are called in a thread, off the backend's event loop.
-describe() gives the one line the chat shows for each call, of these tools and of the GitHub tools.
+describe() gives the one line the chat shows for each call, of these tools, the GitHub tools and a repository's agent's
+tools (repo_tools.py).
 
     tools = WorkTools(agents, record).list()
 """
@@ -631,7 +632,8 @@ class WorkTools:
     def describe(self, name: str, args: dict) -> str:
         """The line the chat shows for a call, e.g. "Adding to Issues: pallets/click#812".
 
-        Also for the GitHub tools and TodoWrite; the VM tools have their own (ComputerTools.describe).
+        Also for the GitHub tools, a repository's agent's tools (repo_tools.py) and TodoWrite; the VM tools have their own
+        (ComputerTools.describe).
         """
         if name == "repos_list":
             return "Looked at the Repos list"
@@ -724,6 +726,25 @@ class WorkTools:
             return f"Note on its VM: {args.get('text')}"
         if name == "vm_note_remove":
             return "Removing notes from its VM: " + ", ".join(args.get("ids") or [])
+        # A repository's agent's tools (repo_tools.py): always on its own repo.
+        if name == "repo_files" and args.get("path"):
+            return f"Listed the files in {args['path']}"
+        if name == "repo_files":
+            return "Listed the files"
+        if name == "repo_read":
+            return "Read " + ", ".join(args.get("paths") or [])
+        if name == "repo_search_code":
+            return f"Searched the code for `{args.get('q')}`"
+        if name == "repo_issues" and args.get("search"):
+            return f"Searched the issues for `{args['search']}`"
+        if name == "repo_issues":
+            return f"Looked at the {args.get('state') or 'open'} issues"
+        if name == "repo_pulls":
+            return f"Looked at the {args.get('state') or 'open'} pull requests"
+        if name == "repo_thread":
+            return f"Read #{args.get('number')}"
+        if name == "draft_issue":
+            return f"Drafting an issue: {args.get('title')}"
         # Claude Code's todo list and the GitHub tools, which have no describe() of their own.
         if name == "TodoWrite":
             return "Updated its todo list"

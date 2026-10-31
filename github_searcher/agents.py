@@ -71,6 +71,18 @@ back for it. It reads the thread and suggests a reply (draft_comment), a new ver
 on that PR's branch (draft_pr with pr: Approve pushes it there and posts its text on the PR as a comment), or
 nothing (it marks the job done). It never posts anything itself.
 
+A repository's agent (the Workspace tab's Live, frontend/src/RepoLive.tsx) belongs to one of the user's own
+repositories for good: its record's "repo" is that repo, and "live" how far its set-up is:
+
+    "repo": "owner/name" | None, "live": {"state": "preparing" | "ready" | "failed", "error": why it failed | None} | None
+
+set_up_live() makes it, aimed at the repo's own new VM (backend/repo_live_api.py makes the VM). prepare_live() then
+waits for the VM, clones the repo here with the user's sign-in (your_repositories.clone) and copies it into desktop 1's
+home, so the VM never gets a token, also for a private repo; then the agent gets a set_up_repo job for desktop 1, the
+desktop the Live tab shows. A failure stays in "live" with why, and the Live tab's Try again runs it again
+(retry_live). It reads its repo with its own tools (agent/repo_tools.py) and, when the user asks for a change, drafts
+an issue (issue_drafts.py) instead of making it; issue_decided() tells it whether the user created or discarded it.
+
 When an issue an agent has a job for goes from free to assigned (someone else is on it now: the
 tags say so, backend/issues_api.py), issue_taken() asks the user in the Inbox ("taken", one pending
 per job): Keep working tells the agent to go on; Stop the agent cancels the job, and when the agent
@@ -81,7 +93,7 @@ Everything here runs in the backend's event loop. notify() and the queue callbac
 from request threads, so they hand their work to the loop. version goes up on every change the
 agent list shows (status, history, context, queue), for the live feed.
 
-    agents = Agents(repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, ..., artifacts)
+    agents = Agents(repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, ..., artifacts, your_repositories, issue_drafts)
     await agents.start()
     agents.send(agent_id, "find good first issues in Python CLI tools")
 """
@@ -92,6 +104,8 @@ import json
 import os
 import re
 import secrets
+import shlex
+import tempfile
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -103,6 +117,7 @@ from github_searcher.agent.agent import Agent
 from github_searcher.agent.work_tools import WorkTools
 from sandbox.agent import long_runs
 from sandbox.agent.tools import ComputerTools
+from sandbox.file_transfer import to_vm
 from sandbox.vms import VMsError
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -122,11 +137,18 @@ SAVE_SECONDS = 5
 # How often the runs nobody waits for are checked.
 RUN_CHECK_SECONDS = 10
 OPEN_STATUSES = ["queued", "working"]
+# A repository's new VM is waited for this long (it takes about a minute), and looked at this often meanwhile.
+LIVE_WAIT_SECONDS = 15 * 60
+LIVE_CHECK_SECONDS = 5
 
 
 class Agents:
-    def __init__(self, repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, repo_signals, issue_tags, explore, artifacts):
+    def __init__(self, repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, repo_signals, issue_tags, explore, artifacts, your_repositories, issue_drafts):
         self.repos = repos
+        # The user's repositories, read with their sign-in: a repository's agent reads its repo and gets its code through it.
+        self.your_repositories = your_repositories
+        # The issues repository agents drafted for the user (issue_drafts.py).
+        self.issue_drafts = issue_drafts
         # Each agent's own folder (github_searcher/artifacts.py). A change in one shows in the agent list (artifacts_stamp).
         self.artifacts = artifacts
         artifacts.on_change = self.changed
@@ -182,6 +204,9 @@ class Agents:
             # Agents from before archiving, and from before name_by (an "agent-N" name was the automatic one).
             record.setdefault("archived_at", None)
             record.setdefault("name_by", "auto" if re.fullmatch(r"agent-\d+", record["name"]) else "user")
+            # And from before repository agents (Live).
+            record.setdefault("repo", None)
+            record.setdefault("live", None)
             if record.get("awake") and self.pending[agent.id] and record["archived_at"] is None:
                 self.wake[agent.id].set()
             self.nudges[agent.id] = {"count": 0, "state": None}
@@ -203,6 +228,11 @@ class Agents:
             if place != 0:
                 continue
             self.notify(agent_id, f"The backend restarted; you still hold {vm_name}. Check where your jobs for it stand (my_jobs), finish them, then release_vm.")
+
+        # A repository's set-up the restart cut off goes on.
+        for agent in self.agents.values():
+            if agent.record["live"] is not None and agent.record["live"]["state"] == "preparing":
+                asyncio.create_task(self.prepare_live(agent.id))
 
         # No tool call waits for a run anymore after a restart: they are all collected by watch_runs now.
         self.queue.to_background()
@@ -449,6 +479,9 @@ class Agents:
                     "prs": prs.get(agent.id, 0),
                     # Goes up on every change to its artifacts, so an open Artifacts tab reads its folder again.
                     "artifacts_stamp": self.artifacts.stamps.get(agent.id, 0),
+                    # A repository's agent (Live): its repo, and how far its set-up is.
+                    "repo": agent.record["repo"],
+                    "live": agent.record["live"],
                 }
             )
         return summaries
@@ -481,6 +514,8 @@ class Agents:
             "created_at": datetime.now(UTC).isoformat(),
             "archived_at": None,
             "name_by": name_by,
+            "repo": None,
+            "live": None,
         }
         computer_tools = ComputerTools(self.vms, self.queue, agent_id, functools.partial(record.get, "target_vm"), record["history"])
         agent = Agent(record, computer_tools, WorkTools(self, record), self.changed)
@@ -540,8 +575,9 @@ class Agents:
         if vm_name is not None:
             await asyncio.to_thread(agent.computer_tools.cancel, vm_name)
         (self.folder / f"{agent_id}.json").unlink(missing_ok=True)
-        # Its artifacts go with it (an archived agent keeps them).
+        # Its artifacts go with it (an archived agent keeps them), and so do its issue drafts, which only its chat shows.
         await asyncio.to_thread(self.artifacts.delete_all, agent_id)
+        await asyncio.to_thread(self.issue_drafts.delete_for_agent, agent_id)
 
     async def archive(self, agent_id: str) -> None:
         """Put the agent away: it stops, its open jobs become cancelled and it leaves every VM queue (what it still
@@ -804,6 +840,156 @@ class Agents:
             text += f"\nIt is for {vm_name}. Use queue_for_vm when ready."
         self.notify(agent_id, text)
         return job
+
+    def live_agent(self, repo: str) -> dict | None:
+        """The record of the repository's agent (Live), or None when it has none yet."""
+        for agent in self.agents.values():
+            if agent.record["repo"] == repo:
+                return agent.record
+        return None
+
+    def set_up_live(self, repo: str, vm_name: str) -> dict:
+        """The Live tab's Set up for one of the user's repositories: a new agent that belongs to it, aimed at its new VM
+        vm_name (made by backend/repo_live_api.py). It is named after the repo. prepare_live() goes on from there."""
+        if self.live_agent(repo) is not None:
+            raise ValueError(f"{repo} has its agent already")
+        names = [agent.name for agent in self.agents.values()]
+        name = repo.split("/")[1]
+        number = 2
+        while name in names:
+            name = f"{repo.split('/')[1]}-{number}"
+            number += 1
+        created = self.create(name)
+        agent = self.agents[created["id"]]
+        agent.record["repo"] = repo
+        agent.record["live"] = {"state": "preparing", "error": None}
+        # Not told: its first message (prepare_live) says it all.
+        self.set_target_vm(agent.id, vm_name, by_agent=True)
+        self.save(agent)
+        self.version += 1
+        self.loop.create_task(self.prepare_live(agent.id))
+        return created
+
+    def retry_live(self, agent_id: str, vm_name: str) -> None:
+        """The Live tab's Try again, after prepare_live failed: once more, on vm_name (the same VM, or a new one when the
+        old one is gone)."""
+        agent = self.agents[agent_id]
+        if agent.record["live"] is None or agent.record["live"]["state"] != "failed":
+            raise ValueError(f"{agent.name} isn't waiting for a new try")
+        self.set_target_vm(agent_id, vm_name, by_agent=True)
+        agent.record["live"] = {"state": "preparing", "error": None}
+        self.save(agent)
+        self.version += 1
+        self.loop.create_task(self.prepare_live(agent_id))
+
+    async def prepare_live(self, agent_id: str) -> None:
+        """A repository's agent gets its repo's code in its VM: once the VM is up (started if it is off), the repo is
+        cloned here with the user's sign-in and copied into desktop 1's home (copy_repo). Then the agent gets its
+        set_up_repo job. A failure is kept in record["live"], with why, and shows in its chat."""
+        agent = self.agents.get(agent_id)
+        if agent is None:
+            return
+        repo = agent.record["repo"]
+        error = None
+        vm_record = None
+        started = False
+        waited = 0
+        while error is None:
+            # It may be deleted meanwhile, or its VM renamed (its target VM follows) or deleted.
+            if agent_id not in self.agents:
+                return
+            vm_name = agent.record["target_vm"]
+            vm_record = None
+            for each in self.vms.list():
+                if each.name == vm_name:
+                    vm_record = each
+            if vm_record is None:
+                error = "Its VM is gone. Try again to make a new one."
+            elif vm_record.status == "running" and vm_record.usage["responding"]:
+                break
+            elif vm_record.status in ["failed", "missing"]:
+                error = f"{vm_name} could not be made: {vm_record.error}. Delete it on the VMs page, then Try again."
+            elif vm_record.status == "stopped" and started:
+                error = f"{vm_name} didn't start: {vm_record.error}"
+            elif vm_record.status == "stopped":
+                started = True
+                try:
+                    self.vms.start_in_background(vm_name)
+                except VMsError:
+                    # Busy with something else: look again next round.
+                    pass
+            elif waited > LIVE_WAIT_SECONDS:
+                error = f"{vm_name} wasn't up after {LIVE_WAIT_SECONDS // 60} minutes."
+            if error is None:
+                await asyncio.sleep(LIVE_CHECK_SECONDS)
+                waited += LIVE_CHECK_SECONDS
+
+        if error is None:
+            try:
+                await asyncio.to_thread(self.copy_repo, repo, vm_record)
+            except Exception as failure:
+                # Not signed in, a clone or copy that failed, a VM that stopped answering: all said the same way.
+                error = f"Could not put the code in {vm_record.name}: {failure}"
+        if agent_id not in self.agents:
+            return
+        now = datetime.now(UTC).isoformat()
+        if error is not None:
+            agent.record["live"] = {"state": "failed", "error": error}
+            agent.history.append({"type": "system", "text": error, "time": now})
+            self.save(agent)
+            self.version += 1
+            return
+
+        vm_name = vm_record.name
+        folder = repo.split("/")[1]
+        agent.record["live"] = {"state": "ready", "error": None}
+        agent.history.append({"type": "system", "text": f"The code is in {vm_name}, in ~/{folder} on desktop 1", "time": now})
+        title = f"Set up {repo}"
+        job = self.jobs.create("set_up_repo", title, agent_id, "user", repo=repo, vm=vm_name)
+        text = (
+            f"You are the agent of {repo}, one of the user's own repositories (see Your repository). Its VM is {vm_name}: "
+            "the user tries the repo out on its desktop 1, next to this chat, on the Workspace tab's Live.\n"
+            f"New job {job['id']}: {title}\n"
+            f"The app copied the code into desktop 1's home folder: ~/{folder}, the default branch with its history. The VM has "
+            "no GitHub access, so you can't fetch or push there for a private repo, and that is fine. Read its README and docs "
+            "first, with your repo_* tools. If it has a clear frontend, set it up the way they say and leave it running on the "
+            "desktop; if it is a library or other low-level building block, open it in VS Code. Either way, end with a short "
+            "introduction to the repo (see Setting up a repo).\n"
+            f"A server you leave running goes in desktop 1's demo service: its start command in {DEMO_DIR}/run.sh, then "
+            "`sudo systemctl enable demo` and `sudo systemctl restart demo` (logs: `journalctl -u demo`).\n"
+            f"It is for {vm_name}, on desktop 1, where the code is and where the user looks: queue_for_vm with desktop 1 when ready."
+        )
+        self.save(agent)
+        self.notify(agent_id, text)
+
+    def copy_repo(self, repo: str, vm_record) -> None:
+        """Clone repo here with the user's sign-in and copy it into desktop 1's home in the VM (prepare_live, in a thread).
+        A folder of that name already there (an earlier try) is kept as it is."""
+        folder = repo.split("/")[1]
+        vm = vm_record.desktop_vm(1)
+        result = vm.exec("cd && pwd", 30)
+        home = result.stdout.strip()
+        if result.returncode != 0 or not home.startswith("/"):
+            raise ValueError(f"the VM didn't say where desktop 1's home is: {result.stderr.strip()}")
+        if vm.exec(f"test -e {shlex.quote(folder)}", 30).returncode == 0:
+            return
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / folder
+            self.your_repositories.clone(repo, str(target))
+            to_vm(vm, str(target), home)
+
+    def issue_decided(self, draft: dict) -> None:
+        """The user created one of the agent's issue drafts on GitHub, or discarded it, from its chat. It hears with its
+        next message: no turn of its own just for this."""
+        agent = self.agents.get(draft["agent"])
+        if agent is None:
+            return
+        text = f"The user discarded your issue draft {draft['id']} ({draft['title']})."
+        if draft["status"] == "created":
+            text = f"The user created your issue draft {draft['id']} on GitHub: {draft['repo']}#{draft['number']} ({draft['title']}), {draft['url']}."
+        self.pending[agent.id].append({"from": "System", "text": text, "shown": False})
+        self.save(agent)
+        self.version += 1
 
     def issue_taken(self, issue_id: str, reason: str) -> None:
         """The issue went from free to assigned: someone else is on it now. Every open job on it gets an item in the

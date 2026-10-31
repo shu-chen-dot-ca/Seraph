@@ -5,7 +5,9 @@ its jobs, and does the hands-on part in a VM while it holds one. Its tools come 
 in-process MCP server ("agent"):
 - the GitHub tools (github_tools.py) read GitHub from this machine, so the token never enters the VM;
 - the work tools (work_tools.py) change the lists, jobs, the Inbox and the VM queue;
-- the computer tools (sandbox/agent/tools.py) act inside the VM: screen, mouse, keyboard, shell.
+- the computer tools (sandbox/agent/tools.py) act inside the VM: screen, mouse, keyboard, shell;
+- only an agent that belongs to one of the user's repositories (the Workspace tab's Live: its record's "repo"): the
+  repository tools (repo_tools.py) read that repo with the user's sign-in and draft issues for it.
 Of Claude Code's own tools it only gets TodoWrite, which touches nothing. No shell, files or web
 on this machine, so the host's secrets stay out of reach.
 
@@ -34,6 +36,7 @@ from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ClaudeSDKClie
 from dotenv import load_dotenv
 
 from github_searcher.agent.github_tools import GithubTools
+from github_searcher.agent.repo_tools import RepoTools
 from github_searcher.agent.work_tools import WorkTools
 from sandbox.agent.tools import ComputerTools
 
@@ -86,6 +89,9 @@ class Agent:
     async def connect(self) -> None:
         # GitHub tools still add old-style "activity" lines to the list they are given; nobody reads this one.
         tools = self.computer_tools.list() + self.work_tools.list() + GithubTools([], self.work_tools.agents.repo_signals).list()
+        # A repository's agent (Live) also reads its repo with the user's sign-in, and drafts issues for it.
+        if self.record.get("repo") is not None:
+            tools += RepoTools(self.work_tools.agents, self.record).list()
         allowed_tools = ["TodoWrite"]
         for item in tools:
             allowed_tools.append(f"mcp__{TOOL_SERVER}__{item.name}")
