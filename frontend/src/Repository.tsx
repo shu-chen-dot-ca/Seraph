@@ -2,14 +2,20 @@
 One of your repositories or a repo you starred, like the repo's page on GitHub: on the GitHub tab
 (#/github/repo?repo=owner/name, opened from Your repositories or Starred in its left list, GitHubNav.tsx) and on the
 Workspace tab's Home (#/home?repo=owner/name, Home.tsx; base is that address, and every tab and pop-up below keeps
-it). Read fresh from GitHub, with your sign-in (it may be private), each time a tab opens
-(backend/your_repositories_api.py); Refresh reads it again. It only reads, except the buttons that say what they do.
+it). Read from GitHub with your sign-in (it may be private) (backend/your_repositories_api.py) and kept on this
+computer, which the app reads from GitHub again every 15 minutes (the first open of a repo reads all its tabs). The
+browser keeps every answer too (in memory and localStorage, also after a reload), so a tab opened before shows at
+once, with no Loading, and the backend's copy replaces it a moment later. A tab never opened shows when it arrives.
+Next to Refresh: when the tab you see was read from GitHub ("Updated 3m ago").
+Refresh, closing a pop-up, a new issue and a re-run read it from GitHub now. It only reads, except the buttons that say
+what they do.
 The bar on top: the repo's name (a lock when private; opens it on GitHub), tabs Code, Issues, Pull requests (with
 how many are open), Commits and Actions (tab=issues|pulls|commits|actions in the address; none is Code), and on the
 right Star or Unstar with how many stars it has (one click, like on GitHub; a repo you unstar leaves Starred at once,
 its page stays open until you go), New issue and Refresh. On a narrow screen (a phone) the bar wraps: the tabs go on
 a line of their own and scroll sideways.
-- Code: the description, stars, forks and website, then the files like on GitHub: the newest commit on the default
+- Code: the description, stars, forks and website, then the files like on GitHub (shown once the files and the README are
+  both in, so nothing jumps): the newest commit on the default
   branch on top (whether its checks passed, who, the message, its id, when; a click opens it on GitHub), where you are
   (the repo's name, then each folder: a click goes back there), then the folder's folders and files, folders first
   (.. goes up). A click on a folder goes into it; a click on a file shows it in the same box: code with line numbers,
@@ -53,7 +59,7 @@ import {
   RefreshCw,
   Star,
 } from "lucide-react";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import NewIssueDialog from "@/NewIssueDialog";
@@ -89,6 +95,7 @@ type RepoOverview = {
   default_branch: string;
   readme: string;
   commits: RepoCommit[];
+  cached_at?: string; // when the kept copy was read from GitHub (every tab's answer has it)
 };
 
 type RepoLabel = { name: string; color: string };
@@ -128,8 +135,13 @@ type RepoPull = {
 // state: GitHub's conclusion once done (success, failure, cancelled, skipped, ...), else running or waiting.
 type RepoRun = { id: number; workflow: string; title: string; number: number; event: string; branch: string; state: string; actor: string; at: string; url: string };
 
+type IssueList = { items: RepoIssue[]; open: number; closed: number; cached_at?: string };
+type PullList = { items: RepoPull[]; open: number; closed: number; cached_at?: string };
+type RunList = { items: RepoRun[]; cached_at?: string };
+
 // The Code tab's files (tree: a folder, blob: a file) and one file (text is null when binary or too big).
-type RepoFiles = { files: { path: string; type: "blob" | "tree"; size: number }[]; truncated: boolean };
+// sha: the file's git id, which names its content: the backend keeps files by it.
+type RepoFiles = { files: { path: string; type: "blob" | "tree"; size: number; sha: string }[]; truncated: boolean };
 type RepoFileText = { path: string; text: string | null; size: number; binary: boolean; too_big: boolean };
 
 const SIZE = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
@@ -153,24 +165,44 @@ const RUN_TEXT: Record<string, string> = {
 const FAILED = ["failure", "timed_out", "startup_failure"];
 const TABS = ["issues", "pulls", "commits", "actions"];
 
+// Every answer read for a repo's page, by repo, then by what was read ("overview", "issues|closed", "tree", ...): kept
+// while the app is open and in localStorage (when it fits), so a page opened before shows at once, also after a
+// reload, and the read behind it only brings it up to date.
+const kept = new Map<string, Record<string, unknown>>();
+
 export default function Repository(props: { repo: string; tab: string; state: string; open: string | null; base?: string }) {
   const yourRepos = useLive("your_repos");
-  const [overview, setOverview] = useState<RepoOverview | null>(null);
-  const [commits, setCommits] = useState<RepoOverview | null>(null);
-  const [files, setFiles] = useState<RepoFiles | null>(null);
+  // This repo's kept answers: from memory, else from localStorage (after a reload).
+  if (!kept.has(props.repo)) {
+    let saved: Record<string, unknown> = {};
+    try {
+      saved = JSON.parse(localStorage.getItem(`repo-page:${props.repo}`) ?? "{}");
+    } catch {
+      // Storage blocked or broken: nothing kept yet.
+    }
+    kept.set(props.repo, saved);
+  }
+  const keptPage = kept.get(props.repo) ?? {};
+  const [overview, setOverview] = useState(() => (keptPage["overview"] as RepoOverview | undefined) ?? null);
+  const [commits, setCommits] = useState(() => (keptPage["commits"] as RepoOverview | undefined) ?? null);
+  const [files, setFiles] = useState(() => (keptPage["tree"] as RepoFiles | undefined) ?? null);
   const [filesError, setFilesError] = useState("");
   // The Code tab: the folder you are in ("" is the top) and the file shown, if any. Files read stay here.
   const [folder, setFolder] = useState("");
   const [openFile, setOpenFile] = useState<string | null>(null);
   const [fileData, setFileData] = useState<Record<string, RepoFileText>>({});
   const [fileErrors, setFileErrors] = useState<Record<string, string>>({});
-  const [issues, setIssues] = useState<{ items: RepoIssue[]; open: number; closed: number } | null>(null);
-  const [pulls, setPulls] = useState<{ items: RepoPull[]; open: number; closed: number } | null>(null);
-  const [runs, setRuns] = useState<{ items: RepoRun[] } | null>(null);
+  const [issues, setIssues] = useState(() => (keptPage[`issues|${props.state}`] as IssueList | undefined) ?? null);
+  const [pulls, setPulls] = useState(() => (keptPage[`pulls|${props.state}`] as PullList | undefined) ?? null);
+  const [runs, setRuns] = useState(() => (keptPage["runs"] as RunList | undefined) ?? null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  // Goes up to read the tab again (Refresh, a closed pop-up, a new issue, a re-run).
+  // Goes up to read the tab again from GitHub (Refresh, a closed pop-up, a new issue, a re-run). Each read remembers
+  // the last reload it answered, so a read for a new reload asks GitHub (fresh) and one for a tab switch takes the kept
+  // copy. Set only once answered, so React's second run of an effect (StrictMode) still asks fresh.
   const [reload, setReload] = useState(0);
+  const pageReload = useRef(0);
+  const filesReload = useRef(0);
   const [filter, setFilter] = useState("");
   const [newIssueOpen, setNewIssueOpen] = useState(false);
   // The run whose failed jobs Re-run would start again, while its "are you sure?" is open.
@@ -192,10 +224,10 @@ export default function Repository(props: { repo: string; tab: string; state: st
     listHash += "&state=closed";
   }
 
-  // Read the open tab from GitHub: when it opens, and on Refresh. A late answer for another tab is dropped.
+  // Read the open tab: what was kept shows at once, then the backend's copy (GitHub on Refresh) replaces it. A late
+  // answer for another tab is dropped. Only a Refresh turns its button's spinner on.
   useEffect(() => {
     let current = true;
-    setLoading(true);
     setError("");
     let path = tab;
     if (tab === "code") {
@@ -203,21 +235,40 @@ export default function Repository(props: { repo: string; tab: string; state: st
     } else if (tab === "actions") {
       path = "runs";
     }
-    api<never>(`/api/your_repositories/${props.repo}/${path}?state=${props.state}`)
+    // What it is kept as: Issues and Pull requests for Open and Closed each.
+    const key = tab === "issues" || tab === "pulls" ? `${path}|${props.state}` : path;
+    function show(result: never) {
+      if (tab === "code") {
+        setOverview(result);
+      } else if (tab === "commits") {
+        setCommits(result);
+      } else if (tab === "issues") {
+        setIssues(result);
+      } else if (tab === "pulls") {
+        setPulls(result);
+      } else {
+        setRuns(result);
+      }
+    }
+    if (keptPage[key] !== undefined) {
+      show(keptPage[key] as never);
+    }
+    const fresh = reload !== pageReload.current;
+    if (fresh) {
+      setLoading(true);
+    }
+    api<never>(`/api/your_repositories/${props.repo}/${path}?state=${props.state}${fresh ? "&fresh=1" : ""}`)
       .then((result) => {
         if (!current) {
           return;
         }
-        if (tab === "code") {
-          setOverview(result);
-        } else if (tab === "commits") {
-          setCommits(result);
-        } else if (tab === "issues") {
-          setIssues(result);
-        } else if (tab === "pulls") {
-          setPulls(result);
-        } else {
-          setRuns(result);
+        pageReload.current = reload;
+        show(result);
+        keptPage[key] = result;
+        try {
+          localStorage.setItem(`repo-page:${props.repo}`, JSON.stringify(keptPage));
+        } catch {
+          // Storage full or blocked: kept while the app is open.
         }
         setLoading(false);
       })
@@ -239,10 +290,19 @@ export default function Repository(props: { repo: string; tab: string; state: st
     }
     let current = true;
     setFilesError("");
-    api<RepoFiles>(`/api/your_repositories/${props.repo}/tree`)
+    const fresh = reload !== filesReload.current;
+    api<RepoFiles>(`/api/your_repositories/${props.repo}/tree${fresh ? "?fresh=1" : ""}`)
       .then((result) => {
-        if (current) {
-          setFiles(result);
+        if (!current) {
+          return;
+        }
+        filesReload.current = reload;
+        setFiles(result);
+        keptPage["tree"] = result;
+        try {
+          localStorage.setItem(`repo-page:${props.repo}`, JSON.stringify(keptPage));
+        } catch {
+          // Storage full or blocked: kept while the app is open.
         }
       })
       .catch((err) => {
@@ -260,15 +320,15 @@ export default function Repository(props: { repo: string; tab: string; state: st
     setOpenFile(null);
   }
 
-  // Shows a file in the files' box; read once, then kept.
-  async function showFile(path: string) {
+  // Shows a file in the files' box; read once, then kept (the backend keeps it by its git id too).
+  async function showFile(path: string, sha: string) {
     setOpenFile(path);
     if (fileData[path] !== undefined) {
       return;
     }
     setFileErrors((current) => ({ ...current, [path]: "" }));
     try {
-      const data = await api<RepoFileText>(`/api/your_repositories/${props.repo}/file?path=${encodeURIComponent(path)}`);
+      const data = await api<RepoFileText>(`/api/your_repositories/${props.repo}/file?path=${encodeURIComponent(path)}&sha=${sha}`);
       setFileData((current) => ({ ...current, [path]: data }));
     } catch (err) {
       setFileErrors((current) => ({ ...current, [path]: err instanceof Error ? err.message : String(err) }));
@@ -325,6 +385,19 @@ export default function Repository(props: { repo: string; tab: string; state: st
     numbers = Array.from({ length: count }, (_, i) => i + 1).join("\n");
   }
   const latest = overview !== null && overview.commits.length > 0 ? overview.commits[0] : null;
+  // The Code tab shows once its README and its files are both in (or the files failed), so nothing jumps.
+  const codeReady = overview !== null && (files !== null || filesError !== "");
+  // When the tab you see was read from GitHub.
+  let shownAt = runs?.cached_at;
+  if (tab === "code") {
+    shownAt = overview?.cached_at;
+  } else if (tab === "commits") {
+    shownAt = commits?.cached_at;
+  } else if (tab === "issues") {
+    shownAt = issues?.cached_at;
+  } else if (tab === "pulls") {
+    shownAt = pulls?.cached_at;
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -363,6 +436,7 @@ export default function Repository(props: { repo: string; tab: string; state: st
           </TabsList>
         </Tabs>
         <div className="ml-auto flex items-center gap-1.5">
+          {shownAt !== undefined && <span className="mr-1 text-xs text-muted-foreground max-md:hidden">Updated {timeAgo(shownAt)}</span>}
           <Button size="sm" variant="outline" disabled={starring || yourRepos.login === null} onClick={toggleStar}>
             {starring ? <Loader2 className="animate-spin" /> : <Star className={cn(starred && "fill-current text-warn")} />}
             {starred ? "Unstar" : "Star"}
@@ -401,8 +475,7 @@ export default function Repository(props: { repo: string; tab: string; state: st
       {error !== "" && <div className="shrink-0 border-b bg-destructive/10 px-3 py-1.5 text-destructive">Could not read it from GitHub: {error}</div>}
 
       <div className="min-h-0 flex-1 overflow-auto">
-        {tab === "code" && overview === null && error === "" && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
-        {tab === "code" && overview !== null && (
+        {tab === "code" && codeReady && overview !== null && (
           <div className="max-w-5xl space-y-4 p-4 max-md:p-2">
             <div className="space-y-1">
               {overview.description !== "" && <p>{overview.description}</p>}
@@ -469,11 +542,6 @@ export default function Repository(props: { repo: string; tab: string; state: st
               </div>
 
               {filesError !== "" && <div className="px-3 py-2 text-destructive">Could not read the files: {filesError}</div>}
-              {openFile === null && files === null && filesError === "" && (
-                <div className="flex items-center gap-2 px-3 py-2 text-muted-foreground">
-                  <Loader2 className="size-3.5 animate-spin" /> Loading files…
-                </div>
-              )}
               {openFile === null && files !== null && files.truncated && (
                 <div className="border-b px-3 py-1 text-xs text-warn">GitHub cut this list short: some files are missing.</div>
               )}
@@ -493,7 +561,7 @@ export default function Repository(props: { repo: string; tab: string; state: st
                     key={entry.path}
                     type="button"
                     className="flex h-8 w-full items-center gap-2 border-b px-3 text-left last:border-b-0 hover:bg-accent/50"
-                    onClick={() => (entry.type === "tree" ? showFolder(entry.path) : showFile(entry.path))}
+                    onClick={() => (entry.type === "tree" ? showFolder(entry.path) : showFile(entry.path, entry.sha))}
                   >
                     {entry.type === "tree" && <Folder className="size-4 shrink-0 text-primary" />}
                     {entry.type === "blob" && /\.(md|markdown|mdx)$/i.test(entry.path) && <FileText className="size-4 shrink-0 text-muted-foreground" />}
@@ -503,11 +571,6 @@ export default function Repository(props: { repo: string; tab: string; state: st
                   </button>
                 ))}
 
-              {openFile !== null && shownFile === undefined && shownError === "" && (
-                <div className="flex items-center gap-2 px-3 py-2 text-muted-foreground">
-                  <Loader2 className="size-3.5 animate-spin" /> Loading…
-                </div>
-              )}
               {openFile !== null && shownError !== "" && <div className="px-3 py-2 text-destructive">Could not read it: {shownError}</div>}
               {shownFile !== undefined && shownFile.binary && <div className="px-3 py-2 text-muted-foreground">Binary file, {SIZE.format(shownFile.size)}B.</div>}
               {shownFile !== undefined && shownFile.too_big && (
@@ -543,7 +606,6 @@ export default function Repository(props: { repo: string; tab: string; state: st
           </div>
         )}
 
-        {tab === "commits" && commits === null && error === "" && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
         {tab === "commits" && commits !== null && commits.commits.length === 0 && <div className="px-3 py-2 text-muted-foreground">No commits yet.</div>}
         {tab === "commits" &&
           commits !== null &&
@@ -561,7 +623,6 @@ export default function Repository(props: { repo: string; tab: string; state: st
             </a>
           ))}
 
-        {tab === "issues" && issues === null && error === "" && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
         {tab === "issues" && issues !== null && issueRows.length === 0 && (
           <div className="px-3 py-2 text-muted-foreground">{needle !== "" ? "Nothing matches the filter." : props.state === "closed" ? "No closed issues." : "No open issues."}</div>
         )}
@@ -606,7 +667,6 @@ export default function Repository(props: { repo: string; tab: string; state: st
             );
           })}
 
-        {tab === "pulls" && pulls === null && error === "" && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
         {tab === "pulls" && pulls !== null && pullRows.length === 0 && (
           <div className="px-3 py-2 text-muted-foreground">
             {needle !== "" ? "Nothing matches the filter." : props.state === "closed" ? "No closed pull requests." : "No open pull requests."}
@@ -657,7 +717,6 @@ export default function Repository(props: { repo: string; tab: string; state: st
             );
           })}
 
-        {tab === "actions" && runs === null && error === "" && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
         {tab === "actions" && runs !== null && runs.items.length === 0 && <div className="px-3 py-2 text-muted-foreground">No GitHub Actions runs.</div>}
         {tab === "actions" &&
           runs !== null &&

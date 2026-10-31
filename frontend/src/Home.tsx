@@ -6,7 +6,8 @@ last pushed, its description (two lines at most), whether its checks passed on t
 PRs, and its stars. The open one is marked. Signed out, a line says to sign in (Account, on the GitHub tab).
 Right: the open repo's page, like on GitHub (Repository.tsx, the same page as on the GitHub tab): Code (its files and
 README), Issues, Pull requests, Commits and Actions, Star, New issue and Refresh. Its tabs and pop-ups keep this
-address (#/home?repo=owner/name&tab=...). With none open, a line says to pick one.
+address (#/home?repo=owner/name&tab=...). A repo opened before opens at once: its tabs are kept on this computer and
+read from GitHub again every 15 minutes. With none open, a line says to pick one.
 On a narrow screen (a phone) one side shows at a time: the cards, or the open repo with Repositories (back to the
 cards) above it.
 The list comes from the live store (github_searcher/your_repositories.py reads it every minute), so it updates itself.

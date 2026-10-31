@@ -3,8 +3,10 @@ one repo's page, read from GitHub when it opens, and the changes you make there,
 maintainer's in your own).
 
 GET /api/your_repositories/{owner}/{name}/overview (the Code tab's description, README and latest commit), /tree (its
-files), /file?path=... (one file), /issues?state=open|closed, /pulls?state=open|closed, /commits (the newest 50) and
-/runs are its tabs (Code, Issues, Pull requests, Commits, Actions). All of them only read. POST /api/your_repositories/act is one change,
+files), /file?path=...&sha=... (one file), /issues?state=open|closed, /pulls?state=open|closed, /commits (the newest
+50) and /runs are its tabs (Code, Issues, Pull requests, Commits, Actions). All of them only read, and answer from the
+copy kept on this computer (with cached_at, when it was read from GitHub); fresh=1 reads GitHub now (Refresh).
+keep_your_repositories() reads every kept page again every PAGES_SECONDS. POST /api/your_repositories/act is one change,
 {"repo", "action", "number", "kind": "issue" | "pr", "fields"}, after an "are you sure?" in the browser; it answers
 {"done": what happened, in words, "url"}. POST /api/your_repositories/refresh reads the list again now (Check now).
 
@@ -21,13 +23,14 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.shared import github_account, your_repositories
-from github_searcher.your_repositories import LIST_SIZE
 
 router = APIRouter(prefix="/api")
 
 CHECK_SECONDS = 10
 # Often enough that a repo you make, delete or star on github.com shows here within a minute. One cheap request.
 REFRESH_SECONDS = 60
+# How often every repo page you opened is read from GitHub again, so its kept copy stays recent.
+PAGES_SECONDS = 15 * 60
 NAME = r"[A-Za-z0-9_.-]+"
 
 
@@ -46,8 +49,8 @@ def refresh() -> dict:
 
 
 @router.get("/your_repositories/{owner}/{name}/{tab}")
-def repo_tab(owner: str, name: str, tab: str, state: str = "open", path: str = "") -> dict:
-    """One tab of one of your repositories, as GitHub has it now."""
+def repo_tab(owner: str, name: str, tab: str, state: str = "open", path: str = "", sha: str = "", fresh: bool = False) -> dict:
+    """One tab of one of your repositories: as kept on this computer, or with fresh as GitHub has it now."""
     if re.fullmatch(NAME, owner) is None or re.fullmatch(NAME, name) is None:
         raise HTTPException(status_code=400, detail="That isn't a GitHub repo.")
     repo = f"{owner}/{name}"
@@ -56,24 +59,16 @@ def repo_tab(owner: str, name: str, tab: str, state: str = "open", path: str = "
         your_repositories.refresh()
     if not your_repositories.is_listed(repo):
         raise HTTPException(status_code=404, detail=f"{repo} isn't one of your repositories or stars.")
+    # Issues and Pull requests are kept per Open and Closed.
+    kept_tab = tab
+    if tab in ["issues", "pulls"]:
+        kept_tab = f"{tab}:{'closed' if state == 'closed' else 'open'}"
     try:
-        if tab == "overview":
-            return your_repositories.overview(repo)
-        if tab == "commits":
-            return your_repositories.overview(repo, LIST_SIZE)
-        if tab == "tree":
-            return your_repositories.tree(repo)
         if tab == "file":
-            return your_repositories.file(repo, path)
-        if tab == "issues":
-            return your_repositories.issues(repo, state)
-        if tab == "pulls":
-            return your_repositories.pulls(repo, state)
-        if tab == "runs":
-            return your_repositories.runs(repo)
+            return your_repositories.file(repo, path, sha)
+        return your_repositories.page(repo, kept_tab, fresh)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
-    raise HTTPException(status_code=404, detail=f"Unknown tab {tab}.")
 
 
 @router.post("/your_repositories/act")
@@ -89,6 +84,7 @@ def act(body: ActRequest) -> dict:
 async def keep_your_repositories() -> None:
     """Runs as long as the backend. A failed read shows its error on the page and is tried again next round."""
     last = None
+    pages_last = None
     # The login the list was last read for: a sign in or out reads it again at once.
     read_for = "none yet"
     while True:
@@ -101,4 +97,11 @@ async def keep_your_repositories() -> None:
                 await asyncio.to_thread(your_repositories.refresh)
             except Exception as error:
                 print(f"[your repositories] could not read them: {error}")
+        # After the list, so a repo that left it is forgotten. The first round reads them at start.
+        if pages_last is None or time.monotonic() - pages_last > PAGES_SECONDS:
+            pages_last = time.monotonic()
+            try:
+                await asyncio.to_thread(your_repositories.refresh_pages)
+            except Exception as error:
+                print(f"[your repositories] could not read their pages again: {error}")
         await asyncio.sleep(CHECK_SECONDS)

@@ -25,6 +25,14 @@ file and folder on the default branch, for the Code tab), file(path) (one file's
 big), issues(state) and pulls(state) (the newest 50 of the Open or Closed tab, and how many are in each), runs() (the
 newest GitHub Actions runs) and labels() (for the thread pop-up's Labels).
 
+The page's tabs are kept on this computer, so a page opens at once instead of waiting for GitHub: page(tab) answers
+from the kept copy (DATA_DIR/repo_pages/<owner>__<name>.json, {tab: {"data", "at"}}, the tabs in PAGE_TABS), with
+cached_at (when it was read from GitHub), and reads GitHub only when there is none yet, or with fresh (Refresh, and
+after a change you made there). The first time a repo is opened, its other tabs are read too, in the background.
+refresh_pages() reads every kept page again (backend/your_repositories_api.py, every PAGES_SECONDS) and forgets the
+page of a repo that is no longer yours or starred. Files are kept by their git id (DATA_DIR/repo_pages/files/<sha>.json):
+that id names the content, so a kept file is never out of date.
+
 act() is one change you make, as you: Star and Unstar (one click, like on GitHub, on any repo), a new issue (in a
 repo of either list), and, only in a repo you can push to (is_yours), after the browser asked "are you sure?": edit a
 title and description, close (an issue as completed or as not planned) or reopen, add or remove a label, assign or
@@ -34,12 +42,15 @@ re-run a GitHub Actions run's failed jobs. A refusal raises ValueError with what
 
 import base64
 import copy
+import json
+import re
 import threading
 from datetime import UTC, datetime
 from urllib.parse import quote
 
 import httpx
 
+from github_searcher.github_account import DATA_DIR
 from github_searcher.pr_tracking import ROLLUP
 
 API = "https://api.github.com"
@@ -51,6 +62,11 @@ RUNS_SIZE = 30
 COMMITS_SIZE = 10
 # A file bigger than this isn't shown on the Code tab, only said to be too big (GitHub sends no content past 1 MB).
 FILE_BYTES = 1_000_000
+# The kept copy of each repo page you opened, and the files you opened, by their git id.
+PAGES_DIR = DATA_DIR / "repo_pages"
+FILES_DIR = PAGES_DIR / "files"
+# A page's tabs as kept: the Code tab is overview and tree; Issues and Pull requests have Open and Closed.
+PAGE_TABS = ["overview", "tree", "issues:open", "issues:closed", "pulls:open", "pulls:closed", "commits", "runs"]
 MERGE_METHODS = ["merge", "squash", "rebase"]
 REVIEW_EVENTS = ["APPROVE", "REQUEST_CHANGES", "COMMENT"]
 CLOSE_REASONS = ["completed", "not_planned"]
@@ -138,6 +154,8 @@ class YourRepositories:
         self.data = {"repos": [], "starred": [], "login": None, "checked_at": None, "error": None}
         # A change you made here: backend/your_repositories_api.py reads the list again soon.
         self.wanted = False
+        # One write at a time to a kept page.
+        self.pages_lock = threading.Lock()
 
     def summary(self) -> dict:
         """For the live feed: the list as last read."""
@@ -294,12 +312,19 @@ class YourRepositories:
         for item in answer["tree"]:
             # "commit" items are submodules: nothing to open.
             if item["type"] in ["blob", "tree"]:
-                files.append({"path": item["path"], "type": item["type"], "size": item.get("size", 0)})
+                files.append({"path": item["path"], "type": item["type"], "size": item.get("size", 0), "sha": item["sha"]})
         return {"files": files, "truncated": answer.get("truncated", False)}
 
-    def file(self, repo: str, path: str) -> dict:
+    def file(self, repo: str, path: str, sha: str = "") -> dict:
         """One file on the default branch, for the Code tab. Text comes back as text; a binary or too big file only
-        says what it is."""
+        says what it is. With its git id (sha, from tree()) it is kept in FILES_DIR and read from there next time."""
+        kept = None
+        if re.fullmatch(r"[0-9a-f]{40}", sha) is not None:
+            kept = FILES_DIR / f"{sha}.json"
+        if kept is not None and kept.exists():
+            answer = json.loads(kept.read_text())
+            answer["path"] = path
+            return answer
         with self.client() as client:
             response = client.get(f"/repos/{repo}/contents/{quote(path)}")
         if response.status_code != 200:
@@ -307,24 +332,98 @@ class YourRepositories:
         data = response.json()
         if isinstance(data, list):
             raise ValueError(f"{path} is a folder.")
+        # Symlinks and submodules come back without content: nothing to show, like a binary file.
+        text = None
+        try:
+            if data.get("encoding") == "base64":
+                text = base64.b64decode(data["content"]).decode("utf-8")
+        except UnicodeDecodeError:
+            text = None
         answer = {"path": path, "text": None, "size": data.get("size", 0), "binary": False, "too_big": False}
+        # A NUL byte, or bytes that aren't UTF-8, mean a binary file (images, archives, ...).
         if answer["size"] > FILE_BYTES:
             answer["too_big"] = True
-            return answer
-        # Symlinks and submodules come back without content: nothing to show, like a binary file.
-        if data.get("encoding") != "base64":
+        elif text is None or "\0" in text:
             answer["binary"] = True
-            return answer
-        content = base64.b64decode(data["content"])
-        # A NUL byte, or bytes that aren't UTF-8, mean a binary file (images, archives, ...).
-        if b"\0" in content:
-            answer["binary"] = True
-            return answer
-        try:
-            answer["text"] = content.decode("utf-8")
-        except UnicodeDecodeError:
-            answer["binary"] = True
+        else:
+            answer["text"] = text
+        if kept is not None:
+            FILES_DIR.mkdir(parents=True, exist_ok=True)
+            kept.write_text(json.dumps(answer))
         return answer
+
+    def load_page(self, repo: str) -> dict:
+        """The kept copy of a repo's page: {tab: {"data", "at"}}, {} when there is none."""
+        path = PAGES_DIR / f"{repo.replace('/', '__')}.json"
+        if not path.exists():
+            return {}
+        return json.loads(path.read_text())
+
+    def keep_tab(self, repo: str, tab: str) -> dict:
+        """Reads one tab (one of PAGE_TABS) from GitHub and keeps it. Returns what is kept: {"data", "at"}."""
+        if tab == "overview":
+            data = self.overview(repo)
+        elif tab == "tree":
+            data = self.tree(repo)
+        elif tab == "commits":
+            data = self.overview(repo, LIST_SIZE)
+        elif tab == "runs":
+            data = self.runs(repo)
+        elif tab.startswith("issues:"):
+            data = self.issues(repo, tab.removeprefix("issues:"))
+        else:
+            data = self.pulls(repo, tab.removeprefix("pulls:"))
+        entry = {"data": data, "at": datetime.now(UTC).isoformat()}
+        path = PAGES_DIR / f"{repo.replace('/', '__')}.json"
+        with self.pages_lock:
+            page = self.load_page(repo)
+            page[tab] = entry
+            PAGES_DIR.mkdir(parents=True, exist_ok=True)
+            # Written whole, then put in place, so a reader never sees half of it.
+            temporary = path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(page))
+            temporary.replace(path)
+        return entry
+
+    def page(self, repo: str, tab: str, fresh: bool = False) -> dict:
+        """One tab of a repo's page (one of PAGE_TABS), with cached_at: when it was read from GitHub. From the kept
+        copy when there is one, else (and with fresh) from GitHub, and then kept. The first time a repo is opened, its
+        other tabs are read too, in the background, so they open at once."""
+        if tab not in PAGE_TABS:
+            raise ValueError(f"Unknown tab {tab}.")
+        page = self.load_page(repo)
+        if not fresh and tab in page:
+            return {**page[tab]["data"], "cached_at": page[tab]["at"]}
+        entry = self.keep_tab(repo, tab)
+        if len(page) == 0:
+            threading.Thread(target=self.fill_page, args=(repo, True), daemon=True).start()
+        return {**entry["data"], "cached_at": entry["at"]}
+
+    def fill_page(self, repo: str, only_missing: bool) -> None:
+        """Reads the tabs of a repo's page from GitHub and keeps them: the missing ones (its first open), or all of
+        them (refresh_pages). A tab GitHub refuses keeps what it had."""
+        for tab in PAGE_TABS:
+            if only_missing and tab in self.load_page(repo):
+                continue
+            try:
+                self.keep_tab(repo, tab)
+            except (httpx.HTTPError, ValueError) as error:
+                print(f"[your repositories] could not read {tab} of {repo}: {error}")
+
+    def refresh_pages(self) -> None:
+        """Reads every kept repo page again. The page of a repo that is no longer yours or starred is forgotten. Only
+        once the list was read fine, signed in, so a failed read or a sign out forgets nothing."""
+        with self.lock:
+            ready = self.data["checked_at"] is not None and self.data["error"] is None and self.data["login"] is not None
+        if not ready or not PAGES_DIR.exists():
+            return
+        for path in PAGES_DIR.glob("*.json"):
+            # GitHub logins have no "_", so the first "__" is where the owner ends.
+            repo = path.stem.replace("__", "/", 1)
+            if not self.is_listed(repo):
+                path.unlink(missing_ok=True)
+                continue
+            self.fill_page(repo, False)
 
     def issues(self, repo: str, state: str) -> dict:
         """The Issues tab: the newest LIST_SIZE open or closed issues (the newest change first), and how many of each."""
