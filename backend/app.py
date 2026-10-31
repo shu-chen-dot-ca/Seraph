@@ -167,7 +167,8 @@ async def feed(websocket: WebSocket, watch: dict) -> None:
                     continue
                 for issue in item["check"]["issues"]:
                     issue["tags"] = tags.get(f"{item['full_name']}#{issue['number']}")
-            data = {"items": items, "can_undo": tracked.can_undo(), "can_redo": tracked.can_redo()}
+            # auto_add: whether Auto-add (the page's switch) is on.
+            data = {"items": items, "can_undo": tracked.can_undo(), "can_redo": tracked.can_redo(), "auto_add": tracked_issues.auto_add()["on"]}
             messages.append({"topic": "tracked", "data": data})
         # The run in progress (or the last one), the found list and the profile.
         if sent["explore"] != explore.version:

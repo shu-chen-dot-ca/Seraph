@@ -3,7 +3,11 @@ The Tracked list: repos the user wants to keep an eye on for new issues. The use
 Track column); agents can add and remove them too (their tracked_* tools), and undo / redo (Ctrl+Z / Ctrl+Y) works on
 both, like Repos. The bar on top has Refresh all (Check now for every repo, then Claude reads every issue tagged Free
 again and the page says which ones aren't free anymore: claimed in the comments, a PR came, ...; minutes for many) and
-Mark all as read (every issue new now isn't anymore; only ones found later are new).
+Mark all as read (every issue new now isn't anymore; only ones found later are new). On the right, before Select,
+the Auto-add switch: while it is on, the backend puts every good new issue of the tracked repos into the Issues list
+by itself (its repo into Repos too), within seconds: free (no assignee, tagged Free, not Out of scope), no comments,
+opened in the last 3 days, in a repo whose AI policy is AI welcome. Each issue only once: one removed from the Issues
+list stays out (backend/tracked_api.py).
 
 The backend checks each repo's open issues every few minutes (github_searcher/tracked_issues.py): the newest
 ones and every good first or help wanted one. An issue is new for three days after it was opened, assigned or not,
@@ -76,6 +80,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
 import { NewcomersTag, PolicyTag, ToneTag } from "@/components/ui/repo-tags";
 import { RowSelection, SelectBox } from "@/components/ui/row-selection";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -451,6 +456,14 @@ export default function Tracked() {
     setRefreshing(false);
   }
 
+  async function setAutoAdd(on: boolean) {
+    try {
+      await api("/api/tracked/auto_add", { method: "POST", body: { on } });
+    } catch (err) {
+      toast.error(`Could not turn Auto-add ${on ? "on" : "off"}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
   async function markAllRead() {
     try {
       await api("/api/tracked/mark_read", { method: "POST" });
@@ -606,6 +619,13 @@ export default function Tracked() {
           </span>
         )}
         <span className="ml-auto flex items-center gap-1">
+          <label
+            className="flex items-center gap-1.5 px-2 text-xs"
+            title="Put good new issues into the Issues list by themselves: free, no comments, opened in the last 3 days, in a repo whose AI policy is AI welcome. Each one once"
+          >
+            <Switch size="sm" checked={tracked.auto_add} onCheckedChange={setAutoAdd} />
+            Auto-add to Issues
+          </label>
           <Button
             variant={selectMode ? "secondary" : "ghost"} size="xs"
             disabled={!selectMode && names.length === 0}

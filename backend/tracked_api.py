@@ -11,24 +11,31 @@ issue found so far not new anymore.
 
 An issue the user likes goes into the Issues list from here (add_issue), and its repo into Repos if
 missing, both from what the last check found, so it takes no GitHub call.
+
+Auto-add (the switch on the Tracked page, set_auto_add) does that by itself: while it is on, keep_tracked puts every
+good new issue into the Issues list within TRACKED_CHECK_SECONDS. Good means free (no assignee, tagged free, not out
+of scope), no comments, opened in the last NEW_DAYS days, in a repo whose AI policy is AI welcome. Each issue only
+once (tracked_issues.py keeps which), so one the user removes from the Issues list stays out.
 """
 
 import asyncio
 import re
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.shared import issues, repos, tracked, tracked_issues
+from backend.shared import issue_tags, issues, repo_signals, repos, tracked, tracked_issues
 from github_searcher.search import get_repository
 
 router = APIRouter(prefix="/api")
 
 TRACKED_CHECK_SECONDS = 10
 TRACKED_REFRESH_SECONDS = 10 * 60
+# An issue is new this many days after it was opened (the Tracked page says the same).
+NEW_DAYS = 3
 
 
 class AddRequest(BaseModel):
@@ -42,6 +49,10 @@ class NameRequest(BaseModel):
 class AddIssueRequest(BaseModel):
     repo: str
     number: int
+
+
+class AutoAddRequest(BaseModel):
+    on: bool
 
 
 @router.post("/tracked")
@@ -144,6 +155,13 @@ def mark_read() -> dict:
     return {}
 
 
+@router.post("/tracked/auto_add")
+def set_auto_add(body: AutoAddRequest) -> dict:
+    """Turn Auto-add on or off. On, the good new issues go into the Issues list within seconds."""
+    tracked_issues.set_auto_add(on=body.on)
+    return {}
+
+
 @router.post("/tracked/add_issue")
 def add_issue(body: AddIssueRequest) -> dict:
     """Put one issue of a tracked repo into the Issues list, and its repo into Repos if it isn't there."""
@@ -194,7 +212,8 @@ def add_issue(body: AddIssueRequest) -> dict:
 
 
 async def keep_tracked() -> None:
-    """Runs as long as the backend: checks repos that were never checked, and all of them now and then.
+    """Runs as long as the backend: checks repos that were never checked, and all of them now and then, and adds the
+    good new issues to the Issues list while Auto-add is on.
 
     A repo that fails (GitHub down, the repo deleted or renamed) shows its error and waits for the next full round.
     """
@@ -215,4 +234,62 @@ async def keep_tracked() -> None:
                 await asyncio.to_thread(tracked_issues.check, name)
             except Exception:
                 failed.append(name)
+
+        # Auto-add: the good new issues not taken up before go into the Issues list, and their repos into Repos. The
+        # tags come a little after a check, so an issue counts once it has them.
+        auto_add = tracked_issues.auto_add()
+        if not auto_add["on"]:
+            await asyncio.sleep(TRACKED_CHECK_SECONDS)
+            continue
+        checks = tracked_issues.all()
+        tags = issue_tags.all()
+        signals = repo_signals.all()
+        # GitHub's format, so it compares as text with the issues' created_at.
+        since = (datetime.now(UTC) - timedelta(days=NEW_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        now = datetime.now(UTC).isoformat()
+        new_issues = []
+        new_repos = {}
+        for item in tracked.items():
+            check = checks.get(item["full_name"])
+            policy = None
+            if signals.get(item["full_name"]) is not None:
+                policy = signals[item["full_name"]]["ai_policy"]["tag"]
+            if check is None or policy != "welcome":
+                continue
+            for issue in check["issues"]:
+                issue_id = f"{item['full_name']}#{issue['number']}"
+                issue_tags_now = tags.get(issue_id)
+                if issue_id in auto_add["added"] or issue_tags_now is None:
+                    continue
+                if issue["assignees"] > 0 or issue["comments"] > 0 or issue["created_at"] < since:
+                    continue
+                if issue_tags_now["status"] != "free" or issue_tags_now["level"] == "out of scope":
+                    continue
+                new_issues.append(
+                    {
+                        "id": issue_id,
+                        "repo": item["full_name"],
+                        "number": issue["number"],
+                        "title": issue["title"],
+                        "labels": issue["labels"],
+                        "state": "OPEN",
+                        "comments": issue["comments"],
+                        "html_url": issue["url"],
+                        "note": "Added by Auto-add: free, new, no comments, AI welcome.",
+                        "added_by": "user",
+                        "added_at": now,
+                    }
+                )
+                repo_item = dict(item)
+                repo_item["note"] = ""
+                repo_item["added_by"] = "user"
+                repo_item["added_at"] = now
+                if check["stars"] is not None:
+                    repo_item["stars"] = check["stars"]
+                new_repos[item["full_name"]] = repo_item
+        if new_issues:
+            # One already in the Issues list is skipped, and its repo isn't added again (the user may have removed it).
+            added = issues.add(new_issues)
+            repos.add([new_repos[issue_id.split("#")[0]] for issue_id in added])
+            tracked_issues.set_auto_add(added=[issue["id"] for issue in new_issues])
         await asyncio.sleep(TRACKED_CHECK_SECONDS)
