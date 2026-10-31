@@ -5,6 +5,8 @@ Overview is three areas with draggable dividers:
   desktop (noVNC in an iframe)  |  queue (who holds the desktop, who waits)
   ------------------------------+------------------------------------------
   stats (CPU, memory and internet speed over the last minute, disk, internet used)  and  the jobs on this VM
+In phone mode (App.tsx, a screen under 768px wide) the queue is under the desktop instead, and stats and jobs take
+half the width each.
 
 A VM has one to three desktops (set in Settings > Resources while it is stopped). Each has its own screen, mouse,
 keyboard and home folder, so agents on different desktops work at the same time without getting in each other's
@@ -138,6 +140,17 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
   const [stopRun, setStopRun] = useState<VMRun | null>(null);
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [forking, setForking] = useState(false);
+  // Phone mode (App.tsx, under 768px): the queue goes under the desktop instead of beside it.
+  const [phone, setPhone] = useState(() => window.matchMedia("(max-width: 767px)").matches);
+  // Follow the screen's width, also when a phone turns sideways.
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 767px)");
+    function update() {
+      setPhone(media.matches);
+    }
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
   // When the VM stopped answering (Date.now()), or null while it answers.
   const silentSince = useRef<number | null>(null);
 
@@ -373,19 +386,19 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3 max-md:h-auto max-md:min-h-9 max-md:flex-wrap max-md:py-1">
         <Monitor className="size-4 text-muted-foreground" />
         <h1 className="font-semibold">{vm.name}</h1>
         <Badge variant="secondary" title={error ?? undefined}>
           <StatusDot tone={VM_TONE[vm.status]} />
           {STATUS_TEXT[vm.status] ?? vm.status}
         </Badge>
-        <span className="text-muted-foreground">
+        <span className="text-muted-foreground max-md:hidden">
           {imageName}
           {vm.forked_from !== "" && ` · forked from ${vm.forked_from}`}
           {vm.internet ? "" : " · no internet"}
         </span>
-        <div className="ml-2 flex items-center gap-1">
+        <div className="ml-2 flex items-center gap-1 max-md:ml-0">
           <Button variant="outline" size="sm" disabled={!canStart || busy !== ""} onClick={() => power("start")}>
             {busy === "start" ? <Loader2 className="animate-spin" /> : <Play />} Start
           </Button>
@@ -405,7 +418,7 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
             <Copy /> Fork
           </Button>
         </div>
-        <Tabs value={tab} onValueChange={setTab} className="ml-auto">
+        <Tabs value={tab} onValueChange={setTab} className="ml-auto max-w-full overflow-x-auto max-md:ml-0">
           <TabsList>
             <TabsTrigger value="overview" className="px-2.5">
               Overview
@@ -429,7 +442,7 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
       <div className={tab === "overview" ? "min-h-0 flex-1 [&:has([data-separator=active])_iframe]:pointer-events-none" : "hidden"}>
         <ResizablePanelGroup orientation="vertical">
           <ResizablePanel defaultSize="68" minSize="25">
-            <ResizablePanelGroup orientation="horizontal">
+            <ResizablePanelGroup key={phone ? "phone" : "computer"} orientation={phone ? "vertical" : "horizontal"}>
               <ResizablePanel defaultSize="76" minSize="30">
                 <div className="flex h-full flex-col">
                   <div className="flex h-7 shrink-0 items-center gap-1 border-b bg-muted/40 px-2 text-xs">
@@ -561,7 +574,7 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
 
               <ResizableHandle />
 
-              <ResizablePanel defaultSize="24" minSize={220}>
+              <ResizablePanel defaultSize="24" minSize={phone ? 60 : 220}>
                 <div className="flex h-full flex-col">
                   <div className="flex h-7 shrink-0 items-center gap-1 border-b bg-muted/40 px-2 text-xs">
                     <span className="font-medium text-muted-foreground">{count > 1 ? `Queue · Desktop ${shown}` : "Queue"}</span>
@@ -761,7 +774,7 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
 
           <ResizablePanel defaultSize="32" minSize={120}>
             <div className="flex h-full">
-              <div className="w-80 shrink-0 overflow-auto border-r">
+              <div className="w-80 shrink-0 overflow-auto border-r max-md:w-1/2">
                 <div className="flex h-7 items-center border-b bg-muted/40 px-2 text-xs font-medium text-muted-foreground">Stats</div>
                 <div className="space-y-2.5 p-2">
                   {charts.map((chart) => {

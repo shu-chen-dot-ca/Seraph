@@ -390,3 +390,37 @@
 .markdown :where(h2) {
   font-size: 1.3em;
 }
+
+/* Touch screens (a phone) have no hover, so what shows on hover shows always there: the sidebar's + and ⋯ (in place
+   of the count or status they fade out over), a row's select box, Notifications' Done, a note's Remove. Outside any
+   layer, so these win over the utilities. */
+@media (hover: none) {
+  .group-hover\:opacity-100 {
+    opacity: 1;
+  }
+
+  .group-hover\:opacity-0 {
+    opacity: 0;
+  }
+
+  .group-hover\:visible {
+    visibility: visible;
+  }
+
+  .group-hover\:inline-flex {
+    display: inline-flex;
+  }
+
+  .group-hover\:hidden {
+    display: none;
+  }
+}
+
+/* Phone mode (App.tsx): fields at 16px, as an iPhone zooms the whole page in when you tap a smaller one. */
+@media (max-width: 767px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}

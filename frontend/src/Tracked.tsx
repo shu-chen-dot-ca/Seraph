@@ -546,7 +546,7 @@ export default function Tracked() {
   return (
     <div className="relative flex h-full flex-col">
       {/* The same bar as on the other pages: Refresh all and Mark all as read on the left. */}
-      <div className="flex h-9 shrink-0 items-center border-b px-3">
+      <div className="flex h-9 shrink-0 items-center border-b px-3 max-md:h-auto max-md:min-h-9 max-md:flex-wrap max-md:py-1 max-md:gap-y-1">
         {names.length > 0 && (
           <span className="flex items-center gap-1">
             <Button
@@ -774,7 +774,7 @@ export default function Tracked() {
           {openRepo !== undefined && (
             <>
               <div className="shrink-0 space-y-2 border-b pt-3 pr-10 pb-2 pl-4">
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 max-md:flex-wrap max-md:gap-y-1">
                   <DialogTitle className="min-w-0 truncate leading-normal">{openRepo.full_name}</DialogTitle>
                   <span className="flex shrink-0 items-center gap-1">
                     <Button

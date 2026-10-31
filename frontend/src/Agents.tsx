@@ -49,8 +49,9 @@ import { AGENT_TONE, StatusDot } from "@/components/ui/status-dot";
 import { api, useLive, useLoaded, type AgentSummary } from "@/live";
 import { cn } from "@/lib/utils";
 
-// The box (picking the row), then the columns.
-const COLUMNS = "grid grid-cols-[16px_minmax(120px,180px)_96px_190px_100px_minmax(200px,320px)_80px_150px_minmax(0,1fr)_32px] items-center gap-3";
+// The box (picking the row), then the columns. Phone mode (App.tsx) keeps the box, Name, Status and the menu.
+const COLUMNS =
+  "grid grid-cols-[16px_minmax(120px,180px)_96px_190px_100px_minmax(200px,320px)_80px_150px_minmax(0,1fr)_32px] items-center gap-3 max-md:grid-cols-[16px_minmax(0,1fr)_minmax(0,1.5fr)_32px]";
 
 // The bar's full width: the backend compacts the conversation at AGENT_CONTEXT_CAP (500k) tokens,
 // or earlier when the model's window is smaller.
@@ -242,7 +243,7 @@ export default function Agents() {
 
   return (
     <div className="relative flex h-full flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3 max-md:h-auto max-md:min-h-9 max-md:flex-wrap max-md:py-1">
         {/* What to do with the picked agents, on the left while in select mode. */}
         {selectMode && (
           <>
@@ -294,13 +295,13 @@ export default function Agents() {
           <SelectBox checked={allPicked} partial={chosen.length > 0} />
         </button>
         <span>Name</span>
-        <span>ID</span>
+        <span className="max-md:hidden">ID</span>
         <span>Status</span>
-        <span>Target VM</span>
-        <span>Job</span>
-        <span>Open jobs</span>
-        <span>Context</span>
-        <span>Activity</span>
+        <span className="max-md:hidden">Target VM</span>
+        <span className="max-md:hidden">Job</span>
+        <span className="max-md:hidden">Open jobs</span>
+        <span className="max-md:hidden">Context</span>
+        <span className="max-md:hidden">Activity</span>
         <span />
       </div>
 
@@ -336,7 +337,7 @@ export default function Agents() {
               >
                 {agent.name}
               </a>
-              <span className="truncate font-mono text-xs text-muted-foreground" title="Its id: unique, and it never changes">
+              <span className="truncate font-mono text-xs text-muted-foreground max-md:hidden" title="Its id: unique, and it never changes">
                 {agent.id}
               </span>
               <span className="flex min-w-0 items-center gap-1.5">
@@ -350,7 +351,7 @@ export default function Agents() {
                   {agent.busy && agent.status !== "working" && <span className="text-muted-foreground"> · working</span>}
                 </span>
               </span>
-              <span className="truncate">
+              <span className="truncate max-md:hidden">
                 {agent.target_vm === null && <span className="text-muted-foreground">–</span>}
                 {agent.target_vm !== null && (
                   <a href={`#/vms/${agent.target_vm}`} className="text-primary hover:underline" onClick={(event) => event.stopPropagation()}>
@@ -358,7 +359,7 @@ export default function Agents() {
                   </a>
                 )}
               </span>
-              <span className="flex min-w-0 items-center gap-2">
+              <span className="flex min-w-0 items-center gap-2 max-md:hidden">
                 {job === undefined && <span className="text-muted-foreground">–</span>}
                 {job !== undefined && (
                   <>
@@ -369,8 +370,8 @@ export default function Agents() {
                   </>
                 )}
               </span>
-              <span className={cn("tabular-nums", (openJobs[agent.id] ?? 0) === 0 && "text-muted-foreground")}>{openJobs[agent.id] ?? 0}</span>
-              <span className="flex items-center gap-2" title={`${agent.context_used.toLocaleString()} of ${cap.toLocaleString()} tokens`}>
+              <span className={cn("tabular-nums max-md:hidden", (openJobs[agent.id] ?? 0) === 0 && "text-muted-foreground")}>{openJobs[agent.id] ?? 0}</span>
+              <span className="flex items-center gap-2 max-md:hidden" title={`${agent.context_used.toLocaleString()} of ${cap.toLocaleString()} tokens`}>
                 <span className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-muted">
                   <span className={cn("block h-full", percent > 80 ? "bg-warn" : "bg-muted-foreground/70")} style={{ width: `${percent}%` }} />
                 </span>
@@ -378,13 +379,13 @@ export default function Agents() {
                   {Math.round(agent.context_used / 1000)}k / {cap >= 1_000_000 ? `${cap / 1_000_000}M` : `${Math.round(cap / 1000)}k`}
                 </span>
               </span>
-              <span className="truncate text-muted-foreground" title={agent.activity}>
+              <span className="truncate text-muted-foreground max-md:hidden" title={agent.activity}>
                 {agent.activity}
               </span>
               {rowMenu(agent)}
             </div>
             {job !== undefined && (job.headline !== "" || stuck !== "" || (agent.busy && agent.todo_total > 0)) && (
-              <div className="flex min-w-0 items-center gap-3 pb-1.5 pl-[328px] text-xs text-muted-foreground tabular-nums">
+              <div className="flex min-w-0 items-center gap-3 pb-1.5 pl-[328px] text-xs max-md:pl-7 text-muted-foreground tabular-nums">
                 {job.headline !== "" && (
                   <span className="truncate text-foreground/80" title={job.headline}>
                     {job.headline}
@@ -438,15 +439,15 @@ export default function Agents() {
               >
                 {agent.name}
               </a>
-              <span className="truncate font-mono text-xs" title="Its id: unique, and it never changes">
+              <span className="truncate font-mono text-xs max-md:hidden" title="Its id: unique, and it never changes">
                 {agent.id}
               </span>
               <span className="truncate">archived {agent.archived_at !== null ? new Date(agent.archived_at).toLocaleDateString() : ""}</span>
-              <span className="truncate">{agent.target_vm ?? "–"}</span>
-              <span className="truncate">{agent.prs > 0 ? `${agent.prs} PR${agent.prs > 1 ? "s" : ""}: it keeps its context for updates` : "–"}</span>
-              <span />
-              <span className="text-xs tabular-nums">{Math.round(agent.context_used / 1000)}k</span>
-              <span className="truncate" title={agent.activity}>
+              <span className="truncate max-md:hidden">{agent.target_vm ?? "–"}</span>
+              <span className="truncate max-md:hidden">{agent.prs > 0 ? `${agent.prs} PR${agent.prs > 1 ? "s" : ""}: it keeps its context for updates` : "–"}</span>
+              <span className="max-md:hidden" />
+              <span className="text-xs tabular-nums max-md:hidden">{Math.round(agent.context_used / 1000)}k</span>
+              <span className="truncate max-md:hidden" title={agent.activity}>
                 {agent.activity}
               </span>
               {rowMenu(agent)}

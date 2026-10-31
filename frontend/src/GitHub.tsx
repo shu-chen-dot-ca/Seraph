@@ -269,7 +269,7 @@ export default function GitHub(props: { section: string; repo: string | null; st
   return (
     <div className="flex h-full flex-col">
       {isList && (
-        <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+        <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3 max-md:h-auto max-md:min-h-9 max-md:flex-wrap max-md:py-1">
           <Tabs value={props.state} onValueChange={(value) => (window.location.hash = value === "closed" ? closedTabHash : openTabHash)}>
             <TabsList>
               <TabsTrigger value="open" className="px-2.5">
@@ -289,12 +289,12 @@ export default function GitHub(props: { section: string; repo: string | null; st
             </span>
           )}
           <Input
-            className="w-52"
+            className="w-52 max-md:w-auto max-md:min-w-0 max-md:flex-1"
             placeholder={props.section === "pulls" ? "Filter pull requests" : "Filter issues"}
             value={filter}
             onChange={(event) => setFilter(event.target.value)}
           />
-          <span className="ml-auto text-xs text-muted-foreground">{prs.checked_at !== null ? `Checked ${since(prs.checked_at, now)} ago` : ""}</span>
+          <span className="ml-auto text-xs text-muted-foreground max-md:hidden">{prs.checked_at !== null ? `Checked ${since(prs.checked_at, now)} ago` : ""}</span>
           <Button size="sm" variant="outline" disabled={prs.refreshing} onClick={checkNow}>
             {prs.refreshing ? <Loader2 className="animate-spin" /> : <RefreshCw />} Check now
           </Button>

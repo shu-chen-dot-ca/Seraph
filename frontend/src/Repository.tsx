@@ -452,7 +452,7 @@ export default function Repository(props: { repo: string; tab: string; state: st
       </div>
 
       {(tab === "issues" || tab === "pulls") && (
-        <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+        <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3 max-md:h-auto max-md:min-h-9 max-md:flex-wrap max-md:py-1">
           <Tabs value={props.state} onValueChange={(value) => (window.location.hash = value === "closed" ? `${base}&tab=${tab}&state=closed` : `${base}&tab=${tab}`)}>
             <TabsList>
               <TabsTrigger value="open" className="px-2.5">
@@ -464,7 +464,7 @@ export default function Repository(props: { repo: string; tab: string; state: st
             </TabsList>
           </Tabs>
           <Input
-            className="w-52"
+            className="w-52 max-md:w-auto max-md:min-w-0 max-md:flex-1"
             placeholder={tab === "pulls" ? "Filter pull requests" : "Filter issues"}
             value={filter}
             onChange={(event) => setFilter(event.target.value)}

@@ -90,7 +90,7 @@ export default function Notifications(props: { open: string | null }) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3 max-md:h-auto max-md:min-h-9 max-md:flex-wrap max-md:py-1">
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
             <TabsTrigger value="all" className="px-2.5">
@@ -101,10 +101,10 @@ export default function Notifications(props: { open: string | null }) {
             </TabsTrigger>
           </TabsList>
         </Tabs>
-        <span className="ml-auto text-xs text-muted-foreground">
+        <span className="ml-auto text-xs text-muted-foreground max-md:hidden">
           {notifications.checked_at !== null ? `Checked ${since(notifications.checked_at, now)} ago` : ""}
         </span>
-        <Button size="sm" variant="outline" disabled={unread.length === 0} onClick={markAllRead}>
+        <Button size="sm" variant="outline" className="max-md:ml-auto" disabled={unread.length === 0} onClick={markAllRead}>
           <Check /> Mark all as read
         </Button>
         <Button size="sm" variant="outline" disabled={checking} onClick={checkNow}>

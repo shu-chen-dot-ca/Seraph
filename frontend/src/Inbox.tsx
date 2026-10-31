@@ -78,7 +78,8 @@ import Overview from "@/Overview";
 import { api, useLive, useLoaded, type Draft, type GithubAccountStatus } from "@/live";
 import { cn } from "@/lib/utils";
 
-const COLUMNS = "grid grid-cols-[12px_88px_120px_190px_minmax(0,1fr)_44px] items-center gap-2";
+// Phone mode (App.tsx) leaves out Agent and Target, so Title keeps its room.
+const COLUMNS = "grid grid-cols-[12px_88px_120px_190px_minmax(0,1fr)_44px] items-center gap-2 max-md:grid-cols-[12px_88px_minmax(0,1fr)_32px]";
 
 const KIND_LABEL: Record<string, string> = { pr: "PR", comment: "Comment", question: "Question", taken: "Taken" };
 
@@ -568,7 +569,7 @@ export default function Inbox(props: { selected: string | null }) {
     <div className="relative flex h-full flex-col">
       <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
         <span className="text-xs text-muted-foreground tabular-nums">{pendingCount} pending</span>
-        <span className="ml-auto text-xs text-muted-foreground">
+        <span className="ml-auto text-xs text-muted-foreground max-md:hidden">
           {account !== null && account.connected
             ? `Approved PRs and comments go to GitHub as @${account.login}. Decisions go to the agent.`
             : "Nothing here is sent to GitHub. Decisions go to the agent."}
@@ -578,8 +579,8 @@ export default function Inbox(props: { selected: string | null }) {
       <div className={cn(COLUMNS, "h-7 shrink-0 border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground")}>
         <span />
         <span>Kind</span>
-        <span>Agent</span>
-        <span>Target</span>
+        <span className="max-md:hidden">Agent</span>
+        <span className="max-md:hidden">Target</span>
         <span>Title</span>
         <span className="text-right">Age</span>
       </div>
@@ -631,8 +632,8 @@ export default function Inbox(props: { selected: string | null }) {
                   {each.kind === "taken" && <UserX className="size-3.5" />}
                   {KIND_LABEL[each.kind] ?? each.kind}
                 </span>
-                <span className="truncate">{agentNames[each.agent] ?? each.agent}</span>
-                <span className="truncate text-muted-foreground">{each.target ?? each.repo ?? "–"}</span>
+                <span className="truncate max-md:hidden">{agentNames[each.agent] ?? each.agent}</span>
+                <span className="truncate text-muted-foreground max-md:hidden">{each.target ?? each.repo ?? "–"}</span>
                 <span className="flex min-w-0 items-center gap-1.5">
                   <span className={cn("truncate", each.status === "pending" && "font-medium")}>{each.title}</span>
                   {each.evidence.length > 0 && (
@@ -780,7 +781,7 @@ export default function Inbox(props: { selected: string | null }) {
                 </div>
 
                 {showTabs && (
-                  <div className="flex h-9 items-center gap-2 border-y px-4">
+                  <div className="flex h-9 items-center gap-2 border-y px-4 max-md:h-auto max-md:min-h-9 max-md:flex-wrap max-md:py-1">
                     <Tabs value={shownTab} onValueChange={setPRTab}>
                       <TabsList>
                         <TabsTrigger value="overview" className="px-2.5">
@@ -947,7 +948,7 @@ export default function Inbox(props: { selected: string | null }) {
                     value={reply}
                     onChange={(event) => setReplies((current) => ({ ...current, [draft.id]: event.target.value }))}
                   />
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 max-md:flex-wrap">
                     <span className="text-xs text-muted-foreground">Stop cancels the job, and the agent stops working on it right away.</span>
                     <div className="ml-auto flex items-center gap-1.5">
                       <Button variant="outline" size="sm" disabled={busy !== ""} onClick={() => decide("reject")}>
@@ -981,7 +982,7 @@ export default function Inbox(props: { selected: string | null }) {
                       }
                     }}
                   />
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 max-md:flex-wrap">
                     <span className="text-xs text-muted-foreground">
                       {isEditing && "Save or cancel your edit first."}
                       {!isEditing && draft.kind !== "question" && account !== null && account.connected && updateOf !== null &&
@@ -991,7 +992,7 @@ export default function Inbox(props: { selected: string | null }) {
                       {!isEditing && (draft.kind === "question" || account === null || !account.connected) &&
                         "Approve sends nothing to GitHub; the agent is told, with your note."}
                     </span>
-                    <div className="ml-auto flex shrink-0 items-center gap-1.5">
+                    <div className="ml-auto flex shrink-0 items-center gap-1.5 max-md:shrink max-md:flex-wrap max-md:justify-end">
                       <Button variant="outline" size="sm" disabled={busy !== "" || isEditing} onClick={() => decide("reject")}>
                         {busy === "reject" ? <Loader2 className="animate-spin" /> : <X />} Reject
                       </Button>
@@ -1037,7 +1038,7 @@ export default function Inbox(props: { selected: string | null }) {
 
               {draft.status !== "pending" && (
                 <div className="shrink-0 border-t bg-muted/30 px-4 py-2">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 max-md:flex-wrap">
                     <StatusDot tone={DRAFT_TONE[draft.status]} />
                     <span className="font-medium">{(draft.kind === "taken" ? TAKEN_LABEL[draft.status] : DECISION_LABEL[draft.status]) ?? draft.status}</span>
                     {draft.decided_at !== null && <span className="text-xs text-muted-foreground">{new Date(draft.decided_at).toLocaleString()}</span>}

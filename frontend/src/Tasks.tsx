@@ -256,7 +256,7 @@ export default function Tasks(props: { state: string; view: string; task: string
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3 max-md:h-auto max-md:min-h-9 max-md:flex-wrap max-md:py-1">
         <Tabs
           value={props.state === "done" ? "done" : "progress"}
           onValueChange={(value) => {
@@ -301,7 +301,7 @@ export default function Tasks(props: { state: string; view: string; task: string
             </TabsTrigger>
           </TabsList>
         </Tabs>
-        <Input className="w-52" placeholder="Filter tasks" value={filter} onChange={(event) => setFilter(event.target.value)} />
+        <Input className="w-52 max-md:w-auto max-md:min-w-0 max-md:flex-1" placeholder="Filter tasks" value={filter} onChange={(event) => setFilter(event.target.value)} />
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto">
