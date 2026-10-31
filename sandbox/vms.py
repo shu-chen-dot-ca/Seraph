@@ -5,7 +5,8 @@ A VM is a resource, not tied to a repo or an agent. Each one is an Incus VM name
 
     DATA_DIR/vms/<name>.json   {"name", "incus_name", "image", "image_fingerprint", "cpus", "memory_gb",
                                 "disk_gb", "internet", "env", "secrets_in_vm", "autostart", "status",
-                                "created_at", "forked_from", "holder", "queue", "traffic", "notes"}
+                                "created_at", "forked_from", "holder", "priority", "queue", "runs", "traffic",
+                                "notes"}
 
 "image" is the name of the image it was made from (sandbox/images.py) and "image_fingerprint" the exact
 build, since an image can be rebuilt or renamed later. A fork (a copy of a stopped VM, see VMs.fork) has its
@@ -30,7 +31,8 @@ sandbox/agent/browser_service.py): a Firefox nobody sees, one session per agent,
 The env variables for all VMs (set in the Settings dialog) are in DATA_DIR/global_env.json, not in vms/
 (every .json there is a VM's record). Every VM gets them, with its own on top (see VMRecord.write_env).
 
-holder and queue belong to VMQueue (vm_queue.py); they live here so they are saved with the VM.
+holder, priority, queue and runs belong to VMQueue (vm_queue.py); they live here so they are saved with the VM.
+runs are the long commands agents left going in it (sandbox/agent/long_runs.py).
 Only kept while the backend runs: usage (on, whether it answers, CPU %, memory and disk in use, internet
 download and upload speed), samples (the last 60 of those, one per second) and locked_by (who locked the
 human out of the desktop).
@@ -148,6 +150,10 @@ class VMRecord:
         # Who uses the VM ("user", an agent id or None) and the agents waiting for it. Changed by VMQueue only.
         self.holder = record["holder"]
         self.queue = record["queue"]
+        # Agents that stepped aside (checked first for the next turn), and the long runs agents left going in the VM.
+        # Changed by VMQueue only. Records from before stepping aside have neither.
+        self.priority = record.get("priority", [])
+        self.runs = record.get("runs", [])
         # The VM this one is a copy of, or "" (records from before forks have none).
         self.forked_from = record.get("forked_from", "")
         # Records from before internet use was counted have no traffic.
@@ -214,7 +220,9 @@ class VMRecord:
             "status": self.status,
             "created_at": self.created_at,
             "holder": self.holder,
+            "priority": list(self.priority),
             "queue": list(self.queue),
+            "runs": [dict(run) for run in self.runs],
             "forked_from": self.forked_from,
             "traffic": dict(self.traffic),
             "notes": list(self.notes),

@@ -25,6 +25,11 @@ Settings dialog): any agent may list their names and add or remove empty ones
 
 bash can show a command live in a terminal window on the desktop (visible), and start programs
 on the desktop (on_desktop), so the user sees long runs and the app being tried, not only the agent.
+A visible command is a run (long_runs.py): it goes on in the VM by itself. bash waits for it up to
+long_runs.FOREGROUND_SECONDS, then leaves it going in the background; background: true returns at once. A run in
+the background is collected by the app (agents.py), which gives the agent its result (bash_result) in a message.
+While another agent's run goes in the VM, vm_stop and vm_restart are refused (they would kill it), unless the VM
+no longer answers.
 
 The browser_* tools are the agent's own web browser in the VM (sandbox/agent/browser_service.py): a Firefox that
 isn't on the desktop, which the agent reads as text with numbered things to click or fill in, instead of
@@ -43,9 +48,9 @@ Computer calls block (they run `incus exec`), so they run in a thread and the
 backend keeps answering other requests meanwhile. Every command the agent runs
 in the VM is tagged with its id, so when it loses the VM (the user took it, gave
 it to another agent, removed or deleted it) cancel() kills whatever it still
-had running there: a long bash command, typing, a server it started.
+had running there: a bash command, typing, a server it started. Its runs have their own tags and go on.
 
-    tools = ComputerTools(vms, agent["id"], lambda: agent["target_vm"], agent["history"]).list()
+    tools = ComputerTools(vms, queue, agent["id"], lambda: agent["target_vm"], agent["history"]).list()
 """
 
 import asyncio
@@ -54,6 +59,7 @@ import json
 
 from claude_agent_sdk import tool
 
+from sandbox.agent import long_runs
 from sandbox.agent.computer_use import Computer
 from sandbox.vm import BROWSER_DIR
 from sandbox.vms import VMRecord, VMs, VMsError
@@ -70,8 +76,10 @@ BROWSER_CALL = f"python3 {BROWSER_DIR}/browser_service.py call"
 
 
 class ComputerTools:
-    def __init__(self, vms: VMs, agent_id: str, get_target_vm, history: list):
+    def __init__(self, vms: VMs, queue, agent_id: str, get_target_vm, history: list):
         self.vms = vms
+        # The VM queue (sandbox/vm_queue.py), which keeps the runs going in each VM.
+        self.queue = queue
         self.agent_id = agent_id
         # Returns the agent's target VM name (or None), read fresh on every call.
         self.get_target_vm = get_target_vm
@@ -124,12 +132,17 @@ class ComputerTools:
                 "The user's environment variables are set in it; their values are replaced by [hidden] in the output. "
                 "Only the last 50000 bytes of stdout and of stderr come back. visible: true shows the command live in a terminal "
                 "window on the desktop while it runs, so the user can follow it; use it for anything that takes a while (installs, "
-                "builds, test runs). To start a program or a terminal window on the desktop, prefix it with on_desktop and put it "
+                "builds, test runs); its output then comes back as one, stdout and stderr together. A visible command still "
+                f"running after {long_runs.FOREGROUND_SECONDS // 60} minutes goes on in the background, and you get its result in a message when it "
+                "ends. background: true starts it that way at once (shown in the window too), for anything you expect to take "
+                "more than about 5 minutes (a big install, a build): then do what else you have in this VM, or end your turn, "
+                "and the VM goes to whoever waits for it meanwhile; you get it back first once the run is over. "
+                "To start a program or a terminal window on the desktop, prefix it with on_desktop and put it "
                 "in the background with its output in a file, e.g. `on_desktop nohup python app.py > /tmp/app.log 2>&1 &` or "
                 "`on_desktop gnome-terminal -- bash -c 'cd ~/proj && python demo.py; exec bash'` (konsole -e on a KDE desktop).",
                 {
                     "type": "object",
-                    "properties": {"command": {"type": "string"}, "visible": {"type": "boolean"}},
+                    "properties": {"command": {"type": "string"}, "visible": {"type": "boolean"}, "background": {"type": "boolean"}},
                     "required": ["command"],
                 },
             )(self.bash),
@@ -301,6 +314,8 @@ class ComputerTools:
             return f"Waiting {args.get('seconds')} seconds"
         if name == "bash":
             command = str(args.get("command", "")).replace("\n", " ").replace("`", "'")[:160]
+            if args.get("background"):
+                return f"Running `{command}` in the background (in a terminal on the desktop)"
             if args.get("visible"):
                 return f"Running `{command}` (in a terminal on the desktop)"
             return f"Running `{command}`"
@@ -412,17 +427,60 @@ class ComputerTools:
         record = self.held_vm()
         computer = Computer(record.vm, self.tag)
         await asyncio.to_thread(computer.check)
-        output = await asyncio.to_thread(computer.bash, args["command"], 600, bool(args.get("visible")))
-        # The VM may have been taken from it while the command ran: then its output is not its to see.
-        if record.holder != self.agent_id:
-            raise ValueError("You lost the VM while the command ran; it was stopped. " + NOT_HOLDER)
-        # Read after the command: the user may have changed them meanwhile.
-        # Longest first, so a value that contains another one is hidden whole.
+        if not args.get("visible") and not args.get("background"):
+            output = await asyncio.to_thread(computer.bash, args["command"], 600)
+            # The VM may have been taken from it while the command ran: then its output is not its to see.
+            if record.holder != self.agent_id:
+                raise ValueError("You lost the VM while the command ran; it was stopped. " + NOT_HOLDER)
+            # Read after the command: the user may have changed them meanwhile.
+            # Longest first, so a value that contains another one is hidden whole.
+            values = sorted(list(record.global_env.values()) + list(record.env.values()), key=len, reverse=True)
+            for value in values:
+                if len(value) >= HIDE_MIN_LENGTH:
+                    output = output.replace(value, "[hidden]")
+            return {"content": [{"type": "text", "text": output}]}
+
+        # A visible or background command is a run (long_runs.py): it goes on in the VM by itself.
+        label = args["command"].strip().replace("\n", " ")[:300]
+        run = await asyncio.to_thread(long_runs.start, record, self.agent_id, "bash", args["command"], label)
+        self.queue.add_run(record.name, run)
+        later = (
+            f"you get its result in a message when it ends (all its output is in {run['log']} in the VM). If you have more "
+            f"to do in {record.name} that doesn't touch what it works on, do it; otherwise end your turn: whoever waits gets "
+            f"{record.name} meanwhile, and you get it back first once the run is over."
+        )
+        if args.get("background"):
+            return {"content": [{"type": "text", "text": f"Started in the background as {run['id']}: " + later}]}
+        result = await long_runs.wait(record, run, long_runs.FOREGROUND_SECONDS)
+        if result is None or not self.queue.claim_run(run["id"]):
+            text = f"Still running after {long_runs.FOREGROUND_SECONDS // 60} minutes, so it goes on in the background as {run['id']}: " + later
+            return {"content": [{"type": "text", "text": text}]}
+        text = self.bash_result(record, run, result)
+        self.queue.finish_run(record.name, run["id"])
+        return {"content": [{"type": "text", "text": text}]}
+
+    def bash_result(self, record: VMRecord, run: dict, result: dict) -> str:
+        """What the agent gets when its bash run ended (long_runs.check's result): how, and the end of its output, with
+        the user's secrets hidden. Also for a run in the background, which agents.py collects."""
+        seconds = result["seconds"]
+        took = f"{seconds // 60}m {seconds % 60}s" if seconds >= 60 else f"{seconds}s"
+        text = f"exit code {result['exit_code']}, after {took}"
+        if result["ended"] == "timeout":
+            text = f"Stopped after {long_runs.RUN_LIMIT_SECONDS // 3600} hours, the longest a run may take"
+        if result["ended"] == "gone" and run["stopped_by_user"]:
+            text = f"The user stopped it after {took}"
+        if result["ended"] == "gone" and not run["stopped_by_user"]:
+            text = "It ended without finishing: the VM stopped or restarted"
+        output = result["output"]
+        if len(output.encode()) >= long_runs.OUTPUT_LIMIT:
+            output = f"[cut: only the last {long_runs.OUTPUT_LIMIT} bytes; all of it is in {run['log']}]\n{output}"
+        text += f"\n--- output (stdout and stderr) ---\n{output}"
+        # Read now: the user may have changed them while it ran. Longest first, so a value that contains another one is hidden whole.
         values = sorted(list(record.global_env.values()) + list(record.env.values()), key=len, reverse=True)
         for value in values:
             if len(value) >= HIDE_MIN_LENGTH:
-                output = output.replace(value, "[hidden]")
-        return {"content": [{"type": "text", "text": output}]}
+                text = text.replace(value, "[hidden]")
+        return text
 
     async def env_vars(self, args: dict) -> dict:
         # The VM's own only while it holds the VM; the ones for all VMs always. Names and set or empty, never values.
@@ -493,6 +551,10 @@ class ComputerTools:
         record = self.held_vm()
         if await asyncio.to_thread(record.vm.status) != "Running":
             return {"content": [{"type": "text", "text": "The VM is already off."}]}
+        # Another agent's run would end with it.
+        others = [run for run in record.runs if run["agent"] != self.agent_id]
+        if others:
+            raise ValueError(f"Another agent's run is going in this VM (`{others[0]['label'][:100]}`); shutting it down would end it. Leave the VM on.")
         await asyncio.to_thread(record.stop)
         return {"content": [{"type": "text", "text": "The VM is off."}]}
 
@@ -540,6 +602,13 @@ class ComputerTools:
 
     async def vm_restart(self, args: dict) -> dict:
         record = self.held_vm()
+        # Another agent's run would end with it; a VM that no longer answers has lost it anyway.
+        others = [run for run in record.runs if run["agent"] != self.agent_id]
+        if others and await asyncio.to_thread(record.vm.responds):
+            raise ValueError(
+                f"Another agent's run is going in this VM (`{others[0]['label'][:100]}`); a restart would end it. "
+                "Restart only if the VM stops answering (vm_health)."
+            )
         await asyncio.to_thread(record.restart)
         return {"content": [{"type": "text", "text": "The VM restarted and its desktop is up. Everything that was running in it has ended."}]}
 

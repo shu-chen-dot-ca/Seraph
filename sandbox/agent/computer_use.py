@@ -7,8 +7,8 @@ Both need the X11 display of the logged-in desktop (the image uses X11, not Wayl
 Coordinates are pixels of the VM's screen, the same size as the screenshot.
 
 bash can also put things on that desktop for the user to watch: its commands get on_desktop, which starts a
-program or a terminal window there, and visible shows the whole command live in a terminal window (WATCH),
-as run_tests does for test runs.
+program or a terminal window there. Long commands (a visible or background bash, a test run) are runs instead
+(long_runs.py), shown live in a terminal window (WATCH).
 
 With a tag, every command runs tagged (VM.exec), so VM.kill_tagged(tag) can stop them all,
 including a long bash command or typing that is still going on.
@@ -44,19 +44,18 @@ DESKTOP_ENV = (
 )
 # A long run, live in a terminal window on the desktop for the user to follow: the window shows {log} while the shell
 # that runs this lives ($$ is that shell, also in the subshell), then says the run is over and stays until the next
-# run opens its window (the old one closes then). It never fails or holds up the run: with no desktop nothing opens.
+# run with the same {pid} file opens its window (the old one closes then). Each agent has its own pid file, so one
+# agent's run never closes another's window. It never fails or holds up the run: with no desktop nothing opens.
 WATCH = (
-    "( " + DESKTOP_ENV + "kill $(cat ~/.cache/sandbox-watch.pid 2>/dev/null) 2>/dev/null; "
+    "( " + DESKTOP_ENV + "kill $(cat {pid} 2>/dev/null) 2>/dev/null; "
     '[ -n "$DISPLAY" ] || exit 0; '
-    "watch=\"echo \\$\\$ > ~/.cache/sandbox-watch.pid; tail --pid=$$ -n +1 -f {log}; echo; "
-    "echo 'Finished. This window closes when the next run starts.'; exec sleep infinity\"; "
+    "watch=\"echo \\$\\$ > {pid}; tail --pid=$$ -n +1 -f {log}; echo; "
+    "echo 'Finished. This window closes when the same agent starts its next run.'; exec sleep infinity\"; "
     'if command -v gnome-terminal; then gnome-terminal -- bash -c "$watch"; '
     'elif command -v konsole; then setsid -f konsole -e bash -c "$watch"; '
     'elif command -v xterm; then setsid -f xterm -e bash -c "$watch"; fi '
     ") > /dev/null 2>&1; "
 )
-# Where a visible bash command's output goes for its window.
-BASH_LOG = "~/.cache/sandbox-bash.log"
 # JPEG, not PNG: a PNG of the screen is over 1MB, too big for one message to Claude.
 SCREENSHOT_PATH = "/tmp/computer-use-screen.jpg"
 SCREENSHOT_QUALITY = 60
@@ -189,22 +188,15 @@ class Computer:
         except Exception as error:
             raise ComputerError(f"Logged in, but the desktop did not come up: {error}")
 
-    def bash(self, command: str, timeout: float = 600, visible: bool = False) -> str:
+    def bash(self, command: str, timeout: float = 600) -> str:
         """Run a shell command as the desktop user. Returns what it printed and its exit code.
 
         The command can use on_desktop to start something on the desktop the user watches, e.g.
-        `on_desktop nohup python app.py > /tmp/app.log 2>&1 &`. visible: the user follows the whole command live
-        in a terminal window on the desktop (WATCH), for long ones: installs, builds, test runs.
+        `on_desktop nohup python app.py > /tmp/app.log 2>&1 &`.
         """
         desktop = f"on_desktop() {{ ( {DESKTOP_ENV}\"$@\" ) }}; "
         # The newline ends a comment on the command's last line. tail never stops the command, it only keeps the end.
         capped = f"{desktop}{{ {command}\n}} > >(tail -c {OUTPUT_LIMIT}) 2> >(tail -c {OUTPUT_LIMIT} >&2)"
-        if visible:
-            # Python prints as it goes instead of in chunks, so the window keeps up.
-            capped = (
-                f"{desktop}export PYTHONUNBUFFERED=1; mkdir -p ~/.cache; : > {BASH_LOG}; {WATCH.format(log=BASH_LOG)}"
-                f"{{ {command}\n}} > >(tee -a {BASH_LOG} | tail -c {OUTPUT_LIMIT}) 2> >(tee -a {BASH_LOG} | tail -c {OUTPUT_LIMIT} >&2)"
-            )
         result = self.vm.exec(capped, timeout=timeout, tag=self.tag)
         stdout = result.stdout
         stderr = result.stderr
