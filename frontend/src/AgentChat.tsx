@@ -1,7 +1,7 @@
 /*
 One agent's page: its name and id in the header (the id is unique and never changes); under the header, the job it is on now (its title and every step, the current one marked, and a
 warning when it has been quiet too long; the rest of its progress is on the Jobs page); the conversation on the left;
-on the right where it stands in a VM queue, its jobs in two lists that each fold with their header: In queue (still to
+on the right where it stands in a VM queue (or its priority line, after it stepped aside while its run goes), its jobs in two lists that each fold with their header: In queue (still to
 do, being done or waiting on you, in the order it takes them, with their progress; a queued one has an x that takes it
 off: the job is cancelled, and the agent is told) and Finished (done and cancelled, newest first), and the Desktop.
 
@@ -730,7 +730,7 @@ export default function AgentChat(props: { agentId: string }) {
     }
   });
 
-  const locked = summary.status === "in_queue" || summary.status === "using_vm";
+  const locked = summary.status === "in_queue" || summary.status === "in_priority" || summary.status === "using_vm";
   const cap = summary.context_max > 0 ? Math.min(summary.context_max, CONTEXT_CAP) : CONTEXT_CAP;
   const capText = cap >= 1_000_000 ? `${cap / 1_000_000}M` : `${Math.round(cap / 1000)}k`;
   const percent = Math.min(100, (summary.context_used / cap) * 100);
@@ -805,6 +805,7 @@ export default function AgentChat(props: { agentId: string }) {
           {summary.status === "idle" && "idle"}
           {summary.status === "working" && "working"}
           {summary.status === "in_queue" && `in queue #${summary.place} · ${summary.vm}`}
+          {summary.status === "in_priority" && `in priority #${summary.place} · ${summary.vm}`}
           {summary.status === "using_vm" && `using ${summary.vm}`}
           {summary.busy && summary.status !== "working" && " · working"}
         </span>
@@ -1147,8 +1148,11 @@ export default function AgentChat(props: { agentId: string }) {
                     <a href={`#/vms/${summary.vm}`} className="text-primary hover:underline">
                       {summary.vm}
                     </a>
-                    's queue
+                    {summary.status === "in_priority" ? "'s priority line" : "'s queue"}
                   </div>
+                  {summary.status === "in_priority" && (
+                    <div className="text-muted-foreground">It stepped aside while its run goes there, and gets the VM back first.</div>
+                  )}
                   {queueVM !== undefined && (
                     <div className="text-muted-foreground">
                       {queueVM.holder === null && `${queueVM.name} is free.`}

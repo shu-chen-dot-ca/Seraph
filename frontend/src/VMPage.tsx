@@ -17,8 +17,13 @@ exists while the VM runs; its address comes from GET /api/vms/{name}/viewer, ask
 until the VM has one. A VM from a terminal-only image has no desktop: the same area shows its terminal (ttyd).
 
 The queue buttons map one to one onto the backend: Take over, Release (your own hold), Give (the VM
-goes to that agent now), Front (next in line) and Remove (out of the queue, or the VM taken away;
-the agent is interrupted). When the desktop is locked (by an agent while it works, or by you),
+goes to that agent now), Front (next in line), Skip (the holding agent steps aside: the next one gets the VM, and the
+agent goes to the Priority line and gets it back first; it is interrupted, its runs go on) and Remove (out of a line,
+or the VM taken away; the agent is interrupted).
+Priority lists the agents that stepped aside: an agent steps aside by itself when all it does in the VM is wait for
+its run (a test suite, a build). When the VM is free again, the first of them whose run is over (ready) gets it, before
+anyone in Waiting; one whose run still goes (run going) waits for the next turn. Runs lists the long commands agents
+left going in the VM, who started each and for how long; Stop ends one (it asks first), and its agent is told. When the desktop is locked (by an agent while it works, or by you),
 a cover stops clicks and keys from reaching it, with an Unlock button.
 
 When the VM runs but doesn't answer (still booting, or frozen: Incus still says Running), a notice over
@@ -54,7 +59,7 @@ import {
 import { JobProgressBar, currentJob } from "@/components/ui/job-progress";
 import { AGENT_TONE, JOB_LABEL, JOB_TONE, StatusDot, VM_TONE } from "@/components/ui/status-dot";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api, useLive, useLoaded } from "@/live";
+import { api, useLive, useLoaded, type VMRun } from "@/live";
 import { cn } from "@/lib/utils";
 
 // The backend keeps one sample per second for the last minute.
@@ -117,6 +122,8 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
   const [busy, setBusy] = useState("");
   const [hover, setHover] = useState<{ chart: string; index: number } | null>(null);
   const [confirmReset, setConfirmReset] = useState(false);
+  // The run whose Stop asks "are you sure?" now.
+  const [stopRun, setStopRun] = useState<VMRun | null>(null);
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [forking, setForking] = useState(false);
   // When the VM stopped answering (Date.now()), or null while it answers.
@@ -279,14 +286,24 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
     setBusy("");
   }
 
-  // take_over and release act on the VM; give, front and remove also name an agent.
-  async function queueAction(action: "take_over" | "release" | "give" | "front" | "remove", agentId: string | null) {
+  // take_over and release act on the VM; give, front, skip and remove also name an agent.
+  async function queueAction(action: "take_over" | "release" | "give" | "front" | "skip" | "remove", agentId: string | null) {
     setBusy(agentId === null ? action : `${action}:${agentId}`);
     try {
       const body = agentId === null ? undefined : { agent: agentId };
       await api(`/api/vms/${encodeURIComponent(name)}/${action}`, { method: "POST", body: body });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
+    }
+    setBusy("");
+  }
+
+  async function stopRunNow(runId: string) {
+    setBusy(`stop:${runId}`);
+    try {
+      await api(`/api/vms/${encodeURIComponent(name)}/runs/${encodeURIComponent(runId)}/stop`, { method: "POST" });
+    } catch (err) {
+      toast.error(`Could not stop the run: ${err instanceof Error ? err.message : err}`);
     }
     setBusy("");
   }
@@ -514,6 +531,15 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                             variant="ghost"
                             size="xs"
                             className="ml-auto"
+                            title="Give the VM to the next agent now. This one goes to Priority and gets it back first (it is interrupted; its runs go on)"
+                            disabled={busy !== "" || (vm.queue.length === 0 && vm.priority.length === 0)}
+                            onClick={() => queueAction("skip", vm.holder)}
+                          >
+                            Skip
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="xs"
                             title="Take the VM away from this agent (it is interrupted)"
                             disabled={busy !== ""}
                             onClick={() => queueAction("remove", vm.holder)}
@@ -537,6 +563,44 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                         )}
                       </div>
                     )}
+
+                    {vm.priority.length > 0 && (
+                      <div className="mt-1 border-t px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground">Priority ({vm.priority.length})</div>
+                    )}
+                    {vm.priority.map((agentId, index) => {
+                      const agent = agentById[agentId];
+                      const runGoing = vm.runs.some((run) => run.agent === agentId);
+                      return (
+                        <div key={agentId} className="flex h-7 items-center gap-1.5 px-2 hover:bg-accent/40">
+                          <span className="w-5 shrink-0 text-xs text-muted-foreground tabular-nums">#{index + 1}</span>
+                          <a href={`#/agents/${agentId}`} className="min-w-0 truncate text-primary hover:underline">
+                            {agent?.name ?? agentId}
+                          </a>
+                          <span className="shrink-0 text-xs text-muted-foreground">{runGoing ? "run going" : "ready"}</span>
+                          <span className="ml-auto flex shrink-0 items-center">
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              title="Give the VM to this agent now"
+                              disabled={busy !== ""}
+                              onClick={() => queueAction("give", agentId)}
+                            >
+                              Give
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon-xs"
+                              aria-label={`Remove ${agent?.name ?? agentId} from the priority line`}
+                              title="Remove from the priority line (the agent is interrupted; its runs go on)"
+                              disabled={busy !== ""}
+                              onClick={() => queueAction("remove", agentId)}
+                            >
+                              <X />
+                            </Button>
+                          </span>
+                        </div>
+                      );
+                    })}
 
                     <div className="mt-1 border-t px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground">Waiting ({vm.queue.length})</div>
                     {vm.queue.length === 0 && <div className="flex h-7 items-center px-2 text-muted-foreground">No agent is waiting.</div>}
@@ -578,6 +642,40 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                               <X />
                             </Button>
                           </span>
+                        </div>
+                      );
+                    })}
+
+                    {vm.runs.length > 0 && (
+                      <div className="mt-1 border-t px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground">Runs ({vm.runs.length})</div>
+                    )}
+                    {vm.runs.map((run) => {
+                      const minutes = Math.max(0, Math.floor((Date.now() - Date.parse(run.started_at)) / 60000));
+                      const took = minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`;
+                      return (
+                        <div key={run.id} className="flex items-center gap-1.5 px-2 py-1 hover:bg-accent/40">
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-mono text-xs" title={run.label}>
+                              {run.label}
+                            </div>
+                            <div className="truncate text-xs text-muted-foreground">
+                              <a href={`#/agents/${run.agent}`} className="hover:underline">
+                                {agentById[run.agent]?.name ?? run.agent}
+                              </a>
+                              {" · "}
+                              {run.stopped_by_user ? "stopping" : took}
+                            </div>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            aria-label={`Stop ${run.label}`}
+                            title="Stop this run"
+                            disabled={busy !== "" || run.stopped_by_user}
+                            onClick={() => setStopRun(run)}
+                          >
+                            <Square />
+                          </Button>
                         </div>
                       );
                     })}
@@ -785,6 +883,36 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={resetTraffic}>Reset</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={stopRun !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setStopRun(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Stop this run?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {stopRun !== null && `${agentById[stopRun.agent]?.name ?? stopRun.agent}'s run ends now: ${stopRun.label}. The agent is told you stopped it; a stopped test run doesn't count.`}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (stopRun !== null) {
+                  stopRunNow(stopRun.id);
+                }
+              }}
+            >
+              Stop
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

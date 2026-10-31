@@ -9,7 +9,9 @@ sandbox/vms.py and answer at once; the browser follows the state through
 they are filled in now (Agents.secrets_filled). Settings and the viewer make Incus calls that block, so those
 endpoints are plain `def` (FastAPI runs them in a thread pool). The queue
 endpoints are `async def`: they are quick, and taking a VM from an agent
-interrupts that agent, which lives on the event loop.
+interrupts that agent, which lives on the event loop. Skip makes the holding agent step aside (the next one gets
+the VM, and the agent waits in the VM's priority line, sandbox/vm_queue.py). Stop ends one of the long runs agents
+left going in the VM (sandbox/agent/long_runs.py); its agent is told the user stopped it.
 """
 
 import asyncio
@@ -23,6 +25,7 @@ from pydantic import BaseModel
 
 from backend.shared import agents, images, queue, vms
 from sandbox import file_transfer
+from sandbox.agent import long_runs
 from sandbox.agent.computer_use import Computer, ComputerError
 from sandbox.file_transfer import FileTransferError
 from sandbox.images import ImagesError
@@ -134,7 +137,7 @@ async def delete_vm(name: str) -> dict:
         raise HTTPException(status_code=500, detail=str(error))
 
     # Read after the delete: an agent may have joined the queue while it ran.
-    for agent_id in [record.holder] + list(record.queue):
+    for agent_id in [record.holder] + list(record.priority) + list(record.queue):
         if agent_id is None or agent_id == "user":
             continue
         agents.on_kick(name, agent_id, f"The user deleted {name}; you are in no VM queue anymore.")
@@ -478,6 +481,38 @@ async def move_to_front(name: str, body: AgentRequest) -> dict:
         queue.move_to_front(name, body.agent)
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error))
+    return {}
+
+
+@router.post("/vms/{name}/skip")
+async def skip(name: str, body: AgentRequest) -> dict:
+    """The holding agent steps aside: the next one gets the VM, and it waits in the priority line, so it gets the VM back
+    first. It is interrupted; its runs go on."""
+    try:
+        vms.get(name)
+    except VMsError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    try:
+        queue.step_aside(name, body.agent, by_user=True)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    return {}
+
+
+@router.post("/vms/{name}/runs/{run_id}/stop")
+async def stop_run(name: str, run_id: str) -> dict:
+    """Ends one of the runs going in the VM. Its agent hears that the user stopped it once the app sees it ended."""
+    try:
+        record = vms.get(name)
+        run = queue.stop_run(name, run_id)
+    except VMsError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    try:
+        await asyncio.to_thread(long_runs.stop, record, run)
+    except Exception as error:
+        raise HTTPException(status_code=500, detail=f"Could not stop it: {error}")
     return {}
 
 

@@ -17,6 +17,7 @@ const AGENT_TONE: Record<string, Tone> = {
   idle: "gray",
   working: "green",
   in_queue: "amber",
+  in_priority: "amber",
   using_vm: "green",
 }
 

@@ -536,7 +536,8 @@ export type GithubAccountStatus = {
   connected_at?: string;
 };
 
-export type AgentStatus = "idle" | "working" | "in_queue" | "using_vm";
+// in_priority: it stepped aside from its VM while its run goes, and gets the VM back first.
+export type AgentStatus = "idle" | "working" | "in_queue" | "in_priority" | "using_vm";
 
 export type AgentSummary = {
   id: string;
@@ -545,7 +546,7 @@ export type AgentSummary = {
   status: AgentStatus;
   busy: boolean;
   vm: string | null; // the VM it is queued for or holds
-  place: number | null; // 0 = holder, n = place in the queue
+  place: number | null; // 0 = holder, n = place in the queue (or in the priority line, for in_priority)
   context_used: number;
   context_max: number;
   cost_usd: number;
@@ -606,6 +607,17 @@ export type VMNote = {
   at: string;
 };
 
+// A long command an agent left going in a VM (a test suite, a build): it goes on by itself until it ends.
+export type VMRun = {
+  id: string;
+  agent: string; // the agent id
+  kind: "bash" | "tests";
+  label: string; // the command, as you see it
+  started_at: string;
+  background: boolean; // false while the agent's tool call still waits for it
+  stopped_by_user: boolean;
+};
+
 export type VMSummary = {
   name: string;
   incus_name: string;
@@ -622,7 +634,9 @@ export type VMSummary = {
   status: VMStatus;
   created_at: string;
   holder: string | null; // null, "user" or an agent id
+  priority: string[]; // agents that stepped aside while their run goes; they come before the queue, first = checked first
   queue: string[]; // agent ids, first = next
+  runs: VMRun[]; // long commands agents left going in the VM
   usage: VMUsage | null;
   samples: { cpu_percent: number | null; memory_used_gb: number | null; net_down_rate: number | null; net_up_rate: number | null }[];
   traffic: VMTraffic;
