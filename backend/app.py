@@ -2,7 +2,8 @@
 
 The pieces are made once in backend/shared.py (the Repos, Issues and Tracked lists,
 jobs, the inbox, your GitHub account, your PRs, the VMs, the VM queue and the agents), and each page has its
-own router in backend/*_api.py (the GitHub tab: github_api.py, and its Account page: github_account_api.py).
+own router in backend/*_api.py (the GitHub tab: github_api.py, its Account page: github_account_api.py, and Your
+repositories: your_repositories_api.py).
 
 The browser never polls. It keeps one websocket open on /api/live, gets every
 topic when it connects, then only the topics that changed. Every store has a
@@ -33,8 +34,8 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
-from backend import agents_api, artifacts_api, explore_api, github_account_api, images_api, inbox_api, issues_api, github_api, repos_api, sherpa_api, tracked_api, vms_api
-from backend.shared import agents, explore, images, inbox, issue_facts, issue_tags, issues, jobs, pr_tracking, repo_signals, repos, resource_usage, sherpa, tracked, tracked_issues, vms
+from backend import agents_api, artifacts_api, explore_api, github_account_api, images_api, inbox_api, issues_api, github_api, repos_api, sherpa_api, tracked_api, vms_api, your_repositories_api
+from backend.shared import agents, explore, images, inbox, issue_facts, issue_tags, issues, jobs, pr_tracking, repo_signals, repos, resource_usage, sherpa, tracked, tracked_issues, vms, your_repositories
 from github_searcher.token_balancer import BALANCER
 
 # override: the backend reloads itself on code changes, and .env changes should apply then too.
@@ -64,6 +65,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(repos_api.keep_signals()),
         asyncio.create_task(tracked_api.keep_tracked()),
         asyncio.create_task(github_api.keep_prs()),
+        asyncio.create_task(your_repositories_api.keep_your_repositories()),
     ]
     yield
     explore.save_for_restart()
@@ -76,6 +78,7 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(inbox_api.router)
 app.include_router(github_api.router)
 app.include_router(github_account_api.router)
+app.include_router(your_repositories_api.router)
 app.include_router(issues_api.router)
 app.include_router(repos_api.router)
 app.include_router(explore_api.router)
@@ -128,7 +131,7 @@ async def live(websocket: WebSocket) -> None:
 async def feed(websocket: WebSocket, watch: dict) -> None:
     """The live feed of one browser, until it goes away."""
     # The version of each topic this browser has; None until it is sent.
-    sent = {"repos": None, "issues": None, "tracked": None, "explore": None, "github": None, "jobs": None, "inbox": None, "prs": None, "agents": None, "vms": None, "images": None, "resource": None}
+    sent = {"repos": None, "issues": None, "tracked": None, "explore": None, "github": None, "jobs": None, "inbox": None, "prs": None, "your_repos": None, "agents": None, "vms": None, "images": None, "resource": None}
     while True:
         # The version is noted before the data is read: a change in between is sent again next tick, never lost.
         messages = []
@@ -188,6 +191,10 @@ async def feed(websocket: WebSocket, watch: dict) -> None:
         if sent["prs"] != pr_tracking.version:
             sent["prs"] = pr_tracking.version
             messages.append({"topic": "prs", "data": pr_tracking.summary()})
+        # Your repositories, read with your sign-in.
+        if sent["your_repos"] != your_repositories.version:
+            sent["your_repos"] = your_repositories.version
+            messages.append({"topic": "your_repos", "data": your_repositories.summary()})
         if sent["agents"] != agents.version:
             sent["agents"] = agents.version
             messages.append({"topic": "agents", "data": agents.summaries()})

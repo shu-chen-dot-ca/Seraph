@@ -4,7 +4,8 @@ thread pop-up shows of one PR or issue (backend/github_api.py): its whole timeli
 and one comment (whose it is, before you delete it).
 
 Every request goes through token_balancer.py, which spreads them over the team's tokens, paces
-them and waits out rate limits. Errors come back as httpx.HTTPStatusError, as before.
+them and waits out rate limits. Errors come back as httpx.HTTPStatusError, as before. The thread pop-up's reads take
+own_token for one of your repositories, which may be private: they go with your sign-in then (token_balancer.py).
 """
 
 from urllib.parse import quote
@@ -652,10 +653,10 @@ def get_pr_status(owner: str, repo: str, number: int) -> dict | None:
     return data["data"]["repository"]["pullRequest"]
 
 
-def get_action_runs(owner: str, repo: str, sha: str) -> list[dict]:
+def get_action_runs(owner: str, repo: str, sha: str, own_token: str | None = None) -> list[dict]:
     # The repo's GitHub Actions runs for one commit. Never cached. A first-time contributor's runs wait as
     # "action_required" until a maintainer approves them, which the checks above don't show.
-    response = BALANCER.request("GET", f"https://api.github.com/repos/{owner}/{repo}/actions/runs", params={"head_sha": sha, "per_page": 100})
+    response = BALANCER.request("GET", f"https://api.github.com/repos/{owner}/{repo}/actions/runs", params={"head_sha": sha, "per_page": 100}, own_token=own_token)
     response.raise_for_status()
     return response.json()["workflow_runs"]
 
@@ -763,7 +764,7 @@ fragment ReviewRequestedItem on ReviewRequestedEvent { createdAt actor { login }
 """
 
 
-def get_full_thread(owner: str, repo: str, number: int) -> dict | None:
+def get_full_thread(owner: str, repo: str, number: int, own_token: str | None = None) -> dict | None:
     # Never cached: the pop-up shows it as it is now. Returns the issue or PR node (__typename says which), None when
     # GitHub has no such repo or number.
     response = BALANCER.request(
@@ -771,6 +772,7 @@ def get_full_thread(owner: str, repo: str, number: int) -> dict | None:
         "https://api.github.com/graphql",
         json={"query": FULL_THREAD_QUERY, "variables": {"owner": owner, "name": repo, "number": number}},
         timeout=60,
+        own_token=own_token,
     )
     response.raise_for_status()
     data = response.json()
@@ -781,23 +783,23 @@ def get_full_thread(owner: str, repo: str, number: int) -> dict | None:
     return data["data"]["repository"]["issueOrPullRequest"]
 
 
-def get_check_runs(owner: str, repo: str, sha: str) -> list[dict]:
+def get_check_runs(owner: str, repo: str, sha: str, own_token: str | None = None) -> list[dict]:
     # One commit's check runs (GitHub Actions jobs and other apps' checks), the first 100. Never cached.
-    response = BALANCER.request("GET", f"https://api.github.com/repos/{owner}/{repo}/commits/{sha}/check-runs", params={"per_page": 100})
+    response = BALANCER.request("GET", f"https://api.github.com/repos/{owner}/{repo}/commits/{sha}/check-runs", params={"per_page": 100}, own_token=own_token)
     response.raise_for_status()
     return response.json()["check_runs"]
 
 
-def get_commit_statuses(owner: str, repo: str, sha: str) -> list[dict]:
+def get_commit_statuses(owner: str, repo: str, sha: str, own_token: str | None = None) -> list[dict]:
     # One commit's statuses, the older kind of check that outside services set: the latest of each. Never cached.
-    response = BALANCER.request("GET", f"https://api.github.com/repos/{owner}/{repo}/commits/{sha}/status", params={"per_page": 100})
+    response = BALANCER.request("GET", f"https://api.github.com/repos/{owner}/{repo}/commits/{sha}/status", params={"per_page": 100}, own_token=own_token)
     response.raise_for_status()
     return response.json()["statuses"]
 
 
-def get_pr_files(owner: str, repo: str, number: int) -> list[dict]:
+def get_pr_files(owner: str, repo: str, number: int, own_token: str | None = None) -> list[dict]:
     # A PR's files changed, the first 100, each with its patch (missing for a binary or very big file). Never cached.
-    response = BALANCER.request("GET", f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}/files", params={"per_page": 100})
+    response = BALANCER.request("GET", f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}/files", params={"per_page": 100}, own_token=own_token)
     response.raise_for_status()
     return response.json()
 

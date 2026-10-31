@@ -2,7 +2,8 @@
 whole thread for the thread pop-up, which agent follows each one, and the changes you make there, as you
 (github_searcher/github_account.py). Its Account page signs you in (backend/github_account_api.py).
 
-GET /api/github/thread?id=owner/name%23n is one PR or issue as GitHub has it now, read with the search tokens: the
+GET /api/github/thread?id=owner/name%23n is one PR or issue as GitHub has it now, read with the search tokens (with
+your sign-in when it is in one of your repositories or stars, which may be private: github_searcher/your_repositories.py): the
 description, the newest 100 timeline items (comments, reviews with their code comments, commits, and events in plain
 words; "hidden" says how many earlier ones are left out), and for a PR its branch, commits, the newest commit's checks
 (with GitHub Actions runs that wait for a maintainer to approve them) and files changed. "you" is your signed-in login,
@@ -31,7 +32,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.shared import agents, github_account, inbox, pr_tracking
+from backend.shared import agents, github_account, inbox, pr_tracking, your_repositories
 from github_searcher.github_account import SendError
 from github_searcher.pr_tracking import AGENT_MODES, ROLLUP
 from github_searcher.search import get_action_runs, get_check_runs, get_commit_statuses, get_full_thread, get_issue_comment, get_pr_files
@@ -90,8 +91,12 @@ async def thread_details(id: str) -> dict:
     owner = match.group(1)
     name = match.group(2)
     number = int(match.group(3))
+    # One of your repositories or stars: read with your sign-in, as it may be private.
+    own_token = None
+    if your_repositories.is_listed(f"{owner}/{name}"):
+        own_token = your_repositories.token()
     try:
-        thread = await asyncio.to_thread(get_full_thread, owner, name, number)
+        thread = await asyncio.to_thread(get_full_thread, owner, name, number, own_token)
     except (ValueError, httpx.RequestError) as error:
         raise HTTPException(status_code=400, detail=str(error))
     if thread is None:
@@ -113,10 +118,10 @@ async def thread_details(id: str) -> dict:
     if kind == "pr":
         sha = thread["headRefOid"]
         check_runs, statuses, runs, changed = await asyncio.gather(
-            asyncio.to_thread(get_check_runs, owner, name, sha),
-            asyncio.to_thread(get_commit_statuses, owner, name, sha),
-            asyncio.to_thread(get_action_runs, owner, name, sha),
-            asyncio.to_thread(get_pr_files, owner, name, number),
+            asyncio.to_thread(get_check_runs, owner, name, sha, own_token),
+            asyncio.to_thread(get_commit_statuses, owner, name, sha, own_token),
+            asyncio.to_thread(get_action_runs, owner, name, sha, own_token),
+            asyncio.to_thread(get_pr_files, owner, name, number, own_token),
         )
 
     checks = []

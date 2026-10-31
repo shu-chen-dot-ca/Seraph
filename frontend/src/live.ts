@@ -2,7 +2,8 @@
 Live data from the backend, and the one fetch helper.
 
 One websocket to /api/live. On connect the server sends every topic, then only the topics that changed:
-{"topic": "repos" | "issues" | "tracked" | "explore" | "github" | "jobs" | "inbox" | "prs" | "agents" | "vms" | "images" | "resource",
+{"topic": "repos" | "issues" | "tracked" | "explore" | "github" | "jobs" | "inbox" | "prs" | "your_repos" | "agents"
+| "vms" | "images" | "resource",
 "data": ...}.
 Each message replaces that topic in the store, and components read it with useLive(topic), so the page never
 polls and never re-fetches lists. When the socket drops it reconnects after a second, and the server sends
@@ -524,6 +525,32 @@ export type PRsData = {
   refreshing: boolean;
 };
 
+// A repo of yours on GitHub (public or private, one you can push to) or one you starred
+// (github_searcher/your_repositories.py, read with your sign-in). checks: the default branch's newest commit's.
+export type YourRepo = {
+  name: string; // owner/name
+  private: boolean;
+  fork: boolean;
+  description: string;
+  url: string;
+  default_branch: string;
+  pushed_at: string | null;
+  checks: "passed" | "failed" | "running" | "none";
+  open_issues: number;
+  open_prs: number;
+  stars: number;
+  starred: boolean; // you starred it
+  can_push: boolean; // one of your repositories: a maintainer's buttons
+};
+
+export type YourReposData = {
+  repos: YourRepo[]; // the ones you can push to, most recently pushed first
+  starred: YourRepo[]; // the ones you starred and can't push to, most recently starred first
+  login: string | null; // who they were read for; null when not signed in
+  checked_at: string | null;
+  error: string | null;
+};
+
 // Your GitHub account (GET /api/github_account, the GitHub tab's Account page), the one that sends what you approve
 // and that the GitHub tab's buttons act as. Never the token.
 export type GithubAccountStatus = {
@@ -873,6 +900,7 @@ export type Topics = {
   jobs: Job[];
   inbox: Draft[];
   prs: PRsData;
+  your_repos: YourReposData;
   agents: AgentSummary[];
   vms: VMSummary[];
   images: ImagesData;
@@ -891,6 +919,7 @@ const store = {
     jobs: [],
     inbox: [],
     prs: { items: [], issues: [], checked_at: null, error: null, refreshing: false },
+    your_repos: { repos: [], starred: [], login: null, checked_at: null, error: null },
     agents: [],
     vms: [],
     images: { images: [], unbuilt: [], default: "", tasks: [] },

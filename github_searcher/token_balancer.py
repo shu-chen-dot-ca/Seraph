@@ -29,6 +29,10 @@ fills up again, pauses, running and waiting requests. version goes up whenever a
 live feed knows when to send it. prime() asks GitHub for every quota once (/rate_limit costs nothing), so
 the bars are right before the first request of a kind.
 
+own_token: a request about one of your repositories (the GitHub tab's thread pop-up, which may show a private one) goes
+with your own sign-in's token instead (github_searcher/your_repositories.py), sent as it is: not spread, paced or
+counted in the bars, since the search tokens can't see private repos.
+
     response = BALANCER.request("GET", "https://api.github.com/search/issues", params={"q": q})
 
     python -m github_searcher.token_balancer     # each token's account and what is left of its quotas
@@ -89,8 +93,11 @@ class TokenBalancer:
         """How many requests of this kind can run at once over all tokens."""
         return RUNNING[kind] * len(self.tokens)
 
-    def request(self, method: str, url: str, accept: str = "application/vnd.github+json", params: dict | None = None, json: dict | None = None, timeout: float = 30) -> httpx.Response:
+    def request(self, method: str, url: str, accept: str = "application/vnd.github+json", params: dict | None = None, json: dict | None = None, timeout: float = 30, own_token: str | None = None) -> httpx.Response:
         """Send one request with the best token right now. Waits as needed, up to MAX_WAIT seconds."""
+        if own_token is not None:
+            headers = {"Accept": accept, "Authorization": f"Bearer {own_token}", "X-GitHub-Api-Version": "2022-11-28"}
+            return httpx.request(method, url, headers=headers, params=params, json=json, timeout=timeout)
         kind = "core"
         if url.endswith("/graphql"):
             kind = "graphql"

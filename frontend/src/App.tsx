@@ -2,8 +2,8 @@
 The whole app: a 36px header, a left list and one page on the right.
 The header's left has two tabs, the open one in full color with the accent under it:
 - Home: finding and doing the work, with the sidebar tree (Sidebar.tsx) on the left.
-- GitHub: your work on GitHub, with its own left list (GitHubNav.tsx: Inbox, Pull requests, Issues,
-  Account). The tab shows how many drafts wait in the Inbox for your decision.
+- GitHub: your work on GitHub, with its own left list (GitHubNav.tsx: Inbox, Pull requests,
+  Issues, Your repositories, Starred, Account). The tab shows how many drafts wait in the Inbox for your decision.
 Each tab goes back to the last page you had open under it (Home starts at Issues, GitHub at the Inbox); a reload
 forgets that. On its right: Sign in while you aren't signed in to GitHub (straight to GitHub's sign-in page once sign in is
 set up, else the GitHub tab's Account page, which walks you through setting it up), or, signed in, your GitHub picture
@@ -16,8 +16,11 @@ The page lives in the URL hash, so refresh and back/forward work and switching p
   Home:  #/issues  #/issues?repo=owner/name  #/issues?open=<issue id>  #/jobs  #/jobs/<job id>  #/explore  #/repos  #/tracked
          #/agents  #/agents/<agent id>  #/vms  #/vms?tab=images  #/vms?tab=defaults  #/vms/<vm name>  #/vms/<vm name>?tab=notes  #/resource
   GitHub: #/inbox  #/inbox/<draft id>  #/github (= #/github/pulls)  #/github/issues  #/github/account
+         #/github/repo?repo=owner/name (Repository.tsx)
          Pull requests and Issues take ?repo=owner/name (only that repo), state=closed (the Closed tab) and
          open=owner/name%23n (that PR or issue in its pop-up), e.g. #/github/issues?repo=owner/name&open=owner/name%2312
+         One of your repositories takes tab=issues|pulls|actions (none: its Overview), state=closed and open=... the same
+         way.
 Anything else opens Issues. Links are plain <a href="#/..."> everywhere; App only reads the hash.
 
 A VM page, once visited, stays mounted (hidden) while you are elsewhere, so its desktop iframe keeps its
@@ -44,6 +47,7 @@ import Sidebar from "@/Sidebar";
 import Tracked from "@/Tracked";
 import VMPage from "@/VMPage";
 import VMs from "@/VMs";
+import Repository from "@/Repository";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import TitleTooltips from "@/components/ui/title-tooltips";
@@ -52,6 +56,8 @@ import { api, useConnected, useLiveValue, useLoaded, type GithubAccountStatus } 
 import { cn } from "@/lib/utils";
 
 const PAGES = ["inbox", "github", "issues", "jobs", "explore", "repos", "tracked", "agents", "vms", "resource"];
+// The GitHub tab's pages under #/github/; anything else there is Pull requests.
+const GITHUB_SECTIONS = ["issues", "account", "repo"];
 // This repo on GitHub, or "": vite.config.ts puts it in from git's origin remote.
 declare const __REPO_URL__: string;
 
@@ -125,7 +131,7 @@ export default function App() {
   const query = new URLSearchParams(queryPart ?? "");
   // The GitHub tab's pages; everything else is on Home. GitHub's section: "#/github/issues" → "issues", "#/github" → "pulls".
   const onGitHub = page === "inbox" || page === "github";
-  const section = id === "issues" || id === "account" ? id : "pulls";
+  const section = id !== null && GITHUB_SECTIONS.includes(id) ? id : "pulls";
 
   // Keep the address for its tab (setting state while rendering, like visitedVMs below). No hash at all is Issues.
   if (onGitHub && hash !== lastGitHub) {
@@ -259,7 +265,16 @@ export default function App() {
           {!onGitHub && <Sidebar page={page} id={id} onOpenSettings={() => setSettingsOpen(true)} />}
           <main className="relative min-w-0 flex-1 overflow-hidden">
             {page === "inbox" && <Inbox selected={id} />}
-            {page === "github" && (
+            {page === "github" && section === "repo" && (
+              <Repository
+                key={query.get("repo") ?? ""}
+                repo={query.get("repo") ?? ""}
+                tab={query.get("tab") ?? "overview"}
+                state={query.get("state") === "closed" ? "closed" : "open"}
+                open={query.get("open")}
+              />
+            )}
+            {page === "github" && (section === "pulls" || section === "issues" || section === "account") && (
               <GitHub
                 key={section}
                 section={section}

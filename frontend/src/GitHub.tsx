@@ -6,7 +6,7 @@ Pull requests and Issues: your PRs and issues on other people's projects, as Git
 (github_searcher/pr_tracking.py), the newest change first. PRs: every PR the Inbox's Approve sent, the other PRs you
 opened, and PRs you commented on. Issues: the ones you opened and the ones you commented on. Both are read from GitHub
 every few minutes on their own (and right after Approve sends a PR); the ones from outside the app need you signed in
-(Account), so the app knows who you are.
+(Account), so the app knows who you are. Your own repositories have their own pages (Repository.tsx).
 The bar on top: tabs Open and Closed (merged PRs are under Closed) with how many; when one repo is shown
 (#/github/pulls?repo=owner/name), a chip with its name and an X to show every repo again; a box that
 filters by title, repo and number; on the right when they were last read from GitHub and Check now. A line under it
