@@ -42,6 +42,15 @@ first, the queued ones too; Down (on its last line) goes forward again, and Down
 were typing before.
 Compact sends "/compact", which Claude Code runs on the conversation itself. The target VM can only
 change while the agent is not queued for or holding a VM (the backend refuses it then).
+
+A repository's agent (the Workspace tab's Live) drafts issues (draft_issue): each shows where it was drafted as a card
+with the issue as it would be opened (its title, labels and text), Create issue (opens it on GitHub as you) and
+Discard, and once decided, what became of it (the drafts come live, topic "issue_drafts").
+
+compact is the chat on a repository's Live tab (RepoLive.tsx), next to its VM's desktop: a slim header (the agent's
+name, a link to this page, where it is, Interrupt), the job it is on, and the conversation with the composer; no tabs,
+target VM, context, job lists or Desktop. Esc interrupts only from the message box there, since the tab stays mounted
+(hidden) while another tab of the repo is open.
 */
 
 import {
@@ -51,9 +60,11 @@ import {
   Brain,
   Camera,
   ChevronRight,
+  CircleCheck,
   CircleDot,
   CircleHelp,
   Clock,
+  ExternalLink,
   FileText,
   FlaskConical,
   FolderGit2,
@@ -94,6 +105,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import AgentArtifacts from "@/AgentArtifacts";
+import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { JobProgressBar, JobSteps, currentJob, stuckFor, useNow } from "@/components/ui/job-progress";
@@ -104,7 +116,7 @@ import { AGENT_TONE, JOB_LABEL, JOB_TONE, StatusDot, VM_TONE } from "@/component
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { api, useLive, useLiveValue, useLoaded, type HistoryEntry, type VMStatus } from "@/live";
+import { api, useLive, useLiveValue, useLoaded, type HistoryEntry, type IssueDraft, type VMStatus } from "@/live";
 import { cn } from "@/lib/utils";
 
 // Entries loaded at first, and per "Show earlier".
@@ -169,6 +181,7 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   run_tests: FlaskConical,
   draft_comment: MessageSquare,
   draft_question: CircleHelp,
+  draft_issue: CircleDot,
   queue_for_vm: ListOrdered,
   release_vm: ListOrdered,
   vm_queue_status: ListOrdered,
@@ -225,6 +238,67 @@ const ToolRow = memo(function ToolRow(props: { entry: ToolEntry; result: ToolRes
         {result !== undefined && result.image && <div className="text-xs text-muted-foreground">It returned an image (not kept).</div>}
       </div>
     </details>
+  );
+});
+
+// An issue a repository's agent drafted (draft_issue): the issue as it would be opened, with Create issue (opens it on
+// GitHub as you) and Discard. Once decided it says so, with a link to the issue. Memoized like ToolRow: its markdown is
+// only drawn again when the draft changes.
+const IssueDraftCard = memo(function IssueDraftCard(props: { draft: IssueDraft }) {
+  const { draft } = props;
+  // The button whose request is on its way: "create" or "discard".
+  const [busy, setBusy] = useState("");
+
+  async function decide(action: "create" | "discard") {
+    setBusy(action);
+    try {
+      const result = await api<IssueDraft>(`/api/issue_drafts/${draft.id}/${action}`, { method: "POST" });
+      if (action === "create") {
+        toast.success(`Created ${result.repo} #${result.number}`);
+      }
+    } catch (err) {
+      toast.error(`Could not ${action === "create" ? "create the issue" : "discard it"}: ${err instanceof Error ? err.message : err}`);
+    }
+    setBusy("");
+  }
+
+  return (
+    <div className="my-1 overflow-hidden rounded-lg border bg-card">
+      <div className="flex h-8 items-center gap-1.5 border-b bg-muted/40 px-3 text-xs text-muted-foreground">
+        <CircleDot className="size-3.5" />
+        New issue in {draft.repo}
+      </div>
+      <div className="space-y-1.5 px-3 py-2">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="font-semibold">{draft.title}</span>
+          {draft.labels.map((label) => (
+            <Badge key={label} variant="outline" className="py-0">
+              {label}
+            </Badge>
+          ))}
+        </div>
+        <Markdown text={draft.body} repo={draft.repo} className="max-h-80 overflow-y-auto" />
+      </div>
+      <div className="flex min-h-10 items-center gap-2 border-t px-3 py-1.5">
+        {draft.status === "pending" && (
+          <>
+            <Button size="sm" disabled={busy !== ""} title="Open it on GitHub, as you" onClick={() => decide("create")}>
+              {busy === "create" && <Loader2 className="animate-spin" />}
+              Create issue
+            </Button>
+            <Button size="sm" variant="ghost" disabled={busy !== ""} onClick={() => decide("discard")}>
+              Discard
+            </Button>
+          </>
+        )}
+        {draft.status === "created" && (
+          <a href={draft.url ?? undefined} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-ok hover:underline">
+            <CircleCheck className="size-3.5" /> Created #{draft.number} <ExternalLink className="size-3" />
+          </a>
+        )}
+        {draft.status === "discarded" && <span className="text-muted-foreground">Discarded</span>}
+      </div>
+    </div>
   );
 });
 
@@ -393,8 +467,10 @@ function VMUsageCards(props: { name: string }) {
   );
 }
 
-export default function AgentChat(props: { agentId: string }) {
+export default function AgentChat(props: { agentId: string; compact?: boolean }) {
   const agents = useLive("agents");
+  // The issues repository agents drafted (only theirs have any): each shows as a card where it was drafted.
+  const issueDrafts = useLive("issue_drafts");
   const jobs = useLive("jobs");
   // Only the VMs' names, states, desktops' holders and whether they answer, as one string: the whole VM list changes
   // every second while a VM runs (its usage samples), and this page would re-render with it.
@@ -565,7 +641,7 @@ export default function AgentChat(props: { agentId: string }) {
   // Esc anywhere on the page interrupts the turn; the next queued message then goes in. An open dialog or
   // menu takes Esc first (Radix marks it handled), so closing one never interrupts.
   useEffect(() => {
-    if (!busy) {
+    if (!busy || props.compact) {
       return;
     }
     function onKeyDown(event: KeyboardEvent) {
@@ -578,7 +654,7 @@ export default function AgentChat(props: { agentId: string }) {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [busy, props.agentId]);
+  }, [busy, props.agentId, props.compact]);
 
   async function showEarlier() {
     const from = Math.max(0, start - PAGE);
@@ -620,6 +696,12 @@ export default function AgentChat(props: { agentId: string }) {
   // and Down after the newest brings back what you were typing, like Claude Code.
   function composerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (event.nativeEvent.isComposing) {
+      return;
+    }
+    // Compact (the Live tab): Esc interrupts from here, not from anywhere on the page.
+    if (event.key === "Escape" && props.compact && busy) {
+      event.preventDefault();
+      interrupt();
       return;
     }
     if (event.key === "Enter" && !event.shiftKey) {
@@ -795,127 +877,352 @@ export default function AgentChat(props: { agentId: string }) {
     }
   }
 
-  return (
+  // The conversation and the composer: the left side of the agent's page, and all of the chat on a repository's Live
+  // tab (compact).
+  const conversation = (
     <div className="flex h-full flex-col">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
-        <StatusDot tone={AGENT_TONE[summary.status] ?? "gray"} />
-        <h1 className="font-semibold">{summary.name}</h1>
-        <span className="font-mono text-xs text-muted-foreground" title="Its id: unique, and it never changes, also when renamed">
-          {summary.id}
-        </span>
-        <Tabs value={pageTab} onValueChange={setPageTab}>
-          <TabsList>
-            <TabsTrigger value="chat" className="px-2.5">
-              Chat
-            </TabsTrigger>
-            <TabsTrigger value="artifacts" className="px-2.5">
-              Artifacts
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-        <span className="truncate text-muted-foreground">
-          {summary.status === "idle" && "idle"}
-          {summary.status === "working" && "working"}
-          {summary.status === "in_queue" && `in queue #${summary.place} · ${summary.vm}`}
-          {summary.status === "in_priority" && `in priority #${summary.place} · ${summary.vm}`}
-          {summary.status === "using_vm" && `using ${summary.vm}`}
-          {summary.busy && summary.status !== "working" && " · working"}
-        </span>
+      <div
+        ref={scrollRef}
+        className="min-h-0 flex-1 overflow-y-auto"
+        onScroll={(event) => {
+          const box = event.currentTarget;
+          // Within a few pixels of the end counts as the bottom.
+          atBottom.current = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+        }}
+      >
+        <div className="mx-auto flex max-w-4xl flex-col gap-1.5 px-4 py-3">
+          {start > 0 && (
+            <Button variant="ghost" size="sm" className="self-center text-muted-foreground" onClick={showEarlier} disabled={loadingEarlier}>
+              {loadingEarlier && <Loader2 className="animate-spin" />}
+              Show earlier ({start} more)
+            </Button>
+          )}
+          {!historyLoaded && historyError === "" && <div className="text-muted-foreground">Loading the conversation…</div>}
+          {historyError !== "" && <div className="text-destructive">Could not load the conversation: {historyError}</div>}
+          {historyLoaded && entries.length === 0 && !summary.busy && (
+            <div className="py-8 text-center text-muted-foreground">
+              {summary.repo !== null
+                ? `Nothing yet. Ask ${summary.name} about the code, issues and pull requests, or tell it what to build: it writes the issue.`
+                : `Nothing yet. Tell ${summary.name} what to look for, or give it an issue from the Issues page.`}
+            </div>
+          )}
 
-        <div className="ml-auto flex shrink-0 items-center gap-2">
-          <span className="text-muted-foreground">Target VM</span>
-          <span title={locked ? `It can't change while ${summary.name} waits for or holds ${summary.vm}.` : undefined}>
-            <Select value={summary.target_vm ?? NO_VM} onValueChange={setTargetVM} disabled={locked}>
-              <SelectTrigger className="w-40">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent position="popper" align="end">
-                <SelectItem value={NO_VM}>No VM</SelectItem>
-                {summary.target_vm !== null && !vmNames.includes(summary.target_vm) && (
-                  <SelectItem value={summary.target_vm}>{summary.target_vm}</SelectItem>
-                )}
-                {vms.map((vm) => (
-                  <SelectItem key={vm.name} value={vm.name}>
-                    <StatusDot tone={VM_TONE[vm.status] ?? "gray"} />
-                    {vm.name}
-                    <span className="text-muted-foreground">{vm.status}</span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </span>
+          {entries.map((entry, index) => {
+            const key = start + index;
 
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="ml-2 flex items-center gap-2">
-                <span className="h-1.5 w-20 overflow-hidden rounded-full bg-muted">
-                  <span className={cn("block h-full", percent > 80 ? "bg-warn" : "bg-muted-foreground/70")} style={{ width: `${percent}%` }} />
-                </span>
-                <span className="text-xs text-muted-foreground tabular-nums">
-                  {Math.round(summary.context_used / 1000)}k / {capText}
-                </span>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>
-              Context: {summary.context_used.toLocaleString()} tokens. It is compacted at {capText}. Cost so far ${summary.cost_usd.toFixed(2)}.
-            </TooltipContent>
-          </Tooltip>
+            if (entry.type === "user") {
+              return (
+                <div key={key} className="flex justify-end py-1">
+                  <div className="max-w-[85%] rounded-md border bg-muted/60 px-3 py-1.5">
+                    <div className="break-words whitespace-pre-wrap">{entry.text}</div>
+                    <div className="text-right text-[11px] text-muted-foreground">{new Date(entry.time).toLocaleTimeString()}</div>
+                  </div>
+                </div>
+              );
+            }
 
-          <Button variant="outline" size="sm" className="ml-2" onClick={interrupt} disabled={!summary.busy} title="Stop the current turn; the next queued message goes in (Esc)">
-            <Square /> Interrupt
-          </Button>
-          <Button variant="outline" size="sm" onClick={compact} disabled={summary.history_length === 0} title="Summarize the conversation to free context">
-            <Minimize2 /> Compact
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" aria-label={`Actions for ${summary.name}`}>
-                <MoreHorizontal />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {summary.archived_at === null && (
-                <DropdownMenuItem onSelect={() => setConfirmAction("archive")}>
-                  <Archive /> Archive
-                </DropdownMenuItem>
-              )}
-              {summary.archived_at !== null && (
-                <DropdownMenuItem onSelect={() => archive("unarchive")}>
-                  <ArchiveRestore /> Unarchive
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive" disabled={summary.prs > 0} onSelect={() => setConfirmAction("delete")}>
-                <Trash2 /> Delete
-                {summary.prs > 0 && <span className="ml-auto text-xs">made PRs: archive it</span>}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <AlertDialog open={confirmAction !== null} onOpenChange={(open) => !open && setConfirmAction(null)}>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>
-                  {confirmAction === "archive" ? "Archive" : "Delete"} {summary.name}?
-                </AlertDialogTitle>
-                <AlertDialogDescription>
-                  {confirmAction === "archive"
-                    ? "It stops, its open jobs are cancelled and it leaves every VM queue. Its conversation stays: it is under Archived on the Agents page, and a message or a job brings it back."
-                    : "Its conversation is deleted, its open jobs are cancelled and it leaves every VM queue. Its drafts stay in the Inbox."}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction
-                  variant={confirmAction === "archive" ? "default" : "destructive"}
-                  onClick={() => (confirmAction === "archive" ? archive("archive") : remove())}
+            if (entry.type === "text") {
+              // ![...](artifact:path): a picture from its artifacts, loaded from this app.
+              const text = entry.text.replace(
+                /\]\(artifact:([^)\s]+)\)/g,
+                (_, file: string) => `](${window.location.origin}/api/agents/${summary.id}/artifacts/file?path=${encodeURIComponent(file)})`,
+              );
+              return <Markdown key={key} text={text} className="py-1" githubImagesOnly issueRefs />;
+            }
+
+            if (entry.type === "thinking") {
+              return (
+                <details key={key} className="group text-muted-foreground">
+                  <summary className="flex h-6 cursor-pointer list-none items-center gap-1.5 select-none hover:text-foreground [&::-webkit-details-marker]:hidden">
+                    <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
+                    <Brain className="size-3.5" />
+                    Thinking
+                  </summary>
+                  <div className="mt-1 mb-2 ml-1.5 border-l-2 pl-3 break-words whitespace-pre-wrap italic">{entry.text}</div>
+                </details>
+              );
+            }
+
+            // An issue the agent drafted: its card, once the call answered with the draft's id.
+            if (entry.type === "tool" && entry.name === "draft_issue") {
+              const answer = results[entry.id];
+              const match = answer !== undefined && !answer.is_error ? /issue_[0-9a-f]{6}/.exec(answer.text) : null;
+              const draft = match !== null ? issueDrafts.find((each) => each.id === match[0]) : undefined;
+              if (draft !== undefined) {
+                return <IssueDraftCard key={key} draft={draft} />;
+              }
+            }
+
+            if (entry.type === "tool") {
+              const result = results[entry.id];
+              const running = result === undefined && summary.busy && index > lastTurnEnd;
+              return <ToolRow key={key} entry={entry} result={result} running={running} />;
+            }
+
+            if (entry.type === "tool_result") {
+              // Shown with its call. A result whose call is before the loaded part stands alone.
+              if (toolIds.has(entry.id)) {
+                return null;
+              }
+              return (
+                <details key={key} className="group">
+                  <summary
+                    className={cn(
+                      "flex h-7 cursor-pointer list-none items-center gap-2 rounded-sm px-1 text-muted-foreground select-none hover:bg-accent/50 [&::-webkit-details-marker]:hidden",
+                      entry.is_error && "text-destructive"
+                    )}
+                  >
+                    <ChevronRight className="size-3.5 shrink-0 transition-transform group-open:rotate-90" />
+                    <Wrench className="size-3.5 shrink-0" />
+                    Result of an earlier tool call
+                  </summary>
+                  <pre
+                    className={cn(
+                      "mt-1 mb-2 ml-3 max-h-96 overflow-auto rounded-sm border bg-muted/50 px-2 py-1.5 text-xs break-all whitespace-pre-wrap",
+                      entry.is_error && "text-destructive"
+                    )}
+                  >
+                    {entry.text}
+                  </pre>
+                </details>
+              );
+            }
+
+            if (entry.type === "system") {
+              return (
+                <div
+                  key={key}
+                  className={cn("py-0.5 text-center text-xs text-muted-foreground", entry.text.startsWith("Error") && "text-destructive")}
                 >
-                  {confirmAction === "archive" ? "Archive" : "Delete"}
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+                  {entry.text}
+                  <span className="ml-1.5 opacity-70">{new Date(entry.time).toLocaleTimeString()}</span>
+                </div>
+              );
+            }
+
+            if (entry.type === "turn_end") {
+              return (
+                <div key={key} className="flex items-center gap-2 py-1 text-[11px] text-muted-foreground">
+                  <div className="h-px flex-1 bg-border" />
+                  {entry.stopped ? (
+                    <span className="flex items-center gap-1 text-warn">
+                      <Ban className="size-3" /> Stopped
+                    </span>
+                  ) : (
+                    <span>Turn ended</span>
+                  )}
+                  <span className="tabular-nums">${entry.cost_usd.toFixed(2)}</span>
+                  <span>{new Date(entry.time).toLocaleTimeString()}</span>
+                  <div className="h-px flex-1 bg-border" />
+                </div>
+              );
+            }
+
+            // A kind of entry this page doesn't know yet.
+            return null;
+          })}
+
+          {summary.busy && (
+            <div className="flex h-7 items-center gap-2 px-1 text-muted-foreground">
+              <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />
+              <span className="truncate">Working…</span>
+            </div>
+          )}
         </div>
       </div>
+
+      <div className="shrink-0 border-t px-3 py-2">
+        {pending > 0 && (
+          <div className="mx-auto mb-2 max-w-4xl space-y-1">
+            <div className="text-xs text-muted-foreground">
+              {pending} of {MAX_QUEUED} queued, each gets its own turn · Esc stops this turn and sends the next
+            </div>
+            {queued.map((message, index) => (
+              <div key={index} className="flex items-center gap-1 rounded-sm border border-dashed py-0.5 pr-0.5 pl-2 text-muted-foreground" title={message}>
+                <span className="min-w-0 flex-1 truncate">{message}</span>
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  className="shrink-0"
+                  title="Take it out: it won't be sent"
+                  aria-label="Cancel this queued message"
+                  onClick={() => cancelQueued(index, message)}
+                >
+                  <X />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="mx-auto flex max-w-4xl items-end gap-2">
+          {/* A new agent (nothing said yet, like one just made with New agent or the sidebar's +) opens with the
+              focus here, so you can type to it right away. */}
+          <Textarea
+            className="max-h-48 min-h-14 resize-none"
+            autoFocus={summary.history_length === 0}
+            placeholder={
+              pending >= MAX_QUEUED
+                ? `${MAX_QUEUED} messages wait; send more when one has gone in`
+                : summary.archived_at !== null
+                  ? `Message ${summary.name} (it comes back from the archive)`
+                  : summary.busy
+                  ? `Message ${summary.name} (sent when this turn ends)`
+                  : `Message ${summary.name}`
+            }
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={composerKeyDown}
+          />
+          <Button size="icon" onClick={send} disabled={text.trim() === "" || pending >= MAX_QUEUED} aria-label="Send" title="Send (Enter)">
+            <ArrowUp />
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="flex h-full flex-col">
+      {!props.compact && (
+        <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+          <StatusDot tone={AGENT_TONE[summary.status] ?? "gray"} />
+          <h1 className="font-semibold">{summary.name}</h1>
+          <span className="font-mono text-xs text-muted-foreground" title="Its id: unique, and it never changes, also when renamed">
+            {summary.id}
+          </span>
+          <Tabs value={pageTab} onValueChange={setPageTab}>
+            <TabsList>
+              <TabsTrigger value="chat" className="px-2.5">
+                Chat
+              </TabsTrigger>
+              <TabsTrigger value="artifacts" className="px-2.5">
+                Artifacts
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <span className="truncate text-muted-foreground">
+            {summary.status === "idle" && "idle"}
+            {summary.status === "working" && "working"}
+            {summary.status === "in_queue" && `in queue #${summary.place} · ${summary.vm}`}
+            {summary.status === "in_priority" && `in priority #${summary.place} · ${summary.vm}`}
+            {summary.status === "using_vm" && `using ${summary.vm}`}
+            {summary.busy && summary.status !== "working" && " · working"}
+          </span>
+
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <span className="text-muted-foreground">Target VM</span>
+            <span title={locked ? `It can't change while ${summary.name} waits for or holds ${summary.vm}.` : undefined}>
+              <Select value={summary.target_vm ?? NO_VM} onValueChange={setTargetVM} disabled={locked}>
+                <SelectTrigger className="w-40">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent position="popper" align="end">
+                  <SelectItem value={NO_VM}>No VM</SelectItem>
+                  {summary.target_vm !== null && !vmNames.includes(summary.target_vm) && (
+                    <SelectItem value={summary.target_vm}>{summary.target_vm}</SelectItem>
+                  )}
+                  {vms.map((vm) => (
+                    <SelectItem key={vm.name} value={vm.name}>
+                      <StatusDot tone={VM_TONE[vm.status] ?? "gray"} />
+                      {vm.name}
+                      <span className="text-muted-foreground">{vm.status}</span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </span>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="ml-2 flex items-center gap-2">
+                  <span className="h-1.5 w-20 overflow-hidden rounded-full bg-muted">
+                    <span className={cn("block h-full", percent > 80 ? "bg-warn" : "bg-muted-foreground/70")} style={{ width: `${percent}%` }} />
+                  </span>
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    {Math.round(summary.context_used / 1000)}k / {capText}
+                  </span>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent>
+                Context: {summary.context_used.toLocaleString()} tokens. It is compacted at {capText}. Cost so far ${summary.cost_usd.toFixed(2)}.
+              </TooltipContent>
+            </Tooltip>
+
+            <Button variant="outline" size="sm" className="ml-2" onClick={interrupt} disabled={!summary.busy} title="Stop the current turn; the next queued message goes in (Esc)">
+              <Square /> Interrupt
+            </Button>
+            <Button variant="outline" size="sm" onClick={compact} disabled={summary.history_length === 0} title="Summarize the conversation to free context">
+              <Minimize2 /> Compact
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" aria-label={`Actions for ${summary.name}`}>
+                  <MoreHorizontal />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {summary.archived_at === null && (
+                  <DropdownMenuItem onSelect={() => setConfirmAction("archive")}>
+                    <Archive /> Archive
+                  </DropdownMenuItem>
+                )}
+                {summary.archived_at !== null && (
+                  <DropdownMenuItem onSelect={() => archive("unarchive")}>
+                    <ArchiveRestore /> Unarchive
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem variant="destructive" disabled={summary.prs > 0} onSelect={() => setConfirmAction("delete")}>
+                  <Trash2 /> Delete
+                  {summary.prs > 0 && <span className="ml-auto text-xs">made PRs: archive it</span>}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <AlertDialog open={confirmAction !== null} onOpenChange={(open) => !open && setConfirmAction(null)}>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>
+                    {confirmAction === "archive" ? "Archive" : "Delete"} {summary.name}?
+                  </AlertDialogTitle>
+                  <AlertDialogDescription>
+                    {confirmAction === "archive"
+                      ? "It stops, its open jobs are cancelled and it leaves every VM queue. Its conversation stays: it is under Archived on the Agents page, and a message or a job brings it back."
+                      : "Its conversation is deleted, its open jobs are cancelled and it leaves every VM queue. Its drafts stay in the Inbox."}
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    variant={confirmAction === "archive" ? "default" : "destructive"}
+                    onClick={() => (confirmAction === "archive" ? archive("archive") : remove())}
+                  >
+                    {confirmAction === "archive" ? "Archive" : "Delete"}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
+        </div>
+      )}
+      {props.compact && (
+        <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+          <StatusDot tone={AGENT_TONE[summary.status] ?? "gray"} />
+          <a href={`#/agents/${summary.id}`} className="truncate font-semibold hover:underline" title="Its own page">
+            {summary.name}
+          </a>
+          <span className="truncate text-muted-foreground">
+            {summary.status === "idle" && "idle"}
+            {summary.status === "working" && "working"}
+            {summary.status === "in_queue" && `in queue #${summary.place} · ${summary.vm}`}
+            {summary.status === "in_priority" && `in priority #${summary.place} · ${summary.vm}`}
+            {summary.status === "using_vm" && `using ${summary.vm}`}
+            {summary.busy && summary.status !== "working" && " · working"}
+          </span>
+          <Button variant="outline" size="sm" className="ml-auto shrink-0" onClick={interrupt} disabled={!summary.busy} title="Stop the current turn; the next queued message goes in (Esc in the message box)">
+            <Square /> Interrupt
+          </Button>
+        </div>
+      )}
 
       {summary.archived_at !== null && (
         <div className="flex shrink-0 items-center gap-2 border-b bg-muted/40 px-3 py-1.5 text-muted-foreground">
@@ -946,380 +1253,197 @@ export default function AgentChat(props: { agentId: string }) {
       )}
 
       <div className={pageTab === "chat" ? "flex min-h-0 flex-1 flex-col" : "hidden"}>
-      <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
-        <ResizablePanel defaultSize="70%" minSize="35%">
-          <div className="flex h-full flex-col">
-            <div
-              ref={scrollRef}
-              className="min-h-0 flex-1 overflow-y-auto"
-              onScroll={(event) => {
-                const box = event.currentTarget;
-                // Within a few pixels of the end counts as the bottom.
-                atBottom.current = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-              }}
-            >
-              <div className="mx-auto flex max-w-4xl flex-col gap-1.5 px-4 py-3">
-                {start > 0 && (
-                  <Button variant="ghost" size="sm" className="self-center text-muted-foreground" onClick={showEarlier} disabled={loadingEarlier}>
-                    {loadingEarlier && <Loader2 className="animate-spin" />}
-                    Show earlier ({start} more)
-                  </Button>
-                )}
-                {!historyLoaded && historyError === "" && <div className="text-muted-foreground">Loading the conversation…</div>}
-                {historyError !== "" && <div className="text-destructive">Could not load the conversation: {historyError}</div>}
-                {historyLoaded && entries.length === 0 && !summary.busy && (
-                  <div className="py-8 text-center text-muted-foreground">
-                    Nothing yet. Tell {summary.name} what to look for, or give it an issue from the Issues page.
-                  </div>
-                )}
+        {props.compact && conversation}
+        {!props.compact && (
+          <ResizablePanelGroup orientation="horizontal" className="min-h-0 flex-1">
+            <ResizablePanel defaultSize="70%" minSize="35%">
+              {conversation}
+            </ResizablePanel>
 
-                {entries.map((entry, index) => {
-                  const key = start + index;
+            <ResizableHandle />
 
-                  if (entry.type === "user") {
-                    return (
-                      <div key={key} className="flex justify-end py-1">
-                        <div className="max-w-[85%] rounded-md border bg-muted/60 px-3 py-1.5">
-                          <div className="break-words whitespace-pre-wrap">{entry.text}</div>
-                          <div className="text-right text-[11px] text-muted-foreground">{new Date(entry.time).toLocaleTimeString()}</div>
+            <ResizablePanel defaultSize="30%" minSize={240}>
+              <div className="h-full overflow-y-auto">
+                <div className="flex h-7 items-center border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground">VM queue</div>
+                <div className="space-y-1 border-b px-3 py-2">
+                  {summary.place === 0 && summary.vm !== null && (
+                    <div className="flex items-center gap-1.5">
+                      <StatusDot tone="green" />
+                      Holds desktop {summary.desktop} of
+                      <a href={`#/vms/${summary.vm}`} className="text-primary hover:underline">
+                        {summary.vm}
+                      </a>
+                    </div>
+                  )}
+                  {summary.place !== null && summary.place > 0 && summary.vm !== null && (
+                    <>
+                      <div className="flex items-center gap-1.5">
+                        <StatusDot tone="amber" />
+                        Number {summary.place} in the {summary.status === "in_priority" ? "priority line" : "queue"} for desktop {summary.desktop} of
+                        <a href={`#/vms/${summary.vm}`} className="text-primary hover:underline">
+                          {summary.vm}
+                        </a>
+                      </div>
+                      {summary.status === "in_priority" && (
+                        <div className="text-muted-foreground">It stepped aside while its run goes there, and gets the desktop back first.</div>
+                      )}
+                      {queueHolder !== undefined && queueVM !== undefined && (
+                        <div className="text-muted-foreground">
+                          {queueHolder === null && `Desktop ${summary.desktop} is free.`}
+                          {queueHolder === "user" && `You hold desktop ${summary.desktop}.`}
+                          {queueHolder !== null && queueHolder !== "user" && `${agentNames[queueHolder] ?? queueHolder} holds desktop ${summary.desktop}.`}
+                          {queueVM.status !== "running" && ` ${queueVM.name} is ${queueVM.status}.`}
                         </div>
-                      </div>
-                    );
-                  }
+                      )}
+                    </>
+                  )}
+                  {summary.place === null && (
+                    <div className="flex items-center gap-1.5 text-muted-foreground">
+                      <StatusDot tone="gray" />
+                      Not in a VM queue.
+                    </div>
+                  )}
+                  <div className="text-muted-foreground">
+                    Target VM:{" "}
+                    {summary.target_vm === null ? (
+                      "none"
+                    ) : (
+                      <a href={`#/vms/${summary.target_vm}`} className="text-primary hover:underline">
+                        {summary.target_vm}
+                      </a>
+                    )}
+                  </div>
+                </div>
 
-                  if (entry.type === "text") {
-                    // ![...](artifact:path): a picture from its artifacts, loaded from this app.
-                    const text = entry.text.replace(
-                      /\]\(artifact:([^)\s]+)\)/g,
-                      (_, file: string) => `](${window.location.origin}/api/agents/${summary.id}/artifacts/file?path=${encodeURIComponent(file)})`,
-                    );
-                    return <Markdown key={key} text={text} className="py-1" githubImagesOnly issueRefs />;
-                  }
-
-                  if (entry.type === "thinking") {
-                    return (
-                      <details key={key} className="group text-muted-foreground">
-                        <summary className="flex h-6 cursor-pointer list-none items-center gap-1.5 select-none hover:text-foreground [&::-webkit-details-marker]:hidden">
-                          <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
-                          <Brain className="size-3.5" />
-                          Thinking
-                        </summary>
-                        <div className="mt-1 mb-2 ml-1.5 border-l-2 pl-3 break-words whitespace-pre-wrap italic">{entry.text}</div>
-                      </details>
-                    );
-                  }
-
-                  if (entry.type === "tool") {
-                    const result = results[entry.id];
-                    const running = result === undefined && summary.busy && index > lastTurnEnd;
-                    return <ToolRow key={key} entry={entry} result={result} running={running} />;
-                  }
-
-                  if (entry.type === "tool_result") {
-                    // Shown with its call. A result whose call is before the loaded part stands alone.
-                    if (toolIds.has(entry.id)) {
-                      return null;
-                    }
-                    return (
-                      <details key={key} className="group">
-                        <summary
-                          className={cn(
-                            "flex h-7 cursor-pointer list-none items-center gap-2 rounded-sm px-1 text-muted-foreground select-none hover:bg-accent/50 [&::-webkit-details-marker]:hidden",
-                            entry.is_error && "text-destructive"
-                          )}
-                        >
-                          <ChevronRight className="size-3.5 shrink-0 transition-transform group-open:rotate-90" />
-                          <Wrench className="size-3.5 shrink-0" />
-                          Result of an earlier tool call
-                        </summary>
-                        <pre
-                          className={cn(
-                            "mt-1 mb-2 ml-3 max-h-96 overflow-auto rounded-sm border bg-muted/50 px-2 py-1.5 text-xs break-all whitespace-pre-wrap",
-                            entry.is_error && "text-destructive"
-                          )}
-                        >
-                          {entry.text}
-                        </pre>
-                      </details>
-                    );
-                  }
-
-                  if (entry.type === "system") {
-                    return (
-                      <div
-                        key={key}
-                        className={cn("py-0.5 text-center text-xs text-muted-foreground", entry.text.startsWith("Error") && "text-destructive")}
+                {jobLists.map((list) => {
+                  const folded = foldedLists.includes(list.key);
+                  return (
+                    <div key={list.key}>
+                      <button
+                        type="button"
+                        className="flex h-7 w-full items-center gap-1 border-b bg-muted/40 px-2 text-xs font-medium text-muted-foreground hover:text-foreground"
+                        aria-expanded={!folded}
+                        onClick={() => setFoldedLists(folded ? foldedLists.filter((key) => key !== list.key) : [...foldedLists, list.key])}
                       >
-                        {entry.text}
-                        <span className="ml-1.5 opacity-70">{new Date(entry.time).toLocaleTimeString()}</span>
-                      </div>
-                    );
-                  }
-
-                  if (entry.type === "turn_end") {
-                    return (
-                      <div key={key} className="flex items-center gap-2 py-1 text-[11px] text-muted-foreground">
-                        <div className="h-px flex-1 bg-border" />
-                        {entry.stopped ? (
-                          <span className="flex items-center gap-1 text-warn">
-                            <Ban className="size-3" /> Stopped
-                          </span>
-                        ) : (
-                          <span>Turn ended</span>
-                        )}
-                        <span className="tabular-nums">${entry.cost_usd.toFixed(2)}</span>
-                        <span>{new Date(entry.time).toLocaleTimeString()}</span>
-                        <div className="h-px flex-1 bg-border" />
-                      </div>
-                    );
-                  }
-
-                  // A kind of entry this page doesn't know yet.
-                  return null;
+                        <ChevronRight className={cn("size-3.5 transition-transform", !folded && "rotate-90")} />
+                        {list.label}
+                        <span className="ml-0.5 tabular-nums">{list.jobs.length}</span>
+                      </button>
+                      {!folded && list.jobs.length === 0 && <div className="border-b px-3 py-2 text-muted-foreground">{list.empty}</div>}
+                      {!folded &&
+                        list.jobs.map((job) => (
+                          <div key={job.id} className={cn("border-b px-3 py-1.5", !OPEN_STATUSES.includes(job.status) && "text-muted-foreground")}>
+                            <div className="flex items-center gap-1.5">
+                              <StatusDot tone={JOB_TONE[job.status] ?? "gray"} />
+                              {job.repo !== null ? (
+                                <a href={`#/issues?repo=${encodeURIComponent(job.repo)}`} className="truncate hover:underline" title={job.title}>
+                                  {job.title}
+                                </a>
+                              ) : (
+                                <span className="truncate" title={job.title}>
+                                  {job.title}
+                                </span>
+                              )}
+                              {job.status === "queued" && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon-xs"
+                                  className="ml-auto shrink-0"
+                                  aria-label={`Remove ${job.id}`}
+                                  title="Remove it from the queue: the job is cancelled and the agent is told"
+                                  onClick={() => removeJob(job.id)}
+                                >
+                                  <X />
+                                </Button>
+                              )}
+                            </div>
+                            <div className="flex flex-wrap items-center gap-x-2 pl-3.5 text-xs text-muted-foreground">
+                              <span>{JOB_LABEL[job.status] ?? job.status}</span>
+                              <span className="font-mono">{job.id}</span>
+                              {job.vm !== null && (
+                                <a href={`#/vms/${job.vm}`} className="text-primary hover:underline">
+                                  {job.vm}
+                                </a>
+                              )}
+                              {job.drafts.map((draft) => (
+                                <a key={draft} href={`#/inbox/${draft}`} className="font-mono text-primary hover:underline">
+                                  {draft}
+                                </a>
+                              ))}
+                            </div>
+                            {OPEN_STATUSES.includes(job.status) && (
+                              <div className="space-y-0.5 py-0.5 pl-3.5">
+                                <JobProgressBar job={job} />
+                                {job.headline !== "" && <div className="line-clamp-2 text-xs">{job.headline}</div>}
+                              </div>
+                            )}
+                            {job.notes !== "" && <div className="line-clamp-3 pl-3.5 text-xs whitespace-pre-wrap text-muted-foreground">{job.notes}</div>}
+                          </div>
+                        ))}
+                    </div>
+                  );
                 })}
 
-                {summary.busy && (
-                  <div className="flex h-7 items-center gap-2 px-1 text-muted-foreground">
-                    <Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />
-                    <span className="truncate">Working…</span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <div className="shrink-0 border-t px-3 py-2">
-              {pending > 0 && (
-                <div className="mx-auto mb-2 max-w-4xl space-y-1">
-                  <div className="text-xs text-muted-foreground">
-                    {pending} of {MAX_QUEUED} queued, each gets its own turn · Esc stops this turn and sends the next
-                  </div>
-                  {queued.map((message, index) => (
-                    <div key={index} className="flex items-center gap-1 rounded-sm border border-dashed py-0.5 pr-0.5 pl-2 text-muted-foreground" title={message}>
-                      <span className="min-w-0 flex-1 truncate">{message}</span>
-                      <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        className="shrink-0"
-                        title="Take it out: it won't be sent"
-                        aria-label="Cancel this queued message"
-                        onClick={() => cancelQueued(index, message)}
-                      >
-                        <X />
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <div className="mx-auto flex max-w-4xl items-end gap-2">
-                {/* A new agent (nothing said yet, like one just made with New agent or the sidebar's +) opens with the
-                    focus here, so you can type to it right away. */}
-                <Textarea
-                  className="max-h-48 min-h-14 resize-none"
-                  autoFocus={summary.history_length === 0}
-                  placeholder={
-                    pending >= MAX_QUEUED
-                      ? `${MAX_QUEUED} messages wait; send more when one has gone in`
-                      : summary.archived_at !== null
-                        ? `Message ${summary.name} (it comes back from the archive)`
-                        : summary.busy
-                        ? `Message ${summary.name} (sent when this turn ends)`
-                        : `Message ${summary.name}`
-                  }
-                  value={text}
-                  onChange={(event) => setText(event.target.value)}
-                  onKeyDown={composerKeyDown}
-                />
-                <Button size="icon" onClick={send} disabled={text.trim() === "" || pending >= MAX_QUEUED} aria-label="Send" title="Send (Enter)">
-                  <ArrowUp />
-                </Button>
-              </div>
-            </div>
-          </div>
-        </ResizablePanel>
-
-        <ResizableHandle />
-
-        <ResizablePanel defaultSize="30%" minSize={240}>
-          <div className="h-full overflow-y-auto">
-            <div className="flex h-7 items-center border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground">VM queue</div>
-            <div className="space-y-1 border-b px-3 py-2">
-              {summary.place === 0 && summary.vm !== null && (
-                <div className="flex items-center gap-1.5">
-                  <StatusDot tone="green" />
-                  Holds desktop {summary.desktop} of
-                  <a href={`#/vms/${summary.vm}`} className="text-primary hover:underline">
-                    {summary.vm}
-                  </a>
-                </div>
-              )}
-              {summary.place !== null && summary.place > 0 && summary.vm !== null && (
-                <>
-                  <div className="flex items-center gap-1.5">
-                    <StatusDot tone="amber" />
-                    Number {summary.place} in the {summary.status === "in_priority" ? "priority line" : "queue"} for desktop {summary.desktop} of
-                    <a href={`#/vms/${summary.vm}`} className="text-primary hover:underline">
-                      {summary.vm}
+                <div className="flex h-7 items-center gap-1.5 border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground">
+                  Desktop
+                  {deskVM !== null && (
+                    <a href={`#/vms/${deskVM}`} className="font-normal text-primary hover:underline">
+                      {deskVM}
+                      {deskInfo !== undefined && deskInfo.holders.length > 1 && `, desktop ${deskNumber}`}
                     </a>
+                  )}
+                </div>
+                <div className="p-2">
+                  <div className="relative aspect-video overflow-hidden rounded-md border bg-muted/30">
+                    {deskReady && deskUrl !== null && (
+                      <>
+                        <LiveDesktop url={deskUrl} className="pointer-events-none absolute inset-0 bg-black" />
+                        {/* Over the picture: a click opens it big, here on the page. */}
+                        <button
+                          type="button"
+                          className="absolute inset-0 cursor-zoom-in"
+                          aria-label={`Show the desktop of ${deskVM} big`}
+                          title="Show it big"
+                          onClick={() => setDeskBig(true)}
+                        />
+                      </>
+                    )}
+                    {deskVM === null && <span className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">No VM yet.</span>}
+                    {deskInfo !== undefined && deskInfo.status !== "running" && (
+                      <span className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">{deskInfo.status === "stopped" ? "Off" : deskInfo.status}</span>
+                    )}
+                    {deskInfo !== undefined && deskInfo.status === "running" && deskUrl === null && !deskTerminal && (
+                      <span className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">Waiting for the desktop…</span>
+                    )}
+                    {deskReady && deskTerminal && (
+                      <span className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-xs text-muted-foreground">
+                        <Terminal className="size-5" />
+                        Terminal only
+                      </span>
+                    )}
                   </div>
-                  {summary.status === "in_priority" && (
-                    <div className="text-muted-foreground">It stepped aside while its run goes there, and gets the desktop back first.</div>
-                  )}
-                  {queueHolder !== undefined && queueVM !== undefined && (
-                    <div className="text-muted-foreground">
-                      {queueHolder === null && `Desktop ${summary.desktop} is free.`}
-                      {queueHolder === "user" && `You hold desktop ${summary.desktop}.`}
-                      {queueHolder !== null && queueHolder !== "user" && `${agentNames[queueHolder] ?? queueHolder} holds desktop ${summary.desktop}.`}
-                      {queueVM.status !== "running" && ` ${queueVM.name} is ${queueVM.status}.`}
-                    </div>
-                  )}
-                </>
-              )}
-              {summary.place === null && (
-                <div className="flex items-center gap-1.5 text-muted-foreground">
-                  <StatusDot tone="gray" />
-                  Not in a VM queue.
                 </div>
-              )}
-              <div className="text-muted-foreground">
-                Target VM:{" "}
-                {summary.target_vm === null ? (
-                  "none"
-                ) : (
-                  <a href={`#/vms/${summary.target_vm}`} className="text-primary hover:underline">
-                    {summary.target_vm}
-                  </a>
-                )}
+                {deskVM !== null && <VMUsageCards name={deskVM} />}
+
+                <Dialog open={deskBig && deskReady && deskUrl !== null} onOpenChange={setDeskBig}>
+                  <DialogContent className="flex h-[90vh] flex-col gap-2 sm:max-w-[95vw]">
+                    <DialogHeader>
+                      <DialogTitle>Desktop of {deskVM}</DialogTitle>
+                      <DialogDescription>
+                        Only to watch: nothing you do here reaches the VM. To use it, open{" "}
+                        <a href={`#/vms/${deskVM}`} className="text-primary hover:underline" onClick={() => setDeskBig(false)}>
+                          its page
+                        </a>
+                        .
+                      </DialogDescription>
+                    </DialogHeader>
+                    {deskUrl !== null && <LiveDesktop url={deskUrl} className="min-h-0 flex-1 overflow-hidden rounded-md bg-black" />}
+                  </DialogContent>
+                </Dialog>
               </div>
-            </div>
-
-            {jobLists.map((list) => {
-              const folded = foldedLists.includes(list.key);
-              return (
-                <div key={list.key}>
-                  <button
-                    type="button"
-                    className="flex h-7 w-full items-center gap-1 border-b bg-muted/40 px-2 text-xs font-medium text-muted-foreground hover:text-foreground"
-                    aria-expanded={!folded}
-                    onClick={() => setFoldedLists(folded ? foldedLists.filter((key) => key !== list.key) : [...foldedLists, list.key])}
-                  >
-                    <ChevronRight className={cn("size-3.5 transition-transform", !folded && "rotate-90")} />
-                    {list.label}
-                    <span className="ml-0.5 tabular-nums">{list.jobs.length}</span>
-                  </button>
-                  {!folded && list.jobs.length === 0 && <div className="border-b px-3 py-2 text-muted-foreground">{list.empty}</div>}
-                  {!folded &&
-                    list.jobs.map((job) => (
-                      <div key={job.id} className={cn("border-b px-3 py-1.5", !OPEN_STATUSES.includes(job.status) && "text-muted-foreground")}>
-                        <div className="flex items-center gap-1.5">
-                          <StatusDot tone={JOB_TONE[job.status] ?? "gray"} />
-                          {job.repo !== null ? (
-                            <a href={`#/issues?repo=${encodeURIComponent(job.repo)}`} className="truncate hover:underline" title={job.title}>
-                              {job.title}
-                            </a>
-                          ) : (
-                            <span className="truncate" title={job.title}>
-                              {job.title}
-                            </span>
-                          )}
-                          {job.status === "queued" && (
-                            <Button
-                              variant="ghost"
-                              size="icon-xs"
-                              className="ml-auto shrink-0"
-                              aria-label={`Remove ${job.id}`}
-                              title="Remove it from the queue: the job is cancelled and the agent is told"
-                              onClick={() => removeJob(job.id)}
-                            >
-                              <X />
-                            </Button>
-                          )}
-                        </div>
-                        <div className="flex flex-wrap items-center gap-x-2 pl-3.5 text-xs text-muted-foreground">
-                          <span>{JOB_LABEL[job.status] ?? job.status}</span>
-                          <span className="font-mono">{job.id}</span>
-                          {job.vm !== null && (
-                            <a href={`#/vms/${job.vm}`} className="text-primary hover:underline">
-                              {job.vm}
-                            </a>
-                          )}
-                          {job.drafts.map((draft) => (
-                            <a key={draft} href={`#/inbox/${draft}`} className="font-mono text-primary hover:underline">
-                              {draft}
-                            </a>
-                          ))}
-                        </div>
-                        {OPEN_STATUSES.includes(job.status) && (
-                          <div className="space-y-0.5 py-0.5 pl-3.5">
-                            <JobProgressBar job={job} />
-                            {job.headline !== "" && <div className="line-clamp-2 text-xs">{job.headline}</div>}
-                          </div>
-                        )}
-                        {job.notes !== "" && <div className="line-clamp-3 pl-3.5 text-xs whitespace-pre-wrap text-muted-foreground">{job.notes}</div>}
-                      </div>
-                    ))}
-                </div>
-              );
-            })}
-
-            <div className="flex h-7 items-center gap-1.5 border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground">
-              Desktop
-              {deskVM !== null && (
-                <a href={`#/vms/${deskVM}`} className="font-normal text-primary hover:underline">
-                  {deskVM}
-                  {deskInfo !== undefined && deskInfo.holders.length > 1 && `, desktop ${deskNumber}`}
-                </a>
-              )}
-            </div>
-            <div className="p-2">
-              <div className="relative aspect-video overflow-hidden rounded-md border bg-muted/30">
-                {deskReady && deskUrl !== null && (
-                  <>
-                    <LiveDesktop url={deskUrl} className="pointer-events-none absolute inset-0 bg-black" />
-                    {/* Over the picture: a click opens it big, here on the page. */}
-                    <button
-                      type="button"
-                      className="absolute inset-0 cursor-zoom-in"
-                      aria-label={`Show the desktop of ${deskVM} big`}
-                      title="Show it big"
-                      onClick={() => setDeskBig(true)}
-                    />
-                  </>
-                )}
-                {deskVM === null && <span className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">No VM yet.</span>}
-                {deskInfo !== undefined && deskInfo.status !== "running" && (
-                  <span className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">{deskInfo.status === "stopped" ? "Off" : deskInfo.status}</span>
-                )}
-                {deskInfo !== undefined && deskInfo.status === "running" && deskUrl === null && !deskTerminal && (
-                  <span className="absolute inset-0 flex items-center justify-center text-xs text-muted-foreground">Waiting for the desktop…</span>
-                )}
-                {deskReady && deskTerminal && (
-                  <span className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-xs text-muted-foreground">
-                    <Terminal className="size-5" />
-                    Terminal only
-                  </span>
-                )}
-              </div>
-            </div>
-            {deskVM !== null && <VMUsageCards name={deskVM} />}
-
-            <Dialog open={deskBig && deskReady && deskUrl !== null} onOpenChange={setDeskBig}>
-              <DialogContent className="flex h-[90vh] flex-col gap-2 sm:max-w-[95vw]">
-                <DialogHeader>
-                  <DialogTitle>Desktop of {deskVM}</DialogTitle>
-                  <DialogDescription>
-                    Only to watch: nothing you do here reaches the VM. To use it, open{" "}
-                    <a href={`#/vms/${deskVM}`} className="text-primary hover:underline" onClick={() => setDeskBig(false)}>
-                      its page
-                    </a>
-                    .
-                  </DialogDescription>
-                </DialogHeader>
-                {deskUrl !== null && <LiveDesktop url={deskUrl} className="min-h-0 flex-1 overflow-hidden rounded-md bg-black" />}
-              </DialogContent>
-            </Dialog>
-          </div>
-        </ResizablePanel>
-      </ResizablePanelGroup>
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        )}
       </div>
     </div>
   );

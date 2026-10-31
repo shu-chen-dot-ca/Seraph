@@ -2,7 +2,7 @@
 Live data from the backend, and the one fetch helper.
 
 One websocket to /api/live. On connect the server sends every topic, then only the topics that changed:
-{"topic": "repos" | "issues" | "tracked" | "explore" | "github" | "jobs" | "inbox" | "prs" | "your_repos" | "notifications" | "agents"
+{"topic": "repos" | "issues" | "tracked" | "explore" | "github" | "jobs" | "inbox" | "issue_drafts" | "prs" | "your_repos" | "notifications" | "agents"
 | "vms" | "images" | "resource",
 "data": ...}.
 Each message replaces that topic in the store, and components read it with useLive(topic), so the page never
@@ -611,6 +611,27 @@ export type AgentSummary = {
   archived_at: string | null; // archived: stopped, its conversation kept
   prs: number; // PR drafts that wait for you or were approved: it can only be archived, not deleted
   artifacts_stamp: number; // goes up on every change to its artifacts (the Artifacts tab reads its folder again)
+  repo: string | null; // a repository's agent (the Workspace tab's Live): the repo it belongs to
+  live: LiveSetUp | null; // and how far its set-up is
+};
+
+// How far a repository's agent's set-up is (github_searcher/agents.py, prepare_live): its VM coming up and the code
+// going in, then ready (it has its set_up_repo job), or failed with why (Try again).
+export type LiveSetUp = { state: "preparing" | "ready" | "failed"; error: string | null };
+
+// An issue a repository's agent drafted for you (github_searcher/issue_drafts.py), a card in its chat.
+export type IssueDraft = {
+  id: string;
+  agent: string;
+  repo: string;
+  title: string;
+  body: string; // markdown
+  labels: string[];
+  status: "pending" | "created" | "discarded";
+  url: string | null; // the issue on GitHub, once created
+  number: number | null;
+  created_at: string;
+  decided_at: string | null;
 };
 
 export type Todo = {
@@ -906,6 +927,7 @@ export type Topics = {
   github: GithubStatus | null;
   jobs: Job[];
   inbox: Draft[];
+  issue_drafts: IssueDraft[];
   prs: PRsData;
   your_repos: YourReposData;
   notifications: NotificationsData;
@@ -926,6 +948,7 @@ const store = {
     github: null,
     jobs: [],
     inbox: [],
+    issue_drafts: [],
     prs: { items: [], issues: [], checked_at: null, error: null, refreshing: false },
     your_repos: { repos: [], starred: [], login: null, checked_at: null, error: null },
     notifications: { items: [], login: null, checked_at: null, error: null },
