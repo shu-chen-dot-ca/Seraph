@@ -656,14 +656,15 @@ done
         if result.returncode != 0:
             raise VMError(f"Could not set Firefox's graphics card name in {self.name}: {result.stderr.strip()}")
 
-    def set_up_browser(self, desktops: int = 1) -> None:
+    def set_up_browser(self, desktops: int = 1, restart: bool = True) -> None:
         """Put the agents' browser in the VM (sandbox/agent/browser_service.py) and start one for each of its desktops.
         Safe to run again; a desktop the VM no longer has loses its browser.
 
         Each runs as a systemd service: sandbox-browser for desktop 1, sandbox-browser-<n> for desktop n. The first
         time in a VM the start installs what they need (BROWSER_INSTALL), which takes a few minutes and doesn't hold
         up the VM's start: meanwhile the browser tools say it is still starting. Started again here (not only at
-        boot), so a VM always runs this file's newest version.
+        boot), so a VM always runs this file's newest version. restart=False leaves the browsers already going alone
+        and only starts the missing ones: a desktop added or removed while agents work on the others.
         """
         result = self.exec_root(f"mkdir -p {BROWSER_DIR}", timeout=30)
         if result.returncode != 0:
@@ -691,6 +692,10 @@ done
             units.append(unit)
         gone = " ".join([f"sandbox-browser-{desktop}" for desktop in range(desktops + 1, MAX_DESKTOPS + 1)])
         units = " ".join(units)
+        # start does nothing to a browser that already runs.
+        action = "restart"
+        if not restart:
+            action = "start"
         # Not while one is still installing (it started at boot): a restart then would kill apt halfway.
         script = f"""
 systemctl disable --now {gone} > /dev/null 2>&1 || true
@@ -698,7 +703,7 @@ systemctl daemon-reload
 for unit in {units}; do
     systemctl enable --quiet $unit
     if [ "$(systemctl is-active $unit)" != activating ]; then
-        systemctl restart --no-block $unit
+        systemctl {action} --no-block $unit
     fi
 done
 """

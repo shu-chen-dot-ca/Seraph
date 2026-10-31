@@ -14,6 +14,7 @@ desktop some of them asked for ({agent id: desktop number}); the others take the
 desktop has its own user, home folder, screen, mouse and keyboard, so an agent on one never gets in the way of an
 agent on another; desktop_vm(n) runs commands as desktop n's user. How many
 desktops a VM has is set like its CPUs and memory: when it is made, or later while it is stopped (set_resources).
+One can also be added or the last one removed at any time, also while it runs (add_desktop, remove_desktop).
 Every start sets them up in the VM (VM.set_up_desktops) and gives each its own agents' browser.
 
 "image" is the name of the image it was made from (sandbox/images.py) and "image_fingerprint" the exact
@@ -660,6 +661,62 @@ class VMRecord:
             while len(self.desktops) < desktops:
                 self.desktops.append({"holder": None, "priority": []})
             self.save()
+        except VMsError:
+            raise
+        except Exception as error:
+            raise VMsError(str(error))
+        finally:
+            self.lock.release()
+
+    def add_desktop(self, queue_lock: threading.Lock) -> None:
+        """One more desktop, running or not (the desktop bar's +). While the VM runs it is set up in it first (the
+        first time TigerVNC is installed, under a minute); the other desktops and their browsers go on untouched. Only
+        then is it in the record, under VMQueue's lock (queue_lock), so no agent gets it before it is up. While the VM
+        is off it comes up with the next start."""
+        if not self.lock.acquire(blocking=False):
+            raise VMsError(f"{self.name} is busy")
+        try:
+            number = len(self.desktops) + 1
+            if number > MAX_DESKTOPS:
+                raise VMsError(f"{self.name} already has {MAX_DESKTOPS} desktops, the most a VM can have.")
+            running = self.vm.status() == "Running"
+            if running:
+                self.vm.set_up_desktops(number)
+                self.vm.set_up_browser(number, restart=False)
+            with queue_lock:
+                self.desktops.append({"holder": None, "priority": []})
+                self.save()
+            # The env variables in its ~/.bashrc too.
+            if running:
+                self.write_env()
+        except VMsError:
+            raise
+        except Exception as error:
+            raise VMsError(str(error))
+        finally:
+            self.lock.release()
+
+    def remove_desktop(self, number: int, queue_lock: threading.Lock) -> None:
+        """Take the last desktop away, running or not (the desktop bar's ×). Never desktop 1, and not one someone holds,
+        stepped aside from, asked for or has a run on. It leaves the record first, under VMQueue's lock (queue_lock), so
+        nobody joins it meanwhile; then, while the VM runs, its session, demo and browser stop. Its user and home stay,
+        with everything in them, for when the VM gets that desktop again."""
+        if not self.lock.acquire(blocking=False):
+            raise VMsError(f"{self.name} is busy")
+        try:
+            if number == 1 or number != len(self.desktops):
+                raise VMsError(f"Only the last desktop can go, and never desktop 1 ({self.name} has {len(self.desktops)}).")
+            with queue_lock:
+                line = self.desktops[number - 1]
+                runs = [run for run in self.runs if run.get("desktop", 1) == number]
+                if line["holder"] is not None or line["priority"] or number in self.wants.values() or runs:
+                    raise VMsError(f"Desktop {number} is in use (held, waited for, or a run is going on it), so it can't go.")
+                self.desktops = self.desktops[: number - 1]
+                self.locked_by.pop(number, None)
+                self.save()
+            if self.vm.status() == "Running":
+                self.vm.set_up_desktops(number - 1)
+                self.vm.set_up_browser(number - 1, restart=False)
         except VMsError:
             raise
         except Exception as error:
