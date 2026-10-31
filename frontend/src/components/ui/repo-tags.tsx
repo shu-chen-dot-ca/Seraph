@@ -1,13 +1,14 @@
 import { Badge } from "@/components/ui/badge"
-import type { AIPolicyTag, NewcomerTag, Reviewers, ReviewerTag, Tone } from "@/live"
+import type { AIPolicyTag, NewcomerTag, Reviewers, ReviewerTag } from "@/live"
 
-// A repo's status as small tags: how well it fits, what its contribution files say about AI, how newcomers fare, how its
-// reviews feel, who reviews outside PRs (an AI reviewer, maintainers or both), how busy it is, and how many contributors, maintainers and unanswered PRs it has; and the labels behind
-// them. The Repos and Explore tables show the same things as plain text columns, with these labels; the tags themselves
-// are for places that show one repo, like an open Repos row (and the Tracked table's AI policy, newcomers and reviews).
+// A repo's status as small tags: how well it fits, what its contribution files say about AI, how newcomers fare, who
+// reviews outside PRs (an AI reviewer, maintainers or both), how busy it is, and how many contributors, maintainers and
+// unanswered PRs it has; and the labels behind them. The Repos and Explore tables show the same things as plain text
+// columns, with these labels; the tags themselves are for places that show one repo, like an open Repos row (and the
+// Tracked table's AI policy and newcomers).
 //
 // What Claude judges is always one of a fixed set (the same keys as the backend), so repos rank the same way every
-// time: the AI policy (POLICY_LABEL), the review tone (TONE_LABEL), what reviewers ask for (ASK_LABEL, from
+// time: the AI policy (POLICY_LABEL), what reviewers ask for (ASK_LABEL, from
 // repo_signals.py ASKS) and the fit (FIT_LEVELS, from explore.py FIT_LEVELS). A label not in a set (written before
 // the set existed) is shown as it is.
 
@@ -78,22 +79,6 @@ const REVIEWER_MEANING: Record<ReviewerTag, string> = {
   few: "Too few reviewed outside PRs lately to tell",
 }
 
-const TONE_LABEL: Record<Tone, string> = {
-  warm: "Warm reviews",
-  neutral: "Neutral reviews",
-  strict: "Strict reviews",
-  curt: "Curt reviews",
-  unknown: "Little review feedback",
-}
-
-const TONE_VARIANT: Record<Tone, TagVariant> = {
-  warm: "ok",
-  neutral: "secondary",
-  strict: "warn",
-  curt: "bad",
-  unknown: "secondary",
-}
-
 // What reviewers ask contributors for (repo_signals.py ASKS).
 const ASK_LABEL: Record<string, string> = {
   tests: "tests",
@@ -132,14 +117,6 @@ function NewcomersTag(props: { tag: NewcomerTag; detail?: string }) {
   return (
     <Badge variant={NEWCOMER_VARIANT[props.tag]} title={props.detail ? `${NEWCOMER_MEANING[props.tag]}. ${props.detail}` : NEWCOMER_MEANING[props.tag]}>
       {NEWCOMER_LABEL[props.tag]}
-    </Badge>
-  )
-}
-
-function ToneTag(props: { tone: Tone; summary?: string }) {
-  return (
-    <Badge variant={TONE_VARIANT[props.tone]} title={props.summary || "How maintainers' feedback on outside PRs feels"}>
-      {TONE_LABEL[props.tone]}
     </Badge>
   )
 }
@@ -215,7 +192,5 @@ export {
   POLICY_LABEL,
   PolicyTag,
   ReviewersTag,
-  TONE_LABEL,
-  ToneTag,
   UnansweredTag,
 }

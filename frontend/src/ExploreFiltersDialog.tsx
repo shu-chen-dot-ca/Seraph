@@ -1,6 +1,6 @@
 /*
 Explore's filters, in a pop-up: every tag a repo can get, the same as the Repos and Tracked pages, in their own colors,
-in sections by kind: Fit, AI policy, Newcomers, Reviews, First reply, Activity, Other (free beginner issues, 1
+in sections by kind: Fit, AI policy, Newcomers, First reply, Activity, Other (free beginner issues, 1
 maintainer, 5+ unanswered PRs). Each tag has three states, a click moves it on: once to include it (a check mark and a
 ring), twice to exclude it (an x, crossed out, with a ring), a third time back to "doesn't matter" (paler). Each row
 on its own: with tags included, a repo needs one of them and the rest of the row is skipped; with none included, any
@@ -36,11 +36,6 @@ export const FILTERS: { key: string; section: string; label: string; variant: "o
   { key: "newcomers:welcomes", section: "Newcomers", label: "Welcomes newcomers", variant: "ok", title: "Most newcomers' first PRs get merged, with a first reply within 3 days" },
   { key: "newcomers:ok", section: "Newcomers", label: "Newcomers OK", variant: "secondary", title: "Newcomers' first PRs fare neither clearly well nor badly" },
   { key: "newcomers:few", section: "Newcomers", label: "Few newcomers", variant: "secondary", title: "Too few newcomers lately to tell" },
-  { key: "tone:warm", section: "Reviews", label: "Warm reviews", variant: "ok", title: "Maintainers' feedback on outside PRs feels warm" },
-  { key: "tone:neutral", section: "Reviews", label: "Neutral reviews", variant: "secondary", title: "Maintainers' feedback on outside PRs feels neutral" },
-  { key: "tone:strict", section: "Reviews", label: "Strict reviews", variant: "warn", title: "Maintainers' feedback on outside PRs feels strict" },
-  { key: "tone:curt", section: "Reviews", label: "Curt reviews", variant: "bad", title: "Maintainers' feedback on outside PRs feels curt" },
-  { key: "tone:unknown", section: "Reviews", label: "Little review feedback", variant: "secondary", title: "Too little maintainer feedback on recent outside PRs to judge" },
   { key: "reply:fast", section: "First reply", label: "Replies in 2 days", variant: "ok", title: "Outside contributors' PRs get a first reply within 2 days (the median)" },
   { key: "reply:week", section: "First reply", label: "Replies in a week", variant: "secondary", title: "Outside contributors' PRs get a first reply in 3 to 7 days (the median)" },
   { key: "reply:slow", section: "First reply", label: "Replies over a week", variant: "warn", title: "Outside contributors' PRs wait over a week for a first reply (the median)" },
@@ -52,7 +47,7 @@ export const FILTERS: { key: string; section: string; label: string; variant: "o
   { key: "other:unanswered", section: "Other", label: "5+ unanswered PRs", variant: "warn", title: "5 or more outside contributors' PRs open over 30 days that nobody answered" },
 ];
 
-const SECTIONS = ["Fit", "AI policy", "Newcomers", "Reviews", "First reply", "Activity", "Other"];
+const SECTIONS = ["Fit", "AI policy", "Newcomers", "First reply", "Activity", "Other"];
 
 const STATE_NAME = { include: "included", exclude: "excluded", none: "doesn't matter" };
 

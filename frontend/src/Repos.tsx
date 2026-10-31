@@ -8,10 +8,10 @@ The table reads like the Explore page's: a column for each thing known about a r
 those merged or closed), newcomers' first PRs merged (New merged; hover for merged, closed and still open), how
 newcomers fare (welcomed, OK, turned away: their first PRs mostly closed, or left waiting: mostly still open after a
 month), the AI policy, and reply speed (how fast a maintainer first answers an outside PR;
-bots, AI reviewers and other outsiders don't count). Then its type and fit, stars, review tone, Reviewed by (who
-reviews outside PRs: Agent only when most get a review or comment only from an AI reviewer, a bot like CodeRabbit or
-Copilot; Agent and human; Human only; Few reviews when too few to tell; hover for the counts, the pop-up says them
-too; CI and other bots don't count), PRs, issues and commits
+bots, AI reviewers and other outsiders don't count). Then its type and fit, stars, Reviewed by (who reviews outside
+PRs: Agent only when most get a review or comment only from an AI reviewer, a bot like CodeRabbit or Copilot; Agent and
+human; Human only; Few reviews when too few to tell; hover for the counts, the pop-up says them too; CI and other bots
+don't count), PRs, issues and commits
 a month and the trend, new contributors (people whose first PR there was recent, as "16 in 6 days": the days its 100
 newest PRs cover; people who contributed before don't count; it sorts by new contributors a day), maintainers, PRs no maintainer answered, its issues in the Issues list, and more
 (TABLE_COLUMNS; github_searcher/repo_signals.py, kept fresh by the backend). There is no overall score: the numbers
@@ -30,13 +30,13 @@ browser. Rows have no arrow: the first column is for the boxes (see below).
 Sorting is by any number of fields at once (SORT_FIELDS): a click on a field's name in the header (Activity sorts by
 commits a month), or on a field's arrow in the All fields panel (every field, shown as a column or not). Each click on
 a field goes one step:
-- down: adds it to the sort, the best or the most first (fastest replies, most merged, warmest reviews, most open to
-  AI, A to Z for text),
+- down: adds it to the sort, the best or the most first (fastest replies, most merged, most open to AI, A to Z for
+  text),
 - up: turned round,
 - off: takes it out of the sort (with none left, back to the list's own order).
 Which field counts first: the first line's columns from left to right, then the second line's, then Track, then the
 fields not shown as columns (in the All fields panel's order), Name last of all. A field only orders the repos the ones before it
-leave the same. Every header the list sorts by turns blue with its arrow. Repos without a value for a field go last either way. What Claude judges (AI policy, review tone, what reviewers ask for,
+leave the same. Every header the list sorts by turns blue with its arrow. Repos without a value for a field go last either way. What Claude judges (AI policy, what reviewers ask for,
 fit) is always one of a fixed set, so it ranks in a fixed order (*_RANK below). For the AI policy: AI welcome best
 (green), then No AI policy (a lighter green), AI: disclose, AI: unclear, and No AI last (red); the Explore and Tracked
 pages rank it the same. The sort is remembered in this browser.
@@ -89,7 +89,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ColumnsDialog } from "@/components/ui/columns-dialog";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { ASK_LABEL, FIT_LEVELS, FitTag, NEWCOMER_LABEL, NewcomersTag, POLICY_LABEL, PolicyTag, ReviewersTag, TONE_LABEL, ToneTag } from "@/components/ui/repo-tags";
+import { ASK_LABEL, FIT_LEVELS, FitTag, NEWCOMER_LABEL, NewcomersTag, POLICY_LABEL, PolicyTag, ReviewersTag } from "@/components/ui/repo-tags";
 import { Input } from "@/components/ui/input";
 import { RowSelection, SelectBox } from "@/components/ui/row-selection";
 import { api, useLive, useLiveValue, useLoaded, type ListedRepo } from "@/live";
@@ -134,7 +134,6 @@ type SortKey =
   | "release"
   | "issue_replies"
   | "ai_policy"
-  | "tone"
   | "reviewers"
   | "asks"
   | "community"
@@ -177,7 +176,6 @@ const SORT_FIELDS: { key: SortKey; label: string; group: string; better: "higher
   { key: "release", label: "Last release", group: "Activity", better: "higher", down: "Most recent first", up: "Longest ago first" },
   { key: "issue_replies", label: "Issues answered", group: "Activity", better: "higher", down: "Most new issues answered first", up: "Fewest first" },
   { key: "ai_policy", label: "AI policy", group: "Policy and reviews", better: "higher", down: "Most open to AI first", up: "Strictest first" },
-  { key: "tone", label: "Review tone", group: "Policy and reviews", better: "higher", down: "Warmest first", up: "Curtest first" },
   { key: "reviewers", label: "Reviewed by", group: "Policy and reviews", better: "higher", down: "Human only first, then agent and human, then agent only", up: "Agent only first" },
   { key: "asks", label: "Reviewer asks", group: "Policy and reviews", better: "lower", down: "Fewest asks first", up: "Most asks first" },
   { key: "community", label: "Community", group: "Policy and reviews", better: "higher", down: "Most (guide, code of conduct, Discussions, chat) first", up: "Fewest first" },
@@ -191,7 +189,6 @@ const FIRST_LINE_GROUPS = ["Outside contributors", "Newcomers", "Policy and revi
 // The fixed order of each judged or tagged value, best first being the highest. Values not listed (unknown) go last.
 const POLICY_RANK: Record<string, number> = { welcome: 5, none: 4, disclose: 3, unclear: 2, no_ai: 1 };
 const NEWCOMER_RANK: Record<string, number> = { welcomes: 5, ok: 4, few: 3, left_waiting: 2, turned_away: 1 };
-const TONE_RANK: Record<string, number> = { warm: 4, neutral: 3, strict: 2, curt: 1 };
 const TREND_RANK: Record<string, number> = { up: 3, flat: 2, down: 1 };
 const REVIEWER_RANK: Record<string, number> = { human: 3, both: 2, agent: 1 };
 
@@ -236,7 +233,6 @@ const TABLE_COLUMNS: TableColumn[] = [
   { key: "release", label: "Release", name: "Last release", group: "Activity", title: "Its last GitHub release", sort: "release" },
   { key: "issue_replies", label: "Answered", name: "Issues answered", group: "Activity", title: "New issues a maintainer answered within a week", sort: "issue_replies" },
   { key: "ai_policy", label: "AI policy", name: "AI policy", group: "Policy and reviews", title: "What its contribution files say about AI", sort: "ai_policy" },
-  { key: "tone", label: "Reviews", name: "Review tone", group: "Policy and reviews", title: "How maintainers' feedback on outside PRs feels", sort: "tone" },
   { key: "reviewers", label: "Reviewed by", name: "Reviewed by", group: "Policy and reviews", title: "Who reviews outside PRs: only an AI reviewer (a bot like CodeRabbit or Copilot), both, or only maintainers", sort: "reviewers" },
   { key: "asks", label: "Asks", name: "Reviewer asks", group: "Policy and reviews", title: "How many things reviewers ask contributors for (tests, docs, a changelog entry...)", sort: "asks" },
   { key: "community", label: "Community", name: "Community", group: "Policy and reviews", title: "Contributing guide, code of conduct, GitHub Discussions and chat", sort: "community" },
@@ -254,7 +250,6 @@ const DEFAULT_COLUMNS: ColumnKey[] = [
   "lane",
   "fit",
   "stars",
-  "tone",
   "reviewers",
   "prs",
   "issues",
@@ -268,11 +263,10 @@ const DEFAULT_COLUMNS: ColumnKey[] = [
 // "-6": saved before Reviewed by (who reviews outside PRs) joined the defaults; starting from the new defaults once
 // shows it.
 const COLUMNS_STORAGE = "repos-columns-6";
-// The AI policy, newcomers and tone columns are tags (the Explore page's too): green for good news, amber for "have a
+// The AI policy and newcomers columns are tags (the Explore page's too): green for good news, amber for "have a
 // look", red for bad, gray for the rest. Other values are plain text, colored only when it means something.
 const POLICY_VARIANT: Record<string, "ok" | "fine" | "warn" | "bad"> = { welcome: "ok", none: "fine", no_ai: "bad" };
 const NEWCOMER_VARIANT: Record<string, "ok" | "warn" | "bad"> = { welcomes: "ok", turned_away: "bad", left_waiting: "bad" };
-const TONE_VARIANT: Record<string, "ok" | "warn" | "bad"> = { warm: "ok", strict: "warn", curt: "bad" };
 const NAME_MIN = 160;
 // The column at the end, wide enough for its Set up and Track / Untrack buttons.
 const ACTIONS_WIDTH = 156;
@@ -497,9 +491,6 @@ export default function Repos() {
       return activity?.last_release_at ? new Date(activity.last_release_at).getTime() : null;
     }
     const atmosphere = signals.atmosphere ?? null;
-    if (key === "tone") {
-      return atmosphere !== null ? (TONE_RANK[atmosphere.tone] ?? null) : null;
-    }
     if (key === "asks") {
       // Too little feedback to judge says nothing about how much reviewers ask for.
       return atmosphere !== null && atmosphere.tone !== "unknown" ? atmosphere.asks_for.length : null;
@@ -935,16 +926,6 @@ export default function Repos() {
       return rate === null ? "–" : `${Math.round(rate * 100)}%`;
     }
     const atmosphere = signals.atmosphere ?? null;
-    if (key === "tone") {
-      if (atmosphere === null) {
-        return "–";
-      }
-      return (
-        <Badge variant={TONE_VARIANT[atmosphere.tone] ?? "secondary"} title={atmosphere.summary}>
-          {TONE_LABEL[atmosphere.tone] ?? atmosphere.tone}
-        </Badge>
-      );
-    }
     if (key === "asks") {
       if (atmosphere === null || atmosphere.tone === "unknown") {
         return "–";
@@ -1398,19 +1379,11 @@ export default function Repos() {
                       </>
                     )}
 
-                    {openAtmosphere !== null && (
+                    {openAtmosphere !== null && openAtmosphere.asks_for.length > 0 && (
                       <>
-                        <span className="text-muted-foreground">Atmosphere</span>
+                        <span className="text-muted-foreground">Reviewers ask for</span>
                         <span className="flex min-w-0 flex-col gap-1">
-                          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                            <ToneTag tone={openAtmosphere.tone} />
-                            <span>{openAtmosphere.summary}</span>
-                          </span>
-                          {openAtmosphere.asks_for.length > 0 && (
-                            <span className="text-muted-foreground">
-                              Reviewers ask for: {openAtmosphere.asks_for.map((ask) => ASK_LABEL[ask] ?? ask).join(", ")}
-                            </span>
-                          )}
+                          <span>{openAtmosphere.asks_for.map((ask) => ASK_LABEL[ask] ?? ask).join(", ")}</span>
                           <span className="text-xs text-muted-foreground">
                             From maintainers' feedback on {openAtmosphere.prs} recent PRs, read {timeAgo(openAtmosphere.judged_at)}
                           </span>

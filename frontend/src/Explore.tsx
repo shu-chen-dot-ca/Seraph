@@ -28,7 +28,7 @@ column holds a first-line field over a second-line one. The first line (FIRST_LI
 the main ones first: outside PRs merged (of those merged or closed), newcomers' first PRs merged (the same, for people
 who never opened a PR there before; hover for how many were merged, closed and still open), how newcomers fare, its AI
 policy, and how fast a maintainer first replies to an outside PR (bots, AI reviewers and other outsiders don't count);
-then review tone, who reviews outside PRs (Reviewed by: Agent only when most get a review or comment only from an AI
+then who reviews outside PRs (Reviewed by: Agent only when most get a review or comment only from an AI
 reviewer, a bot like CodeRabbit or Copilot; Agent and human; Human only when only maintainers do; Few reviews when
 too few to tell; hover for the counts; CI and other bots don't count), how many outside PRs no maintainer answered and
 how many maintainers it has. The second line
@@ -87,7 +87,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { FIT_LEVELS, NEWCOMER_LABEL, POLICY_LABEL, ReviewersTag, TONE_LABEL } from "@/components/ui/repo-tags";
+import { FIT_LEVELS, NEWCOMER_LABEL, POLICY_LABEL, ReviewersTag } from "@/components/ui/repo-tags";
 import { RowSelection, SelectBox } from "@/components/ui/row-selection";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StatusDot } from "@/components/ui/status-dot";
@@ -127,7 +127,6 @@ type FoundKey =
   | "policy"
   | "newcomers"
   | "reply"
-  | "tone"
   | "reviewers"
   | "prs"
   | "issues"
@@ -149,7 +148,6 @@ const FIRST_LINE: FoundColumn[] = [
   { key: "newcomers", label: "Newcomers", title: "How newcomers' first PRs fare", better: "higher" },
   { key: "policy", label: "AI policy", title: "What its contribution files say about AI", better: "higher" },
   { key: "reply", label: "Reply", title: "Median days until outside contributors' PRs get a first reply from a maintainer (bots and other outsiders don't count)", better: "lower" },
-  { key: "tone", label: "Reviews", title: "How maintainers' feedback on outside PRs feels", better: "higher" },
   { key: "reviewers", label: "Reviewed by", title: "Who reviews outside PRs: only an AI reviewer (a bot like CodeRabbit or Copilot), both, or only maintainers; human only first", better: "higher" },
   { key: "unanswered", label: "Unanswered", title: "Outside contributors' PRs open over 30 days that no maintainer answered", better: "lower" },
   { key: "maintainers", label: "Maintainers", title: "People who merged a PR in the last 30 days (bots not counted)", better: "higher" },
@@ -174,15 +172,13 @@ const SLOTS = Array.from({ length: Math.max(FIRST_LINE.length, SECOND_LINE.lengt
 // The order of each judged value, best first being the highest. Values not listed (unknown) go last.
 const POLICY_RANK: Record<string, number> = { welcome: 5, none: 4, disclose: 3, unclear: 2, no_ai: 1 };
 const NEWCOMER_RANK: Record<string, number> = { welcomes: 5, ok: 4, few: 3, left_waiting: 2, turned_away: 1 };
-const TONE_RANK: Record<string, number> = { warm: 4, neutral: 3, strict: 2, curt: 1 };
 const TREND_RANK: Record<string, number> = { up: 3, flat: 2, down: 1 };
 const REVIEWER_RANK: Record<string, number> = { human: 3, both: 2, agent: 1 };
 
-// The AI policy, newcomers and tone columns are tags: green for good news, amber for "have a look", red for bad, gray
+// The AI policy and newcomers columns are tags: green for good news, amber for "have a look", red for bad, gray
 // for the rest.
 const POLICY_VARIANT: Record<string, "ok" | "fine" | "warn" | "bad"> = { welcome: "ok", none: "fine", no_ai: "bad" };
 const NEWCOMER_VARIANT: Record<string, "ok" | "warn" | "bad"> = { welcomes: "ok", turned_away: "bad", left_waiting: "bad" };
-const TONE_VARIANT: Record<string, "ok" | "warn" | "bad"> = { warm: "ok", strict: "warn", curt: "bad" };
 
 export default function Explore() {
   const explore = useLive("explore");
@@ -328,9 +324,6 @@ export default function Explore() {
     if (key === "newcomers") {
       return each.newcomers !== undefined ? (NEWCOMER_RANK[each.newcomers] ?? null) : null;
     }
-    if (key === "tone") {
-      return each.tone !== undefined && each.tone !== null ? (TONE_RANK[each.tone] ?? null) : null;
-    }
     if (key === "reviewers") {
       return each.reviewers ? (REVIEWER_RANK[each.reviewers.tag] ?? null) : null;
     }
@@ -411,16 +404,6 @@ export default function Explore() {
         return "–";
       }
       return <Badge variant={NEWCOMER_VARIANT[each.newcomers] ?? "secondary"}>{NEWCOMER_LABEL[each.newcomers] ?? each.newcomers}</Badge>;
-    }
-    if (key === "tone") {
-      if (each.tone === undefined || each.tone === null) {
-        return "–";
-      }
-      return (
-        <Badge variant={TONE_VARIANT[each.tone] ?? "secondary"} title={each.atmosphere}>
-          {TONE_LABEL[each.tone] ?? each.tone}
-        </Badge>
-      );
     }
     if (key === "reviewers") {
       return each.reviewers ? <ReviewersTag reviewers={each.reviewers} /> : "–";

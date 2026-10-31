@@ -30,7 +30,7 @@ for the tags. Tag again (on the repo's row and in its pop-up) has Claude read al
 The list is a table like the Explore page's: Name, then the repo's fields in two lines, so a row isn't too long, and
 its description under them, from the name on. The header has two lines of names to match: each column holds a
 first-line field over a second-line one. The first line (FIRST_LINE) is how outside contributors fare, from the repo's
-signals (the same as the Repos page's columns): AI policy, newcomers, reply speed, review tone, unanswered PRs and
+signals (the same as the Repos page's columns): AI policy, newcomers, reply speed, unanswered PRs and
 maintainers; hover a tag for what it means. The second (SECOND_LINE): stars, its issues' numbers (New, Free, Easy,
 Open, Checked), new contributors (people whose first PR there was recent, as "16 in 6 days"; people who contributed
 before don't count) and activity. Every column is as wide as its widest cell (one CSS grid, each row a subgrid) and
@@ -81,7 +81,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
-import { NewcomersTag, PolicyTag, ToneTag } from "@/components/ui/repo-tags";
+import { NewcomersTag, PolicyTag } from "@/components/ui/repo-tags";
 import { RowSelection, SelectBox } from "@/components/ui/row-selection";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api, useLive, useLoaded, type TrackedIssue, type TrackedRepo } from "@/live";
@@ -95,7 +95,6 @@ type TrackedKey =
   | "ai_policy"
   | "newcomers"
   | "reply"
-  | "reviews"
   | "activity"
   | "new_contributors"
   | "maintainers"
@@ -112,7 +111,6 @@ const FIRST_LINE: TrackedColumn[] = [
   { key: "ai_policy", label: "AI policy", title: "What its contribution files say about AI: the most open first" },
   { key: "newcomers", label: "Newcomers", title: "How newcomers' first PRs fare: the most welcoming first" },
   { key: "reply", label: "Reply", title: "Median days until outside contributors' PRs get a first reply from a maintainer (bots and other outsiders don't count): the fastest first", better: "lower" },
-  { key: "reviews", label: "Reviews", title: "How maintainers' feedback on outside PRs feels: the warmest first" },
   { key: "unanswered", label: "Unanswered", title: "Outside contributors' PRs open over 30 days that no maintainer answered" },
   { key: "maintainers", label: "Maintainers", title: "People who merged a PR in the last 30 days" },
 ];
@@ -134,7 +132,6 @@ const SLOTS = Array.from({ length: Math.max(FIRST_LINE.length, SECOND_LINE.lengt
 // The tags' order for sorting, the friendliest highest (the same as the Repos page's).
 const POLICY_RANK: Record<string, number> = { welcome: 5, none: 4, disclose: 3, unclear: 2, no_ai: 1 };
 const NEWCOMER_RANK: Record<string, number> = { welcomes: 5, ok: 4, few: 3, left_waiting: 2, turned_away: 1 };
-const TONE_RANK: Record<string, number> = { warm: 4, neutral: 3, strict: 2, curt: 1 };
 // The pop-up's issues: #, Title (the room left over), the tags (Free, Marked, Level, Kind), Opened, Updated, Checked
 // (Claude last read it), comments, then GitHub and Add.
 const ISSUE_COLUMNS = "grid grid-cols-[56px_minmax(0,1fr)_72px_160px_64px_72px_150px_80px_80px_36px_120px] items-center gap-2";
@@ -237,9 +234,6 @@ export default function Tracked() {
     }
     if (key === "reply") {
       return signals !== null ? signals.median_days_to_first_reply : null;
-    }
-    if (key === "reviews") {
-      return signals !== null && signals.atmosphere ? (TONE_RANK[signals.atmosphere.tone] ?? null) : null;
     }
     if (key === "activity") {
       return signals !== null && signals.activity !== undefined ? signals.activity.commits_month : null;
@@ -762,15 +756,13 @@ export default function Tracked() {
                   >
                     {signals !== null && signals.median_days_to_first_reply !== null ? `${signals.median_days_to_first_reply}d` : "–"}
                   </span>
-                  <span className="flex h-7 items-center">
-                    {signals !== null && signals.atmosphere ? <ToneTag tone={signals.atmosphere.tone} summary={signals.atmosphere.summary} /> : "–"}
-                  </span>
                   <span className={cn("flex h-7 items-center tabular-nums", signals !== null && signals.stale_outside_prs >= 5 && "text-warn")}>
                     {signals !== null ? signals.stale_outside_prs : "–"}
                   </span>
                   <span className={cn("flex h-7 items-center tabular-nums", signals !== null && signals.active_mergers_30d <= 1 && "text-warn")}>
                     {signals !== null ? signals.active_mergers_30d : "–"}
                   </span>
+                  <span />
                   <span />
                   <span />
                   <span />
