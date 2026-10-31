@@ -229,8 +229,12 @@ export default function NewJobDialog(props: { onClose: () => void }) {
                   {vm.name}
                   <span className="text-muted-foreground">
                     {vm.status}
-                    {vm.holder === "user" && " · held by you"}
-                    {vm.holder !== null && vm.holder !== "user" && ` · held by ${agentNames[vm.holder] ?? vm.holder}`}
+                    {vm.desktops.length === 1 && vm.desktops[0].holder === "user" && " · held by you"}
+                    {vm.desktops.length === 1 &&
+                      vm.desktops[0].holder !== null &&
+                      vm.desktops[0].holder !== "user" &&
+                      ` · held by ${agentNames[vm.desktops[0].holder] ?? vm.desktops[0].holder}`}
+                    {vm.desktops.length > 1 && ` · ${vm.desktops.filter((desktop) => desktop.holder === null).length} of ${vm.desktops.length} desktops free`}
                     {vm.queue.length > 0 && ` · ${vm.queue.length} waiting`}
                   </span>
                 </SelectItem>

@@ -594,6 +594,7 @@ export type AgentSummary = {
   status: AgentStatus;
   busy: boolean;
   vm: string | null; // the VM it is queued for or holds
+  desktop: number | null; // the desktop of that VM it holds, stepped aside from or asked for (null: any)
   place: number | null; // 0 = holder, n = place in the queue (or in the priority line, for in_priority)
   context_used: number;
   context_max: number;
@@ -653,12 +654,20 @@ export type VMNote = {
   text: string;
   by: string; // an agent id or "user"
   at: string;
+  desktop?: number; // the desktop an agent wrote it on (its ~ is that desktop's home); the user's have none
+};
+
+// One desktop of a VM: who uses it, and who stepped aside from it. Each has its own screen, mouse, keyboard and home folder.
+export type VMDesktop = {
+  holder: string | null; // null, "user" or an agent id
+  priority: string[]; // agents that stepped aside while their run goes; they come before the queue, first = checked first
 };
 
 // A long command an agent left going in a VM (a test suite, a build): it goes on by itself until it ends.
 export type VMRun = {
   id: string;
   agent: string; // the agent id
+  desktop?: number; // the desktop it runs on (none: desktop 1)
   kind: "bash" | "tests";
   label: string; // the command, as you see it
   started_at: string;
@@ -681,15 +690,15 @@ export type VMSummary = {
   autostart: boolean;
   status: VMStatus;
   created_at: string;
-  holder: string | null; // null, "user" or an agent id
-  priority: string[]; // agents that stepped aside while their run goes; they come before the queue, first = checked first
-  queue: string[]; // agent ids, first = next
+  desktops: VMDesktop[]; // desktop 1 first; agents on different desktops work at the same time
+  queue: string[]; // agent ids waiting for a desktop, first = next
+  wants: Record<string, number>; // the desktop some of them asked for (the others take the first that frees up)
   runs: VMRun[]; // long commands agents left going in the VM
   usage: VMUsage | null;
   samples: { cpu_percent: number | null; memory_used_gb: number | null; net_down_rate: number | null; net_up_rate: number | null }[];
   traffic: VMTraffic;
   notes: VMNote[]; // what agents and the user set up in it, oldest first
-  locked_by: "user" | "agent" | null;
+  locked_by: Record<string, "user" | "agent">; // per desktop number: who locked your mouse and keyboard out
   error: string | null; // why the last create, start or stop failed
 };
 
@@ -796,6 +805,7 @@ export type VMOptions = {
   disk_gb_min: number;
   disk_gb_max: number;
   disk_gb_default: number;
+  desktops: number[]; // 1, 2, 3: how many desktops (agents at the same time) a VM can have
   next_name: string;
 };
 

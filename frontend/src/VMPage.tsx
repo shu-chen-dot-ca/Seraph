@@ -2,9 +2,17 @@
 One VM's page: a header with its state and power buttons, and four tabs.
 
 Overview is three areas with draggable dividers:
-  desktop (noVNC in an iframe)  |  queue (who holds the VM, who waits)
-  ------------------------------+--------------------------------------
+  desktop (noVNC in an iframe)  |  queue (who holds the desktop, who waits)
+  ------------------------------+------------------------------------------
   stats (CPU, memory and internet speed over the last minute, disk, internet used)  and  the jobs on this VM
+
+A VM has one to three desktops (set in Settings > Resources while it is stopped). Each has its own screen, mouse,
+keyboard and home folder, so agents on different desktops work at the same time without getting in each other's
+way. With more than one, buttons Desktop 1, Desktop 2, ... above the desktop pick which one the desktop area, its
+Lock, and the queue panel (its holder, Priority and Runs) are about; each button's tooltip says who holds it. Waiting
+is one line for the whole VM: the next agent gets the first desktop that frees up, unless it asked for one ("for
+desktop 2"); Give hands the desktop shown to that agent. A desktop's iframe stays mounted once opened, so switching
+back is instant.
 Notes is VMNotes: what agents (and you) set up in this VM, for the next agent. #/vms/<name>?tab=notes opens it
 (the VMs overview's Notes card links there).
 Resources is VMResources: copy files and folders between this computer and the VM (only you; agents can't).
@@ -13,13 +21,13 @@ Settings is VMSettings. Fork (only while stopped) makes a new VM that starts as 
 App keeps this page mounted (hidden) after you leave it, and the Overview stays mounted while the
 Notes, Resources or Settings tab is open, so the desktop iframe never reloads: coming back is instant, and always to the
 Overview (the tab you were on isn't remembered). The iframe only
-exists while the VM runs; its address comes from GET /api/vms/{name}/viewer, asked again (every 3 s)
+exists while the VM runs; its address comes from GET /api/vms/{name}/viewer?desktop=n, asked again (every 3 s)
 until the VM has one. A VM from a terminal-only image has no desktop: the same area shows its terminal (ttyd).
 
-The queue buttons map one to one onto the backend: Take over, Release (your own hold), Give (the VM
-goes to that agent now), Front (next in line), Skip (the holding agent steps aside: the next one gets the VM, and the
-agent goes to the Priority line and gets it back first; it is interrupted, its runs go on) and Remove (out of a line,
-or the VM taken away; the agent is interrupted).
+The queue buttons map one to one onto the backend, for the desktop shown: Take over, Release (your own hold), Give
+(the desktop goes to that agent now), Front (next in line), Skip (the holding agent steps aside: the next one gets the
+desktop, and the agent goes to the Priority line and gets it back first; it is interrupted, its runs go on) and Remove
+(out of a line, or the desktop taken away; the agent is interrupted).
 Priority lists the agents that stepped aside: an agent steps aside by itself when all it does in the VM is wait for
 its run (a test suite, a build). When the VM is free again, the first of them whose run is over (ready) gets it, before
 anyone in Waiting; one whose run still goes (run going) waits for the next turn. Runs lists the long commands agents
@@ -112,9 +120,13 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
       setTab("notes");
     }
   }, [props.active, props.tab]);
-  const [desktopUrl, setDesktopUrl] = useState<string | null>(null);
-  // The VM has no desktop (a terminal-only image): desktopUrl is its terminal.
+  // Each desktop's noVNC page by its number (1, 2, 3), once known.
+  const [desktopUrls, setDesktopUrls] = useState<Record<number, string>>({});
+  // The VM has no desktop (a terminal-only image): desktopUrls[1] is its terminal.
   const [terminalOnly, setTerminalOnly] = useState(false);
+  // The desktop shown, and the ones opened since the page loaded (their iframes stay, so switching back is instant).
+  const [desk, setDesk] = useState(1);
+  const [opened, setOpened] = useState<number[]>([1]);
   const [viewerError, setViewerError] = useState("");
   // Bumped by Reconnect: a new iframe key loads the desktop again.
   const [reload, setReload] = useState(0);
@@ -132,13 +144,18 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
   const name = props.name;
   const vm = vms.find((each) => each.name === name);
   const running = vm !== undefined && vm.status === "running";
-  const locked = vm !== undefined && vm.locked_by !== null;
+  const count = vm !== undefined ? vm.desktops.length : 1;
+  // A desktop that went away (fewer desktops now) falls back to desktop 1.
+  const shown = desk <= count ? desk : 1;
+  const lockedBy = vm !== undefined ? (vm.locked_by[shown] ?? null) : null;
+  const locked = lockedBy !== null;
+  const desktopUrl = desktopUrls[shown] ?? null;
   const silent = running && vm.usage !== null && vm.usage.on && !vm.usage.responding;
 
-  // Ask where the desktop is once the VM runs; forget it when it stops.
+  // Ask where each desktop is once the VM runs; forget them when it stops.
   useEffect(() => {
     if (!running) {
-      setDesktopUrl(null);
+      setDesktopUrls({});
       setViewerError("");
       return;
     }
@@ -146,12 +163,24 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
     let timer = 0;
     async function load() {
       try {
-        const answer = await api<{ desktop: string | null; terminal: string | null }>(`/api/vms/${encodeURIComponent(name)}/viewer`);
+        const urls: Record<number, string> = {};
+        let terminal = false;
+        for (let number = 1; number <= count; number++) {
+          const answer = await api<{ desktop: string | null; terminal: string | null }>(
+            `/api/vms/${encodeURIComponent(name)}/viewer?desktop=${number}`,
+          );
+          urls[number] = answer.desktop ?? answer.terminal ?? "";
+          terminal = answer.desktop === null;
+          // A terminal-only image has no desktops: its one terminal is all there is.
+          if (terminal) {
+            break;
+          }
+        }
         if (stopped) {
           return;
         }
-        setDesktopUrl(answer.desktop ?? answer.terminal);
-        setTerminalOnly(answer.desktop === null);
+        setDesktopUrls(urls);
+        setTerminalOnly(terminal);
         setViewerError("");
       } catch (err) {
         if (stopped) {
@@ -167,7 +196,7 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
       stopped = true;
       window.clearTimeout(timer);
     };
-  }, [name, running]);
+  }, [name, running, count]);
 
   // Reload the desktop when the VM answers again after a while (a blip of a second or two doesn't count).
   useEffect(() => {
@@ -207,7 +236,11 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
     agentById[agent.id] = agent;
   }
   const error = vm.error;
-  const holderAgent = vm.holder !== null && vm.holder !== "user" ? agentById[vm.holder] : undefined;
+  // The desktop shown: who holds it, who waits for it, and the runs going on it.
+  const line = vm.desktops[shown - 1];
+  const holder = line.holder;
+  const runs = vm.runs.filter((run) => (run.desktop ?? 1) === shown);
+  const holderAgent = holder !== null && holder !== "user" ? agentById[holder] : undefined;
   // The job the holding agent is on, with its progress, for the queue panel.
   const holderJob = holderAgent !== undefined ? currentJob(holderAgent.id, jobs) : undefined;
   // The image's name now (it may have been renamed since), or the name it was made with.
@@ -286,11 +319,11 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
     setBusy("");
   }
 
-  // take_over and release act on the VM; give, front, skip and remove also name an agent.
+  // take_over, release and give act on the desktop shown; give, front, skip and remove name an agent.
   async function queueAction(action: "take_over" | "release" | "give" | "front" | "skip" | "remove", agentId: string | null) {
     setBusy(agentId === null ? action : `${action}:${agentId}`);
     try {
-      const body = agentId === null ? undefined : { agent: agentId };
+      const body = agentId === null ? { desktop: shown } : { agent: agentId, desktop: shown };
       await api(`/api/vms/${encodeURIComponent(name)}/${action}`, { method: "POST", body: body });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
@@ -322,7 +355,7 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
     }
     setBusy("lock");
     try {
-      await api(`/api/vms/${encodeURIComponent(name)}/lock`, { method: "PUT", body: { enabled: enabled } });
+      await api(`/api/vms/${encodeURIComponent(name)}/lock`, { method: "PUT", body: { enabled: enabled, desktop: shown } });
     } catch (err) {
       toast.error(`Could not ${enabled ? "lock" : "unlock"} the desktop: ${err instanceof Error ? err.message : err}`);
     }
@@ -330,6 +363,13 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
   }
 
   const canStart = vm.status === "stopped" || vm.status === "failed";
+
+  function showDesktop(number: number) {
+    setDesk(number);
+    if (!opened.includes(number)) {
+      setOpened([...opened, number]);
+    }
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -393,7 +433,30 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
               <ResizablePanel defaultSize="76" minSize="30">
                 <div className="flex h-full flex-col">
                   <div className="flex h-7 shrink-0 items-center gap-1 border-b bg-muted/40 px-2 text-xs">
-                    <span className="font-medium text-muted-foreground">{terminalOnly ? "Terminal" : "Desktop"}</span>
+                    {(terminalOnly || count === 1) && <span className="font-medium text-muted-foreground">{terminalOnly ? "Terminal" : "Desktop"}</span>}
+                    {!terminalOnly &&
+                      count > 1 &&
+                      vm.desktops.map((each, index) => {
+                        const number = index + 1;
+                        let heldBy = "Free";
+                        if (each.holder === "user") {
+                          heldBy = "Held by you";
+                        }
+                        if (each.holder !== null && each.holder !== "user") {
+                          heldBy = `Held by ${agentById[each.holder]?.name ?? each.holder}`;
+                        }
+                        return (
+                          <Button
+                            key={number}
+                            variant={number === shown ? "secondary" : "ghost"}
+                            size="xs"
+                            title={heldBy}
+                            onClick={() => showDesktop(number)}
+                          >
+                            Desktop {number}
+                          </Button>
+                        );
+                      })}
                     {running && desktopUrl !== null && (
                       <div className="ml-auto flex items-center gap-0.5">
                         {!terminalOnly && (
@@ -414,16 +477,23 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                     )}
                   </div>
                   <div className="relative min-h-0 flex-1 bg-muted/30">
-                    {running && desktopUrl !== null && (
-                      <iframe
-                        key={`${desktopUrl}-${reload}`}
-                        ref={frameRef}
-                        src={desktopUrl}
-                        title={terminalOnly ? `Terminal of ${vm.name}` : `Desktop of ${vm.name}`}
-                        allow="clipboard-write"
-                        className="absolute inset-0 size-full border-0 bg-black"
-                      />
-                    )}
+                    {running &&
+                      opened.map((number) => {
+                        const url = desktopUrls[number];
+                        if (url === undefined || number > count) {
+                          return null;
+                        }
+                        return (
+                          <iframe
+                            key={`${url}-${reload}`}
+                            ref={number === shown ? frameRef : undefined}
+                            src={url}
+                            title={terminalOnly ? `Terminal of ${vm.name}` : `Desktop ${number} of ${vm.name}`}
+                            allow="clipboard-write"
+                            className={cn("absolute inset-0 size-full border-0 bg-black", number !== shown && "hidden")}
+                          />
+                        );
+                      })}
 
                     {silent && (
                       <div className="absolute inset-x-0 top-2 z-10 flex justify-center px-2">
@@ -441,7 +511,7 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                       <div className="absolute inset-0 cursor-not-allowed">
                         <div className="absolute top-2 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-md border bg-background py-1 pr-1 pl-2.5 whitespace-nowrap">
                           <Lock className="size-3.5 text-warn" />
-                          {vm.locked_by === "agent" ? "Locked by the agent while it works" : "You locked your mouse and keyboard out"}
+                          {lockedBy === "agent" ? "Locked by the agent while it works" : "You locked your mouse and keyboard out"}
                           <Button size="xs" variant="outline" disabled={busy === "lock"} onClick={() => setLock(false)}>
                             <Unlock /> Unlock
                           </Button>
@@ -494,13 +564,13 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
               <ResizablePanel defaultSize="24" minSize={220}>
                 <div className="flex h-full flex-col">
                   <div className="flex h-7 shrink-0 items-center gap-1 border-b bg-muted/40 px-2 text-xs">
-                    <span className="font-medium text-muted-foreground">Queue</span>
-                    {vm.holder !== "user" && (
+                    <span className="font-medium text-muted-foreground">{count > 1 ? `Queue · Desktop ${shown}` : "Queue"}</span>
+                    {holder !== "user" && (
                       <Button
                         variant="ghost"
                         size="xs"
                         className="ml-auto"
-                        title={holderAgent !== undefined ? `${holderAgent.name} goes back to the front of the queue` : "Hold the VM yourself"}
+                        title={holderAgent !== undefined ? `${holderAgent.name} goes back to the front of the queue` : "Hold this desktop yourself"}
                         disabled={busy !== ""}
                         onClick={() => queueAction("take_over", null)}
                       >
@@ -510,8 +580,8 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                   </div>
                   <div className="min-h-0 flex-1 overflow-auto">
                     <div className="px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground">Holder</div>
-                    {vm.holder === null && <div className="flex h-7 items-center px-2 text-muted-foreground">Free</div>}
-                    {vm.holder === "user" && (
+                    {holder === null && <div className="flex h-7 items-center px-2 text-muted-foreground">Free</div>}
+                    {holder === "user" && (
                       <div className="flex h-7 items-center gap-2 px-2">
                         <User className="size-3.5 text-primary" />
                         You
@@ -520,29 +590,29 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                         </Button>
                       </div>
                     )}
-                    {vm.holder !== null && vm.holder !== "user" && (
+                    {holder !== null && holder !== "user" && (
                       <div className="px-2">
                         <div className="flex h-7 items-center gap-2">
                           <StatusDot tone={holderAgent !== undefined ? AGENT_TONE[holderAgent.status] : "gray"} />
-                          <a href={`#/agents/${vm.holder}`} className="truncate text-primary hover:underline">
-                            {holderAgent?.name ?? vm.holder}
+                          <a href={`#/agents/${holder}`} className="truncate text-primary hover:underline">
+                            {holderAgent?.name ?? holder}
                           </a>
                           <Button
                             variant="ghost"
                             size="xs"
                             className="ml-auto"
-                            title="Give the VM to the next agent now. This one goes to Priority and gets it back first (it is interrupted; its runs go on)"
-                            disabled={busy !== "" || (vm.queue.length === 0 && vm.priority.length === 0)}
-                            onClick={() => queueAction("skip", vm.holder)}
+                            title="Give the desktop to the next agent now. This one goes to Priority and gets it back first (it is interrupted; its runs go on)"
+                            disabled={busy !== "" || (vm.queue.length === 0 && line.priority.length === 0)}
+                            onClick={() => queueAction("skip", holder)}
                           >
                             Skip
                           </Button>
                           <Button
                             variant="ghost"
                             size="xs"
-                            title="Take the VM away from this agent (it is interrupted)"
+                            title="Take the desktop away from this agent (it is interrupted)"
                             disabled={busy !== ""}
-                            onClick={() => queueAction("remove", vm.holder)}
+                            onClick={() => queueAction("remove", holder)}
                           >
                             <X /> Remove
                           </Button>
@@ -564,10 +634,10 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                       </div>
                     )}
 
-                    {vm.priority.length > 0 && (
-                      <div className="mt-1 border-t px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground">Priority ({vm.priority.length})</div>
+                    {line.priority.length > 0 && (
+                      <div className="mt-1 border-t px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground">Priority ({line.priority.length})</div>
                     )}
-                    {vm.priority.map((agentId, index) => {
+                    {line.priority.map((agentId, index) => {
                       const agent = agentById[agentId];
                       const runGoing = vm.runs.some((run) => run.agent === agentId);
                       return (
@@ -581,7 +651,7 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                             <Button
                               variant="ghost"
                               size="xs"
-                              title="Give the VM to this agent now"
+                              title={`Give desktop ${shown} to this agent now`}
                               disabled={busy !== ""}
                               onClick={() => queueAction("give", agentId)}
                             >
@@ -606,17 +676,19 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                     {vm.queue.length === 0 && <div className="flex h-7 items-center px-2 text-muted-foreground">No agent is waiting.</div>}
                     {vm.queue.map((agentId, index) => {
                       const agent = agentById[agentId];
+                      const wants = vm.wants[agentId];
                       return (
                         <div key={agentId} className="flex h-7 items-center gap-1.5 px-2 hover:bg-accent/40">
                           <span className="w-5 shrink-0 text-xs text-muted-foreground tabular-nums">#{index + 1}</span>
                           <a href={`#/agents/${agentId}`} className="min-w-0 truncate text-primary hover:underline">
                             {agent?.name ?? agentId}
                           </a>
+                          {count > 1 && wants !== undefined && <span className="shrink-0 text-xs text-muted-foreground">for desktop {wants}</span>}
                           <span className="ml-auto flex shrink-0 items-center">
                             <Button
                               variant="ghost"
                               size="xs"
-                              title="Give the VM to this agent now"
+                              title={`Give desktop ${shown} to this agent now`}
                               disabled={busy !== ""}
                               onClick={() => queueAction("give", agentId)}
                             >
@@ -646,10 +718,10 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                       );
                     })}
 
-                    {vm.runs.length > 0 && (
-                      <div className="mt-1 border-t px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground">Runs ({vm.runs.length})</div>
+                    {runs.length > 0 && (
+                      <div className="mt-1 border-t px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground">Runs ({runs.length})</div>
                     )}
-                    {vm.runs.map((run) => {
+                    {runs.map((run) => {
                       const minutes = Math.max(0, Math.floor((Date.now() - Date.parse(run.started_at)) / 60000));
                       const took = minutes >= 60 ? `${Math.floor(minutes / 60)} h ${minutes % 60} min` : `${minutes} min`;
                       return (

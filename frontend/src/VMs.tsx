@@ -11,7 +11,7 @@ size; under it a row of cards, all the same size, side by side (the row scrolls 
 - CPU, Memory and Internet: the number now and a chart of the last minute. Internet also has the total since it
   was last reset (on the VM page).
 - Disk: space used, with a bar that turns amber at 90%.
-- Held by: who uses the VM (you or an agent, a link) and who waits for it.
+- Held by: who uses the VM (you or an agent, a link) and who waits for it; with several desktops, who holds each.
 
 Everything comes from the live "vms", "jobs" and "agents" topics (the backend samples usage about once a second),
 so the numbers move on their own. Whether a running VM has a desktop is asked once when it runs (its viewer).
@@ -219,6 +219,8 @@ export default function VMs(props: { tab: "vms" | "images" | "defaults" }) {
               return b.updated_at.localeCompare(a.updated_at);
             });
           const openJobs = vmJobs.filter((job) => OPEN_JOB.includes(job.status)).length;
+          // Everyone waiting for one of its desktops.
+          const waiting = vm.queue;
 
           // The internet chart shows download and upload together: it is all data used.
           const internetValues = vm.samples.map((sample) => {
@@ -273,6 +275,7 @@ export default function VMs(props: { tab: "vms" | "images" | "defaults" }) {
                 <span className="text-muted-foreground">{silent ? "not answering" : vm.status}</span>
                 <span className="truncate text-xs text-muted-foreground">
                   {imageNames[vm.image_fingerprint] ?? (vm.image || "–")} · {vm.cpus} CPU · {vm.memory_gb} GB · {vm.disk_gb} GB disk
+                  {vm.desktops.length > 1 && ` · ${vm.desktops.length} desktops`}
                 </span>
                 {vm.error !== null && (
                   <span className="truncate text-xs text-destructive" title={vm.error}>
@@ -424,19 +427,37 @@ export default function VMs(props: { tab: "vms" | "images" | "defaults" }) {
 
                 <div className={cn(CARD, "flex min-w-0 flex-col p-2.5")}>
                   <div className="text-muted-foreground">Held by</div>
-                  <div className="truncate text-lg font-medium">
-                    {vm.holder === null && <span className="text-muted-foreground">Nobody</span>}
-                    {vm.holder === "user" && "You"}
-                    {vm.holder !== null && vm.holder !== "user" && (
-                      <a href={`#/agents/${vm.holder}`} className="text-primary hover:underline">
-                        {agentNames[vm.holder] ?? vm.holder}
-                      </a>
-                    )}
+                  {vm.desktops.length === 1 && (
+                    <div className="truncate text-lg font-medium">
+                      {vm.desktops[0].holder === null && <span className="text-muted-foreground">Nobody</span>}
+                      {vm.desktops[0].holder === "user" && "You"}
+                      {vm.desktops[0].holder !== null && vm.desktops[0].holder !== "user" && (
+                        <a href={`#/agents/${vm.desktops[0].holder}`} className="text-primary hover:underline">
+                          {agentNames[vm.desktops[0].holder] ?? vm.desktops[0].holder}
+                        </a>
+                      )}
+                    </div>
+                  )}
+                  {/* Several desktops: one line each, Desktop n and who holds it. */}
+                  {vm.desktops.length > 1 &&
+                    vm.desktops.map((desktop, index) => (
+                      <div key={index} className="truncate text-xs">
+                        <span className="text-muted-foreground">Desktop {index + 1}: </span>
+                        {desktop.holder === null && <span className="text-muted-foreground">Nobody</span>}
+                        {desktop.holder === "user" && "You"}
+                        {desktop.holder !== null && desktop.holder !== "user" && (
+                          <a href={`#/agents/${desktop.holder}`} className="text-primary hover:underline">
+                            {agentNames[desktop.holder] ?? desktop.holder}
+                          </a>
+                        )}
+                      </div>
+                    ))}
+                  <div className="mt-auto text-xs text-muted-foreground">
+                    {waiting.length === 0 ? "Nobody waits" : `${waiting.length} waiting`}
                   </div>
-                  <div className="mt-auto text-xs text-muted-foreground">{vm.queue.length === 0 ? "Nobody waits" : `${vm.queue.length} waiting`}</div>
-                  {vm.queue.length > 0 && (
+                  {waiting.length > 0 && (
                     <div className="truncate text-xs">
-                      {vm.queue.map((id, index) => (
+                      {waiting.map((id, index) => (
                         <span key={id}>
                           {index > 0 && ", "}
                           <a href={`#/agents/${id}`} className="hover:underline">

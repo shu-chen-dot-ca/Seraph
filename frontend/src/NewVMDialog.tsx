@@ -1,5 +1,7 @@
 /*
-The New VM dialog: a name, the image it starts from, CPUs, memory and disk.
+The New VM dialog: a name, the image it starts from, CPUs, memory, disk and desktops (1 by default). Each desktop has
+its own screen, mouse, keyboard and home folder, so that many agents can work in the VM at the same time; each one
+also takes some memory (about 1 GB with its browser).
 
 The choices and defaults come from GET /api/vms/options (they live in .env), including the first free
 name (vm1, vm2, ...). POST /api/vms answers at once with status "creating"; the VM shows up in the list
@@ -26,6 +28,7 @@ export default function NewVMDialog(props: { open: boolean; onOpenChange: (open:
   const [cpus, setCpus] = useState("");
   const [memory, setMemory] = useState("");
   const [disk, setDisk] = useState("");
+  const [desktops, setDesktops] = useState("1");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -49,6 +52,7 @@ export default function NewVMDialog(props: { open: boolean; onOpenChange: (open:
         setCpus(String(answer.cpus_default));
         setMemory(String(answer.memory_gb_default));
         setDisk(String(answer.disk_gb_default));
+        setDesktops("1");
       })
       .catch((err) => {
         if (!stopped) {
@@ -75,7 +79,7 @@ export default function NewVMDialog(props: { open: boolean; onOpenChange: (open:
     try {
       await api("/api/vms", {
         method: "POST",
-        body: { name: name, image: shownImage, cpus: Number(cpus), memory_gb: Number(memory), disk_gb: diskNumber },
+        body: { name: name, image: shownImage, cpus: Number(cpus), memory_gb: Number(memory), disk_gb: diskNumber, desktops: Number(desktops) },
       });
       toast.success(`Creating ${name}. It takes about a minute.`);
       props.onOpenChange(false);
@@ -186,6 +190,20 @@ export default function NewVMDialog(props: { open: boolean; onOpenChange: (open:
                 GB ({options.disk_gb_min} to {options.disk_gb_max})
               </span>
             </div>
+
+            <label className="text-muted-foreground">Desktops</label>
+            <Select value={desktops} onValueChange={setDesktops}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent position="popper">
+                {options.desktops.map((number) => (
+                  <SelectItem key={number} value={String(number)}>
+                    {number === 1 ? "1 desktop" : `${number} desktops (${number} agents at once)`}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             {/* Lets Enter in a field submit the form. */}
             <button type="submit" className="hidden" />
           </form>

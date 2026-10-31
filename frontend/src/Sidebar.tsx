@@ -380,7 +380,7 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
               <a href={`#/vms/${vm.name}`} className="flex h-8 min-w-0 flex-1 items-center gap-2 pr-2 pl-6">
                 <StatusDot tone={VM_TONE[vm.status]} />
                 <span className="truncate">{vm.name}</span>
-                <span className={status}>{vm.status !== "running" ? "off" : vm.holder !== null ? "busy" : "free"}</span>
+                <span className={status}>{vm.status !== "running" ? "off" : vm.desktops.every((desktop) => desktop.holder !== null) ? "busy" : "free"}</span>
               </a>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>

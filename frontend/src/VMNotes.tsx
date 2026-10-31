@@ -5,7 +5,8 @@ The Notes tab of a VM page: what is set up in this VM, so the next agent (and yo
 Agents write them: the one holding the VM adds a note for what it set up or changed on top of the plain project, and
 removes notes that are no longer true. Every agent sees them when it picks a VM, and again when the VM becomes its
 turn; it still checks the VM itself before relying on them. Oldest first, each with who wrote it (an agent, a link
-to it, or You) and when.
+to it, or You), when, and for an agent's note the desktop it was on (each desktop has its own home folder, so
+~/openclaw on desktop 2 is /home/desktop2/openclaw).
 
 You can add your own (the box at the bottom; Ctrl+Enter adds it too), e.g. something you installed by hand or a rule
 for agents ("leave ~/demo as it is"). Agents can't remove your notes. Remove (on hover) takes any note off, at once.
@@ -79,6 +80,7 @@ export default function VMNotes(props: { name: string }) {
                 </a>
               )}
               <span>{new Date(note.at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</span>
+              {note.desktop !== undefined && <span>Desktop {note.desktop}</span>}
               <Button
                 variant="ghost"
                 size="xs"

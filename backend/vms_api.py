@@ -1,7 +1,12 @@
 """The VMs pages: create, rename and delete VMs, power, settings, the desktop viewer, a small picture of each VM's
 screen (the VMs overview's Desktop card), each VM's queue, the user's side of its notes (what is set up in it; the
 Notes tab, see sandbox/vms.py), and copying files between this computer and a VM (the
-Resources tab; only the user can, see sandbox/file_transfer.py).
+Resources tab, desktop 1's home; only the user can, see sandbox/file_transfer.py).
+
+A VM has one to three desktops (sandbox/vm.py), each with its own holder and priority line, and one waiting line for
+them all: the viewer, the screen picture, the lock, Take over, Release and Give name the desktop (1 when left out);
+Front, Skip and Remove name an agent. The number of desktops is set with CPU and memory (Resources, only while the VM
+is stopped); a desktop in use can't go, and new ones go to the agents waiting.
 
 Create, start, stop and restart run in background threads inside
 sandbox/vms.py and answer at once; the browser follows the state through
@@ -46,6 +51,16 @@ class CreateRequest(BaseModel):
     cpus: int
     memory_gb: int
     disk_gb: int
+    desktops: int = 1
+
+
+class LockRequest(BaseModel):
+    enabled: bool
+    desktop: int = 1
+
+
+class DesktopRequest(BaseModel):
+    desktop: int = 1
 
 
 class ToggleRequest(BaseModel):
@@ -55,6 +70,7 @@ class ToggleRequest(BaseModel):
 class ResourcesRequest(BaseModel):
     cpus: int
     memory_gb: int
+    desktops: int = 1
 
 
 class EnvRequest(BaseModel):
@@ -63,6 +79,7 @@ class EnvRequest(BaseModel):
 
 class AgentRequest(BaseModel):
     agent: str
+    desktop: int = 1
 
 
 class NoteRequest(BaseModel):
@@ -71,7 +88,7 @@ class NoteRequest(BaseModel):
 
 @router.get("/vms/options")
 def vm_options() -> dict:
-    """CPU, memory and disk choices for the New VM dialog (from .env), and the first free name."""
+    """CPU, memory, disk and desktops choices for the New VM dialog (from .env), and the first free name."""
     return vms.options()
 
 
@@ -81,7 +98,7 @@ def create_vm(body: CreateRequest) -> dict:
     image = body.image.strip() or images.get_default()
     try:
         image = images.find(image)["name"]
-        record = vms.create(body.name.strip(), image, body.cpus, body.memory_gb, body.disk_gb)
+        record = vms.create(body.name.strip(), image, body.cpus, body.memory_gb, body.disk_gb, body.desktops)
     except (ImagesError, VMsError) as error:
         raise HTTPException(status_code=400, detail=str(error))
     return vms.summary(record)
@@ -137,7 +154,10 @@ async def delete_vm(name: str) -> dict:
         raise HTTPException(status_code=500, detail=str(error))
 
     # Read after the delete: an agent may have joined the queue while it ran.
-    for agent_id in [record.holder] + list(record.priority) + list(record.queue):
+    waiting = list(record.queue)
+    for line in record.desktops:
+        waiting += [line["holder"]] + list(line["priority"])
+    for agent_id in waiting:
         if agent_id is None or agent_id == "user":
             continue
         agents.on_kick(name, agent_id, f"The user deleted {name}; you are in no VM queue anymore.")
@@ -222,8 +242,9 @@ def remove_note(name: str, note_id: str) -> dict:
 
 
 @router.get("/vms/{name}/viewer")
-def vm_viewer(name: str) -> dict:
-    """Where the browser finds the VM's desktop (noVNC), or its terminal (ttyd) when it has no desktop.
+def vm_viewer(name: str, desktop: int = 1) -> dict:
+    """Where the browser finds one of the VM's desktops (noVNC; desktop n's is on NOVNC_PORT + n - 1), or its terminal
+    (ttyd) when it has no desktop.
 
     The browser loads it straight from the VM's address on the Incus bridge,
     which only this machine can reach.
@@ -240,21 +261,26 @@ def vm_viewer(name: str) -> dict:
     # A terminal-only image: terminal 1, the same tmux session every time.
     if not record.vm.has_desktop():
         return {"desktop": None, "terminal": f"http://{address}:{TERMINAL_PORT}/?arg=1"}
+    if desktop < 1 or desktop > len(record.desktops):
+        raise HTTPException(status_code=404, detail=f"{name} has no desktop {desktop}.")
+    port = int(NOVNC_PORT) + desktop - 1
     # bell=off: no ding in the browser each time the desktop beeps (e.g. while the agent types).
-    desktop = f"http://{address}:{NOVNC_PORT}/vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=2000&bell=off"
-    return {"desktop": desktop, "terminal": None}
+    url = f"http://{address}:{port}/vnc.html?autoconnect=true&resize=scale&reconnect=true&reconnect_delay=2000&bell=off"
+    return {"desktop": url, "terminal": None}
 
 
 @router.get("/vms/{name}/screen")
-def vm_screen(name: str) -> Response:
-    """A small JPEG of the VM's screen right now, for the Desktop card on the VMs overview. Only looks: nothing
-    reaches the desktop. 409 while the desktop isn't up (off, booting, or a terminal-only image)."""
+def vm_screen(name: str, desktop: int = 1) -> Response:
+    """A small JPEG of one of the VM's desktops right now, for the Desktop card on the VMs overview. Only looks:
+    nothing reaches the desktop. 409 while the desktop isn't up (off, booting, or a terminal-only image)."""
     try:
         record = vms.get(name)
     except VMsError as error:
         raise HTTPException(status_code=404, detail=str(error))
+    if desktop < 1 or desktop > len(record.desktops):
+        raise HTTPException(status_code=404, detail=f"{name} has no desktop {desktop}.")
     try:
-        jpeg = Computer(record.vm).preview()
+        jpeg = Computer(record.desktop_vm(desktop)).preview()
     except (ComputerError, subprocess.TimeoutExpired) as error:
         raise HTTPException(status_code=409, detail=str(error))
     # Always a new picture: the card asks again every few seconds.
@@ -271,6 +297,7 @@ def vm_settings(name: str) -> dict:
     return {
         "cpus": record.cpus,
         "memory_gb": record.memory_gb,
+        "desktops": len(record.desktops),
         "disk_gb": record.disk_gb,
         "internet": record.internet,
         "autostart": record.autostart,
@@ -310,13 +337,17 @@ def set_autostart(name: str, body: ToggleRequest) -> dict:
 
 @router.put("/vms/{name}/resources")
 def set_resources(name: str, body: ResourcesRequest) -> dict:
-    """CPU and memory; they only change while the VM is stopped."""
+    """CPU, memory and desktops; they only change while the VM is stopped. A desktop in use can't go."""
     try:
         record = vms.get(name)
     except VMsError as error:
         raise HTTPException(status_code=404, detail=str(error))
     try:
-        record.set_resources(body.cpus, body.memory_gb)
+        # The queue's lock: nobody joins a desktop while it goes.
+        with queue.lock:
+            record.set_resources(body.cpus, body.memory_gb, body.desktops)
+        # New desktops go to the agents waiting.
+        queue.fill(name)
     except VMsError as error:
         raise HTTPException(status_code=409, detail=str(error))
     except VMError as error:
@@ -421,51 +452,57 @@ def copy_files(name: str, body: CopyRequest) -> dict:
 
 
 @router.put("/vms/{name}/lock")
-def set_lock(name: str, body: ToggleRequest) -> dict:
-    """The user locks or unlocks their mouse and keyboard. Unlocking also ends a lock the agent set."""
+def set_lock(name: str, body: LockRequest) -> dict:
+    """The user locks or unlocks their mouse and keyboard on one desktop. Unlocking also ends a lock the agent set."""
     try:
         record = vms.get(name)
     except VMsError as error:
         raise HTTPException(status_code=404, detail=str(error))
-    record.locked_by = "user" if body.enabled else None
+    # A new dict, so a reader never sees one half changed.
+    locked_by = {number: who for number, who in record.locked_by.items() if number != body.desktop}
+    if body.enabled:
+        locked_by[body.desktop] = "user"
+    record.locked_by = locked_by
     # locked_by is not saved on disk, so no save tells the live feed; this does.
     vms.changed()
     return {"locked_by": record.locked_by}
 
 
 @router.post("/vms/{name}/take_over")
-async def take_over(name: str) -> dict:
-    """The user takes the VM. An agent holding it goes back to the front of the queue."""
+async def take_over(name: str, body: DesktopRequest) -> dict:
+    """The user takes a desktop. An agent holding it goes back to the front of its queue."""
     try:
         vms.get(name)
+        queue.take_over(name, body.desktop)
     except VMsError as error:
         raise HTTPException(status_code=404, detail=str(error))
-    queue.take_over(name)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error))
     return {}
 
 
 @router.post("/vms/{name}/release")
-async def release(name: str) -> dict:
-    """The user gives back the VM they took over; the next agent in the queue gets it."""
+async def release(name: str, body: DesktopRequest) -> dict:
+    """The user gives back a desktop they took over; the next agent in its queue gets it."""
     try:
-        record = vms.get(name)
+        vms.get(name)
+        queue.release(name, "user", body.desktop)
     except VMsError as error:
         raise HTTPException(status_code=404, detail=str(error))
-    if record.holder != "user":
-        raise HTTPException(status_code=409, detail="You don't hold this VM.")
-    queue.release(name, "user")
+    except ValueError:
+        raise HTTPException(status_code=409, detail="You don't hold this desktop.")
     return {}
 
 
 @router.post("/vms/{name}/give")
 async def give(name: str, body: AgentRequest) -> dict:
-    """The user hands the VM to a waiting agent now. An agent holding it goes back to the front of the queue."""
+    """The user hands a desktop to a waiting agent now. An agent holding it goes back to the front of the queue."""
     try:
         vms.get(name)
     except VMsError as error:
         raise HTTPException(status_code=404, detail=str(error))
     try:
-        queue.give_to(name, body.agent)
+        queue.give_to(name, body.agent, body.desktop)
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error))
     return {}

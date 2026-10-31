@@ -346,7 +346,7 @@ export default function Agents() {
                   {agent.status === "working" && "working"}
                   {agent.status === "in_queue" && `in queue #${agent.place} · ${agent.vm}`}
                   {agent.status === "in_priority" && `in priority #${agent.place} · ${agent.vm}`}
-                  {agent.status === "using_vm" && `using ${agent.vm}`}
+                  {agent.status === "using_vm" && `using ${agent.vm} · desktop ${agent.desktop}`}
                   {agent.busy && agent.status !== "working" && <span className="text-muted-foreground"> · working</span>}
                 </span>
               </span>

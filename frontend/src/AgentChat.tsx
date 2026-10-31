@@ -13,7 +13,8 @@ The header's ⋯ menu has Archive (or Unarchive) and Delete, both asking first. 
 jobs and takes it out of every VM queue, but keeps this conversation; an archived agent's page says so, and sending it
 a message brings it back. An agent that made PRs can't be deleted, only archived, so it keeps its context for updates.
 
-The Desktop is the live screen of the VM the agent holds, else of its target VM: only the screen, like the VMs page's
+The Desktop is the live screen of the agent's own desktop of the VM it holds or waits for (a VM has one to three, each
+with its own screen), else of desktop 1 of its target VM: only the screen, like the VMs page's
 picture, without noVNC's page and buttons around it (noVNC's own client draws it straight from the VM's VNC
 connection), so it moves as smoothly as the VM page's desktop. View-only: nothing reaches the VM from it. A click opens
 it big in a pop-up on this page (still view-only; the VM's name above it links to the VM page, where you can use it).
@@ -395,14 +396,19 @@ function VMUsageCards(props: { name: string }) {
 export default function AgentChat(props: { agentId: string }) {
   const agents = useLive("agents");
   const jobs = useLive("jobs");
-  // Only the VMs' names, states, holders and whether they answer, as one string: the whole VM list changes every
-  // second while a VM runs (its usage samples), and this page would re-render with it.
+  // Only the VMs' names, states, desktops' holders and whether they answer, as one string: the whole VM list changes
+  // every second while a VM runs (its usage samples), and this page would re-render with it.
   const vmsText = useLiveValue((topics) =>
     JSON.stringify(
-      topics.vms.map((vm) => ({ name: vm.name, status: vm.status, holder: vm.holder, responding: vm.usage === null || !vm.usage.on || vm.usage.responding })),
+      topics.vms.map((vm) => ({
+        name: vm.name,
+        status: vm.status,
+        holders: vm.desktops.map((desktop) => desktop.holder),
+        responding: vm.usage === null || !vm.usage.on || vm.usage.responding,
+      })),
     ),
   );
-  const vms = JSON.parse(vmsText) as { name: string; status: VMStatus; holder: string | null; responding: boolean }[];
+  const vms = JSON.parse(vmsText) as { name: string; status: VMStatus; holders: (string | null)[]; responding: boolean }[];
   const agentsLoaded = useLoaded("agents");
 
   // entries[0] is history[start] on the server.
@@ -454,12 +460,14 @@ export default function AgentChat(props: { agentId: string }) {
   const summary = agents.find((agent) => agent.id === props.agentId);
   const historyLength = summary?.history_length ?? 0;
 
-  // The Desktop on the right: the VM the agent holds, else its target VM. Its address is asked once it runs and
-  // answers (again every 3 s until it has one), and forgotten when it stops or stops answering, so the view
-  // connects afresh when it is back.
+  // The Desktop on the right: the desktop of the VM the agent holds or waits for, else desktop 1 of its target VM.
+  // Its address is asked once it runs and answers (again every 3 s until it has one), and forgotten when it stops or
+  // stops answering, so the view connects afresh when it is back.
   let deskVM: string | null = null;
+  let deskNumber = 1;
   if (summary !== undefined) {
-    deskVM = summary.place === 0 && summary.vm !== null ? summary.vm : summary.target_vm;
+    deskVM = summary.vm !== null ? summary.vm : summary.target_vm;
+    deskNumber = summary.vm !== null && summary.desktop !== null ? summary.desktop : 1;
   }
   const deskInfo = vms.find((vm) => vm.name === deskVM);
   const deskReady = deskInfo !== undefined && deskInfo.status === "running" && deskInfo.responding;
@@ -477,7 +485,9 @@ export default function AgentChat(props: { agentId: string }) {
     let timer = 0;
     async function load() {
       try {
-        const answer = await api<{ desktop: string | null; terminal: string | null }>(`/api/vms/${encodeURIComponent(name)}/viewer`);
+        const answer = await api<{ desktop: string | null; terminal: string | null }>(
+          `/api/vms/${encodeURIComponent(name)}/viewer?desktop=${deskNumber}`,
+        );
         if (stopped) {
           return;
         }
@@ -496,7 +506,7 @@ export default function AgentChat(props: { agentId: string }) {
       stopped = true;
       window.clearTimeout(timer);
     };
-  }, [deskVM, deskReady]);
+  }, [deskVM, deskNumber, deskReady]);
   const end = start + entries.length;
 
   // Once the agent was there, its disappearing means it was deleted (not that the list is still loading).
@@ -748,6 +758,8 @@ export default function AgentChat(props: { agentId: string }) {
 
   const vmNames = vms.map((vm) => vm.name);
   const queueVM = vms.find((vm) => vm.name === summary.vm);
+  // Who holds the desktop the agent waits for (undefined: not known yet).
+  const queueHolder = queueVM !== undefined && summary.desktop !== null ? queueVM.holders[summary.desktop - 1] : undefined;
   const agentNames: Record<string, string> = {};
   for (const agent of agents) {
     agentNames[agent.id] = agent.name;
@@ -1134,7 +1146,7 @@ export default function AgentChat(props: { agentId: string }) {
               {summary.place === 0 && summary.vm !== null && (
                 <div className="flex items-center gap-1.5">
                   <StatusDot tone="green" />
-                  Holds
+                  Holds desktop {summary.desktop} of
                   <a href={`#/vms/${summary.vm}`} className="text-primary hover:underline">
                     {summary.vm}
                   </a>
@@ -1144,21 +1156,20 @@ export default function AgentChat(props: { agentId: string }) {
                 <>
                   <div className="flex items-center gap-1.5">
                     <StatusDot tone="amber" />
-                    Number {summary.place} in
+                    Number {summary.place} in the {summary.status === "in_priority" ? "priority line" : "queue"} for desktop {summary.desktop} of
                     <a href={`#/vms/${summary.vm}`} className="text-primary hover:underline">
                       {summary.vm}
                     </a>
-                    {summary.status === "in_priority" ? "'s priority line" : "'s queue"}
                   </div>
                   {summary.status === "in_priority" && (
-                    <div className="text-muted-foreground">It stepped aside while its run goes there, and gets the VM back first.</div>
+                    <div className="text-muted-foreground">It stepped aside while its run goes there, and gets the desktop back first.</div>
                   )}
-                  {queueVM !== undefined && (
+                  {queueHolder !== undefined && queueVM !== undefined && (
                     <div className="text-muted-foreground">
-                      {queueVM.holder === null && `${queueVM.name} is free.`}
-                      {queueVM.holder === "user" && `You hold ${queueVM.name}.`}
-                      {queueVM.holder !== null && queueVM.holder !== "user" && `${agentNames[queueVM.holder] ?? queueVM.holder} holds ${queueVM.name}.`}
-                      {queueVM.status !== "running" && ` It is ${queueVM.status}.`}
+                      {queueHolder === null && `Desktop ${summary.desktop} is free.`}
+                      {queueHolder === "user" && `You hold desktop ${summary.desktop}.`}
+                      {queueHolder !== null && queueHolder !== "user" && `${agentNames[queueHolder] ?? queueHolder} holds desktop ${summary.desktop}.`}
+                      {queueVM.status !== "running" && ` ${queueVM.name} is ${queueVM.status}.`}
                     </div>
                   )}
                 </>
@@ -1255,6 +1266,7 @@ export default function AgentChat(props: { agentId: string }) {
               {deskVM !== null && (
                 <a href={`#/vms/${deskVM}`} className="font-normal text-primary hover:underline">
                   {deskVM}
+                  {deskInfo !== undefined && deskInfo.holders.length > 1 && `, desktop ${deskNumber}`}
                 </a>
               )}
             </div>

@@ -1,5 +1,5 @@
 /*
-The Settings tab of a VM page: its name, CPU and memory, internet, autostart, env vars, its image, and Delete.
+The Settings tab of a VM page: its name, CPU, memory and desktops, internet, autostart, env vars, its image, and Delete.
 
 Most of it reads the live "vms" topic, so a change shows up as soon as the backend has made it.
 The env values are the one thing the live feed leaves out (it only carries the names, so agents and
@@ -7,7 +7,9 @@ other views never see secrets): they come from GET /api/vms/{name}/settings, fet
 the names change (an agent can add or remove empty ones) unless you have unsaved edits. Once you save a value for an
 empty one, the agent that added it is told and carries on.
 
-CPU and memory only change while the VM is stopped; Incus applies them on the next start.
+CPU, memory and desktops only change while the VM is stopped; they apply on the next start. Desktops is how many
+agents can work in the VM at the same time, each on its own desktop (screen, mouse, keyboard and home folder). A
+desktop someone holds or waits for can't go; one that goes keeps its home folder, and comes back with it.
 Rename works running or not; the page moves to the new name (#/vms/<new name>).
 */
 
@@ -41,6 +43,7 @@ export default function VMSettings(props: { name: string }) {
   // "" = not touched, so the select follows the live value.
   const [cpus, setCpus] = useState("");
   const [memory, setMemory] = useState("");
+  const [desktops, setDesktops] = useState("");
   const [newName, setNewName] = useState(props.name);
   const [rows, setRows] = useState<EnvRow[]>([]);
   const [envLoaded, setEnvLoaded] = useState(false);
@@ -92,9 +95,11 @@ export default function VMSettings(props: { name: string }) {
   const stopped = vm.status === "stopped";
   const shownCpus = cpus === "" ? String(vm.cpus) : cpus;
   const shownMemory = memory === "" ? String(vm.memory_gb) : memory;
-  const resourcesChanged = shownCpus !== String(vm.cpus) || shownMemory !== String(vm.memory_gb);
+  const shownDesktops = desktops === "" ? String(vm.desktops.length) : desktops;
+  const resourcesChanged = shownCpus !== String(vm.cpus) || shownMemory !== String(vm.memory_gb) || shownDesktops !== String(vm.desktops.length);
   const cpuChoices = options === null ? [vm.cpus] : options.cpus;
   const memoryChoices = options === null ? [vm.memory_gb] : options.memory_gb;
+  const desktopChoices = options === null ? [vm.desktops.length] : options.desktops;
 
   // Each change below: the live feed shows the result, so only errors need handling here.
   async function rename() {
@@ -116,11 +121,12 @@ export default function VMSettings(props: { name: string }) {
     try {
       await api(`/api/vms/${encodeURIComponent(vmName)}/resources`, {
         method: "PUT",
-        body: { cpus: Number(shownCpus), memory_gb: Number(shownMemory) },
+        body: { cpus: Number(shownCpus), memory_gb: Number(shownMemory), desktops: Number(shownDesktops) },
       });
       setCpus("");
       setMemory("");
-      toast.success(`${vmName} gets ${shownCpus} CPUs and ${shownMemory} GB on its next start.`);
+      setDesktops("");
+      toast.success(`${vmName} gets ${shownCpus} CPUs, ${shownMemory} GB and ${shownDesktops} ${shownDesktops === "1" ? "desktop" : "desktops"} on its next start.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -242,6 +248,20 @@ export default function VMSettings(props: { name: string }) {
               </SelectContent>
             </Select>
 
+            <label className="text-muted-foreground">Desktops</label>
+            <Select value={shownDesktops} onValueChange={setDesktops} disabled={!stopped}>
+              <SelectTrigger className="w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent position="popper">
+                {desktopChoices.map((number) => (
+                  <SelectItem key={number} value={String(number)}>
+                    {number === 1 ? "1 desktop" : `${number} desktops`}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
             <label className="text-muted-foreground">Disk</label>
             <span className="tabular-nums">{vm.disk_gb} GB</span>
 
@@ -251,7 +271,7 @@ export default function VMSettings(props: { name: string }) {
                 {busy === "resources" && <Loader2 className="animate-spin" />}
                 Apply
               </Button>
-              {!stopped && <span className="text-muted-foreground">Stop the VM to change CPU and memory.</span>}
+              {!stopped && <span className="text-muted-foreground">Stop the VM to change CPU, memory and desktops.</span>}
             </div>
           </div>
         </section>
