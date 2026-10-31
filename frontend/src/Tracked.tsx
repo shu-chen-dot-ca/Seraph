@@ -11,7 +11,7 @@ list stays out (backend/tracked_api.py).
 
 The backend checks each repo's open issues every few minutes (github_searcher/tracked_issues.py): the newest
 ones and every good first or help wanted one. An issue is new for three days after it was opened, assigned or not,
-unless Mark all as read saw it; the row shows how many are new, the sidebar the total. Check now asks GitHub at once.
+unless Mark all as read saw it; the sidebar shows how many are new. Check now asks GitHub at once.
 
 Each issue row shows Marked (next to Free), the same as on the Issues page, without opening the issue: what the
 maintainers marked it with on GitHub, from its labels (only maintainers can label an issue), however the repo spells
@@ -30,14 +30,11 @@ for the tags. Tag again (on the repo's row and in its pop-up) has Claude read al
 The list is a table like the Explore page's: Name, then the repo's fields in two lines, so a row isn't too long, and
 its description under them, from the name on. The header has two lines of names to match: each column holds a
 first-line field over a second-line one. The first line (FIRST_LINE) is how outside contributors fare, from the repo's
-signals (the same as the Repos page's columns): AI policy, newcomers, reply speed, unanswered PRs and
-maintainers; hover a tag for what it means. The second (SECOND_LINE): stars, its issues' numbers (New, Free, Easy,
-Open, Checked), new contributors (people whose first PR there was recent, as "16 in 6 days"; people who contributed
-before don't count) and activity. Every column is as wide as its widest cell (one CSS grid, each row a subgrid) and
-all of them sit on the left, the room left over going before the row's buttons. The text is in the page's own color
-(blue for new issues, green for free ones, red for a failed check; the tags' own colors). A click on a field's name in
-the header adds it to the sort, the best first (the most, the latest check, the fastest reply, the friendliest tag; A
-to Z for the name); again the other way round; again takes it out. Many fields sort at once, like on the Explore page:
+signals (the same as the Repos page's columns): AI policy, newcomers and reply speed; hover a tag for what it means.
+The second (SECOND_LINE): stars and its issues' numbers (Free, Easy). Every column is as wide as its widest cell (one
+CSS grid, each row a subgrid) and all of them sit on the left, the room left over going before the row's buttons. The
+text is in the page's own color (green for free issues; the tags' own colors). A click on a field's name in the
+header adds it to the sort, the best first (the most, the fastest reply, the friendliest tag; A to Z for the name); again the other way round; again takes it out. Many fields sort at once, like on the Explore page:
 in the order they come, the first line from left to right, then the second (say AI policy, then Free); Name last of
 all, and the list's order among what is still the same. With none, it is the list's order. Every sorted name is blue
 with an arrow.
@@ -90,40 +87,19 @@ import { cn, timeAgo } from "@/lib/utils";
 const COMPACT = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
 // The columns after Name, each sorted by a click on its header: the best first (the most, the latest; the least for
 // lower: the fastest reply). First the repo's tags, from its signals (the same as the Repos page's columns).
-type TrackedKey =
-  | "name"
-  | "ai_policy"
-  | "newcomers"
-  | "reply"
-  | "activity"
-  | "new_contributors"
-  | "maintainers"
-  | "unanswered"
-  | "stars"
-  | "new"
-  | "free"
-  | "easy"
-  | "open"
-  | "checked";
+type TrackedKey = "name" | "ai_policy" | "newcomers" | "reply" | "stars" | "free" | "easy";
 type TrackedColumn = { key: TrackedKey; label: string; title: string; better?: "lower" };
 // Each row has two lines, so it isn't too long. The first: how outside contributors fare.
 const FIRST_LINE: TrackedColumn[] = [
   { key: "ai_policy", label: "AI policy", title: "What its contribution files say about AI: the most open first" },
   { key: "newcomers", label: "Newcomers", title: "How newcomers' first PRs fare: the most welcoming first" },
   { key: "reply", label: "Reply", title: "Median days until outside contributors' PRs get a first reply from a maintainer (bots and other outsiders don't count): the fastest first", better: "lower" },
-  { key: "unanswered", label: "Unanswered", title: "Outside contributors' PRs open over 30 days that no maintainer answered" },
-  { key: "maintainers", label: "Maintainers", title: "People who merged a PR in the last 30 days" },
 ];
-// The second, under the first: stars, its issues' numbers, and how busy it is (the wide ones last).
+// The second, under the first: stars and its issues' numbers.
 const SECOND_LINE: TrackedColumn[] = [
   { key: "stars", label: "Stars", title: "Stars on GitHub" },
-  { key: "new", label: "New", title: "Open issues opened in the last 3 days and not marked read, assigned or not" },
   { key: "free", label: "Free", title: "Open issues a newcomer can start on now: nobody is on it and the maintainers want it done" },
   { key: "easy", label: "Easy", title: "Free issues that are easy: our agent can write the fix, see it and prove it in its VM" },
-  { key: "open", label: "Open", title: "Open issues its last check found" },
-  { key: "checked", label: "Checked", title: "When the backend last asked GitHub" },
-  { key: "new_contributors", label: "New contributors", title: "People whose first PR there came in the time shown: its 100 newest PRs, at most 90 days, among the 30 most recent outside authors. People who contributed before don't count, nor do maintainers or bots: the most a day first" },
-  { key: "activity", label: "Activity", title: "PRs, issues and commits a month (90-day average); sorts by commits a month" },
 ];
 // Every column in sort order (the first line from left to right, then the second), and the table's columns after
 // Name: each holds a first-line field over a second-line one.
@@ -195,15 +171,15 @@ export default function Tracked() {
 
   const inIssues = new Set(issues.items.map((issue) => issue.id));
   // An issue is new for three days after it was opened, assigned or not, unless Mark all as read saw it. How many of
-  // each repo's are, and of all.
+  // all are.
   const newSince = Date.now() - 3 * 24 * 60 * 60 * 1000;
-  const newCounts: Record<string, number> = {};
   let newTotal = 0;
   for (const repo of tracked.items) {
     const check = repo.check;
     const read = check !== null ? (check.read ?? []) : [];
-    newCounts[repo.full_name] = check !== null ? check.issues.filter((issue) => new Date(issue.created_at).getTime() > newSince && !read.includes(issue.number)).length : 0;
-    newTotal += newCounts[repo.full_name];
+    if (check !== null) {
+      newTotal += check.issues.filter((issue) => new Date(issue.created_at).getTime() > newSince && !read.includes(issue.number)).length;
+    }
   }
 
   async function remove(names: string[]) {
@@ -235,38 +211,13 @@ export default function Tracked() {
     if (key === "reply") {
       return signals !== null ? signals.median_days_to_first_reply : null;
     }
-    if (key === "activity") {
-      return signals !== null && signals.activity !== undefined ? signals.activity.commits_month : null;
-    }
-    if (key === "new_contributors") {
-      // Per day, so a repo whose newest PRs cover a week compares fairly with one whose cover three months.
-      if (signals === null || signals.newcomers === undefined || signals.pr_window_days === undefined) {
-        return null;
-      }
-      return signals.newcomers.prs / signals.pr_window_days;
-    }
-    if (key === "maintainers") {
-      return signals !== null ? signals.active_mergers_30d : null;
-    }
-    if (key === "unanswered") {
-      return signals !== null ? signals.stale_outside_prs : null;
-    }
     if (check === null) {
       return null;
-    }
-    if (key === "new") {
-      return newCounts[repo.full_name];
     }
     if (key === "free") {
       return check.issues.filter((issue) => issue.assignees === 0 && issue.tags?.status === "free").length;
     }
-    if (key === "easy") {
-      return check.issues.filter((issue) => issue.assignees === 0 && issue.tags?.status === "free" && issue.tags.level === "easy").length;
-    }
-    if (key === "open") {
-      return check.issues.length;
-    }
-    return new Date(check.checked_at).getTime();
+    return check.issues.filter((issue) => issue.assignees === 0 && issue.tags?.status === "free" && issue.tags.level === "easy").length;
   }
 
   const rows = [...tracked.items];
@@ -695,7 +646,6 @@ export default function Tracked() {
             </div>
             {rows.map((repo) => {
               const check = repo.check;
-              const fresh = newCounts[repo.full_name];
               const signals = repo.signals;
               const free = check !== null ? check.issues.filter((issue) => issue.assignees === 0 && issue.tags?.status === "free").length : 0;
               const easy = check !== null ? check.issues.filter((issue) => issue.assignees === 0 && issue.tags?.status === "free" && issue.tags.level === "easy").length : 0;
@@ -756,15 +706,6 @@ export default function Tracked() {
                   >
                     {signals !== null && signals.median_days_to_first_reply !== null ? `${signals.median_days_to_first_reply}d` : "–"}
                   </span>
-                  <span className={cn("flex h-7 items-center tabular-nums", signals !== null && signals.stale_outside_prs >= 5 && "text-warn")}>
-                    {signals !== null ? signals.stale_outside_prs : "–"}
-                  </span>
-                  <span className={cn("flex h-7 items-center tabular-nums", signals !== null && signals.active_mergers_30d <= 1 && "text-warn")}>
-                    {signals !== null ? signals.active_mergers_30d : "–"}
-                  </span>
-                  <span />
-                  <span />
-                  <span />
                   <span />
                   <span className="flex h-7 items-center justify-end gap-0.5" onClick={(event) => event.stopPropagation()}>
                     <Button
@@ -798,33 +739,8 @@ export default function Tracked() {
                     <Star className="size-3.5" />
                     {COMPACT.format(check !== null && check.stars !== null ? check.stars : repo.stars)}
                   </span>
-                  <span className={cn("flex h-6 items-center tabular-nums", fresh > 0 && "font-medium text-primary")}>{check !== null ? fresh : "–"}</span>
                   <span className={cn("flex h-6 items-center tabular-nums", free > 0 && "text-ok")}>{check !== null ? free : "–"}</span>
                   <span className={cn("flex h-6 items-center tabular-nums", easy > 0 && "text-ok")}>{check !== null ? easy : "–"}</span>
-                  <span className="flex h-6 items-center tabular-nums">{check !== null ? check.issues.length : "–"}</span>
-                  <span className="flex h-6 items-center gap-1 whitespace-nowrap tabular-nums">
-                    {check === null && (
-                      <>
-                        <Loader2 className="size-3.5 animate-spin" /> checking
-                      </>
-                    )}
-                    {check !== null && check.error !== null && (
-                      <span className="text-destructive" title={check.error}>
-                        failed
-                      </span>
-                    )}
-                    {check !== null && check.error === null && <span title={new Date(check.checked_at).toLocaleString()}>{timeAgo(check.checked_at)}</span>}
-                  </span>
-                  <span className="flex h-6 items-center whitespace-nowrap tabular-nums">
-                    {signals !== null && signals.newcomers !== undefined && signals.pr_window_days !== undefined
-                      ? `${signals.newcomers.prs} in ${signals.pr_window_days} day${signals.pr_window_days === 1 ? "" : "s"}`
-                      : "–"}
-                  </span>
-                  <span className="flex h-6 items-center whitespace-nowrap tabular-nums" title="A month on average over 90 days; the arrow: the last 30 days were busier or quieter">
-                    {signals !== null && signals.activity !== undefined
-                      ? `${COMPACT.format(signals.activity.prs_opened_month)} PRs · ${COMPACT.format(signals.activity.issues_opened_month)} issues · ${COMPACT.format(signals.activity.commits_month)} commits /mo${signals.activity.trend === "up" ? " ↑" : signals.activity.trend === "down" ? " ↓" : ""}`
-                      : "–"}
-                  </span>
                   <span />
                   <span />
                   {(repo.note !== "" || repo.description !== "") && (
