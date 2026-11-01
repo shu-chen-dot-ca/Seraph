@@ -5,8 +5,8 @@ you when the tab opens, after every change, and on Refresh.
 - Next release: the version it will be (from the merged pull requests' titles: a feat moves the middle number up, else
   the last one), the pull requests merged since the last release, grouped as in its notes (Features, Fixes, Other
   changes), and Release, which asks first (Enter confirms): the GitHub release, with those notes, made as you. On the
-  app's own repo the live copy then gets it ready, checks it on a copy of your data and installs it by itself; it is
-  taken back by itself when it goes wrong in its first ten minutes (deploy/switch.sh).
+  app's own repo the live copy (./live.sh) then gets it ready, checks it on a copy of your data and offers it as Update
+  in the header; once installed it is taken back by itself when it goes wrong in its first ten minutes (deploy/switch.sh).
 - Planned: the issues in the next release (GitHub's milestone "Next release"): workers take them before the others.
   Remove takes one out; Add issue puts an open issue in.
 - Installed, on the app's own repo: the version that runs, one being made ready or failing its check, and the last one
@@ -219,7 +219,7 @@ export default function Releases(props: { repo: string }) {
         <>
           <div className={heading}>Installed</div>
           <div className="space-y-1 border-y px-3 py-2">
-            {!updates.live && <div className="text-muted-foreground">This is the dev copy: releases install on the live copy (deploy/install.sh).</div>}
+            {!updates.live && <div className="text-muted-foreground">This is your working code (./run.sh): releases install on the live copy (./live.sh).</div>}
             {updates.live && (
               <>
                 <div>
@@ -227,6 +227,7 @@ export default function Releases(props: { repo: string }) {
                   {updates.switched_at !== null && <span className="text-muted-foreground">, since {timeAgo(updates.switched_at)}</span>}
                 </div>
                 {updates.preparing !== null && <div className="text-muted-foreground">Getting {updates.preparing} ready and checking it on a copy of your data…</div>}
+                {updates.ready !== null && !updates.restarting && <div>{updates.ready} is ready: Update in the header installs it.</div>}
                 {updates.restarting && <div className="text-muted-foreground">Installing {updates.ready ?? ""}: the app restarts in a moment.</div>}
                 {updates.error !== "" && <div className="text-destructive">{updates.error}</div>}
                 {updates.failed !== null && (
@@ -268,7 +269,7 @@ export default function Releases(props: { repo: string }) {
             <AlertDialogDescription>
               The GitHub release {info?.next} is made on {info?.default_branch}, as you, with the {info?.prs.length} pull requests merged since the last one in its
               notes.
-              {project?.app && updates.live && " The live copy then checks it on a copy of your data and installs it, and takes it back by itself if it goes wrong."}
+              {project?.app && " The live copy then checks it on a copy of your data and offers it as Update; once installed, it is taken back by itself if it goes wrong."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
