@@ -582,7 +582,8 @@ class WorkTools:
                 "vm_note_add",
                 "Add a note to the VM you hold, for the next agent that picks it or works in it: what is set up in it now and "
                 "how it differs from a plain set-up. It is marked with your desktop, since ~ is that desktop's own home. "
-                "One thing per note, e.g. 'openclaw in ~/openclaw: pnpm install and build "
+                "One thing per note, a repo named as owner/name (the app tells from that which VMs have a repo set up), e.g. "
+                "'openclaw/openclaw in ~/openclaw: pnpm install and build "
                 "done, on main at 3f2a1c9 (Oct 27). Added the matrix plugin and turned on debug logs in ~/.openclaw for issue "
                 "4120.' Facts that stay true, not a diary. Never a secret.",
                 {"text": str},
