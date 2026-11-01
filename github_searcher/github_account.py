@@ -337,9 +337,16 @@ class GithubAccount:
         else:
             response = client.post(f"/repos/{fork}/git/refs", json={"ref": f"refs/heads/{PICTURES_BRANCH}", "sha": commit})
         response.raise_for_status()
-        # By the commit, so a link never changes.
+        # By the commit, so a link never changes. A private repo's raw files need a sign-in that raw.githubusercontent.com
+        # never gets from a page: there GitHub's own address shows them, to whoever may see the repo.
+        response = client.get(f"/repos/{fork}")
+        response.raise_for_status()
+        private = response.json()["private"]
         for item in shown:
-            body = body.replace(f"evidence:{item['id']}", f"https://raw.githubusercontent.com/{fork}/{commit}/{draft['id']}/{item['file']}")
+            link = f"https://raw.githubusercontent.com/{fork}/{commit}/{draft['id']}/{item['file']}"
+            if private:
+                link = f"https://github.com/{fork}/blob/{commit}/{draft['id']}/{item['file']}?raw=true"
+            body = body.replace(f"evidence:{item['id']}", link)
         return body
 
     def tree(self, client: httpx.Client, fork: str, base_tree: str, diff: str) -> str:
