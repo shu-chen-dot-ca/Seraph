@@ -88,6 +88,7 @@ export default function IssueDetailsDialog(props: { repo: string; issue: Tracked
               {tags !== null && tags.level !== null && (
                 <Badge variant={LEVEL_VARIANT[tags.level]}>{LEVEL_LABEL[tags.level]}</Badge>
               )}
+              {tags !== null && tags.lines !== undefined && tags.lines !== null && <Badge variant="secondary">~{tags.lines} lines</Badge>}
               {tags !== null && tags.kind !== null && <Badge variant="secondary">{tags.kind}</Badge>}
               {tags !== null && <span>{tags.reason}</span>}
               {tags === null && !isAssigned && <span className="text-muted-foreground">Not tagged yet.</span>}
