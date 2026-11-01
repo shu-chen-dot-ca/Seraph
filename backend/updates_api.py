@@ -1,6 +1,8 @@
 """Updates of the live copy (github_searcher/updates.py): Update in the header and Settings → About.
 
-GET /api/health answers once the app has started: deploy/switch.sh waits for it after a switch.
+GET /api/health answers once the app has started: deploy/switch.sh waits for it after a switch, then watches it for the
+new release's first minutes. "errors" is how many errors the app reported since it started (github_searcher/crashes.py):
+switch.sh takes the release back when they climb.
 POST /api/updates/check checks GitHub for a newer release now (Check for updates).
 POST /api/updates/restart restarts on the release that is ready (Restart in the Update dialog).
 POST /api/updates/previous goes back to the release before this one, with data/ from before the update (Previous version).
@@ -9,8 +11,10 @@ Restart and Previous version answer at once. The switch waits first, up to a min
 the middle of a tool call, so none is cut off half-way through a command. An agent's turn that is still going is cut
 off like on any restart, and the agent carries on after it (Agents.stop and start). VMs, and the runs in them, keep going.
 
-keep_updates(), which the app runs in the background, checks every CHECK_SECONDS, and at once when asked. The state
-reaches the browser through /api/live (topic "updates").
+keep_updates(), which the app runs in the background, checks every CHECK_SECONDS, and at once when asked (Check for
+updates, or a Release on the app's own repo: backend/projects_api.py). A newer release that is ready (it passed its
+check, updates.py) is installed by itself, the way Restart does it. The state reaches the browser through /api/live
+(topic "updates").
 """
 
 import asyncio
@@ -18,7 +22,7 @@ import time
 
 from fastapi import APIRouter, HTTPException
 
-from backend.shared import agents, updates
+from backend.shared import agents, crashes, updates
 from github_searcher.updates import CHECK_SECONDS, HOME
 
 router = APIRouter(prefix="/api")
@@ -31,7 +35,7 @@ waiting = []
 
 @router.get("/health")
 def health() -> dict:
-    return {"ok": True, "version": updates.running}
+    return {"ok": True, "version": updates.running, "errors": crashes.since_start}
 
 
 @router.post("/updates/check")
@@ -96,4 +100,9 @@ async def keep_updates() -> None:
             last = time.monotonic()
             updates.asked = False
             await asyncio.to_thread(updates.check)
+            # Ready: installed now (constant development; switch.sh takes it back if it goes wrong).
+            if updates.ready is not None and not updates.restarting:
+                updates.restarting = True
+                updates.version += 1
+                waiting.append(asyncio.get_running_loop().create_task(switch_when_quiet(updates.ready, "")))
         await asyncio.sleep(5)

@@ -7,29 +7,41 @@ The live copy (deploy/install.sh makes it) lives in SERAPH_HOME (~/seraph), whic
     releases/<tag>/               a release: its code, .venv, its built page (frontend/dist), .env (a link) and VERSION
     backups/<time>-<tag>/         data/ as it was before each switch (the last 10)
     previous                      "<tag> <backup>": the release before this one, and data/ from just before the switch
-    failed                        the release the last switch went to, when it didn't start (switch.sh went back)
+    failed                        the release the last switch went to, when it didn't start or went wrong in its first
+                                  minutes (switch.sh went back), and failed-reason why
+    failed-crashes.json           the errors that release reported, until the release before it reports them (crashes.py)
+    check-data/                   a copy of data/ for a new release's check, only while it runs
     data/, .env                   yours, the same for every release
 
 Without SERAPH_HOME (the dev copy, ./run.sh) there are no updates, and the version is "dev".
 
 check() asks GitHub for the latest release of SERAPH_REPO with your GitHub sign in (it can read your private repos).
 When that isn't the release that runs, it makes it ready: downloads its code, installs its Python packages (uv sync)
-and builds its page (npm ci, npm run build), in releases/<tag>/. VERSION is written last, so a release folder with one
-is ready. Nothing restarts by itself.
+and builds its page (npm ci, npm run build), in releases/<tag>/, then checks it (check_release): it starts on a copy of
+data/ (check-data/, without the VMs) on its own port (BACKEND_PORT + 2) with SERAPH_CHECK=1 (backend/app.py: nothing
+in the background runs), and must answer /api/health, serve its page and send every topic of its live feed with no
+error. VERSION is written last, so a release folder with one is ready and checked. A release that fails its check is
+never made ready: why is in error, and in the app's errors (crashes.py), so it becomes an issue. Neither is the release
+the last switch took back (failed).
 
-switch() runs deploy/switch.sh outside the app (systemd-run), since the app stops on the way. It stops the app, copies
-data/ to backups/, points current at the release and starts it. When the release doesn't answer on /api/health within
-a minute, data/ and current go back and the release before starts again.
+backend/updates_api.py installs a ready release by itself. switch() runs deploy/switch.sh outside the app
+(systemd-run), since the app stops on the way. It stops the app, copies data/ to backups/, points current at the
+release and starts it. When the release doesn't answer on /api/health within a minute, data/ and current go back and
+the release before starts again. After that it watches the release for WATCH minutes (switch.sh): when it stops
+answering for a minute or reports too many errors, the same happens, and what went wrong is kept for the release before.
 """
 
+import json
 import os
 import shutil
 import subprocess
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
+from websockets.sync.client import connect
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # "" in the dev copy: no updates.
@@ -41,11 +53,21 @@ API = "https://api.github.com"
 CHECK_SECONDS = 15 * 60
 # The most a step of making a release ready may take (npm ci on a slow network).
 STEP_SECONDS = 15 * 60
+# A new release's check: the most it may take to answer, and how long its live feed is read.
+CHECK_START_SECONDS = 120
+CHECK_FEED_SECONDS = 10
+# Every topic the live feed sends (backend/app.py): the check needs each of them.
+TOPICS = ["repos", "issues", "tracked", "explore", "github", "jobs", "inbox", "issue_drafts", "prs", "your_repos", "notifications",
+          "agents", "vms", "images", "resource", "updates", "projects", "crashes"]
 
 
 class Updates:
-    def __init__(self, github_account):
+    def __init__(self, github_account, crashes):
         self.github_account = github_account
+        # The app's own errors: a release that fails its check is one.
+        self.crashes = crashes
+        # Releases that failed their check since the backend started, with why: not made ready again.
+        self.rejected = {}
         # Goes up on every change, for the live feed (topic "updates").
         self.version = 0
         # The release that runs: the VERSION file a release gets when it is made ready.
@@ -80,8 +102,11 @@ class Updates:
         if previous is not None:
             switched_at = datetime.fromtimestamp((Path(HOME) / "previous").stat().st_mtime, UTC).isoformat()
         failed = None
+        failed_reason = ""
         if HOME != "" and (Path(HOME) / "failed").is_file():
             failed = (Path(HOME) / "failed").read_text().strip()
+        if HOME != "" and (Path(HOME) / "failed-reason").is_file():
+            failed_reason = (Path(HOME) / "failed-reason").read_text().strip()
         return {
             "live": HOME != "",
             "running": self.running,
@@ -94,6 +119,7 @@ class Updates:
             "previous": previous,
             "switched_at": switched_at,
             "failed": failed,
+            "failed_reason": failed_reason,
             "restarting": self.restarting,
         }
 
@@ -156,6 +182,13 @@ class Updates:
         if tag == self.running:
             self.ready = None
             return
+        # Taken back after it went live, or failed its check: never made ready again; a newer release is.
+        if tag == self.summary()["failed"]:
+            self.ready = None
+            raise ValueError(f"{tag} was taken back: {self.summary()['failed_reason'] or 'it went wrong after it went live'}")
+        if tag in self.rejected:
+            self.ready = None
+            raise ValueError(self.rejected[tag])
         if not (releases / tag / "VERSION").is_file():
             self.preparing = tag
             self.version += 1
@@ -197,12 +230,93 @@ class Updates:
         archive.unlink()
         # Only the built page is needed from here on.
         shutil.rmtree(folder / "frontend" / "node_modules")
+        try:
+            self.check_release(tag)
+        except Exception as error:
+            reason = f"{tag} failed its check before going live: {error}"
+            self.rejected[tag] = reason
+            self.crashes.add("release", reason, "", tag)
+            raise RuntimeError(reason)
         (folder / "VERSION").write_text(tag + "\n")
+
+    def check_release(self, tag: str) -> None:
+        """Starts release <tag> on a copy of data/ with SERAPH_CHECK=1, on its own port, and checks it answers, serves its
+        page and sends every topic of its live feed, with no error. Raises with what went wrong. Its .env is the check's
+        while it runs, and the live one's link again after."""
+        folder = Path(HOME) / "releases" / tag
+        data = Path(HOME) / "check-data"
+        port = int(os.environ["BACKEND_PORT"]) + 2
+        shutil.rmtree(data, ignore_errors=True)
+        # Without the VMs: the check must never see, start or stop one.
+        shutil.copytree(Path(HOME) / "data", data, symlinks=True, ignore=shutil.ignore_patterns("vms", "remote_access"))
+        lines = []
+        for line in (Path(HOME) / ".env").read_text().splitlines():
+            if line.split("=")[0].strip() in ["DATA_DIR", "BACKEND_PORT", "SANDBOX_VM_PREFIX", "SERAPH_CHECK"]:
+                continue
+            lines.append(line)
+        lines += [f"DATA_DIR={data}", f"BACKEND_PORT={port}", "SANDBOX_VM_PREFIX=check-", "SERAPH_CHECK=1"]
+        env_path = folder / ".env"
+        env_path.unlink(missing_ok=True)
+        env_path.write_text("\n".join(lines) + "\n")
+        env = dict(os.environ)
+        env.pop("VIRTUAL_ENV", None)
+        log = open(data / "check.log", "w")
+        process = subprocess.Popen([str(folder / ".venv" / "bin" / "serve")], cwd=folder, env=env, stdout=log, stderr=subprocess.STDOUT)
+        try:
+            health = None
+            started = time.monotonic()
+            while health is None and time.monotonic() - started < CHECK_START_SECONDS:
+                if process.poll() is not None:
+                    break
+                try:
+                    response = httpx.get(f"http://127.0.0.1:{port}/api/health", timeout=5)
+                    if response.status_code == 200:
+                        health = response.json()
+                except httpx.HTTPError:
+                    time.sleep(1)
+            if health is None:
+                log.flush()
+                output = (data / "check.log").read_text()[-1500:]
+                raise RuntimeError(f"it didn't start: {output}")
+            response = httpx.get(f"http://127.0.0.1:{port}/", timeout=30)
+            if response.status_code != 200:
+                raise RuntimeError(f"its page answered {response.status_code}")
+            topics = []
+            with connect(f"ws://127.0.0.1:{port}/api/live", open_timeout=30) as socket:
+                started = time.monotonic()
+                while len(topics) < len(TOPICS) and time.monotonic() - started < CHECK_FEED_SECONDS:
+                    try:
+                        message = json.loads(socket.recv(timeout=CHECK_FEED_SECONDS))
+                    except TimeoutError:
+                        break
+                    topics.append(message["topic"])
+            missing = [topic for topic in TOPICS if topic not in topics]
+            if missing:
+                log.flush()
+                output = (data / "check.log").read_text()[-1500:]
+                raise RuntimeError(f"its live feed didn't send {', '.join(missing)}: {output}")
+            health = httpx.get(f"http://127.0.0.1:{port}/api/health", timeout=10).json()
+            if health.get("errors", 0) > 0:
+                errors = json.loads((data / "crashes.json").read_text())
+                raise RuntimeError("it reported errors: " + "; ".join(item["message"] for item in errors[: health["errors"]]))
+        finally:
+            process.terminate()
+            try:
+                process.wait(30)
+            except subprocess.TimeoutExpired:
+                process.kill()
+            log.close()
+            shutil.rmtree(data, ignore_errors=True)
+            env_path.unlink(missing_ok=True)
+            env_path.symlink_to(Path(HOME) / ".env")
 
     def switch(self, tag: str, restore: str = "") -> None:
         """Runs deploy/switch.sh outside the app, which stops on the way. restore: a copy of data/ to put in place first
         (Previous version). Raises when it couldn't start."""
-        command = ["systemd-run", "--user", "--collect", "--unit", "seraph-switch", str(PROJECT_ROOT / "deploy" / "switch.sh"), tag]
+        # A unit of its own each time: the last switch may still be watching its release (switch.sh stops watching
+        # once current points elsewhere).
+        unit = f"seraph-switch-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
+        command = ["systemd-run", "--user", "--collect", "--unit", unit, str(PROJECT_ROOT / "deploy" / "switch.sh"), tag]
         if restore != "":
             command.append(restore)
         result = subprocess.run(command, capture_output=True, text=True, timeout=30)

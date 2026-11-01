@@ -30,10 +30,15 @@ built page (frontend/dist) from here, at /, so it needs no Vite.
 
 Every exception nobody caught (in a request, a background task on the event loop, or a thread) is reported to the app's
 own errors (github_searcher/crashes.py), which its agent turns into issues (backend/projects_api.py).
+
+SERAPH_CHECK=1 in .env is the check a new release gets before it goes live (github_searcher/updates.py): it runs on a
+copy of data/, and nothing in the background starts (no agents, no keepers), so it never acts on anything; it only
+answers, and its live feed sends every topic once.
 """
 
 import asyncio
 import json
+import os
 import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -63,6 +68,8 @@ LOCAL_HOSTS = ["localhost", "127.0.0.1"]
 # The hosts the API answers: this computer, and the remote access domain once it is set up.
 ALLOWED_HOSTS = LOCAL_HOSTS + ([REMOTE_DOMAIN] if REMOTE_DOMAIN != "" else [])
 THREADS = 64
+# A new release's check before it goes live (module docstring).
+CHECK = os.environ.get("SERAPH_CHECK", "") == "1"
 
 
 @asynccontextmanager
@@ -92,6 +99,9 @@ async def lifespan(app: FastAPI):
 
     threading.excepthook = thread_error
 
+    if CHECK:
+        yield
+        return
     # Agents run on this event loop, so they start here and not at import.
     await agents.start()
     # An Explore run the restart cut off goes on, when only the code reloaded.

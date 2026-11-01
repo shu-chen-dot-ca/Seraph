@@ -60,6 +60,24 @@ class Crashes:
         if self.path.exists():
             self.items = json.loads(self.path.read_text())
 
+        # A release the live copy took back (deploy/switch.sh): what went wrong in it becomes one report here.
+        home = os.environ.get("SERAPH_HOME", "")
+        # Not in a new release's check (backend/app.py), which runs on a copy of data/.
+        if home == "" or os.environ.get("SERAPH_CHECK", "") == "1":
+            return
+        failed = Path(home) / "failed-crashes.json"
+        if not failed.is_file():
+            return
+        report = json.loads(failed.read_text())
+        lines = []
+        for item in report["crashes"][:20]:
+            lines.append(f"- {item['source']}, {item['count']}x: {item['message']}")
+        detail = "What went wrong in it:\n" + ("\n".join(lines) or "nothing was reported; it stopped answering.")
+        self.add("release", f"Release {report['tag']} was taken back: {report['reason']}", detail, report["tag"])
+        failed.unlink()
+        # Reports before this start aren't this release's.
+        self.since_start = 0
+
     def save(self) -> None:
         """Write the list to disk. Called with the lock held, after every change."""
         self.version += 1
