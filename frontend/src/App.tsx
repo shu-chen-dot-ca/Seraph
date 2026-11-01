@@ -32,8 +32,8 @@ The page lives in the URL hash, so refresh and back/forward work and switching p
          One of your repositories takes tab=issues|pulls|commits|actions (none: its Code), state=closed and open=... the same
          way; Notifications takes open=... too; Tasks takes state=done (its Done tab), view=recent (its Recent
          tab), task=owner/name%23n (that task in its pop-up) and open=....
-  Workspace: #/home  #/home?repo=owner/name (Home.tsx; the open repo, which takes tab=issues|pulls|commits|actions,
-         state=closed and open=owner/name%23n like a repository's page on the GitHub tab)
+  Workspace: #/home  #/home?repo=owner/name (Home.tsx; the open repo, which takes tab=code|issues|pulls|commits|actions
+         (none: Agents), state=closed and open=owner/name%23n like a repository's page on the GitHub tab)
          #/pulls (PullRequests.tsx; takes state=closed, view=assigned|mentioned|review-requested,
          visibility=public|private, repo=owner/name, sort=created-asc|comments-desc|comments-asc|updated-desc|updated-asc
          and open=owner/name%23n)
@@ -393,7 +393,7 @@ export default function App() {
             {page === "home" && (
               <Home
                 repo={query.get("repo")}
-                tab={query.get("tab") ?? "code"}
+                tab={query.get("tab") ?? ""}
                 state={query.get("state") === "closed" ? "closed" : "open"}
                 open={query.get("open")}
               />

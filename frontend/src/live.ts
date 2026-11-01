@@ -543,6 +543,7 @@ export type YourRepo = {
   stars: number;
   starred: boolean; // you starred it
   can_push: boolean; // one of your repositories: a maintainer's buttons
+  parent: string | null; // a fork: the repo it was forked from
 };
 
 export type YourReposData = {

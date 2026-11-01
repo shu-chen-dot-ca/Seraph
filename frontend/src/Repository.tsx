@@ -34,6 +34,11 @@ a line of their own and scroll sideways.
   for, the branch, what started it, who and when. A click opens the run on GitHub. In your own repositories a failed
   run has Re-run failed jobs, after an "are you sure?".
 New issue opens NewIssueDialog.tsx.
+
+On the Workspace tab's Home (live) the bar has no link to GitHub in its top left: there the first tab is Agents
+(RepoAgents.tsx: every agent working with the repo, with how many, New agent, and the open one's chat), where a repo
+opens. Code then has tab=code in the address (none is Agents), and Refresh is left out on Agents, which reads nothing
+from GitHub.
 */
 
 import {
@@ -63,6 +68,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import NewIssueDialog from "@/NewIssueDialog";
+import RepoAgents from "@/RepoAgents";
 import ThreadDialog from "@/ThreadDialog";
 import {
   AlertDialog,
@@ -79,7 +85,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Markdown } from "@/components/ui/markdown";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api, useLive } from "@/live";
+import { api, useLive, useLiveValue } from "@/live";
 import { cn, timeAgo } from "@/lib/utils";
 
 // What GET /api/your_repositories/<repo>/<tab> gives (github_searcher/your_repositories.py).
@@ -170,8 +176,28 @@ const TABS = ["issues", "pulls", "commits", "actions"];
 // reload, and the read behind it only brings it up to date.
 const kept = new Map<string, Record<string, unknown>>();
 
-export default function Repository(props: { repo: string; tab: string; state: string; open: string | null; base?: string }) {
+export default function Repository(props: { repo: string; tab: string; state: string; open: string | null; base?: string; live?: boolean }) {
   const yourRepos = useLive("your_repos");
+  // How many agents work with the repo (the Agents tab's count, worked out the same way as there): only the number, so
+  // the page doesn't re-render on every agent update.
+  const agentCount = useLiveValue((topics) => {
+    const names = [props.repo.toLowerCase()];
+    for (const fork of topics.your_repos.repos) {
+      if (fork.parent !== null && fork.parent.toLowerCase() === props.repo.toLowerCase()) {
+        names.push(fork.name.toLowerCase());
+      }
+    }
+    const patterns = names.map((name) => new RegExp(`(?<![\\w.-])${name.replaceAll(".", "\\.")}(?![\\w.-])`, "i"));
+    const vmNames = topics.vms.filter((vm) => vm.notes.some((note) => patterns.some((pattern) => pattern.test(note.text)))).map((vm) => vm.name);
+    const jobAgents = topics.jobs.filter((job) => job.repo !== null && names.includes(job.repo.toLowerCase())).map((job) => job.agent);
+    return topics.agents.filter(
+      (agent) =>
+        (agent.repo !== null && names.includes(agent.repo.toLowerCase())) ||
+        jobAgents.includes(agent.id) ||
+        (agent.target_vm !== null && vmNames.includes(agent.target_vm)) ||
+        (agent.vm !== null && vmNames.includes(agent.vm)),
+    ).length;
+  });
   // This repo's kept answers: from memory, else from localStorage (after a reload).
   if (!kept.has(props.repo)) {
     let saved: Record<string, unknown> = {};
@@ -210,14 +236,21 @@ export default function Repository(props: { repo: string; tab: string; state: st
   const [rerunOpen, setRerunOpen] = useState(false);
   const [starring, setStarring] = useState(false);
 
-  const tab = TABS.includes(props.tab) ? props.tab : "code";
+  // The tab without tab= in the address: Agents on the Workspace tab, else Code.
+  const defaultTab = props.live ? "agents" : "code";
+  let tab = defaultTab;
+  if (TABS.includes(props.tab) || (props.live && ["code"].includes(props.tab))) {
+    tab = props.tab;
+  }
+  // The tabs that read for themselves: no Refresh, nothing read here.
+  const ownTab = tab === "agents";
   const listed = yourRepos.repos.find((each) => each.name === props.repo) ?? yourRepos.starred.find((each) => each.name === props.repo);
   const starred = listed !== undefined && listed.starred;
   const stars = listed?.stars ?? overview?.stars ?? 0;
   const canPush = listed !== undefined && listed.can_push;
   const base = props.base ?? `#/github/repo?repo=${encodeURIComponent(props.repo)}`;
   let listHash = base;
-  if (tab !== "code") {
+  if (tab !== defaultTab) {
     listHash += `&tab=${tab}`;
   }
   if (props.state === "closed") {
@@ -229,6 +262,11 @@ export default function Repository(props: { repo: string; tab: string; state: st
   useEffect(() => {
     let current = true;
     setError("");
+    // Agents reads nothing from GitHub.
+    if (ownTab) {
+      setLoading(false);
+      return;
+    }
     let path = tab;
     if (tab === "code") {
       path = "overview";
@@ -397,27 +435,36 @@ export default function Repository(props: { repo: string; tab: string; state: st
     shownAt = issues?.cached_at;
   } else if (tab === "pulls") {
     shownAt = pulls?.cached_at;
+  } else if (ownTab) {
+    shownAt = undefined;
   }
 
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-9 shrink-0 items-center gap-3 border-b px-3 max-md:h-auto max-md:flex-wrap max-md:gap-y-1 max-md:py-1">
-        <a
-          href={`https://github.com/${props.repo}`}
-          target="_blank"
-          rel="noreferrer"
-          className="flex min-w-0 items-center gap-1.5 font-medium hover:underline"
-          title="Open on GitHub"
-        >
-          {listed !== undefined && listed.private ? <Lock className="size-4 shrink-0 text-muted-foreground" /> : <BookMarked className="size-4 shrink-0 text-muted-foreground" />}
-          <span className="truncate">{props.repo}</span>
-        </a>
+        {!props.live && (
+          <a
+            href={`https://github.com/${props.repo}`}
+            target="_blank"
+            rel="noreferrer"
+            className="flex min-w-0 items-center gap-1.5 font-medium hover:underline"
+            title="Open on GitHub"
+          >
+            {listed !== undefined && listed.private ? <Lock className="size-4 shrink-0 text-muted-foreground" /> : <BookMarked className="size-4 shrink-0 text-muted-foreground" />}
+            <span className="truncate">{props.repo}</span>
+          </a>
+        )}
         <Tabs
           value={tab}
-          onValueChange={(value) => (window.location.hash = value === "code" ? base : `${base}&tab=${value}`)}
+          onValueChange={(value) => (window.location.hash = value === defaultTab ? base : `${base}&tab=${value}`)}
           className="max-md:order-last max-md:w-full max-md:overflow-x-auto"
         >
           <TabsList>
+            {props.live && (
+              <TabsTrigger value="agents" className="px-2.5">
+                Agents <span className="text-xs text-muted-foreground tabular-nums">{agentCount}</span>
+              </TabsTrigger>
+            )}
             <TabsTrigger value="code" className="px-2.5">
               Code
             </TabsTrigger>
@@ -445,9 +492,11 @@ export default function Repository(props: { repo: string; tab: string; state: st
           <Button size="sm" variant="outline" disabled={yourRepos.login === null} onClick={() => setNewIssueOpen(true)}>
             <Plus /> New issue
           </Button>
-          <Button size="sm" variant="outline" disabled={loading} onClick={() => setReload((count) => count + 1)}>
-            {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />} Refresh
-          </Button>
+          {!ownTab && (
+            <Button size="sm" variant="outline" disabled={loading} onClick={() => setReload((count) => count + 1)}>
+              {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />} Refresh
+            </Button>
+          )}
         </div>
       </div>
 
@@ -474,7 +523,12 @@ export default function Repository(props: { repo: string; tab: string; state: st
 
       {error !== "" && <div className="shrink-0 border-b bg-destructive/10 px-3 py-1.5 text-destructive">Could not read it from GitHub: {error}</div>}
 
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div className={tab === "agents" ? "min-h-0 flex-1" : "min-h-0 flex-1 overflow-auto"}>
+        {tab === "agents" && (
+          <div className="h-full">
+            <RepoAgents repo={props.repo} />
+          </div>
+        )}
         {tab === "code" && codeReady && overview !== null && (
           <div className="max-w-5xl space-y-4 p-4 max-md:p-2">
             <div className="space-y-1">

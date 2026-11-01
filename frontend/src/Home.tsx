@@ -4,10 +4,11 @@ Left: one card per repo, in a column: your repositories (every repo you can push
 recently pushed first), then under Starred the repos you starred. A card: a lock when private, owner/name, when it was
 last pushed, its description (two lines at most), whether its checks passed on the default branch, its open issues and
 PRs, and its stars. The open one is marked. Signed out, a line says to sign in (Account, on the GitHub tab).
-Right: the open repo's page, like on GitHub (Repository.tsx, the same page as on the GitHub tab): Code (its files and
-README), Issues, Pull requests, Commits and Actions, Star, New issue and Refresh. Its tabs and pop-ups keep this
-address (#/home?repo=owner/name&tab=...). A repo opened before opens at once: its tabs are kept on this computer and
-read from GitHub again every 15 minutes. With none open, a line says to pick one.
+Right: the open repo's page, like on GitHub (Repository.tsx, the same page as on the GitHub tab, with live): Agents
+(every agent working with the repo and their chats, RepoAgents.tsx; a repo opens on it), Code (its files and README),
+Issues, Pull requests, Commits and Actions, Star, New issue and Refresh. Its tabs and pop-ups keep this address (#/home?repo=owner/name&tab=...; no
+tab is Agents). A repo opened before opens at once: its tabs are kept on this
+computer and read from GitHub again every 15 minutes. With none open, a line says to pick one.
 On a narrow screen (a phone) one side shows at a time: the cards, or the open repo with Repositories (back to the
 cards) above it.
 The list comes from the live store (github_searcher/your_repositories.py reads it every minute), so it updates itself.
@@ -112,6 +113,7 @@ export default function Home(props: { repo: string | null; tab: string; state: s
                 state={props.state}
                 open={props.open}
                 base={`#/home?repo=${encodeURIComponent(props.repo)}`}
+                live
               />
             </div>
           </>
