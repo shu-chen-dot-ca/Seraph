@@ -380,7 +380,8 @@ export type TestRun = {
 };
 
 // What a draft is about, in plain words for the user (github_searcher/inbox.py). PRs have problem, cause, fix and
-// risks; comments have problem and why.
+// risks; comments have problem and why. A report on a paper (draft_report) has paper, claims, verdict, results,
+// problems and unchecked.
 export type DraftOverview = {
   project?: string;
   problem?: string;
@@ -388,13 +389,25 @@ export type DraftOverview = {
   fix?: string;
   risks?: string[];
   why?: string;
+  paper?: string;
+  claims?: string;
+  verdict?: string;
+  results?: ReportResult[];
+  problems?: ReportProblem[];
+  unchecked?: string[];
 };
+
+// One number of a paper next to the agent's (and what the authors' own code gives, "" when not run).
+export type ReportResult = { what: string; paper: string; ours: string; authors: string; note: string };
+
+// A problem the agent found in a paper; evidence is the command run on the job that shows it.
+export type ReportProblem = { title: string; what: string; why: string; evidence: string };
 
 export type DraftStatus = "pending" | "approved" | "rejected" | "replied";
 
 export type Draft = {
   id: string;
-  kind: "pr" | "comment" | "question" | "taken"; // taken: made by the app, an issue an agent works on isn't free anymore
+  kind: "pr" | "comment" | "question" | "taken" | "report"; // taken: made by the app, an issue an agent works on isn't free anymore; report: on a paper
   agent: string;
   job: string | null;
   repo: string | null;

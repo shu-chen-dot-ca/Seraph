@@ -25,7 +25,7 @@ import { cn } from "@/lib/utils";
 // How many rows a section lists.
 const ROWS = 6;
 
-const KIND_TEXT: Record<string, string> = { pr: "PR", comment: "Comment", question: "Question", taken: "Taken" };
+const KIND_TEXT: Record<string, string> = { pr: "PR", comment: "Comment", question: "Question", taken: "Taken", report: "Report" };
 const REASON_TEXT: Record<string, string> = {
   assign: "Assigned",
   author: "Author",
