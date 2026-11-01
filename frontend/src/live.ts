@@ -434,6 +434,17 @@ export type Draft = {
   sent: DraftSent | null; // what went to GitHub as you (github_searcher/github_account.py); null until then
   update_of: string | null; // PR: a new version of your open PR "owner/name#n"; approving pushes it onto that PR
   edited: boolean; // you edited its title or text before deciding
+  review: DraftReview | null; // a project's PR: its review (only passed ones reach the Inbox)
+  replaces: string | null; // a project's PR made again on the new main: the PR "owner/name#n" it replaces
+};
+
+// A project's PR draft is reviewed by the project's reviewer before it reaches the Inbox (github_searcher/inbox.py).
+export type DraftReview = {
+  state: "waiting" | "passed" | "changes";
+  agent: string | null; // the reviewer
+  job: string | null;
+  notes: string;
+  at: string;
 };
 
 // One of a PR branch's commits, sent with your name. own: the agent's (the VM's git address); every commit of a new

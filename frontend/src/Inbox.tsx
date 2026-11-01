@@ -41,6 +41,11 @@ since), nothing is decided and the error shows. Without an account nothing is
 sent; you send it yourself. A sent item's bar links to it on GitHub (a new version: Pushed to PR #n, and why when GitHub refused its comment). One approved but not sent (approved before you
 signed in) has Send to GitHub, with the same question; while you aren't signed in, its bar says in amber it isn't on
 GitHub yet, with a link to Account on the GitHub tab to sign in with GitHub. The bar says who Approve sends as.
+A project's PR (a repository agents develop all the time, Development.tsx) reaches the Inbox only once the project's
+reviewer passed it: its pop-up says so, with the reviewer's notes, and when it was made again on the new main, which PR
+it replaces (that one is closed once this one is open). Once Approve opened it, its bar shows its checks and Merge,
+which asks first and squash-merges it into main, as you; Merge waits for the checks to pass and for no conflict with
+main.
 A decided item's bar says what you decided, and has a box to message its agent about it: the message goes into the
 agent's chat (its page, #/agents/<id>, which Open chat opens), saying which item it is about. An archived agent comes
 back for it; a deleted one can't get messages.
@@ -55,7 +60,7 @@ comment you posted can still be deleted from its PR's or issue's pop-up on the G
 */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Check, ChevronRight, CircleHelp, Copy, Download, ExternalLink, FileCheck, FileText, GitCommitHorizontal, GitPullRequest, Images, Loader2, MessageSquare, MessagesSquare, Pencil, Reply, RotateCcw, Send, Square, Trash2, UserX, X } from "lucide-react";
+import { Check, ChevronRight, CircleHelp, Copy, Download, ExternalLink, FileCheck, FileText, GitCommitHorizontal, GitMerge, GitPullRequest, Images, Loader2, MessageSquare, MessagesSquare, Pencil, Reply, RotateCcw, Send, Square, Trash2, UserX, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -102,6 +107,7 @@ export default function Inbox(props: { selected: string | null }) {
   const inbox = useLive("inbox");
   const agents = useLive("agents");
   const jobs = useLive("jobs");
+  const projects = useLive("projects");
   const loaded = useLoaded("inbox");
   // Overview, diff or message (a report: overview, results, problems or diff). Every item opens on its overview.
   const [prTab, setPRTab] = useState("overview");
@@ -113,7 +119,7 @@ export default function Inbox(props: { selected: string | null }) {
   // Your GitHub account (Account on the GitHub tab): who Approve sends PRs and comments as (null until known).
   const [account, setAccount] = useState<GithubAccountStatus | null>(null);
   // The "are you sure?" before sending: for Approve, or for Send to GitHub on an approved item.
-  const [confirming, setConfirming] = useState<"" | "approve" | "send">("");
+  const [confirming, setConfirming] = useState<"" | "approve" | "send" | "merge">("");
   // Edit on a pending PR's or comment's last tab: the title and text as you change them, until Save or Cancel.
   const [editing, setEditing] = useState<{ id: string; title: string; body: string } | null>(null);
   const [now, setNow] = useState(Date.now());
@@ -426,6 +432,21 @@ export default function Inbox(props: { selected: string | null }) {
     setBusy("");
   }
 
+  // Merge on a project's PR that Approve opened: squash-merged into main, as you.
+  async function mergePR() {
+    if (draft === undefined || draft.sent === null) {
+      return;
+    }
+    setBusy("merge");
+    try {
+      await api(`/api/projects/merge/${draft.id}`, { method: "POST" });
+      toast.success(`Merged ${draft.sent.repo}#${draft.sent.number}`);
+    } catch (err) {
+      toast.error(`Could not merge it: ${err instanceof Error ? err.message : err}`);
+    }
+    setBusy("");
+  }
+
   // An approved PR or comment that isn't on GitHub yet (approved before your account was connected).
   async function sendApproved() {
     if (draft === undefined) {
@@ -554,11 +575,19 @@ export default function Inbox(props: { selected: string | null }) {
   const isEditing = draft !== undefined && editing !== null && editing.id === draft.id;
   // A new version of your open PR "owner/name#n": its commits go onto that PR's branch, its text as a comment there.
   const updateOf = draft !== undefined && draft.kind === "pr" ? draft.update_of : null;
+  // A project's PR that Approve opened (projects.py): its checks, and Merge.
+  const project = draft === undefined || draft.repo === null ? undefined : projects.find((each) => each.repo.toLowerCase() === draft.repo?.toLowerCase());
+  const projectPR = project !== undefined && draft !== undefined && draft.sent !== null && !draft.sent.update ? project.prs[String(draft.sent.number)] : undefined;
+  const canMerge = projectPR !== undefined && projectPR.state === "open" && projectPR.mergeable !== false && (projectPR.checks === "passed" || projectPR.checks === "none");
   // The "are you sure?" before Approve (or Send to GitHub) sends it, in words for what goes out.
   let confirmTitle = "";
   let confirmText = "";
   let confirmLabel = "";
-  if (draft !== undefined && updateOf !== null) {
+  if (draft !== undefined && confirming === "merge" && draft.sent !== null) {
+    confirmTitle = `Merge PR #${draft.sent.number} into main?`;
+    confirmText = `It is squash-merged as @${account?.login}: one commit on main, titled "${draft.title} (#${draft.sent.number})". The next release takes it.`;
+    confirmLabel = "Merge";
+  } else if (draft !== undefined && updateOf !== null) {
     confirmTitle = `Push these changes to ${updateOf}?`;
     confirmText = `It pushes a new commit to your PR's branch in your fork as @${account?.login}, and posts the comment shown here on the PR. Anyone can see them.`;
     confirmLabel = "Push changes";
@@ -781,6 +810,19 @@ export default function Inbox(props: { selected: string | null }) {
                         {updateOf}
                       </a>
                       : its commits go onto the PR's branch in your fork, and its text is posted on the PR as a comment.
+                    </div>
+                  )}
+
+                  {draft.review !== null && draft.review.state === "passed" && (
+                    <div className="border-l-2 border-ok/60 pl-3 text-xs text-muted-foreground">
+                      <span className="font-medium text-foreground">Reviewed{draft.review.agent !== null && draft.review.agent in agentNames ? ` by ${agentNames[draft.review.agent]}` : ""}:</span>{" "}
+                      <span className="whitespace-pre-wrap">{draft.review.notes}</span>
+                    </div>
+                  )}
+
+                  {draft.replaces !== null && (
+                    <div className="text-xs text-muted-foreground">
+                      Made again on the newest main: it replaces {draft.replaces}, which is closed once this one is open.
                     </div>
                   )}
 
@@ -1100,10 +1142,31 @@ export default function Inbox(props: { selected: string | null }) {
                         to send it from here.
                       </span>
                     )}
+                    {projectPR !== undefined && projectPR.state === "open" && (
+                      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <StatusDot tone={projectPR.checks === "passed" ? "green" : projectPR.checks === "failed" ? "red" : projectPR.checks === "running" ? "amber" : "gray"} />
+                        {projectPR.checks === "passed" && "Checks passed"}
+                        {projectPR.checks === "failed" && "Checks failed"}
+                        {projectPR.checks === "running" && "Checks running"}
+                        {projectPR.checks === "none" && "No checks"}
+                        {projectPR.mergeable === false && <span className="text-warn">, conflicts with main</span>}
+                      </span>
+                    )}
+                    {projectPR !== undefined && projectPR.state === "merged" && <span className="text-xs text-muted-foreground">Merged</span>}
                     <div className="ml-auto flex items-center gap-1.5">
                       <Button variant="ghost" size="sm" disabled={busy !== ""} onClick={() => setDeleting({ ids: [draft.id], pending: 0 })}>
                         <Trash2 /> Delete
                       </Button>
+                      {projectPR !== undefined && projectPR.state === "open" && (
+                        <Button
+                          size="sm"
+                          disabled={busy !== "" || !canMerge}
+                          title={canMerge ? "Squash and merge into main, as you" : "Merge waits for the checks to pass and for no conflict with main"}
+                          onClick={() => setConfirming("merge")}
+                        >
+                          {busy === "merge" ? <Loader2 className="animate-spin" /> : <GitMerge />} Merge
+                        </Button>
+                      )}
                       {draft.status === "approved" && draft.sent === null && (draft.kind === "pr" || draft.kind === "comment") && account !== null && account.connected && (
                         <Button size="sm" disabled={busy !== ""} onClick={() => setConfirming("send")}>
                           {busy === "send" ? <Loader2 className="animate-spin" /> : <Send />}
@@ -1162,6 +1225,8 @@ export default function Inbox(props: { selected: string | null }) {
                       onClick={() => {
                         if (confirming === "approve") {
                           decide("approve", true);
+                        } else if (confirming === "merge") {
+                          mergePR();
                         } else {
                           sendApproved();
                         }
