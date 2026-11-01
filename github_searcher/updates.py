@@ -13,7 +13,8 @@ The live copy (deploy/install.sh makes it) lives in SERAPH_HOME (~/seraph), whic
     check-data/                   a copy of data/ for a new release's check, only while it runs
     data/, .env                   yours, the same for every release
 
-Without SERAPH_HOME (the dev copy, ./run.sh) there are no updates, and the version is "dev".
+It runs as the user service seraph, which only ./live.sh starts. Without SERAPH_HOME (./run.sh: the code in the
+folder you edit) there are no updates, and the version is "dev".
 
 check() asks GitHub for the latest release of SERAPH_REPO with your GitHub sign in (it can read your private repos).
 When that isn't the release that runs, it makes it ready: downloads its code, installs its Python packages (uv sync)

@@ -1,5 +1,6 @@
-# The live copy of Seraph, ~/seraph/current (deploy/install.sh puts this file in ~/.config/systemd/user).
-# deploy/switch.sh restarts it on another release; nothing else does, so a save in the dev copy never touches it.
+# The live copy of Seraph, ~/seraph/current (deploy/install.sh puts this file in ~/.config/systemd/user). It never
+# starts by itself: ./live.sh starts it and shows its log, and Ctrl+C there stops it. deploy/switch.sh restarts it on
+# another release while it runs (Update); nothing else does, so a save in the dev copy never touches it.
 [Unit]
 Description=Seraph (the live copy, ~/seraph/current)
 After=network-online.target
@@ -10,8 +11,5 @@ Environment=SERAPH_HOME=%h/seraph
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 WorkingDirectory=%h/seraph/current
 ExecStart=%h/seraph/current/.venv/bin/serve
-Restart=on-failure
-RestartSec=5
-
-[Install]
-WantedBy=default.target
+# A command the app left going in a VM (incus) can ignore the stop: Ctrl+C in ./live.sh doesn't wait long for it.
+TimeoutStopSec=20

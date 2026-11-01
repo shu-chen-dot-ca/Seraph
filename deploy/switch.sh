@@ -8,7 +8,8 @@
 # row (a minute), or its "errors" (what the app reported since it started, github_searcher/crashes.py) reach
 # ERROR_LIMIT, it goes back the same way. Before that, what the release reported is kept in failed-crashes.json, and
 # the release before reports it once it runs (so it becomes an issue); failed and failed-reason say which and why.
-# Another switch meanwhile (current points elsewhere) ends the watch.
+# Another switch meanwhile (current points elsewhere) ends the watch, and so does Ctrl+C in ./live.sh (it leaves
+# ~/seraph/stopped): you stopped it, so it isn't started again.
 set -u
 cd "$HOME/seraph"
 NEW="$1"
@@ -21,8 +22,11 @@ WATCH_SECONDS=600
 DOWN_LIMIT=6
 ERROR_LIMIT=3
 
-# Everything back as it was before this switch, with why ($1).
+# Everything back as it was before this switch, with why ($1). Not when you stopped it yourself (./live.sh).
 go_back() {
+    if [[ -f stopped ]]; then
+        exit 0
+    fi
     echo "Going back to $OLD: $1"
     if [[ -f data/crashes.json ]]; then
         python3 - "$NEW" "$1" <<'EOF' > failed-crashes.json
@@ -64,8 +68,8 @@ for i in $(seq 60); do
     if curl -sf "http://127.0.0.1:$PORT/api/health" > /dev/null; then
         STARTED="yes"
         echo "$OLD $BACKUP" > previous
-        # The last 10 copies of data/ stay.
-        ls -1d backups/* | head -n -10 | xargs -r rm -rf
+        # The last 10 copies of data/ stay (./run.sh keeps its own, named ...-run, the same way).
+        ls -1d backups/* | grep -v -- '-run$' | head -n -10 | xargs -r rm -rf
         break
     fi
     sleep 1
@@ -77,7 +81,7 @@ fi
 DOWN=0
 for i in $(seq $((WATCH_SECONDS / 10))); do
     sleep 10
-    if [[ "$(basename "$(readlink current)")" != "$NEW" ]]; then
+    if [[ "$(basename "$(readlink current)")" != "$NEW" || -f stopped ]]; then
         exit 0
     fi
     HEALTH=$(curl -sf --max-time 5 "http://127.0.0.1:$PORT/api/health" || true)
