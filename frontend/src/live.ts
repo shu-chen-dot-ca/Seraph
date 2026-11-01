@@ -697,6 +697,9 @@ export type VMRun = {
   stopped_by_user: boolean;
 };
 
+// Where an agent last clicked, dragged or scrolled on a desktop, in pixels of that desktop's screen (width x height).
+export type VMPointer = { agent: string; x: number; y: number; width: number; height: number };
+
 export type VMSummary = {
   name: string;
   incus_name: string;
@@ -721,6 +724,7 @@ export type VMSummary = {
   traffic: VMTraffic;
   notes: VMNote[]; // what agents and the user set up in it, oldest first
   locked_by: Record<string, "user" | "agent">; // per desktop number: who locked your mouse and keyboard out
+  pointers: Record<string, VMPointer>; // per desktop number: where an agent last put the mouse (AgentCursor.tsx)
   error: string | null; // why the last create, start or stop failed
 };
 
