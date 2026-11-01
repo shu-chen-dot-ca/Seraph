@@ -3,7 +3,7 @@ Live data from the backend, and the one fetch helper.
 
 One websocket to /api/live. On connect the server sends every topic, then only the topics that changed:
 {"topic": "repos" | "issues" | "tracked" | "explore" | "github" | "jobs" | "inbox" | "issue_drafts" | "prs" | "your_repos" | "notifications" | "agents"
-| "vms" | "images" | "resource" | "updates",
+| "vms" | "images" | "resource" | "updates" | "projects" | "crashes",
 "data": ...}.
 Each message replaces that topic in the store, and components read it with useLive(topic), so the page never
 polls and never re-fetches lists. When the socket drops it reconnects after a second, and the server sends
@@ -434,6 +434,17 @@ export type Draft = {
   sent: DraftSent | null; // what went to GitHub as you (github_searcher/github_account.py); null until then
   update_of: string | null; // PR: a new version of your open PR "owner/name#n"; approving pushes it onto that PR
   edited: boolean; // you edited its title or text before deciding
+  review: DraftReview | null; // a project's PR: its review (only passed ones reach the Inbox)
+  replaces: string | null; // a project's PR made again on the new main: the PR "owner/name#n" it replaces
+};
+
+// A project's PR draft is reviewed by the project's reviewer before it reaches the Inbox (github_searcher/inbox.py).
+export type DraftReview = {
+  state: "waiting" | "passed" | "changes";
+  agent: string | null; // the reviewer
+  job: string | null;
+  notes: string;
+  at: string;
 };
 
 // One of a PR branch's commits, sent with your name. own: the agent's (the VM's git address); every commit of a new
@@ -632,6 +643,8 @@ export type AgentSummary = {
   artifacts_stamp: number; // goes up on every change to its artifacts (the Artifacts tab reads its folder again)
   repo: string | null; // a repository's agent (the Workspace tab's Live): the repo it belongs to
   live: LiveSetUp | null; // and how far its set-up is
+  project: string | null; // a project's worker or reviewer: the project's repo
+  role: "worker" | "reviewer" | null;
 };
 
 // How far a repository's agent's set-up is (github_searcher/agents.py, prepare_live): its VM coming up and the code
@@ -951,8 +964,70 @@ export type UpdatesData = {
   error: string;
   previous: string | null; // the release before this one (Previous version)
   switched_at: string | null; // when this one went live
-  failed: string | null; // the release the last update went to, when it didn't start
+  failed: string | null; // the release the last update went to, when it didn't start or was taken back
+  failed_reason: string; // why ("" when not known)
   restarting: boolean;
+};
+
+// One of your repositories agents develop all the time (github_searcher/projects.py): Development and Releases.
+export type ProjectIssue = {
+  number: number;
+  title: string;
+  state: "working" | "denied" | "stopped" | "closed" | "done";
+  job: string | null;
+  agent: string | null;
+  kind: string | null; // denied: not_valid, duplicate, conflicting, out_of_scope, cannot_reproduce
+  why: string; // denied: the agent's reason
+  at: string;
+};
+
+export type ProjectPR = {
+  number: number;
+  title: string;
+  url: string;
+  draft: string | null; // the Inbox draft Approve opened it from
+  job: string | null;
+  agent: string | null;
+  issue: number | null;
+  state: "open" | "merged" | "closed";
+  checks: "passed" | "failed" | "running" | "none";
+  mergeable: boolean | null; // false: conflicts with main
+  redo: boolean; // its agent makes it again on the new main
+  replaces: string | null;
+  at: string;
+};
+
+export type Project = {
+  repo: string;
+  on: boolean;
+  mode: "drafts" | "auto";
+  agents: number; // workers
+  goals: string;
+  vm: string | null;
+  chat: string | null; // the chat agent (the repository's agent)
+  workers: string[];
+  reviewer: string | null;
+  issues: Record<string, ProjectIssue>;
+  prs: Record<string, ProjectPR>;
+  crashes_sent_at: string | null;
+  error: string; // why the last round failed
+  created_at: string;
+  app: boolean; // the app's own repo: its errors become its issues
+};
+
+// One of the app's own errors (github_searcher/crashes.py), which the app's own project turns into issues.
+export type Crash = {
+  id: string;
+  source: "backend" | "browser" | "agent" | "release";
+  message: string;
+  detail: string;
+  count: number;
+  first_at: string;
+  last_at: string;
+  version: string;
+  state: "new" | "sent" | "filed" | "skipped";
+  issue: number | null;
+  note: string;
 };
 
 // ---- The live store ----
@@ -975,6 +1050,8 @@ export type Topics = {
   images: ImagesData;
   resource: ResourceUsage | null; // null until the backend's first reading
   updates: UpdatesData;
+  projects: Project[];
+  crashes: Crash[]; // the newest first
 };
 
 // Empty until the first message, so components never deal with "not loaded yet".
@@ -1008,8 +1085,11 @@ const store = {
       previous: null,
       switched_at: null,
       failed: null,
+      failed_reason: "",
       restarting: false,
     },
+    projects: [],
+    crashes: [],
   } as Topics,
   loaded: {} as Partial<Record<keyof Topics, boolean>>,
   connected: false,

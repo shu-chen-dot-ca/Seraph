@@ -7,7 +7,8 @@ and how each stands, with the agent that follows each (the GitHub tab), your rep
 (read with your sign-in), VMs, their
 images (and the images' agents), VM queue, the agents' artifacts, the issues repository agents draft (the Workspace
 tab's Live), agents, this computer's use (the Resource page)
-and remote access (the devices that may sign in from elsewhere), and updates (the live copy's new releases). The order matters: the Issues list asks jobs which issues an agent
+and remote access (the devices that may sign in from elsewhere), updates (the live copy's new releases), projects (your
+repositories agents develop all the time) and the app's own errors. The order matters: the Issues list asks jobs which issues an agent
 is working on (those can't be removed), the queue
 keeps its state on the VM records, and Agents needs everything else (it also
 sets the queue's on_grant / on_kick callbacks). Agents only starts its worker
@@ -17,6 +18,7 @@ event loop.
 
 from github_searcher.agents import Agents
 from github_searcher.artifacts import Artifacts
+from github_searcher.crashes import Crashes
 from github_searcher.explore import Explore
 from github_searcher.github_account import GithubAccount
 from github_searcher.inbox import Inbox
@@ -27,6 +29,7 @@ from github_searcher.issue_list import IssueList
 from github_searcher.jobs import Jobs
 from github_searcher.notifications import Notifications
 from github_searcher.pr_tracking import PRTracking
+from github_searcher.projects import Projects
 from github_searcher.repo_list import RepoList
 from github_searcher.repo_signals import RepoSignals
 from github_searcher.remote_access import RemoteAccess
@@ -39,6 +42,8 @@ from sandbox.resource_usage import ResourceUsage
 from sandbox.vm_queue import VMQueue
 from sandbox.vms import VMs
 
+# First, so everything after it can report what goes wrong.
+crashes = Crashes()
 repos = RepoList()
 jobs = Jobs()
 issues = IssueList(jobs)
@@ -59,7 +64,8 @@ image_agents = ImageAgents(images)
 queue = VMQueue(vms)
 artifacts = Artifacts()
 issue_drafts = IssueDrafts()
-agents = Agents(repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, repo_signals, issue_tags, explore, artifacts, your_repositories, issue_drafts)
+projects = Projects(your_repositories)
+agents = Agents(repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, repo_signals, issue_tags, explore, artifacts, your_repositories, issue_drafts, projects, crashes)
 resource_usage = ResourceUsage()
 remote_access = RemoteAccess()
-updates = Updates(github_account)
+updates = Updates(github_account, crashes)

@@ -5,7 +5,8 @@ agent working with the repo, laid out like a chat app's list of chats.
 Your forks of the repo count as the repo here (Home lists the repo instead of them, Home.tsx). Which VMs have the repo
 set up comes from their notes: a VM has it when one of its notes names the repo or your fork as owner/name (agents
 write their notes that way, github_searcher/agent/prompt.md; you can add one yourself on the VM's Notes tab).
-The agents working with the repo: the repo's own agent, every agent with a job on the repo or your fork, every agent that has
+The agents working with the repo: the repo's own agent, its development's workers and reviewer (Development.tsx), every
+agent with a job on the repo or your fork, every agent that has
 one of those VMs as its target VM, waits for it or holds it, and the ones made here since the page opened (one made
 while no VM has the repo has nothing else tying it to the repo: after a reload it is on the Agents page). Newest first;
 archived ones last, marked so.
@@ -70,6 +71,7 @@ export default function RepoAgents(props: { repo: string }) {
     .filter(
       (agent) =>
         (agent.repo !== null && names.includes(agent.repo.toLowerCase())) ||
+        (agent.project !== null && names.includes(agent.project.toLowerCase())) ||
         made.includes(agent.id) ||
         jobAgents.includes(agent.id) ||
         (agent.target_vm !== null && vmNames.includes(agent.target_vm)) ||

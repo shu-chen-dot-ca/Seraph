@@ -35,6 +35,11 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   subject and the body the comment posted on the PR with the push (the draft's update_of, inbox.py). The rules
   (contributing_guide), the tests and the checks on the diff and commits apply as for a new PR; the PR template
   and pr_examples don't, and a follow_up job's change needs no before and after pair (its test runs show it works).
+- Projects: on one of the user's own repositories that agents develop all the time (github_searcher/projects.py), the
+  rules are the repo's own files, so draft_pr and run_tests don't wait for contributing_guide or pr_examples; a PR's
+  title must be a Conventional Commit; and the draft goes to the project's reviewer first (Agents.give_review), so it
+  reaches the Inbox only once the review passes. A fix_issue job with a thread there makes that PR again on the new main:
+  its draft replaces it.
 - Evidence: what the user looks at to decide on a draft. Real screenshots of the project running on
   the VM's desktop (its window, or a terminal running it), screen recordings (GIF) and command runs
   (a test failing, then passing), each "before" or "after" the agent's change, under a topic that
@@ -106,6 +111,7 @@ from claude_agent_sdk import tool
 
 from github_searcher.artifacts import ArtifactsError
 from github_searcher.jobs import EVIDENCE_DIR
+from github_searcher.projects import TITLE, TITLE_CHARS
 from github_searcher.search import get_contents, get_merged_prs, get_pr_status, get_readme, get_repository, get_thread, get_tree
 from sandbox.agent import long_runs
 from sandbox.agent.computer_use import Computer, ComputerError
@@ -2039,12 +2045,22 @@ class WorkTools:
         found = EMOJI.findall(" ".join([args["title"], args["body"], overview["project"], overview["problem"], overview["cause"], overview["fix"]] + risks))
         if found:
             return {"content": [{"type": "text", "text": NO_EMOJI + " ".join(sorted(set(found)))}], "is_error": True}
+        # One of the user's projects (github_searcher/projects.py): its rules are its own files (CLAUDE.md, README, docs),
+        # read in the VM, and its PR titles are Conventional Commits (its release notes and next version come from them).
+        project = self.agents.projects.get(repo)
+        if project is not None and (TITLE.fullmatch(args["title"].strip()) is None or len(args["title"].strip()) > TITLE_CHARS):
+            text = (
+                f"{repo}'s PR titles are Conventional Commits: type(scope): summary, e.g. 'fix(search): keep the filter after a "
+                f"reload'. type is feat, fix, refactor, docs, style, test, chore or perf; one scope, the area changed; the summary "
+                f"lower case, imperative, no period, the whole title under {TITLE_CHARS} characters."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
         # Written from the project's rules and the way its own people write their PRs: the agent has to have read both.
         # A new version of an open PR keeps that PR's description, so only the rules (its commits follow them too).
-        if repo is not None and repo.lower() not in self.guides_read:
+        if project is None and repo is not None and repo.lower() not in self.guides_read:
             text = f"First read {repo}'s rules for contributors (contributing_guide), then write the PR the way they say."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
-        if pr is None and repo is not None and repo.lower() not in self.pr_examples_read:
+        if project is None and pr is None and repo is not None and repo.lower() not in self.pr_examples_read:
             text = f"First read how {repo}'s own people write their PRs (pr_examples), then write yours the same way."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         # The job's pictures go in the body, as ![what](evidence:ev_...): the Inbox shows them there, and sending
@@ -2337,6 +2353,13 @@ class WorkTools:
         target = job["issue"]
         if pr is not None:
             target = pr
+        # A project's PR draft goes to its reviewer first, and reaches the Inbox only when the review passes. One made
+        # again on the new main replaces the PR its job is about (Agents.redo_pr).
+        review = None
+        replaces = None
+        if project is not None:
+            review = {"state": "waiting", "agent": None, "job": None, "notes": "", "at": datetime.now(UTC).isoformat()}
+            replaces = job["thread"]
         draft = self.agents.inbox.create(
             "pr",
             self.agent_id,
@@ -2356,6 +2379,8 @@ class WorkTools:
             overview=overview,
             template=template,
             update_of=pr,
+            review=review,
+            replaces=replaces,
         )
         fields = {"status": "waiting_on_user", "drafts": job["drafts"] + [draft["id"]]}
         # A PR draft is the draft step, even if the agent didn't say so.
@@ -2377,6 +2402,14 @@ class WorkTools:
             f"{job['id']} waits on the user now; move on to your next job (release_vm if none is left for {vm_name})."
             f"{left_out}"
         )
+        if project is not None:
+            self.agents.give_review(draft)
+            text = (
+                f"{draft['id']} goes to {repo}'s reviewer first: {files} files, +{added} -{removed}, {what}, with "
+                f"{len(job['evidence'])} pieces of evidence. When the review passes it reaches the user's Inbox; when the reviewer "
+                f"asks for changes you get a message with them. Nothing was pushed or sent. {job['id']} waits meanwhile; move on "
+                f"to your next job (release_vm if none is left for {vm_name})."
+            )
         return {"content": [{"type": "text", "text": text}]}
 
     async def evidence_add(self, args: dict) -> dict:
@@ -2578,7 +2611,7 @@ class WorkTools:
             text = f"{job['id']} is {job['status']} (the user may have cancelled it); no more test runs for it. Move on."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         # What to run comes from the project's rules: the agent has to have read them.
-        if job["repo"] is not None and job["repo"].lower() not in self.guides_read:
+        if job["repo"] is not None and job["repo"].lower() not in self.guides_read and self.agents.projects.get(job["repo"]) is None:
             text = f"First read {job['repo']}'s rules for contributors (contributing_guide): they say which checks to run before a PR, and how."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         before = job["tests"]["before"]

@@ -7,6 +7,9 @@ that PR or issue; the agent suggests a reply or a new version of the PR as a dra
 nothing needs an answer. The user makes a reproduce_paper job by adding a paper on the Workspace tab's Papers page
 (Agents.reproduce_paper): the agent reads the paper, rebuilds what it describes in the VM, compares its numbers with
 the paper's, checks the claims, and drafts a report for the Inbox. "paper" is the PDF's path in the agent's artifacts.
+For a project (github_searcher/projects.py) the app makes a fix_issue job for each open issue a worker takes, and a
+review job for the reviewer for each PR draft; "thread" on a project's fix_issue job is its PR it makes again on the
+new main (Agents.redo_pr).
 Each job is one JSON file, DATA_DIR/jobs/<id>.json:
 
     {"id": "job_a1b2c3", "kind": "fix_issue" | "set_up_repo" | "task" | "follow_up" | "reproduce_paper" | ..., "title",
@@ -98,6 +101,9 @@ STEPS = {
     # alone (rebuild), run it and the authors' own code and line the numbers up (compare), test the claims (check),
     # then the report.
     "reproduce_paper": ["read", "set_up", "rebuild", "compare", "check", "report"],
+    # Review a project's PR draft before it reaches the user (github_searcher/projects.py): read it and its pictures
+    # (read), run its tests on its code in the VM (test), then pass it or send it back (verdict).
+    "review": ["read", "test", "verdict"],
 }
 
 
