@@ -1,9 +1,12 @@
 /*
 The Workspace tab's Home (#/home, #/home?repo=owner/name): your repositories, laid out like a chat app's list of chats.
 Left: one card per repo, in a column: your repositories (every repo you can push to, public and private, most
-recently pushed first), then under Starred the repos you starred. A card: a lock when private, owner/name, when it was
-last pushed, its description (two lines at most), whether its checks passed on the default branch, its open issues and
-PRs, and its stars. The open one is marked. Signed out, a line says to sign in (Account, on the GitHub tab).
+recently pushed first), then under Starred the repos you starred. Your forks aren't listed: the repo each was forked
+from is, first under Starred (also when you haven't starred it), and its page has your fork's branches (the branch
+picker on Code and Commits, Repository.tsx) and the agents working on your fork (RepoAgents.tsx). A card: a lock when
+private, owner/name (a fork icon when you have a fork of it), when it was last pushed, its description (two lines at
+most), whether its checks passed on the default branch, its open issues and PRs, and its stars. The open one is
+marked. Signed out, a line says to sign in (Account, on the GitHub tab).
 Right: the open repo's page, like on GitHub (Repository.tsx, the same page as on the GitHub tab, with live): Agents
 (every agent working with the repo and their chats, RepoAgents.tsx; a repo opens on it), Code (its files and README),
 Issues, Pull requests, Commits and Actions, Star, New issue and Refresh. Its tabs and pop-ups keep this address (#/home?repo=owner/name&tab=...; no
@@ -14,19 +17,36 @@ cards) above it.
 The list comes from the live store (github_searcher/your_repositories.py reads it every minute), so it updates itself.
 */
 
-import { BookMarked, ChevronLeft, CircleCheck, CircleDashed, CircleDot, CircleX, GitPullRequest, Lock, Star } from "lucide-react";
+import { BookMarked, ChevronLeft, CircleCheck, CircleDashed, CircleDot, CircleX, GitFork, GitPullRequest, Lock, Star } from "lucide-react";
 import { Fragment } from "react";
 
 import Repository from "@/Repository";
 import { since, useNow } from "@/components/ui/job-progress";
-import { useLive } from "@/live";
+import { useLive, type YourRepo } from "@/live";
 import { cn } from "@/lib/utils";
 
 export default function Home(props: { repo: string | null; tab: string; state: string; open: string | null }) {
   const yourRepos = useLive("your_repos");
   const now = useNow();
 
-  const cards = [...yourRepos.repos, ...yourRepos.starred];
+  // Your forks aren't listed: the repos they were forked from are, first under Starred.
+  const own = yourRepos.repos.filter((repo) => repo.parent === null);
+  const listed = [...yourRepos.repos, ...yourRepos.starred, ...yourRepos.parents];
+  const originals: YourRepo[] = [];
+  for (const fork of yourRepos.repos) {
+    const original = listed.find((each) => each.name === fork.parent);
+    if (original !== undefined && !own.includes(original) && !originals.includes(original)) {
+      originals.push(original);
+    }
+  }
+  const cards = [...own, ...originals, ...yourRepos.starred.filter((repo) => !originals.includes(repo))];
+  // Which of them you have a fork of, for the card's fork icon.
+  const forksOf: Record<string, string> = {};
+  for (const fork of yourRepos.repos) {
+    if (fork.parent !== null) {
+      forksOf[fork.parent] = fork.name;
+    }
+  }
   const signedOut = yourRepos.login === null && yourRepos.error === null;
 
   return (
@@ -34,7 +54,7 @@ export default function Home(props: { repo: string | null; tab: string; state: s
       <div className={cn("flex w-80 shrink-0 flex-col border-r max-md:w-full max-md:border-r-0", props.repo !== null && "max-md:hidden")}>
         <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
           <h1 className="font-semibold">Repositories</h1>
-          <span className="ml-auto text-xs text-muted-foreground tabular-nums">{yourRepos.repos.length}</span>
+          <span className="ml-auto text-xs text-muted-foreground tabular-nums">{own.length}</span>
         </div>
         <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
           {signedOut && (
@@ -49,7 +69,7 @@ export default function Home(props: { repo: string | null; tab: string; state: s
           {!signedOut && yourRepos.error === null && cards.length === 0 && <div className="px-1 py-2 text-muted-foreground">You have no repositories yet.</div>}
           {cards.map((repo, index) => (
             <Fragment key={repo.name}>
-              {index === yourRepos.repos.length && <div className="px-1 pt-2 text-xs font-medium text-muted-foreground">Starred</div>}
+              {index === own.length && <div className="px-1 pt-2 text-xs font-medium text-muted-foreground">Starred</div>}
               <a
                 href={`#/home?repo=${encodeURIComponent(repo.name)}`}
                 className={cn(
@@ -63,6 +83,11 @@ export default function Home(props: { repo: string | null; tab: string; state: s
                     <span className="text-muted-foreground">{repo.name.slice(0, repo.name.indexOf("/") + 1)}</span>
                     <span className="font-semibold">{repo.name.slice(repo.name.indexOf("/") + 1)}</span>
                   </span>
+                  {forksOf[repo.name] !== undefined && (
+                    <span title={`Your fork: ${forksOf[repo.name]}`}>
+                      <GitFork className="size-3.5 shrink-0 text-muted-foreground" />
+                    </span>
+                  )}
                   <span className="ml-auto shrink-0 text-xs text-muted-foreground">{repo.pushed_at !== null ? `${since(repo.pushed_at, now)} ago` : ""}</span>
                 </div>
                 <p className="mt-1 line-clamp-2 min-h-8 text-xs text-muted-foreground">{repo.description !== "" ? repo.description : "No description."}</p>

@@ -23,6 +23,10 @@ a line of their own and scroll sideways.
   repo is under the files, at the top folder. Where you are isn't in the address: a reload starts at the top.
 - Commits: the newest 50 commits on the default branch, each with whether its checks passed, the message, who and
   when, and its id; a click opens it on GitHub.
+- On the Workspace tab (live), Code and Commits have a branch picker on top, like GitHub's: your forks' branches
+  first (owner:branch; your forks aren't on Home's list, the repo is), then the repo's own, its default branch first.
+  Picking one shows that branch's files, README and commits, read from your fork for its branches. The branch isn't in
+  the address: a reload or another repo starts on the default branch.
 - Issues and Pull requests: tabs Open and Closed (state=closed) with how many, a box that filters by title and number,
   and the newest 50, the newest change first, like GitHub's lists. An issue row: its state, title, labels, number, who
   opened it and when, who it is assigned to, comments. A PR row: its state (open, draft, merged, closed), title,
@@ -53,6 +57,8 @@ import {
   File,
   FileText,
   Folder,
+  ChevronDown,
+  GitBranch,
   GitMerge,
   GitPullRequest,
   GitPullRequestClosed,
@@ -81,6 +87,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Markdown } from "@/components/ui/markdown";
@@ -149,6 +156,10 @@ type RunList = { items: RepoRun[]; cached_at?: string };
 // sha: the file's git id, which names its content: the backend keeps files by it.
 type RepoFiles = { files: { path: string; type: "blob" | "tree"; size: number; sha: string }[]; truncated: boolean };
 type RepoFileText = { path: string; text: string | null; size: number; binary: boolean; too_big: boolean };
+
+// The branch picker's branches: your forks' first (yours), then the repo's own, its default branch first.
+type RepoBranch = { repo: string; name: string; at: string | null; default: boolean; yours: boolean };
+type BranchList = { branches: RepoBranch[]; cached_at?: string };
 
 const SIZE = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
 
@@ -221,6 +232,10 @@ export default function Repository(props: { repo: string; tab: string; state: st
   const [issues, setIssues] = useState(() => (keptPage[`issues|${props.state}`] as IssueList | undefined) ?? null);
   const [pulls, setPulls] = useState(() => (keptPage[`pulls|${props.state}`] as PullList | undefined) ?? null);
   const [runs, setRuns] = useState(() => (keptPage["runs"] as RunList | undefined) ?? null);
+  const [branches, setBranches] = useState(() => (keptPage["branches"] as BranchList | undefined) ?? null);
+  // The branch on Code and Commits: "" is the repo's default branch, else "owner/name:branch" (the repo itself or your
+  // fork of it).
+  const [branch, setBranch] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   // Goes up to read the tab again from GitHub (Refresh, a closed pop-up, a new issue, a re-run). Each read remembers
@@ -229,6 +244,7 @@ export default function Repository(props: { repo: string; tab: string; state: st
   const [reload, setReload] = useState(0);
   const pageReload = useRef(0);
   const filesReload = useRef(0);
+  const branchesReload = useRef(0);
   const [filter, setFilter] = useState("");
   const [newIssueOpen, setNewIssueOpen] = useState(false);
   // The run whose failed jobs Re-run would start again, while its "are you sure?" is open.
@@ -273,8 +289,12 @@ export default function Repository(props: { repo: string; tab: string; state: st
     } else if (tab === "actions") {
       path = "runs";
     }
-    // What it is kept as: Issues and Pull requests for Open and Closed each.
-    const key = tab === "issues" || tab === "pulls" ? `${path}|${props.state}` : path;
+    // What it is kept as: Issues and Pull requests for Open and Closed each, Code and Commits for each branch.
+    const onBranch = branch !== "" && (tab === "code" || tab === "commits");
+    let key = tab === "issues" || tab === "pulls" ? `${path}|${props.state}` : path;
+    if (onBranch) {
+      key += `@${branch}`;
+    }
     function show(result: never) {
       if (tab === "code") {
         setOverview(result);
@@ -295,7 +315,7 @@ export default function Repository(props: { repo: string; tab: string; state: st
     if (fresh) {
       setLoading(true);
     }
-    api<never>(`/api/your_repositories/${props.repo}/${path}?state=${props.state}${fresh ? "&fresh=1" : ""}`)
+    api<never>(`/api/your_repositories/${props.repo}/${path}?state=${props.state}${fresh ? "&fresh=1" : ""}${onBranch ? `&branch=${encodeURIComponent(branch)}` : ""}`)
       .then((result) => {
         if (!current) {
           return;
@@ -319,7 +339,7 @@ export default function Repository(props: { repo: string; tab: string; state: st
     return () => {
       current = false;
     };
-  }, [props.repo, tab, props.state, reload]);
+  }, [props.repo, tab, props.state, reload, branch]);
 
   // The Code tab's files, all in one answer: when the tab opens, and on Refresh.
   useEffect(() => {
@@ -329,14 +349,14 @@ export default function Repository(props: { repo: string; tab: string; state: st
     let current = true;
     setFilesError("");
     const fresh = reload !== filesReload.current;
-    api<RepoFiles>(`/api/your_repositories/${props.repo}/tree${fresh ? "?fresh=1" : ""}`)
+    api<RepoFiles>(`/api/your_repositories/${props.repo}/tree?fresh=${fresh ? 1 : 0}&branch=${encodeURIComponent(branch)}`)
       .then((result) => {
         if (!current) {
           return;
         }
         filesReload.current = reload;
         setFiles(result);
-        keptPage["tree"] = result;
+        keptPage[branch === "" ? "tree" : `tree@${branch}`] = result;
         try {
           localStorage.setItem(`repo-page:${props.repo}`, JSON.stringify(keptPage));
         } catch {
@@ -351,7 +371,51 @@ export default function Repository(props: { repo: string; tab: string; state: st
     return () => {
       current = false;
     };
-  }, [props.repo, tab, reload]);
+  }, [props.repo, tab, reload, branch]);
+
+  // The branch picker's branches (the Workspace tab): when Code or Commits opens, and on Refresh.
+  useEffect(() => {
+    if (!props.live || (tab !== "code" && tab !== "commits")) {
+      return;
+    }
+    let current = true;
+    const fresh = reload !== branchesReload.current;
+    api<BranchList>(`/api/your_repositories/${props.repo}/branches${fresh ? "?fresh=1" : ""}`)
+      .then((result) => {
+        if (!current) {
+          return;
+        }
+        branchesReload.current = reload;
+        setBranches(result);
+        keptPage["branches"] = result;
+        try {
+          localStorage.setItem(`repo-page:${props.repo}`, JSON.stringify(keptPage));
+        } catch {
+          // Storage full or blocked: kept while the app is open.
+        }
+      })
+      .catch(() => {
+        // The picker keeps what it had; the tab's own read says when GitHub can't be reached.
+      });
+    return () => {
+      current = false;
+    };
+  }, [props.repo, tab, reload, props.live]);
+
+  // Another branch on Code and Commits: what was kept for it shows at once, else nothing until it is read. The files
+  // differ from branch to branch, so the Code tab starts at the top again.
+  function pickBranch(value: string) {
+    const suffix = value === "" ? "" : `@${value}`;
+    setBranch(value);
+    setOverview((keptPage[`overview${suffix}`] as RepoOverview | undefined) ?? null);
+    setCommits((keptPage[`commits${suffix}`] as RepoOverview | undefined) ?? null);
+    setFiles((keptPage[`tree${suffix}`] as RepoFiles | undefined) ?? null);
+    setFilesError("");
+    setFolder("");
+    setOpenFile(null);
+    setFileData({});
+    setFileErrors({});
+  }
 
   function showFolder(path: string) {
     setFolder(path);
@@ -366,7 +430,9 @@ export default function Repository(props: { repo: string; tab: string; state: st
     }
     setFileErrors((current) => ({ ...current, [path]: "" }));
     try {
-      const data = await api<RepoFileText>(`/api/your_repositories/${props.repo}/file?path=${encodeURIComponent(path)}&sha=${sha}`);
+      const data = await api<RepoFileText>(
+        `/api/your_repositories/${props.repo}/file?path=${encodeURIComponent(path)}&sha=${sha}&branch=${encodeURIComponent(branch)}`,
+      );
       setFileData((current) => ({ ...current, [path]: data }));
     } catch (err) {
       setFileErrors((current) => ({ ...current, [path]: err instanceof Error ? err.message : String(err) }));
@@ -423,6 +489,13 @@ export default function Repository(props: { repo: string; tab: string; state: st
     numbers = Array.from({ length: count }, (_, i) => i + 1).join("\n");
   }
   const latest = overview !== null && overview.commits.length > 0 ? overview.commits[0] : null;
+  // The branch shown: its repo (the repo itself or your fork), its name, and how the picker says it.
+  const branchRepo = branch === "" ? props.repo : branch.slice(0, branch.indexOf(":"));
+  const branchName = branch === "" ? (overview?.default_branch ?? "") : branch.slice(branch.indexOf(":") + 1);
+  let branchLabel = branchName;
+  if (branchRepo !== props.repo) {
+    branchLabel = `${branchRepo.slice(0, branchRepo.indexOf("/"))}:${branchName}`;
+  }
   // The Code tab shows once its README and its files are both in (or the files failed), so nothing jumps.
   const codeReady = overview !== null && (files !== null || filesError !== "");
   // When the tab you see was read from GitHub.
@@ -521,6 +594,42 @@ export default function Repository(props: { repo: string; tab: string; state: st
         </div>
       )}
 
+      {props.live && (tab === "code" || tab === "commits") && (
+        <div className="flex h-9 shrink-0 items-center gap-2 border-b px-3">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" variant="outline" className="min-w-0">
+                <GitBranch /> <span className="truncate">{branchLabel !== "" ? branchLabel : "Branch"}</span> <ChevronDown />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="max-h-96 w-72 overflow-y-auto">
+              {branches === null && <DropdownMenuLabel className="text-muted-foreground">Loading…</DropdownMenuLabel>}
+              {branches !== null &&
+                branches.branches.map((each, index) => {
+                  // The repo's own default branch is "": the page without a branch.
+                  const value = each.repo === props.repo && each.default ? "" : `${each.repo}:${each.name}`;
+                  return (
+                    <Fragment key={`${each.repo}:${each.name}`}>
+                      {(index === 0 || branches.branches[index - 1].repo !== each.repo) && (
+                        <DropdownMenuLabel className="text-xs text-muted-foreground">{each.yours ? `Your fork: ${each.repo}` : each.repo}</DropdownMenuLabel>
+                      )}
+                      <DropdownMenuItem onSelect={() => pickBranch(value)}>
+                        <span className={cn("min-w-0 truncate", value === branch && "font-semibold")}>{each.name}</span>
+                        {each.default && !each.yours && (
+                          <Badge variant="outline" className="py-0">
+                            default
+                          </Badge>
+                        )}
+                        {each.at !== null && <span className="ml-auto shrink-0 text-xs text-muted-foreground">{timeAgo(each.at)}</span>}
+                      </DropdownMenuItem>
+                    </Fragment>
+                  );
+                })}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      )}
+
       {error !== "" && <div className="shrink-0 border-b bg-destructive/10 px-3 py-1.5 text-destructive">Could not read it from GitHub: {error}</div>}
 
       <div className={tab === "agents" ? "min-h-0 flex-1" : "min-h-0 flex-1 overflow-auto"}>
@@ -584,7 +693,7 @@ export default function Repository(props: { repo: string; tab: string; state: st
                     <span className="text-muted-foreground">/</span>
                     <span className="font-medium">{openFile.slice(openFile.lastIndexOf("/") + 1)}</span>
                     <a
-                      href={`https://github.com/${props.repo}/blob/${overview.default_branch}/${openFile}`}
+                      href={`https://github.com/${branchRepo}/blob/${branchName}/${openFile}`}
                       target="_blank"
                       rel="noreferrer"
                       className="ml-auto flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
@@ -632,7 +741,7 @@ export default function Repository(props: { repo: string; tab: string; state: st
               )}
               {shownFile !== undefined && shownFile.text !== null && isMarkdown && (
                 <div className="px-6 py-4 max-md:px-3">
-                  <Markdown text={shownFile.text} repo={props.repo} gitRef={overview.default_branch} base={folder} />
+                  <Markdown text={shownFile.text} repo={branchRepo} gitRef={branchName} base={folder} />
                 </div>
               )}
               {shownFile !== undefined && shownFile.text !== null && !isMarkdown && (
@@ -652,7 +761,7 @@ export default function Repository(props: { repo: string; tab: string; state: st
                   {overview.readme === "" ? (
                     <span className="text-muted-foreground">No README.</span>
                   ) : (
-                    <Markdown text={overview.readme} repo={props.repo} gitRef={overview.default_branch} base="" issueRefs />
+                    <Markdown text={overview.readme} repo={branchRepo} gitRef={branchName} base="" issueRefs />
                   )}
                 </div>
               </section>

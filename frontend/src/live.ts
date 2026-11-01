@@ -549,6 +549,7 @@ export type YourRepo = {
 export type YourReposData = {
   repos: YourRepo[]; // the ones you can push to, most recently pushed first
   starred: YourRepo[]; // the ones you starred and can't push to, most recently starred first
+  parents: YourRepo[]; // the repos your forks were forked from, when in neither list
   login: string | null; // who they were read for; null when not signed in
   checked_at: string | null;
   error: string | null;
@@ -973,7 +974,7 @@ const store = {
     inbox: [],
     issue_drafts: [],
     prs: { items: [], issues: [], checked_at: null, error: null, refreshing: false },
-    your_repos: { repos: [], starred: [], login: null, checked_at: null, error: null },
+    your_repos: { repos: [], starred: [], parents: [], login: null, checked_at: null, error: null },
     notifications: { items: [], login: null, checked_at: null, error: null },
     agents: [],
     vms: [],
