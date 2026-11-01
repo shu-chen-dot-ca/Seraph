@@ -31,8 +31,8 @@ GitHub's labels aren't shown otherwise: each issue carries the app's own tags in
 Free (a newcomer can start now) or Assigned (someone is on it: an assignee, a claim, the author doing it), or
 Self-assigned (blue: you are on it, your GitHub account from the GitHub tab's Account page is an assignee or has an
 open PR for it; not counted as Assigned), or Closed (muted, whatever its tags say, when the issue is closed on GitHub;
-it sorts last), its Kind, and
-a Level: how hard the fix is for our agent in its sandbox VM, decided by fixed rules from eight yes / no checks Claude
+it sorts last), its Kind, its Lines (a rough guess of how many lines the fix adds and removes, tests included, shown
+as ~40), and a Level: how hard the fix is for our agent in its sandbox VM, decided by fixed rules from eight yes / no checks Claude
 answers (we can do it at all, it is free of politics, the goal is clear, it runs in our VM, its effect is easy to see,
 easy to prove fixed, general programming knowledge is enough, the change stays local). Out of scope (grey): we don't
 take it, whatever the rest says. Either our agent can't do it yet: it can't end as a pull request to this repo (the
@@ -120,7 +120,7 @@ const ROLE: Record<string, string> = {
 };
 const MAINTAINERS = ["OWNER", "MEMBER", "COLLABORATOR"];
 
-type SortKey = "number" | "title" | "repo" | "free" | "marked" | "level" | "kind" | "stars" | "opened" | "active" | "read" | "comments" | "status" | "agent";
+type SortKey = "number" | "title" | "repo" | "free" | "marked" | "level" | "lines" | "kind" | "stars" | "opened" | "active" | "read" | "comments" | "status" | "agent";
 
 // The table's columns: # and Title (which takes the room left over), then the rest. All but Title are measured by the
 // sizer. better says which way the first click on a header sorts: higher first, or A to Z.
@@ -132,11 +132,12 @@ const ISSUE_COLUMNS: IssueColumn[] = [
   { key: "free", label: "Free", title: "Free first (a newcomer can start now), then self-assigned (you are on it), then not ready yet, then assigned, then closed", better: "higher" },
   { key: "marked", label: "Marked", title: "What the maintainers marked it with on GitHub: good first issue, help wanted (they want an outside PR) or confirmed. Hover for all its labels", better: "higher" },
   { key: "level", label: "Level", title: "How hard the fix is for our agent in its VM, by fixed rules: easy (it can write it, see it and prove it there), medium or hard; out of scope when we don't take it (our agent can't do it yet, or it touches politics)", better: "higher" },
+  { key: "lines", label: "Lines", title: "A rough guess of how many lines the fix adds and removes, tests included; the most first", better: "higher" },
   { key: "kind", label: "Kind", title: "Bug, docs, feature or question: A to Z", better: "text" },
   { key: "stars", label: "Stars", title: "The repo's stars", better: "higher" },
   { key: "opened", label: "Opened", title: "When the issue was opened on GitHub", better: "higher" },
   { key: "active", label: "Updated", title: "Its last change on GitHub: a comment, a label, an edit…", better: "higher" },
-  { key: "read", label: "Checked", title: "When Claude last read it and its comments and updated its tags (Free, Level, Kind)", better: "higher" },
+  { key: "read", label: "Checked", title: "When Claude last read it and its comments and updated its tags (Free, Level, Lines, Kind)", better: "higher" },
   { key: "comments", label: "Comments", title: "Comments", better: "higher" },
   { key: "status", label: "Status", title: "What is being done about it (its latest job): in progress first", better: "higher" },
   { key: "agent", label: "Agent", title: "The agent on its latest job", better: "text" },
@@ -338,6 +339,9 @@ export default function Issues(props: { repo: string | null; open: string | null
     if (key === "level") {
       return issue.tags?.level ? (LEVEL_RANK[issue.tags.level] ?? null) : null;
     }
+    if (key === "lines") {
+      return issue.tags?.lines ?? null;
+    }
     if (key === "kind") {
       return issue.tags?.kind ?? null;
     }
@@ -518,6 +522,12 @@ export default function Issues(props: { repo: string | null; open: string | null
           {LEVEL_LABEL[issue.tags.level]}
         </span>
       );
+    }
+    if (key === "lines") {
+      if (issue.tags?.lines === undefined || issue.tags.lines === null) {
+        return <span title={issue.tags ? issue.tags.reason : "Being tagged"}>{issue.tags ? "–" : "…"}</span>;
+      }
+      return <span title={issue.tags.reason}>~{issue.tags.lines}</span>;
     }
     if (key === "stars") {
       const stars = facts !== null ? facts.repo_stars : repoStars[issue.repo];
@@ -1098,6 +1108,7 @@ export default function Issues(props: { repo: string | null; open: string | null
                     {shownTags.level !== null && (
                       <Badge variant={LEVEL_VARIANT[shownTags.level] ?? "secondary"}>{LEVEL_LABEL[shownTags.level]}</Badge>
                     )}
+                    {shownTags.lines !== undefined && shownTags.lines !== null && <Badge variant="secondary">~{shownTags.lines} lines</Badge>}
                     {shownTags.kind !== null && <Badge variant="secondary">{shownTags.kind}</Badge>}
                     <span>{shownTags.reason}</span>
                     <Button variant="ghost" size="xs" disabled={retagging.includes(shown.id)} title="Claude reads it and its comments again now" onClick={() => tagAgain(shown.id)}>

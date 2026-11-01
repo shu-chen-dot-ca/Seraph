@@ -23,8 +23,8 @@ GitHub's labels aren't shown otherwise: each issue carries the app's own tags in
 (github_searcher/issue_tags.py, made by Claude in the background): Free or Assigned, Easy / Medium / Hard (how hard
 the fix is for our agent in its VM, by fixed rules, the same as on the Issues page; kept until the issue changes) or
 Out of scope (grey: we don't take it, as our agent can't do it yet, like a plugin the project wants as its own
-repository, or it touches politics: activist or politically sensitive, or against another country's laws), and
-its kind, each in its own column, the reason on hover. Assigned on GitHub counts as Assigned at once, without waiting
+repository, or it touches politics: activist or politically sensitive, or against another country's laws), its Lines
+(a rough guess of how many lines the fix adds and removes, tests included, shown as ~40) and its kind, each in its own column, the reason on hover. Assigned on GitHub counts as Assigned at once, without waiting
 for the tags. Tag again (on the repo's row and in its pop-up) has Claude read all its unassigned issues again now.
 
 The list is a table like the Explore page's: Name, then the repo's fields in two lines, so a row isn't too long, and
@@ -108,20 +108,21 @@ const SLOTS = Array.from({ length: Math.max(FIRST_LINE.length, SECOND_LINE.lengt
 // The tags' order for sorting, the friendliest highest (the same as the Repos page's).
 const POLICY_RANK: Record<string, number> = { welcome: 5, none: 4, disclose: 3, unclear: 2, no_ai: 1 };
 const NEWCOMER_RANK: Record<string, number> = { welcomes: 5, ok: 4, few: 3, left_waiting: 2, turned_away: 1 };
-// The pop-up's issues: #, Title (the room left over), the tags (Free, Marked, Level, Kind), Opened, Updated, Checked
+// The pop-up's issues: #, Title (the room left over), the tags (Free, Marked, Level, Lines, Kind), Opened, Updated, Checked
 // (Claude last read it), comments, then GitHub and Add.
-const ISSUE_COLUMNS = "grid grid-cols-[56px_minmax(0,1fr)_72px_160px_64px_72px_150px_80px_80px_36px_120px] items-center gap-2";
-type IssueKey = "number" | "title" | "free" | "marked" | "level" | "kind" | "opened" | "updated" | "read" | "comments";
+const ISSUE_COLUMNS = "grid grid-cols-[56px_minmax(0,1fr)_72px_160px_64px_48px_72px_150px_80px_80px_36px_120px] items-center gap-2";
+type IssueKey = "number" | "title" | "free" | "marked" | "level" | "lines" | "kind" | "opened" | "updated" | "read" | "comments";
 const ISSUE_HEADERS: { key: IssueKey; label: string; title: string }[] = [
   { key: "number", label: "#", title: "Its number on GitHub, newest first" },
   { key: "title", label: "Title", title: "A to Z" },
   { key: "free", label: "Free", title: "Free first (a newcomer can start now), then not ready yet, then assigned" },
   { key: "marked", label: "Marked", title: "What the maintainers marked it with on GitHub: good first issue, help wanted (they want an outside PR) or confirmed; the most marked first. Hover for all its labels" },
   { key: "level", label: "Level", title: "How hard the fix is for our agent in its VM, by fixed rules: easy (it can write it, see it and prove it there), medium or hard; out of scope when we don't take it (our agent can't do it yet, or it touches politics); the hardest first" },
+  { key: "lines", label: "Lines", title: "A rough guess of how many lines the fix adds and removes, tests included; the most first" },
   { key: "kind", label: "Kind", title: "Bug, docs, feature or question: A to Z" },
   { key: "opened", label: "Opened", title: "When it was opened on GitHub, newest first" },
   { key: "updated", label: "Updated", title: "Its last change on GitHub: a comment, a label, an edit…; the latest first" },
-  { key: "read", label: "Checked", title: "When Claude last read it and its comments and updated its tags (Free, Level, Kind); the latest first" },
+  { key: "read", label: "Checked", title: "When Claude last read it and its comments and updated its tags (Free, Level, Lines, Kind); the latest first" },
   { key: "comments", label: "", title: "Comments, the most first" },
 ];
 // The tags' order for sorting and their colors (the same as on the Issues page): levels like LeetCode's green / amber / red.
@@ -298,6 +299,9 @@ export default function Tracked() {
     }
     if (key === "level") {
       return tags !== null && tags.level !== null ? LEVEL_RANK[tags.level] : null;
+    }
+    if (key === "lines") {
+      return tags !== null ? (tags.lines ?? null) : null;
     }
     if (key === "kind") {
       return tags !== null ? tags.kind : null;
@@ -921,6 +925,9 @@ export default function Tracked() {
                           </span>
                           <span className={cn("truncate", tags !== null && tags.level !== null && LEVEL_COLOR[tags.level])} title={tags?.reason}>
                             {tags !== null ? (tags.level !== null ? LEVEL_LABEL[tags.level] : "–") : isAssigned ? "–" : "…"}
+                          </span>
+                          <span className="truncate" title={tags?.reason}>
+                            {tags !== null ? (tags.lines !== undefined && tags.lines !== null ? `~${tags.lines}` : "–") : isAssigned ? "–" : "…"}
                           </span>
                           <span className="truncate capitalize" title={tags?.reason}>
                             {tags !== null ? (tags.kind ?? "–") : isAssigned ? "–" : "…"}

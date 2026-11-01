@@ -166,13 +166,15 @@ export type IssueItem = {
 // place of GitHub's labels. status: free (a newcomer can start now), assigned (someone is on it) or waiting (nobody
 // is, but it isn't ready). level is like LeetCode's, or out of scope (we don't take it: our agent can't do it yet, as
 // it can't be a pull request to that repo, made and run in a Linux VM, or it touches politics; it can't be assigned).
-// level and kind are null when it is assigned on GitHub (not asked).
+// lines is a rough guess of the lines the fix adds and removes, tests included. level, kind and lines are null when it
+// is assigned on GitHub (not asked); lines is missing on tags from before it.
 export type IssueTags = {
   status: "free" | "assigned" | "waiting";
   level: "easy" | "medium" | "hard" | "out of scope" | null;
   // The yes / no answers the level follows from by fixed rules; missing on tags from before the rules.
   checks?: Record<"in_scope" | "apolitical" | "clear" | "runs_in_vm" | "visible" | "checkable" | "general" | "contained", boolean> | null;
   kind: "bug" | "feature" | "docs" | "question" | null;
+  lines?: number | null;
   reason: string;
   updated_at: string;
   judged_at: string;
