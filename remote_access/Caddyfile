@@ -5,10 +5,11 @@
 #
 # /api/* goes straight to the backend, which checks the sign in on every call (backend/app.py). Everything else is
 # the app's own files, passed on only when the backend says the request is signed in (GET /api/remote_access/check;
-# otherwise its redirect to the Sign in page goes back instead). They come from PAGE_PORT (start_caddy.sh): the
-# backend in the live copy (deploy/), which serves its built page, or the Vite dev server in the dev copy.
-# While the app restarts (an update, deploy/switch.sh) nothing answers there for a few seconds: a page that says so and
-# loads again by itself comes back instead of an error.
+# otherwise its redirect to the Sign in page goes back instead). They come from whichever copy runs: Vite on 5173
+# while ./run.sh runs (the code as you edit it), else the live copy's backend (./live.sh), which serves its built
+# page. Both use the same backend port.
+# While neither runs, or the app restarts (an update, deploy/switch.sh), nothing answers: a page that says so and loads
+# again by itself comes back instead of an error.
 {
 	http_port {$REMOTE_ACCESS_HTTP_PORT}
 	https_port {$REMOTE_ACCESS_HTTPS_PORT}
@@ -24,13 +25,18 @@
 		forward_auth 127.0.0.1:{$BACKEND_PORT} {
 			uri /api/remote_access/check
 		}
+		# Vite first; when it doesn't answer, the backend (and Vite is tried again 10 seconds later).
 		# localhost, not 127.0.0.1: Node often listens on ::1 only.
-		reverse_proxy localhost:{$PAGE_PORT}
+		reverse_proxy localhost:5173 localhost:{$BACKEND_PORT} {
+			lb_policy first
+			lb_try_duration 2s
+			fail_duration 10s
+		}
 	}
 	handle_errors 502 503 504 {
 		header Content-Type "text/html; charset=utf-8"
 		header Cache-Control no-store
-		respond `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="refresh" content="3"><title>Seraph</title><style>body{margin:0;display:flex;height:100vh;align-items:center;justify-content:center;font:15px system-ui,sans-serif;background:#fff;color:#333}@media (prefers-color-scheme:dark){body{background:#111;color:#ddd}}</style></head><body>Updating. This page loads again by itself.</body></html>` 503
+		respond `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="refresh" content="3"><title>Seraph</title><style>body{margin:0;display:flex;height:100vh;align-items:center;justify-content:center;font:15px system-ui,sans-serif;background:#fff;color:#333}@media (prefers-color-scheme:dark){body{background:#111;color:#ddd}}</style></head><body>Seraph isn't running right now, or it is restarting. This page loads again by itself.</body></html>` 503
 	}
 }
 
