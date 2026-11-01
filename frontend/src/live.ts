@@ -340,11 +340,12 @@ export type JobStatus = "queued" | "working" | "waiting_on_user" | "done" | "can
 
 export type Job = {
   id: string;
-  kind: string; // "fix_issue" | "task" | future kinds
+  kind: string; // "fix_issue" | "task" | "reproduce_paper" | future kinds
   title: string;
   agent: string;
   issue: string | null;
   thread: string | null; // follow_up: the PR or issue on GitHub it answers ("owner/name#n")
+  paper: string | null; // reproduce_paper: the PDF in the agent's artifacts ("papers/name.pdf")
   repo: string | null;
   vm: string | null;
   status: JobStatus;
