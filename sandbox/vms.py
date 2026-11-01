@@ -46,8 +46,9 @@ The env variables for all VMs (set in the Settings dialog) are in DATA_DIR/globa
 desktops, queue, wants and runs belong to VMQueue (vm_queue.py); they live here so they are saved with the VM.
 runs are the long commands agents left going in it (sandbox/agent/long_runs.py), each on its agent's desktop.
 Only kept while the backend runs: usage (on, whether it answers, CPU %, memory and disk in use, internet
-download and upload speed), samples (the last 60 of those, one per second) and locked_by (who locked the
-human out of which desktop: {desktop number: "user" or "agent"}).
+download and upload speed), samples (the last 60 of those, one per second), locked_by (who locked the
+human out of which desktop: {desktop number: "user" or "agent"}) and pointers (where an agent last put the mouse on
+each desktop, for the agent's cursor on the VM page: {desktop number: {agent, x, y, width, height}}).
 
 Internet use is counted inside the VM, so the user can watch it on a metered connection (a phone hotspot).
 Counting the VM's network card from outside would also count the desktop and terminals the browser shows,
@@ -208,6 +209,9 @@ class VMRecord:
         self.samples: list[dict] = []
         # Who locked the human's mouse and keyboard out of which desktop: {desktop number: "user" or "agent"}.
         self.locked_by: dict[int, str] = {}
+        # Where an agent last clicked, dragged or scrolled on which desktop, and that desktop's screen size:
+        # {desktop number: {"agent": id, "x", "y", "width", "height"}} (sandbox/agent/tools.py sets it).
+        self.pointers: dict[int, dict] = {}
         # Why the last create, start or stop failed (None when it worked).
         self.error: str | None = None
         # The last CPU reading (nanoseconds used, time read), to work out CPU % between two reads.
@@ -713,6 +717,7 @@ class VMRecord:
                     raise VMsError(f"Desktop {number} is in use (held, waited for, or a run is going on it), so it can't go.")
                 self.desktops = self.desktops[: number - 1]
                 self.locked_by.pop(number, None)
+                self.pointers.pop(number, None)
                 self.save()
             if self.vm.status() == "Running":
                 self.vm.set_up_desktops(number - 1)
@@ -1128,5 +1133,6 @@ class VMs:
         data["usage"] = record.usage
         data["samples"] = record.samples
         data["locked_by"] = record.locked_by
+        data["pointers"] = record.pointers
         data["error"] = record.error
         return data
