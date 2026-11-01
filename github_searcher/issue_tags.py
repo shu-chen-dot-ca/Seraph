@@ -1,5 +1,5 @@
 """The tags the app puts on issues, the same on the Tracked and Issues pages: free or assigned, how hard (or out of
-scope), what kind.
+scope), what kind, about how many lines the fix changes.
 
 GitHub's own labels are spelled differently in every repo ("good first issue", "good-first-issue", "help wanted",
 "effort/small", "kind/bug", ...) and are mostly noise to the user, so the pages don't show them. Claude reads
@@ -9,7 +9,8 @@ each issue instead and gives it tags we define. One JSON file, DATA_DIR/issue_ta
                       "level": "easy" | "medium" | "hard" | "out of scope" | None,
                       "checks": {"in_scope", "apolitical", "clear", "runs_in_vm", "visible", "checkable", "general",
                                  "contained": bool} | None,
-                      "kind": "bug" | "feature" | "docs" | "question" | None, "reason", "updated_at", "judged_at"}, ...}
+                      "kind": "bug" | "feature" | "docs" | "question" | None, "lines": int | None,
+                      "reason", "updated_at", "judged_at"}, ...}
 
 status weighs everything about who may take it: assignees, open pull requests that would close it, the labels
 (good first issue, help wanted and the like invite outside contributors), what the issue template says about the
@@ -44,10 +45,13 @@ was tagged: when that changes, the backend tags it again, and a free one every h
 The level is kept once given: the checks and kind stay from one read to the next while the issue hasn't changed on
 GitHub (Claude is told, and the old ones are kept even if it answers otherwise), so a refresh doesn't flip easy and
 medium; only the status is judged afresh every time. When the issue changed, Claude sees the old answers and keeps
-them unless what is new shows otherwise. Tags from before the rules (no checks) are judged afresh once, by the
+them unless what is new shows otherwise. lines is Claude's rough guess of the fix's size: the lines its pull request
+adds and removes together, tests included (0 when there is nothing to change); it is kept like the checks, and is
+None when the issue is assigned on GitHub. Tags from before the rules (no checks) are judged afresh once, by the
 backend on its own, and so are tags from before a check was added (like in_scope or apolitical): their other answers
-are kept like any others, the new check takes Claude's new answer. Cost isn't a concern here: Claude reads at high effort, CHARS_PER_RUN of issues a
-run. judged_at is when it was last read.
+are kept like any others, the new check takes Claude's new answer. Tags from before lines are read again once too.
+Cost isn't a concern here: Claude reads at high effort, CHARS_PER_RUN of issues a run. judged_at is when it was last
+read.
 
 Kept apart from the lists on purpose, like issue_facts.py: undo/redo of a list shouldn't undo tags, and an issue
 that comes back with an undo keeps its tags. version goes up on every change.
@@ -164,6 +168,7 @@ SCHEMA = {
                     "number": {"type": "integer"},
                     "status": {"type": "string", "enum": ["free", "assigned", "waiting"]},
                     "kind": {"type": "string", "enum": ["bug", "feature", "docs", "question"]},
+                    "lines": {"type": "integer"},
                     "reason": {"type": "string"},
                     "in_scope": {"type": "boolean"},
                     "apolitical": {"type": "boolean"},
@@ -175,7 +180,7 @@ SCHEMA = {
                     "contained": {"type": "boolean"},
                 },
                 "required": [
-                    "number", "status", "kind", "reason", "in_scope", "apolitical", "clear", "runs_in_vm", "visible",
+                    "number", "status", "kind", "lines", "reason", "in_scope", "apolitical", "clear", "runs_in_vm", "visible",
                     "checkable", "general", "contained",
                 ],
             },
@@ -247,7 +252,7 @@ class IssueTags:
         found = {}
         texts = []
         updated = {}
-        # {number: (checks, kind)}: read before and unchanged since, so those stay (and so the level).
+        # {number: (checks, kind, lines)}: read before and unchanged since, so those stay (and so the level).
         kept = {}
         for number in numbers:
             issue = data.get(f"i{number}")
@@ -258,7 +263,7 @@ class IssueTags:
             assignees = [user["login"] for user in issue["assignees"]["nodes"]]
             if assignees:
                 reason = f"Assigned on GitHub to {', '.join(assignees)}."
-                found[issue_id] = {"status": "assigned", "level": None, "checks": None, "kind": None, "reason": reason, "updated_at": issue["updatedAt"], "judged_at": now}
+                found[issue_id] = {"status": "assigned", "level": None, "checks": None, "kind": None, "lines": None, "reason": reason, "updated_at": issue["updatedAt"], "judged_at": now}
                 continue
             updated[number] = issue["updatedAt"]
 
@@ -341,11 +346,14 @@ class IssueTags:
                 before = self.tags.get(issue_id)
             if before is not None and before.get("checks"):
                 answers = ", ".join(f"{key} {'yes' if value else 'no'}" for key, value in before["checks"].items())
+                answers += f"; kind {before['kind']}"
+                if before.get("lines") is not None:
+                    answers += f"; lines {before['lines']}"
                 if before["updated_at"] == issue["updatedAt"]:
-                    kept[number] = (before["checks"], before["kind"])
-                    text += f"\n\nRead before: {answers}; kind {before['kind']}. Nothing changed since: give the same answers."
+                    kept[number] = (before["checks"], before["kind"], before.get("lines"))
+                    text += f"\n\nRead before: {answers}. Nothing changed since: give the same answers."
                 else:
-                    text += f"\n\nRead before: {answers}; kind {before['kind']}. It changed since: keep those answers unless what is new shows otherwise."
+                    text += f"\n\nRead before: {answers}. It changed since: keep those answers unless what is new shows otherwise."
             texts.append(text)
 
         # As many issues per Claude run as fit in CHARS_PER_RUN.
@@ -400,6 +408,8 @@ class IssueTags:
                 + "".join(f"- {key}: {question}\n" for key, question, failed in CHECKS)
                 + "\n"
                 "kind: bug, feature (new behavior or an improvement), docs, or question (a support question, nothing to fix).\n\n"
+                "lines: a rough guess of how many lines the fix's pull request changes: the lines added and removed together, "
+                "as GitHub counts them, its tests included. 0 when there is nothing to change.\n\n"
                 "reason: one short, plain sentence on why it has that status, at most 160 characters (no file or function "
                 "names).\n\n"
                 "Answer for every issue, by its number.\n\n" + "\n\n".join(run)
@@ -417,10 +427,14 @@ class IssueTags:
                 for key, question, failed in CHECKS:
                     checks[key] = item[key]
                 kind = item["kind"]
+                lines = max(item["lines"], 0)
                 if item["number"] in kept:
-                    # The answers from before stay; a check added since (not among them) takes the new answer.
+                    # The answers from before stay; a check added since (not among them) takes the new answer, and so
+                    # do lines when there were none.
                     checks.update(kept[item["number"]][0])
                     kind = kept[item["number"]][1]
+                    if kept[item["number"]][2] is not None:
+                        lines = kept[item["number"]][2]
                 # The level by the rules: political or out of our reach is out of scope, whatever the rest says; every
                 # check yes is easy; not runnable in our VM, a rippling change, or two or more checks no is hard; one is
                 # medium.
@@ -444,6 +458,7 @@ class IssueTags:
                     "level": level,
                     "checks": checks,
                     "kind": kind,
+                    "lines": lines,
                     "reason": reason,
                     "updated_at": updated[item["number"]],
                     "judged_at": datetime.now(UTC).isoformat(),
