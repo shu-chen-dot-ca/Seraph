@@ -11,6 +11,12 @@ empty side says it is missing); "other" items take the full width under them. Pi
 click; there ← / → step through every picture of the draft, so flipping between a before and its after
 shows exactly what changed. A command shows its exit code; short output is shown as it is, longer output
 folds open, and "Full output" loads what was cut.
+
+A report on a paper (draft_report) is shown in three parts, one per Inbox tab (part):
+- overview: what the paper is, what it claims, how it came out, what the agent couldn't check, then its full report.
+- results: the paper's numbers next to the agent's and the authors' code's, then the agent's runs that no problem
+  points to (e.g. its version and the authors' code on the paper's data).
+- problems: each problem in plain words (what, and why it matters), with the run that shows it.
 */
 
 import { ChevronLeft, ChevronRight, Loader2, SquareTerminal } from "lucide-react";
@@ -27,9 +33,16 @@ const STAGE_LABEL: Record<string, string> = { before: "Before", after: "After", 
 // A command's output up to this many lines is shown right away; longer output folds.
 const SHORT_OUTPUT_LINES = 8;
 
-export default function Overview(props: { draft: Draft; files: number; added: number; removed: number }) {
+export default function Overview(props: { draft: Draft; part?: string; files: number; added: number; removed: number }) {
   const draft = props.draft;
   const overview = draft.overview;
+  // A report's part, its Inbox tab; other drafts have only the overview.
+  const part = props.part ?? "overview";
+  const results = overview.results ?? [];
+  const problems = overview.problems ?? [];
+  const unchecked = overview.unchecked ?? [];
+  // A report's runs that no problem points to: shown under its results.
+  const runs = draft.evidence.filter((item) => !problems.some((problem) => problem.evidence === item.id));
   // The full outputs loaded so far, by output file; "" while one loads.
   const [outputs, setOutputs] = useState<Record<string, string>>({});
   // Long command outputs folded open, by evidence id.
@@ -210,11 +223,103 @@ export default function Overview(props: { draft: Draft; files: number; added: nu
           )}
         </div>
       )}
-      {rows.length === 0 && draft.kind !== "question" && draft.kind !== "taken" && (
+      {draft.kind === "report" && part === "overview" && (
+        <>
+          <div className="text-muted-foreground">{overview.paper}</div>
+          <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-2.5">
+            <span className="font-medium">Claims</span>
+            <span className="max-w-3xl">{overview.claims}</span>
+            <span className="font-medium">Outcome</span>
+            <span className="max-w-3xl">{overview.verdict}</span>
+            {unchecked.length > 0 && (
+              <>
+                <span className="font-medium">Couldn't check</span>
+                <ul className="max-w-3xl list-disc space-y-1 pl-4">
+                  {unchecked.map((item) => (
+                    <li key={item}>{item}</li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
+          <div className="space-y-2 pt-1">
+            <h3 className="text-[15px] font-semibold">Full report</h3>
+            <Markdown text={draft.body || "*No text.*"} githubImagesOnly />
+          </div>
+        </>
+      )}
+
+      {draft.kind === "report" && part === "results" && (
+        <>
+          {results.length === 0 && <div className="text-muted-foreground">The report has no numbers to compare.</div>}
+          {results.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead className="text-xs text-muted-foreground">
+                  <tr className="border-b">
+                    <th className="py-1 pr-3 font-medium">What</th>
+                    <th className="py-1 pr-3 font-medium">Paper</th>
+                    <th className="py-1 pr-3 font-medium">Ours</th>
+                    <th className="py-1 pr-3 font-medium">Authors' code</th>
+                    <th className="py-1 font-medium">Note</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {results.map((row, index) => (
+                    <tr key={index} className="border-b align-top">
+                      <td className="py-1.5 pr-3">{row.what}</td>
+                      <td className="py-1.5 pr-3 font-mono text-xs tabular-nums">{row.paper}</td>
+                      <td className="py-1.5 pr-3 font-mono text-xs tabular-nums">{row.ours}</td>
+                      <td className="py-1.5 pr-3 font-mono text-xs tabular-nums">{row.authors || "–"}</td>
+                      <td className="py-1.5 text-muted-foreground">{row.note}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {runs.length > 0 && (
+            <div className="space-y-5 pt-1">
+              <h3 className="text-[15px] font-semibold">Runs</h3>
+              {runs.map((item) => (
+                <section key={item.id} className="space-y-2">
+                  <div className="border-b pb-1 font-semibold">{item.topic}</div>
+                  {item.context && <p className="max-w-3xl">{item.context}</p>}
+                  {renderItem(item, "other")}
+                </section>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {draft.kind === "report" && part === "problems" && (
+        <>
+          {problems.length === 0 && <div className="text-muted-foreground">The agent found no problems.</div>}
+          {problems.map((problem, index) => {
+            const item = draft.evidence.find((each) => each.id === problem.evidence);
+            return (
+              <section key={index} className="space-y-2">
+                <div className="border-b pb-1 text-[15px] font-semibold">{problem.title}</div>
+                <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-2.5">
+                  <span className="font-medium">What</span>
+                  <span className="max-w-3xl">{problem.what}</span>
+                  <span className="font-medium">Why it matters</span>
+                  <span className="max-w-3xl">{problem.why}</span>
+                </div>
+                {item !== undefined && item.context && <p className="max-w-3xl text-muted-foreground">{item.context}</p>}
+                {item !== undefined && renderItem(item, "other")}
+              </section>
+            );
+          })}
+        </>
+      )}
+
+      {rows.length === 0 && draft.kind !== "question" && draft.kind !== "taken" && draft.kind !== "report" && (
         <div className="text-muted-foreground">This draft was made before overviews existed. Its text is in the last tab.</div>
       )}
 
-      {topics.length > 0 && (
+      {topics.length > 0 && draft.kind !== "report" && (
         <div className="space-y-5 pt-1">
           <h3 className="text-[15px] font-semibold">Before and after</h3>
           {topics.map((topic) => (

@@ -1,6 +1,7 @@
 /*
 The Notes tab of a VM page: what is set up in this VM, so the next agent (and you) know before using it, e.g.
-"openclaw in ~/openclaw: built, on main. Added the matrix plugin for issue 4120."
+"openclaw/openclaw in ~/openclaw: built, on main. Added the matrix plugin for issue 4120." A note that names a repo
+as owner/name is how the app tells which VMs have that repo set up (a repository's Agents tab, RepoAgents.tsx).
 
 Agents write them: the one holding the VM adds a note for what it set up or changed on top of the plain project, and
 removes notes that are no longer true. Every agent sees them when it picks a VM, and again when the VM becomes its

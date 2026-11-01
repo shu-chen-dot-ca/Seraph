@@ -1,6 +1,6 @@
 /*
 The Inbox (on the GitHub tab, #/inbox): everything the agents want to send (PRs, comments, new commits for your open
-PRs) or ask (questions), waiting for you. And one kind the app makes itself, Taken: an issue an agent has a job for
+PRs), ask (questions) or report (a paper an agent reproduced, from the Workspace tab's Papers page), waiting for you. And one kind the app makes itself, Taken: an issue an agent has a job for
 isn't free anymore (someone else is on it now, github_searcher/agents.py issue_taken); you pick Keep working or Stop
 the agent (its job is cancelled).
 
@@ -22,6 +22,10 @@ is what would be sent:
   Edit (a pending PR or comment) makes the title and text editable: Save keeps your change (the agent is told you
   edited it when you decide), Cancel drops it. An edited one says "Edited by you". While you edit, the decision
   buttons wait for Save or Cancel.
+A report on a paper has its own tabs, all for you: Overview (what the paper is and claims, how it came out, what the
+agent couldn't check, and its full report), Results (the paper's numbers next to the agent's and the authors' code's,
+and the agent's other runs), Problems (each problem it found, with the run that shows it) and Files (its code, every
+file new, like a diff). Approve accepts it and ends the job; nothing is sent anywhere.
 A new version of one of your open PRs (the agent fixed what a review asked for, or its failing checks) says so on top,
 with a link to that PR in the GitHub tab's pop-up, and its last tab is Commit and comment: the title is the commit
 message, the text the comment posted on the PR with it.
@@ -51,7 +55,7 @@ comment you posted can still be deleted from its PR's or issue's pop-up on the G
 */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Check, ChevronRight, CircleHelp, Copy, Download, ExternalLink, FileCheck, GitCommitHorizontal, GitPullRequest, Images, Loader2, MessageSquare, MessagesSquare, Pencil, Reply, RotateCcw, Send, Square, Trash2, UserX, X } from "lucide-react";
+import { Check, ChevronRight, CircleHelp, Copy, Download, ExternalLink, FileCheck, FileText, GitCommitHorizontal, GitPullRequest, Images, Loader2, MessageSquare, MessagesSquare, Pencil, Reply, RotateCcw, Send, Square, Trash2, UserX, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -81,7 +85,7 @@ import { cn } from "@/lib/utils";
 // Phone mode (App.tsx) leaves out Agent and Target, so Title keeps its room.
 const COLUMNS = "grid grid-cols-[12px_88px_120px_190px_minmax(0,1fr)_44px] items-center gap-2 max-md:grid-cols-[12px_88px_minmax(0,1fr)_32px]";
 
-const KIND_LABEL: Record<string, string> = { pr: "PR", comment: "Comment", question: "Question", taken: "Taken" };
+const KIND_LABEL: Record<string, string> = { pr: "PR", comment: "Comment", question: "Question", taken: "Taken", report: "Report" };
 
 const DECISION_LABEL: Record<string, string> = { pending: "Pending", approved: "Approved", rejected: "Rejected", replied: "Replied" };
 // A Taken notice is decided with Keep working (approved) or Stop the agent (rejected).
@@ -99,7 +103,7 @@ export default function Inbox(props: { selected: string | null }) {
   const agents = useLive("agents");
   const jobs = useLive("jobs");
   const loaded = useLoaded("inbox");
-  // Overview, diff or message. Every item opens on its overview.
+  // Overview, diff or message (a report: overview, results, problems or diff). Every item opens on its overview.
   const [prTab, setPRTab] = useState("overview");
   // The reply box's text per draft (or the message to its agent, once decided), so switching items keeps what you typed.
   const [replies, setReplies] = useState<Record<string, string>>({});
@@ -198,8 +202,8 @@ export default function Inbox(props: { selected: string | null }) {
     return () => window.clearInterval(timer);
   }, []);
 
-  // The PR's diff, split into files. Parsed once per diff, not on every keystroke.
-  const diffText = draft !== undefined && draft.kind === "pr" ? draft.diff : "";
+  // The PR's diff (a report's code), split into files. Parsed once per diff, not on every keystroke.
+  const diffText = draft !== undefined && (draft.kind === "pr" || draft.kind === "report") ? draft.diff : "";
   const files = useMemo(() => {
     const result: DiffFile[] = [];
     let file: DiffFile | null = null;
@@ -530,11 +534,20 @@ export default function Inbox(props: { selected: string | null }) {
   const targetMatch = draft !== undefined && draft.target !== null ? draft.target.match(/^(.+)#(\d+)$/) : null;
   const targetUrl = targetMatch !== null ? `https://github.com/${targetMatch[1]}/issues/${targetMatch[2]}` : null;
   const reply = draft !== undefined ? (replies[draft.id] ?? "") : "";
-  // A question and a Taken notice are only their overview; only PRs have a diff.
+  // A question and a Taken notice are only their overview; only PRs and reports have a diff, only reports have results
+  // and problems, and a report has no message.
   let shownTab = prTab;
-  if (draft === undefined || draft.kind === "question" || draft.kind === "taken" || (shownTab === "diff" && draft.kind !== "pr")) {
+  if (draft === undefined || draft.kind === "question" || draft.kind === "taken" || (shownTab === "diff" && draft.kind !== "pr" && draft.kind !== "report")) {
     shownTab = "overview";
   }
+  if (draft !== undefined && draft.kind !== "report" && (shownTab === "results" || shownTab === "problems")) {
+    shownTab = "overview";
+  }
+  if (draft !== undefined && draft.kind === "report" && shownTab === "message") {
+    shownTab = "overview";
+  }
+  // Only a PR or comment goes to GitHub when approved.
+  const sends = draft !== undefined && (draft.kind === "pr" || draft.kind === "comment");
   const showTabs = draft !== undefined && draft.kind !== "question" && draft.kind !== "taken";
   // Only a pending PR or comment can be edited; the fields show while Edit is on for this item.
   const canEdit = draft !== undefined && draft.status === "pending" && (draft.kind === "pr" || draft.kind === "comment");
@@ -589,7 +602,7 @@ export default function Inbox(props: { selected: string | null }) {
         {!loaded && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
         {loaded && rows.length === 0 && (
           <div className="px-3 py-2 text-muted-foreground">
-            Nothing here yet. Agents put PRs, comments and questions here, and the app asks when someone else takes an issue an agent works on.
+            Nothing here yet. Agents put PRs, comments, questions and reports on papers here, and the app asks when someone else takes an issue an agent works on.
           </div>
         )}
         <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
@@ -630,6 +643,7 @@ export default function Inbox(props: { selected: string | null }) {
                   {each.kind === "comment" && <MessageSquare className="size-3.5" />}
                   {each.kind === "question" && <CircleHelp className="size-3.5" />}
                   {each.kind === "taken" && <UserX className="size-3.5" />}
+                  {each.kind === "report" && <FileText className="size-3.5" />}
                   {KIND_LABEL[each.kind] ?? each.kind}
                 </span>
                 <span className="truncate max-md:hidden">{agentNames[each.agent] ?? each.agent}</span>
@@ -722,6 +736,7 @@ export default function Inbox(props: { selected: string | null }) {
                       {draft.kind === "comment" && <MessageSquare />}
                       {draft.kind === "question" && <CircleHelp />}
                       {draft.kind === "taken" && <UserX />}
+                      {draft.kind === "report" && <FileText />}
                       {KIND_LABEL[draft.kind] ?? draft.kind}
                     </Badge>
                     {draft.target !== null && targetUrl !== null && (
@@ -787,22 +802,38 @@ export default function Inbox(props: { selected: string | null }) {
                         <TabsTrigger value="overview" className="px-2.5">
                           Overview
                         </TabsTrigger>
-                        {draft.kind === "pr" && (
+                        {draft.kind === "report" && (
+                          <TabsTrigger value="results" className="px-2.5">
+                            Results
+                            <span className="text-xs text-muted-foreground tabular-nums">{(draft.overview.results ?? []).length}</span>
+                          </TabsTrigger>
+                        )}
+                        {draft.kind === "report" && (
+                          <TabsTrigger value="problems" className="px-2.5">
+                            Problems
+                            <span className="text-xs text-muted-foreground tabular-nums">{(draft.overview.problems ?? []).length}</span>
+                          </TabsTrigger>
+                        )}
+                        {(draft.kind === "pr" || draft.kind === "report") && (
                           <TabsTrigger value="diff" className="px-2.5">
-                            Diff
+                            {draft.kind === "pr" ? "Diff" : "Files"}
                             <span className="text-xs text-muted-foreground tabular-nums">
                               {files.length} {files.length === 1 ? "file" : "files"}
                             </span>
-                            <span className="font-mono text-xs tabular-nums">
-                              <span className="text-ok">+{totalAdded}</span> <span className="text-destructive">−{totalRemoved}</span>
-                            </span>
+                            {draft.kind === "pr" && (
+                              <span className="font-mono text-xs tabular-nums">
+                                <span className="text-ok">+{totalAdded}</span> <span className="text-destructive">−{totalRemoved}</span>
+                              </span>
+                            )}
                           </TabsTrigger>
                         )}
-                        <TabsTrigger value="message" className="px-2.5">
-                          {draft.kind === "pr" && updateOf === null && "PR message"}
-                          {draft.kind === "pr" && updateOf !== null && "Commit and comment"}
-                          {draft.kind !== "pr" && "Comment"}
-                        </TabsTrigger>
+                        {draft.kind !== "report" && (
+                          <TabsTrigger value="message" className="px-2.5">
+                            {draft.kind === "pr" && updateOf === null && "PR message"}
+                            {draft.kind === "pr" && updateOf !== null && "Commit and comment"}
+                            {draft.kind !== "pr" && "Comment"}
+                          </TabsTrigger>
+                        )}
                       </TabsList>
                     </Tabs>
                     {shownTab === "diff" && (
@@ -858,7 +889,9 @@ export default function Inbox(props: { selected: string | null }) {
                   </div>
                 )}
 
-                {shownTab === "overview" && <Overview draft={draft} files={files.length} added={totalAdded} removed={totalRemoved} />}
+                {(shownTab === "overview" || shownTab === "results" || shownTab === "problems") && (
+                  <Overview draft={draft} part={shownTab} files={files.length} added={totalAdded} removed={totalRemoved} />
+                )}
                 {shownTab === "message" && (
                   <div className="space-y-3 px-4 py-3">
                     {draft.edited && !isEditing && (
@@ -936,7 +969,9 @@ export default function Inbox(props: { selected: string | null }) {
                     )}
                   </div>
                 )}
-                {shownTab === "diff" && files.length === 0 && <div className="px-4 py-3 text-muted-foreground">This draft has no changes.</div>}
+                {shownTab === "diff" && files.length === 0 && (
+                  <div className="px-4 py-3 text-muted-foreground">{draft.kind === "report" ? "This report has no code." : "This draft has no changes."}</div>
+                )}
                 {shownTab === "diff" && diffView}
               </div>
 
@@ -985,11 +1020,12 @@ export default function Inbox(props: { selected: string | null }) {
                   <div className="flex items-center gap-2 max-md:flex-wrap">
                     <span className="text-xs text-muted-foreground">
                       {isEditing && "Save or cancel your edit first."}
-                      {!isEditing && draft.kind !== "question" && account !== null && account.connected && updateOf !== null &&
+                      {!isEditing && sends && account !== null && account.connected && updateOf !== null &&
                         `Approve pushes these changes to ${updateOf} as @${account.login}, after you confirm; the agent is told, with your note.`}
-                      {!isEditing && draft.kind !== "question" && account !== null && account.connected && updateOf === null &&
+                      {!isEditing && sends && account !== null && account.connected && updateOf === null &&
                         `Approve ${draft.kind === "pr" ? "opens this PR" : "posts this comment"} on GitHub as @${account.login}, after you confirm; the agent is told, with your note.`}
-                      {!isEditing && (draft.kind === "question" || account === null || !account.connected) &&
+                      {!isEditing && draft.kind === "report" && "Approve accepts the report and ends the job; nothing is sent anywhere."}
+                      {!isEditing && draft.kind !== "report" && (!sends || account === null || !account.connected) &&
                         "Approve sends nothing to GitHub; the agent is told, with your note."}
                     </span>
                     <div className="ml-auto flex shrink-0 items-center gap-1.5 max-md:shrink max-md:flex-wrap max-md:justify-end">
@@ -1021,7 +1057,7 @@ export default function Inbox(props: { selected: string | null }) {
                         size="sm"
                         disabled={busy !== "" || isEditing}
                         onClick={() => {
-                          if (draft.kind !== "question" && account !== null && account.connected) {
+                          if (sends && account !== null && account.connected) {
                             setConfirming("approve");
                           } else {
                             decide("approve");

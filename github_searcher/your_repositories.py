@@ -10,7 +10,9 @@ puts that repo's code in its VM (agents.py). The token itself never reaches an a
 refresh() reads both lists in one GraphQL request: the 100 most recently pushed repos you can push to (not archived;
 viewerPermission ADMIN, MAINTAIN or WRITE) in "repos", and the 100 you starred most recently in "starred" (the ones
 you can push to are under "repos" only). Per repo: whether the newest commit on its default branch passed its checks,
-how many issues and PRs are open, its stars and whether you starred it. It goes to the browser as the live topic
+how many issues and PRs are open, its stars and whether you starred it. A fork says the repo it was forked from
+(parent), and that repo is in "parents" when it isn't in either list (the Workspace tab's Home lists it instead of your
+fork, under Starred). It goes to the browser as the live topic
 "your_repos", and is kept in DATA_DIR/your_repositories.json too (save_list), so after a restart the page shows the
 last list at once instead of "not signed in" until GitHub answers; it is read again right after. backend/your_repositories_api.py reads it every
 minute, at once when you sign in or out, and soon after a change you made here (wanted); Star and Unstar read it
@@ -18,15 +20,18 @@ again at once, so the left list follows.
 
     {"repos": [{"name": "owner/name", "private", "fork", "description", "url", "default_branch", "pushed_at",
                 "checks": "passed" | "failed" | "running" | "none", "open_issues", "open_prs", "stars",
-                "starred": you starred it, "can_push"}],
+                "starred": you starred it, "can_push", "parent": the repo a fork was forked from | None}],
      "starred": [the same],
+     "parents": [the same: the repos your forks were forked from, when not in repos or starred],
      "login": your login | None, "checked_at", "error": why the last read failed | None}
 
 What a repo's page shows is read when it opens (never kept): overview(count) (the README and the newest count commits
 on the default branch, each with its checks: the Code tab's latest commit, and the Commits tab's 50), tree() (every
 file and folder on the default branch, for the Code tab), file(path) (one file's text, or that it is binary or too
 big), issues(state) and pulls(state) (the newest 50 of the Open or Closed tab, and how many are in each), runs() (the
-newest GitHub Actions runs) and labels() (for the thread pop-up's Labels).
+newest GitHub Actions runs), labels() (for the thread pop-up's Labels) and branches() (the branch picker on the
+Workspace tab: your forks' branches first, then the repo's own). overview, tree and file read another branch when given
+one (source, the repo itself or your fork of it, and ref, the branch's name): the branch picker's.
 
 The page's tabs are kept on this computer, so a page opens at once instead of waiting for GitHub: page(tab) answers
 from the kept copy (DATA_DIR/repo_pages/<owner>__<name>.json, {tab: {"data", "at"}}, the tabs in PAGE_TABS), with
@@ -77,7 +82,7 @@ LIST_PATH = DATA_DIR / "your_repositories.json"
 PAGES_DIR = DATA_DIR / "repo_pages"
 FILES_DIR = PAGES_DIR / "files"
 # A page's tabs as kept: the Code tab is overview and tree; Issues and Pull requests have Open and Closed.
-PAGE_TABS = ["overview", "tree", "issues:open", "issues:closed", "pulls:open", "pulls:closed", "commits", "runs"]
+PAGE_TABS = ["overview", "tree", "issues:open", "issues:closed", "pulls:open", "pulls:closed", "commits", "runs", "branches"]
 # A clone may take this long (a big repo on a slow connection).
 CLONE_SECONDS = 30 * 60
 MERGE_METHODS = ["merge", "squash", "rebase"]
@@ -91,7 +96,7 @@ query {
     login
     repositories(first: 100, affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER],
                  ownerAffiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER], orderBy: {field: PUSHED_AT, direction: DESC}) {
-      nodes { ...RepoFields }
+      nodes { ...RepoFields parent { ...RepoFields } }
     }
     starredRepositories(first: 100, orderBy: {field: STARRED_AT, direction: DESC}) {
       nodes { ...RepoFields }
@@ -119,6 +124,39 @@ query($owner: String!, $name: String!, $count: Int!) {
           }
         }
       }
+    }
+  }
+}
+"""
+
+# Another branch's newest commits, in the repo itself or in your fork of it (source), next to the repo's own details.
+BRANCH_COMMITS_QUERY = """
+query($owner: String!, $name: String!, $sourceOwner: String!, $sourceName: String!, $ref: String!, $count: Int!) {
+  repository(owner: $owner, name: $name) {
+    description url isPrivate homepageUrl stargazerCount forkCount
+    defaultBranchRef { name }
+  }
+  source: repository(owner: $sourceOwner, name: $sourceName) {
+    ref(qualifiedName: $ref) {
+      name
+      target {
+        ... on Commit {
+          history(first: $count) {
+            nodes { oid messageHeadline committedDate url author { name user { login } } statusCheckRollup { state } }
+          }
+        }
+      }
+    }
+  }
+}
+"""
+
+BRANCHES_QUERY = """
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    defaultBranchRef { name }
+    refs(refPrefix: "refs/heads/", first: 100, orderBy: {field: TAG_COMMIT_DATE, direction: DESC}) {
+      nodes { name target { ... on Commit { committedDate } } }
     }
   }
 }
@@ -164,9 +202,13 @@ class YourRepositories:
         self.github_account = github_account
         self.lock = threading.Lock()
         self.version = 0
-        self.data = {"repos": [], "starred": [], "login": None, "checked_at": None, "error": None}
+        self.data = {"repos": [], "starred": [], "parents": [], "login": None, "checked_at": None, "error": None}
         if LIST_PATH.exists():
             self.data = json.loads(LIST_PATH.read_text())
+        # A list kept from before forks said where they came from.
+        self.data.setdefault("parents", [])
+        for each in self.data["repos"] + self.data["starred"]:
+            each.setdefault("parent", None)
         # A change you made here: backend/your_repositories_api.py reads the list again soon.
         self.wanted = False
         # One write at a time to a kept page.
@@ -184,9 +226,9 @@ class YourRepositories:
         return repo.lower() in names
 
     def is_listed(self, repo: str) -> bool:
-        """Whether repo (owner/name) is one you can push to or one you starred: its page may be shown."""
+        """Whether repo (owner/name) is one you can push to, one you starred or one you forked: its page may be shown."""
         with self.lock:
-            names = [each["name"].lower() for each in self.data["repos"] + self.data["starred"]]
+            names = [each["name"].lower() for each in self.data["repos"] + self.data["starred"] + self.data["parents"]]
         return repo.lower() in names
 
     def token(self) -> str | None:
@@ -221,7 +263,7 @@ class YourRepositories:
         """Reads the list again. Not signed in: an empty list. A failure keeps the last list, with why."""
         if self.token() is None:
             with self.lock:
-                self.data = {"repos": [], "starred": [], "login": None, "checked_at": None, "error": None}
+                self.data = {"repos": [], "starred": [], "parents": [], "login": None, "checked_at": None, "error": None}
                 self.version += 1
             self.save_list()
             return
@@ -235,11 +277,19 @@ class YourRepositories:
             return
         repos = []
         starred = []
-        # Yours first: a repo you can push to and starred too is under repos only.
-        names = []
+        parents = []
+        # Yours first: a repo you can push to and starred too is under repos only. Then the repos your forks were
+        # forked from, the ones in neither list.
+        nodes = []
         for node in viewer["repositories"]["nodes"] + viewer["starredRepositories"]["nodes"]:
+            nodes.append((node, False))
+        for node in viewer["repositories"]["nodes"]:
+            if node.get("parent") is not None:
+                nodes.append((node["parent"], True))
+        names = []
+        for node, is_parent in nodes:
             can_push = node["viewerPermission"] in PUSH and not node["isArchived"]
-            if node["nameWithOwner"] in names or (not can_push and not node["viewerHasStarred"]):
+            if node["nameWithOwner"] in names or (not is_parent and not can_push and not node["viewerHasStarred"]):
                 continue
             names.append(node["nameWithOwner"])
             default_branch = ""
@@ -263,13 +313,23 @@ class YourRepositories:
                 "stars": node["stargazerCount"],
                 "starred": node["viewerHasStarred"],
                 "can_push": can_push,
+                "parent": node["parent"]["nameWithOwner"] if node.get("parent") is not None else None,
             }
-            if can_push:
+            if is_parent:
+                parents.append(item)
+            elif can_push:
                 repos.append(item)
             else:
                 starred.append(item)
         with self.lock:
-            self.data = {"repos": repos, "starred": starred, "login": viewer["login"], "checked_at": datetime.now(UTC).isoformat(), "error": None}
+            self.data = {
+                "repos": repos,
+                "starred": starred,
+                "parents": parents,
+                "login": viewer["login"],
+                "checked_at": datetime.now(UTC).isoformat(),
+                "error": None,
+            }
             self.version += 1
         self.save_list()
 
@@ -282,18 +342,36 @@ class YourRepositories:
         temporary.write_text(text)
         temporary.replace(LIST_PATH)
 
-    def overview(self, repo: str, count: int = COMMITS_SIZE) -> dict:
+    def overview(self, repo: str, count: int = COMMITS_SIZE, source: str = "", ref: str = "") -> dict:
         """A repo's Code tab: its description, README (markdown, "" when it has none) and newest count commits (the
-        Commits tab asks for LIST_SIZE)."""
+        Commits tab asks for LIST_SIZE). On the default branch, or with ref on that branch of source (the repo itself
+        or your fork of it)."""
         owner, name = repo.split("/")
-        data = self.graphql(COMMITS_QUERY, {"owner": owner, "name": name, "count": count})["repository"]
+        if ref == "":
+            data = self.graphql(COMMITS_QUERY, {"owner": owner, "name": name, "count": count})["repository"]
+            branch = data["defaultBranchRef"]
+            default_branch = branch["name"] if branch is not None else ""
+            readme_repo = repo
+            params = {}
+        else:
+            source_owner, source_name = source.split("/")
+            answer = self.graphql(
+                BRANCH_COMMITS_QUERY,
+                {"owner": owner, "name": name, "sourceOwner": source_owner, "sourceName": source_name, "ref": f"refs/heads/{ref}", "count": count},
+            )
+            data = answer["repository"]
+            branch = answer["source"]["ref"] if answer["source"] is not None else None
+            if branch is None:
+                raise ValueError(f"{source} has no branch {ref}.")
+            default_branch = data["defaultBranchRef"]["name"] if data["defaultBranchRef"] is not None else ""
+            readme_repo = source
+            params = {"ref": ref}
         readme = ""
         with self.client() as client:
-            response = client.get(f"/repos/{repo}/readme", headers={"Accept": "application/vnd.github.raw+json"})
+            response = client.get(f"/repos/{readme_repo}/readme", params=params, headers={"Accept": "application/vnd.github.raw+json"})
         if response.status_code == 200:
             readme = response.text
         commits = []
-        branch = data["defaultBranchRef"]
         if branch is not None and branch["target"] is not None:
             for commit in branch["target"]["history"]["nodes"]:
                 login = None
@@ -318,16 +396,19 @@ class YourRepositories:
             "homepage": data["homepageUrl"] or "",
             "stars": data["stargazerCount"],
             "forks": data["forkCount"],
-            "default_branch": branch["name"] if branch is not None else "",
+            "default_branch": default_branch,
             "readme": readme,
             "commits": commits,
         }
 
-    def tree(self, repo: str) -> dict:
-        """The Code tab's files: every file and folder on the default branch in one answer (GitHub's recursive tree).
-        truncated: GitHub cut a very big tree short."""
+    def tree(self, repo: str, source: str = "", ref: str = "") -> dict:
+        """The Code tab's files: every file and folder on the default branch in one answer (GitHub's recursive tree),
+        or with ref on that branch of source. truncated: GitHub cut a very big tree short."""
+        url = f"/repos/{repo}/git/trees/HEAD"
+        if ref != "":
+            url = f"/repos/{source}/git/trees/{quote(ref, safe='')}"
         with self.client() as client:
-            response = client.get(f"/repos/{repo}/git/trees/HEAD", params={"recursive": "1"})
+            response = client.get(url, params={"recursive": "1"})
         # An empty repo has no tree yet.
         if response.status_code == 409:
             return {"files": [], "truncated": False}
@@ -341,9 +422,10 @@ class YourRepositories:
                 files.append({"path": item["path"], "type": item["type"], "size": item.get("size", 0), "sha": item["sha"]})
         return {"files": files, "truncated": answer.get("truncated", False)}
 
-    def file(self, repo: str, path: str, sha: str = "") -> dict:
-        """One file on the default branch, for the Code tab. Text comes back as text; a binary or too big file only
-        says what it is. With its git id (sha, from tree()) it is kept in FILES_DIR and read from there next time."""
+    def file(self, repo: str, path: str, sha: str = "", source: str = "", ref: str = "") -> dict:
+        """One file on the default branch (or with ref on that branch of source), for the Code tab. Text comes back as
+        text; a binary or too big file only says what it is. With its git id (sha, from tree()) it is kept in FILES_DIR
+        and read from there next time."""
         kept = None
         if re.fullmatch(r"[0-9a-f]{40}", sha) is not None:
             kept = FILES_DIR / f"{sha}.json"
@@ -351,8 +433,13 @@ class YourRepositories:
             answer = json.loads(kept.read_text())
             answer["path"] = path
             return answer
+        url = f"/repos/{repo}/contents/{quote(path)}"
+        params = {}
+        if ref != "":
+            url = f"/repos/{source}/contents/{quote(path)}"
+            params = {"ref": ref}
         with self.client() as client:
-            response = client.get(f"/repos/{repo}/contents/{quote(path)}")
+            response = client.get(url, params=params)
         if response.status_code != 200:
             raise ValueError(f"GitHub answered {response.status_code}: {response.text[:200]}")
         data = response.json()
@@ -422,6 +509,8 @@ class YourRepositories:
             data = self.overview(repo, LIST_SIZE)
         elif tab == "runs":
             data = self.runs(repo)
+        elif tab == "branches":
+            data = self.branches(repo)
         elif tab.startswith("issues:"):
             data = self.issues(repo, tab.removeprefix("issues:"))
         else:
@@ -477,6 +566,27 @@ class YourRepositories:
                 path.unlink(missing_ok=True)
                 continue
             self.fill_page(repo, False)
+
+    def branches(self, repo: str) -> dict:
+        """The branch picker on the Workspace tab's Code and Commits: the branches of your forks of repo first, then
+        repo's own with its default branch first; otherwise newest commit first."""
+        with self.lock:
+            forks = [each["name"] for each in self.data["repos"] if each["parent"] is not None and each["parent"].lower() == repo.lower()]
+        items = []
+        for each in forks + [repo]:
+            owner, name = each.split("/")
+            data = self.graphql(BRANCHES_QUERY, {"owner": owner, "name": name})["repository"]
+            default = data["defaultBranchRef"]["name"] if data["defaultBranchRef"] is not None else ""
+            found = []
+            for node in data["refs"]["nodes"]:
+                at = None
+                if node["target"] is not None:
+                    at = node["target"].get("committedDate")
+                found.append({"repo": each, "name": node["name"], "at": at, "default": node["name"] == default, "yours": each != repo})
+            if each == repo:
+                found = [branch for branch in found if branch["default"]] + [branch for branch in found if not branch["default"]]
+            items += found
+        return {"branches": items}
 
     def issues(self, repo: str, state: str) -> dict:
         """The Issues tab: the newest LIST_SIZE open or closed issues (the newest change first), and how many of each."""

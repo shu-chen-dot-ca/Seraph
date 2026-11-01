@@ -7,8 +7,9 @@ The header's left has three tabs, the open one in full color with the accent und
 - Workspace: the app's new layout, with its own left list (WorkspaceNav.tsx: Home, Pull requests, Papers; Settings).
   Same agents, jobs, VMs and Inbox; only the layout is new. Its pages are Home (Home.tsx: your repositories as cards,
   the open one like on GitHub), Pull requests (PullRequests.tsx: your pull requests anywhere on GitHub, like
-  github.com/pulls) and Papers (Papers.tsx: papers you gave agents to reproduce). A page it doesn't have (Issues, the
-  GitHub tab's Overview, ...) goes to its own tab.
+  github.com/pulls) and Papers (Papers.tsx: papers you gave agents to reproduce). In phone mode it also has VM
+  (PhoneVM.tsx: one VM desktop to use yourself, with keys under it). A page it doesn't have (Issues, the GitHub tab's
+  Overview, ...) goes to its own tab.
 Each tab goes back to the last page you had open under it (Home starts at Issues, GitHub at its Overview, Workspace at
 its Home); a reload forgets that. On its right: Sign in while you aren't signed in to GitHub (straight to GitHub's sign-in page once sign in is
 set up, else the GitHub tab's Account page, which walks you through setting it up), or, signed in, your GitHub picture
@@ -33,12 +34,13 @@ The page lives in the URL hash, so refresh and back/forward work and switching p
          One of your repositories takes tab=issues|pulls|commits|actions (none: its Code), state=closed and open=... the same
          way; Notifications takes open=... too; Tasks takes state=done (its Done tab), view=recent (its Recent
          tab), task=owner/name%23n (that task in its pop-up) and open=....
-  Workspace: #/home  #/home?repo=owner/name (Home.tsx; the open repo, which takes tab=live|code|issues|pulls|commits|actions
+  Workspace: #/home  #/home?repo=owner/name (Home.tsx; the open repo, which takes tab=code|issues|pulls|commits|actions
          (none: Agents), state=closed and open=owner/name%23n like a repository's page on the GitHub tab)
          #/pulls (PullRequests.tsx; takes state=closed, view=assigned|mentioned|review-requested,
          visibility=public|private, repo=owner/name, sort=created-asc|comments-desc|comments-asc|updated-desc|updated-asc
          and open=owner/name%23n)
          #/papers (Papers.tsx)
+         #/vm (PhoneVM.tsx)
 Anything else opens Issues. Links are plain <a href="#/..."> everywhere; App only reads the hash.
 
 A VM page, once visited, stays mounted (hidden) while you are elsewhere, so its desktop iframe keeps its
@@ -61,6 +63,7 @@ import Issues from "@/Issues";
 import Jobs from "@/Jobs";
 import Notifications from "@/Notifications";
 import Papers from "@/Papers";
+import PhoneVM from "@/PhoneVM";
 import PullRequests from "@/PullRequests";
 import Repos from "@/Repos";
 import Resource from "@/Resource";
@@ -80,7 +83,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { api, useConnected, useLive, useLiveValue, useLoaded, type GithubAccountStatus } from "@/live";
 import { cn } from "@/lib/utils";
 
-const PAGES = ["inbox", "github", "issues", "jobs", "explore", "repos", "tracked", "agents", "vms", "resource", "home", "pulls", "papers"];
+const PAGES = ["inbox", "github", "issues", "jobs", "explore", "repos", "tracked", "agents", "vms", "resource", "home", "pulls", "papers", "vm"];
 // The GitHub tab's pages under #/github/; anything else there is Pull requests.
 const GITHUB_SECTIONS = ["overview", "notifications", "issues", "tasks", "account", "repo"];
 // The open page's name in phone mode's header, where there are no tabs and no left list to show it.
@@ -97,6 +100,7 @@ const PAGE_NAMES: Record<string, string> = {
   home: "Home",
   pulls: "Pull requests",
   papers: "Papers",
+  vm: "VM",
 };
 const GITHUB_NAMES: Record<string, string> = {
   overview: "Overview",
@@ -189,7 +193,7 @@ export default function App() {
   // GitHub's section: "#/github/issues" → "issues", "#/github" → "pulls".
   const section = id !== null && GITHUB_SECTIONS.includes(id) ? id : "pulls";
   // The Workspace tab's pages, then the GitHub tab's pages; everything else is on Home.
-  const onWorkspace = page === "home" || page === "pulls" || page === "papers";
+  const onWorkspace = page === "home" || page === "pulls" || page === "papers" || page === "vm";
   const onGitHub = !onWorkspace && (page === "inbox" || page === "github");
   const onHome = !onWorkspace && !onGitHub;
   // Phone mode's header: the open page's name, a VM's own name on its page.
@@ -414,6 +418,7 @@ export default function App() {
               />
             )}
             {page === "papers" && <Papers />}
+            {page === "vm" && <PhoneVM />}
             {page === "vms" && id === null && (
               <VMs tab={query.get("tab") === "images" ? "images" : query.get("tab") === "defaults" ? "defaults" : "vms"} />
             )}

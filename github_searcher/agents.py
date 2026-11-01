@@ -847,7 +847,7 @@ class Agents:
                         instructions: str = "", agent_name: str = "") -> dict:
         """The user adds a paper (a PDF) on the Papers page for an agent (a new one when agent_id is None) to reproduce: a
         reproduce_paper job (see "Reproducing a paper" in agent/prompt.md). The PDF goes in the agent's artifacts, under
-        papers/, where the agent reads it (artifact_view). agent_name names that new agent; empty gives it "agent-N"."""
+        papers/, where the agent reads it (paper_read). agent_name names that new agent; empty gives it "agent-N"."""
         if not data.startswith(b"%PDF"):
             raise ValueError("That file is not a PDF.")
         if vm_name is not None and vm_name not in [vm_record.name for vm_record in self.vms.list()]:
@@ -881,7 +881,7 @@ class Agents:
         job = self.jobs.create("reproduce_paper", title, agent_id, "user", vm=vm_name, instructions=instructions, paper=path)
         text = f"New job {job['id']}: {title}"
         text += (
-            f"\nThe paper is {path} in your artifacts. Read all of it with artifact_view first, a few pages at a time, then "
+            f"\nThe paper is {path} in your artifacts. Read all of it with paper_read first, a few pages at a time, then "
             "reproduce it as in Reproducing a paper: rebuild it from the paper alone, compare the numbers, check the claims, "
             "and end with draft_report."
         )
@@ -1125,11 +1125,11 @@ class Agents:
                 "\n- A new version of the PR, when a reviewer asked for changes or its checks failed. Its branch is "
                 f"{head['branch']} in the user's fork {head['repo']}, newest commit {head['sha']}. In the VM, in the project's "
                 f"folder (~/{repo.split('/')[1]}; clone it if it isn't there): `git fetch https://github.com/{head['repo']} "
-                f"{head['branch']} && git switch -C pr-{number} {head['sha']}`, and work on top of that commit. The tests "
-                "are the same rule as for a fix: when: before on the project's unchanged main branch (`git fetch origin && "
-                "git switch --detach origin/main`, base origin/main; or job_progress with step test carries over an earlier "
-                f"passing run of the official checks on this VM), then your change on pr-{number}, committed in the project's "
-                f"style, and when: after with base {head['sha']} and the same command. Then draft_pr with pr {thread} and "
+                f"{head['branch']} && git switch -C pr-{number} {head['sha']}`, and work on top of that commit. Commit your "
+                f"change on pr-{number} in the project's style, then run the tests once, with your change: run_tests with "
+                f"when: after, base {head['sha']}, and the checks the project's rules ask for before a PR, however long. No "
+                "when: before run on the main branch: the PR's first version already had one. Then draft_pr with pr "
+                f"{thread} and "
                 f"base {head['sha']}: its title is the commit message's subject, its body the comment posted on the PR with "
                 "the push (what changed, in a line or two)."
             )

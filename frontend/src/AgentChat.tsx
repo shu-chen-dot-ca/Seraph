@@ -45,14 +45,13 @@ were typing before.
 Compact sends "/compact", which Claude Code runs on the conversation itself. The target VM can only
 change while the agent is not queued for or holding a VM (the backend refuses it then).
 
-A repository's agent (the Workspace tab's Live) drafts issues (draft_issue): each shows where it was drafted as a card
+A repository's agent (one that belongs to one of your repositories) drafts issues (draft_issue): each shows where it was drafted as a card
 with the issue as it would be opened (its title, labels and text), Create issue (opens it on GitHub as you) and
 Discard, and once decided, what became of it (the drafts come live, topic "issue_drafts").
 
-compact is the chat on a repository's Live tab (RepoLive.tsx), next to its VM's desktop: a slim header (the agent's
-name, a link to this page, where it is, Interrupt), the job it is on, and the conversation with the composer; no tabs,
-target VM, context, job lists or Desktop. Esc interrupts only from the message box there, since the tab stays mounted
-(hidden) while another tab of the repo is open.
+compact is the chat on a repository's Agents tab (RepoAgents.tsx), next to its list of agents: a slim header (the
+agent's name, a link to this page, where it is, Interrupt), the job it is on, and the conversation with the composer;
+no tabs, target VM, context, job lists or Desktop. Esc interrupts only from the message box there.
 */
 
 import {
@@ -680,7 +679,7 @@ export default function AgentChat(props: { agentId: string; compact?: boolean })
     if (event.nativeEvent.isComposing) {
       return;
     }
-    // Compact (the Live tab): Esc interrupts from here, not from anywhere on the page.
+    // Compact (a repo's Agents tab): Esc interrupts from here, not from anywhere on the page.
     if (event.key === "Escape" && props.compact && busy) {
       event.preventDefault();
       interrupt();

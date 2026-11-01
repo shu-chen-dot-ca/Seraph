@@ -4,9 +4,10 @@ around it. A dropped connection tries again every 2 seconds. viewOnly keeps the 
 without connecting again (a lock comes and goes while the agent works).
 
 The agent page's Desktop (AgentChat.tsx) uses it view-only. Through the remote access domain (REMOTE) the VM page
-(VMPage.tsx) and a repository's Live tab (RepoLive.tsx) use it too, instead of noVNC's page from the VM in an iframe:
+(VMPage.tsx) uses it too, instead of noVNC's page from the VM in an iframe:
 the phone can't reach the VM's address, and an https page can't load http. Its VNC connection then passes through
-the backend (the websocket /api/vms/{name}/vnc).
+the backend (the websocket /api/vms/{name}/vnc). The phone's VM page (PhoneVM.tsx) always connects that way, and
+passes rfbRef to send keys from its own keyboard row.
 */
 
 import RFB from "@novnc/novnc";
@@ -15,9 +16,11 @@ import { useEffect, useRef } from "react";
 // The page came through the remote access domain, not from this computer.
 export const REMOTE = window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1";
 
-export default function LiveDesktop(props: { url: string; viewOnly: boolean; className?: string }) {
+export default function LiveDesktop(props: { url: string; viewOnly: boolean; className?: string; rfbRef?: { current: RFB | null } }) {
   const boxRef = useRef<HTMLDivElement>(null);
-  const rfbRef = useRef<RFB | null>(null);
+  // The connection now, or null between tries: the caller's ref when it passed one.
+  const ownRef = useRef<RFB | null>(null);
+  const rfbRef = props.rfbRef ?? ownRef;
   // Read by each new connection, so one made while locked starts locked.
   const viewOnlyRef = useRef(props.viewOnly);
 
@@ -27,7 +30,7 @@ export default function LiveDesktop(props: { url: string; viewOnly: boolean; cla
     if (rfbRef.current !== null) {
       rfbRef.current.viewOnly = props.viewOnly;
     }
-  }, [props.viewOnly]);
+  }, [props.viewOnly, rfbRef]);
 
   useEffect(() => {
     const box = boxRef.current;
@@ -64,7 +67,7 @@ export default function LiveDesktop(props: { url: string; viewOnly: boolean; cla
         rfbRef.current = null;
       }
     };
-  }, [props.url]);
+  }, [props.url, rfbRef]);
 
   return <div ref={boxRef} className={props.className} />;
 }

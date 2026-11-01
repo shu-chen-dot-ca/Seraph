@@ -43,6 +43,9 @@ works there: once per turn. The user can unlock it any time, and then it stays
 unlocked for the rest of the turn. A lock the agent set ends with its turn
 (Agents calls end_turn after every turn, also one that failed or was cancelled).
 
+Before a click, drag or scroll, the VM page shows the agent's cursor gliding to that place (record.pointers,
+AgentCursor.tsx), and the action waits GLIDE_SECONDS for it to get there, so the user sees where it clicks.
+
 Nothing is written to the agent's history here: the Agent adds a tool entry
 (with describe()'s line) and a tool_result entry for every call itself.
 
@@ -69,6 +72,9 @@ from sandbox.vms import VMRecord, VMs, VMsError
 # The only waits the agent can pick. Short ones are for things that are about
 # instant; for something slow it waits 10s at a time and looks in between.
 WAIT_SECONDS = [1, 3, 10, 30]
+# How long a click, drag or scroll waits for the agent's cursor to glide there on the VM page: the page hears of it
+# within 0.25 s and the glide takes 0.7 s (AgentCursor.tsx).
+GLIDE_SECONDS = 1
 # Values shorter than this are not hidden in output: hiding "1" or "yes" would garble
 # everything, and values that short are not secrets.
 HIDE_MIN_LENGTH = 4
@@ -398,14 +404,39 @@ class ComputerTools:
         }
 
     async def click(self, args: dict) -> dict:
-        computer = Computer(self.held_desktop(), self.tag)
+        record = self.held_vm()
+        desktop = record.holding(self.agent_id)
+        computer = Computer(record.desktop_vm(desktop), self.tag)
         await asyncio.to_thread(computer.check)
+        # Its cursor glides there on the VM page first. A new dict, so a reader never sees one half changed.
+        width, height = await asyncio.to_thread(computer.screen_size)
+        pointer = {"agent": self.agent_id, "x": args["x"], "y": args["y"], "width": width, "height": height}
+        record.pointers = {**record.pointers, desktop: pointer}
+        self.vms.changed()
+        await asyncio.sleep(GLIDE_SECONDS)
+        # The desktop may have been taken from it meanwhile.
+        if record.holding(self.agent_id) != desktop:
+            raise ValueError(NOT_HOLDER)
         await asyncio.to_thread(computer.click, args["x"], args["y"], args["button"], args["count"])
         return {"content": [{"type": "text", "text": "Clicked."}]}
 
     async def drag(self, args: dict) -> dict:
-        computer = Computer(self.held_desktop(), self.tag)
+        record = self.held_vm()
+        desktop = record.holding(self.agent_id)
+        computer = Computer(record.desktop_vm(desktop), self.tag)
         await asyncio.to_thread(computer.check)
+        # Its cursor glides to the start on the VM page, then to the end.
+        width, height = await asyncio.to_thread(computer.screen_size)
+        pointer = {"agent": self.agent_id, "x": args["x1"], "y": args["y1"], "width": width, "height": height}
+        record.pointers = {**record.pointers, desktop: pointer}
+        self.vms.changed()
+        await asyncio.sleep(GLIDE_SECONDS)
+        pointer = {"agent": self.agent_id, "x": args["x2"], "y": args["y2"], "width": width, "height": height}
+        record.pointers = {**record.pointers, desktop: pointer}
+        self.vms.changed()
+        await asyncio.sleep(GLIDE_SECONDS)
+        if record.holding(self.agent_id) != desktop:
+            raise ValueError(NOT_HOLDER)
         await asyncio.to_thread(computer.drag, args["x1"], args["y1"], args["x2"], args["y2"])
         return {"content": [{"type": "text", "text": "Dragged."}]}
 
@@ -422,8 +453,18 @@ class ComputerTools:
         return {"content": [{"type": "text", "text": f"Pressed {args['keys']}."}]}
 
     async def scroll(self, args: dict) -> dict:
-        computer = Computer(self.held_desktop(), self.tag)
+        record = self.held_vm()
+        desktop = record.holding(self.agent_id)
+        computer = Computer(record.desktop_vm(desktop), self.tag)
         await asyncio.to_thread(computer.check)
+        # Its cursor glides there on the VM page first.
+        width, height = await asyncio.to_thread(computer.screen_size)
+        pointer = {"agent": self.agent_id, "x": args["x"], "y": args["y"], "width": width, "height": height}
+        record.pointers = {**record.pointers, desktop: pointer}
+        self.vms.changed()
+        await asyncio.sleep(GLIDE_SECONDS)
+        if record.holding(self.agent_id) != desktop:
+            raise ValueError(NOT_HOLDER)
         await asyncio.to_thread(computer.scroll, args["x"], args["y"], args["direction"], args["amount"])
         return {"content": [{"type": "text", "text": "Scrolled."}]}
 

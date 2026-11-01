@@ -39,7 +39,8 @@ Priority lists the agents that stepped aside: an agent steps aside by itself whe
 its run (a test suite, a build). When the VM is free again, the first of them whose run is over (ready) gets it, before
 anyone in Waiting; one whose run still goes (run going) waits for the next turn. Runs lists the long commands agents
 left going in the VM, who started each and for how long; Stop ends one (it asks first), and its agent is told. When the desktop is locked (by an agent while it works, or by you),
-a cover stops clicks and keys from reaching it, with an Unlock button.
+a cover stops clicks and keys from reaching it, with an Unlock button. Over the desktop, the agent's cursor
+(AgentCursor.tsx) shows where the agent on it clicks, with its name: white while it works, gray while it doesn't.
 
 When the VM runs but doesn't answer (still booting, or frozen: Incus still says Running), a notice over
 the desktop says so and offers Restart. Once it answers again after more than a few seconds, the desktop
@@ -54,6 +55,7 @@ import { Copy, ExternalLink, Loader2, Lock, Monitor, Play, Plus, Power, RotateCw
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
+import AgentCursor from "@/AgentCursor";
 import ForkVMDialog from "@/ForkVMDialog";
 import LiveDesktop, { REMOTE } from "@/LiveDesktop";
 import VMNotes from "@/VMNotes";
@@ -590,6 +592,9 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                           />
                         );
                       })}
+
+                    {/* The agent's cursor where it clicks; a new one for each desktop, so switching doesn't glide. */}
+                    {running && desktopUrl !== null && !terminalOnly && <AgentCursor key={shown} vm={vm} desktop={shown} />}
 
                     {silent && (
                       <div className="absolute inset-x-0 top-2 z-10 flex justify-center px-2">

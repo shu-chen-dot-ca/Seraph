@@ -52,8 +52,9 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   result on the job (agents.py calls it for a run in the background); an after run counts only if the code is still
   the code it started on.
   A passing before is needed to go past set_up and an after for a PR draft; an official before of
-  another job on the same repo and VM counts too (job_progress carries it over; for a follow_up job at its
-  test step), so a project already set up isn't set up again.
+  another job on the same repo and VM counts too (job_progress carries it over), so a project already
+  set up isn't set up again. A follow_up job's new version of a PR needs only the after: the PR's first
+  version had the before.
 - Papers: a reproduce_paper job (the Workspace tab's Papers page) has the user's PDF in the agent's artifacts. paper_read
   shows it page by page, as pictures (formulas, tables and figures as printed) with their text; it only reads a job's
   paper, which only the user puts there, so a file from a VM is never opened by a PDF reader on this computer.
@@ -665,7 +666,8 @@ class WorkTools:
                 "vm_note_add",
                 "Add a note to the VM you hold, for the next agent that picks it or works in it: what is set up in it now and "
                 "how it differs from a plain set-up. It is marked with your desktop, since ~ is that desktop's own home. "
-                "One thing per note, e.g. 'openclaw in ~/openclaw: pnpm install and build "
+                "One thing per note, a repo named as owner/name (the app tells from that which VMs have a repo set up), e.g. "
+                "'openclaw/openclaw in ~/openclaw: pnpm install and build "
                 "done, on main at 3f2a1c9 (Oct 27). Added the matrix plugin and turned on debug logs in ~/.openclaw for issue "
                 "4120.' Facts that stay true, not a diary. Never a secret.",
                 {"text": str},
@@ -1303,9 +1305,6 @@ class WorkTools:
         before = job["tests"]["before"]
         reused = None
         carry = job["kind"] == "fix_issue" and step in STEPS_AFTER_SETUP
-        # A follow-up that changes its PR's code (its test step) takes such a run over too.
-        if job["kind"] == "follow_up" and step == "test":
-            carry = True
         if carry and before is None:
             for other in self.agents.jobs.list():
                 run = other["tests"]["before"]
@@ -2200,15 +2199,19 @@ class WorkTools:
             return {"content": [{"type": "text", "text": text}], "is_error": True}
 
         # Finished means the project's tests pass: before the change, and after it on exactly this code.
+        # A new version of a PR (a follow_up job) needs only the after run: the PR's first version had the before.
         before = job["tests"]["before"]
         after = job["tests"]["after"]
-        if before is None or not before["passed"]:
+        if job["kind"] != "follow_up" and (before is None or not before["passed"]):
             text = (
                 "No PR without the project's tests: they must have passed on the unchanged code first (run_tests with when: before). "
                 "If you already changed the code, `git stash -u`, run it, then `git stash pop`."
             )
             return {"content": [{"type": "text", "text": text}], "is_error": True}
-        if after is None or not after["passed"] or after["command"] != before["command"]:
+        if after is None or not after["passed"]:
+            text = "No PR until the tests pass with your change: run_tests with when: after."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if before is not None and after["command"] != before["command"]:
             text = f"No PR until the tests pass with your change: run_tests with when: after and the command `{before['command']}`."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         if after["diff_hash"] != hashlib.sha256(diff.encode()).hexdigest():
@@ -2579,16 +2582,18 @@ class WorkTools:
             text = f"First read {job['repo']}'s rules for contributors (contributing_guide): they say which checks to run before a PR, and how."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         before = job["tests"]["before"]
-        if when == "after" and (before is None or not before["passed"]):
+        # A new version of a PR needs no run on the unchanged code: the PR's first version already had one. When it has
+        # one anyway (to compare a failing after run), the after run uses its command.
+        if when == "after" and job["kind"] != "follow_up" and (before is None or not before["passed"]):
             text = (
                 "First get the tests passing on the unchanged code (when: before). If another job on this repo already got the "
                 "official checks passing on this VM, job_progress with the next step carries that run over instead."
             )
             return {"content": [{"type": "text", "text": text}], "is_error": True}
-        if when == "after" and scope != before.get("scope", "full"):
+        if when == "after" and before is not None and scope != before.get("scope", "full"):
             text = f"Run it with the same scope as on the unchanged code: {before.get('scope', 'full')}."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
-        if when == "after" and command != before["command"]:
+        if when == "after" and before is not None and command != before["command"]:
             text = (
                 f"Run it with the same command as on the unchanged code: `{before['command']}`. To use another command "
                 "(e.g. the user agreed to leave out tests that already failed), run that one on the unchanged code first: "

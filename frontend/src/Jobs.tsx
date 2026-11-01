@@ -5,13 +5,15 @@ A job comes from Assign on the Issues page (kind fix_issue), from Set up on the 
 the repo running on the VM's desktop or opened in VS Code there, and the agent's short introduction to it in its
 notes), from New job here (kind task), from an agent itself (job_create), or from the app (kind follow_up: someone
 else wrote on one of your PRs or issues whose Agent setting is Drafts, or a PR's checks failed, and its agent drafts
-an answer or a fix for the Inbox). Tabs filter by status; "Open" is everything not done or cancelled, the most
+an answer or a fix for the Inbox), or from Add paper on the Workspace tab's Papers page (kind reproduce_paper: the agent
+reproduces a research paper and drafts a report). Tabs filter by status; "Open" is everything not done or cancelled, the most
 recently changed first. Each row shows its progress (the step the agent is on) and, under the title, the
 agent's headline in everyday words. Only the rows on screen are drawn, so long lists stay fast.
 A click on a row opens that job in a pop-up (#/jobs/<job id>, whatever the tab or filter); the X, Esc or a click
 outside it closes it, back to the list. Its top has the job's status, links to its agent, VM and issue, and Cancel
 job for an open one (like the row's Cancel). A follow_up job links, in the row and the pop-up, to the PR or issue it
-answers: its pop-up on the GitHub tab (#/github/pulls?open=... or #/github/issues?open=...), and GitHub. Below that: every step, what the job is about, the technical detail,
+answers: its pop-up on the GitHub tab (#/github/pulls?open=... or #/github/issues?open=...), and GitHub; a
+reproduce_paper job links to its paper's PDF (a download). Below that: every step, what the job is about, the technical detail,
 the project's test suite runs (before and with the change), what the agent is doing right now, the instructions,
 the agent's notes and the drafts it made, each linking to the Inbox.
 */
@@ -47,7 +49,7 @@ const TABS = [
   { value: "all", label: "All", statuses: [] as string[] },
 ];
 
-const DRAFT_KIND: Record<string, string> = { pr: "PR", comment: "Comment", question: "Question" };
+const DRAFT_KIND: Record<string, string> = { pr: "PR", comment: "Comment", question: "Question", report: "Report" };
 
 export default function Jobs(props: { selected: string | null }) {
   const jobs = useLive("jobs");
@@ -333,6 +335,11 @@ export default function Jobs(props: { selected: string | null }) {
                         <ExternalLink className="size-3" />
                       </a>
                     </span>
+                  )}
+                  {job.paper !== null && (
+                    <a href={`/api/agents/${job.agent}/artifacts/file?path=${encodeURIComponent(job.paper)}&download=1`} className="text-primary hover:underline">
+                      {job.paper.split("/").pop()}
+                    </a>
                   )}
                 </div>
                 <div className="flex items-center gap-2">

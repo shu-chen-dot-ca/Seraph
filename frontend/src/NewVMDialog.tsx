@@ -7,6 +7,7 @@ The choices and defaults come from GET /api/vms/options (they live in .env), inc
 name (vm1, vm2, ...). POST /api/vms answers at once with status "creating"; the VM shows up in the list
 right away through the live feed, and becomes "running" after about a minute. A new VM is empty:
 agents clone what they need. The image starts at the default one (set in the VMs page's Images tab).
+onCreated, when given, hears the new VM's name (the phone's VM page takes its desktop 1 then).
 */
 
 import { Loader2 } from "lucide-react";
@@ -19,7 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { api, useLive, type VMOptions } from "@/live";
 
-export default function NewVMDialog(props: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export default function NewVMDialog(props: { open: boolean; onOpenChange: (open: boolean) => void; onCreated?: (name: string) => void }) {
   const [options, setOptions] = useState<VMOptions | null>(null);
   const [name, setName] = useState("");
   const imagesData = useLive("images");
@@ -83,6 +84,9 @@ export default function NewVMDialog(props: { open: boolean; onOpenChange: (open:
       });
       toast.success(`Creating ${name}. It takes about a minute.`);
       props.onOpenChange(false);
+      if (props.onCreated !== undefined) {
+        props.onCreated(name);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setBusy(false);
