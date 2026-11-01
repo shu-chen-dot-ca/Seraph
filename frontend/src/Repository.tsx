@@ -42,9 +42,9 @@ New issue opens NewIssueDialog.tsx.
 On the Workspace tab's Home (live) the bar has no link to GitHub in its top left: there the first tab is Agents
 (RepoAgents.tsx: every agent working with the repo, with how many, New agent, and the open one's chat), where a repo
 opens. Code then has tab=code in the address (none is Agents), and Refresh is left out on Agents, which reads nothing
-from GitHub. One more tab is only there: Development (tab=development, Development.tsx: agents develop the repo
-all the time, from its issues to pull requests you merge) after Agents. It reads for itself, so Refresh is left
-out on it too.
+from GitHub. Two more tabs are only there: Development (tab=development, Development.tsx: agents develop the repo all
+the time, from its issues to pull requests you merge) after Agents, and Releases (tab=releases, Releases.tsx: plan,
+make and follow its releases) after Actions. Both read for themselves, so Refresh is left out on them too.
 */
 
 import {
@@ -77,6 +77,7 @@ import { toast } from "sonner";
 
 import Development from "@/Development";
 import NewIssueDialog from "@/NewIssueDialog";
+import Releases from "@/Releases";
 import RepoAgents from "@/RepoAgents";
 import ThreadDialog from "@/ThreadDialog";
 import {
@@ -259,11 +260,11 @@ export default function Repository(props: { repo: string; tab: string; state: st
   // The tab without tab= in the address: Agents on the Workspace tab, else Code.
   const defaultTab = props.live ? "agents" : "code";
   let tab = defaultTab;
-  if (TABS.includes(props.tab) || (props.live && ["code", "development"].includes(props.tab))) {
+  if (TABS.includes(props.tab) || (props.live && ["code", "development", "releases"].includes(props.tab))) {
     tab = props.tab;
   }
   // The tabs that read for themselves: no Refresh, nothing read here.
-  const ownTab = tab === "agents" || tab === "development";
+  const ownTab = tab === "agents" || tab === "development" || tab === "releases";
   const listed = yourRepos.repos.find((each) => each.name === props.repo) ?? yourRepos.starred.find((each) => each.name === props.repo);
   const starred = listed !== undefined && listed.starred;
   const stars = listed?.stars ?? overview?.stars ?? 0;
@@ -282,7 +283,7 @@ export default function Repository(props: { repo: string; tab: string; state: st
   useEffect(() => {
     let current = true;
     setError("");
-    // Agents reads nothing from GitHub; Development reads for itself.
+    // Agents reads nothing from GitHub; Development and Releases read for themselves.
     if (ownTab) {
       setLoading(false);
       return;
@@ -562,6 +563,11 @@ export default function Repository(props: { repo: string; tab: string; state: st
             <TabsTrigger value="actions" className="px-2.5">
               Actions
             </TabsTrigger>
+            {props.live && (
+              <TabsTrigger value="releases" className="px-2.5">
+                Releases
+              </TabsTrigger>
+            )}
           </TabsList>
         </Tabs>
         <div className="ml-auto flex items-center gap-1.5">
@@ -648,6 +654,7 @@ export default function Repository(props: { repo: string; tab: string; state: st
           </div>
         )}
         {tab === "development" && <Development repo={props.repo} />}
+        {tab === "releases" && <Releases repo={props.repo} />}
         {tab === "code" && codeReady && overview !== null && (
           <div className="max-w-5xl space-y-4 p-4 max-md:p-2">
             <div className="space-y-1">

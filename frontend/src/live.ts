@@ -964,7 +964,8 @@ export type UpdatesData = {
   error: string;
   previous: string | null; // the release before this one (Previous version)
   switched_at: string | null; // when this one went live
-  failed: string | null; // the release the last update went to, when it didn't start
+  failed: string | null; // the release the last update went to, when it didn't start or was taken back
+  failed_reason: string; // why ("" when not known)
   restarting: boolean;
 };
 
@@ -1084,6 +1085,7 @@ const store = {
       previous: null,
       switched_at: null,
       failed: null,
+      failed_reason: "",
       restarting: false,
     },
     projects: [],
