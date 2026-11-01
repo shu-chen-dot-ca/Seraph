@@ -85,6 +85,17 @@ desktop the Live tab shows. A failure stays in "live" with why, and the Live tab
 (retry_live). It reads its repo with its own tools (agent/repo_tools.py) and, when the user asks for a change, drafts
 an issue (issue_drafts.py) instead of making it; issue_decided() tells it whether the user created or discarded it.
 
+A project (github_searcher/projects.py: one of your repositories agents develop all the time, the Workspace tab repo
+page's Development) has agents of its own. start_project() makes them: its chat agent (the repository's agent, made
+with set_up_live when the repo has none: it sets the repo up on the project's VM), then project_agents() its workers
+and reviewer (record "project": the repo, "role": "worker" | "reviewer"), as many workers as the project asks for, all
+aimed at the project's VM. backend/projects_api.py runs the project: give_issue() hands a worker the next open issue as
+a fix_issue job (it checks the issue and reproduces it first, and may deny it), give_review() hands the reviewer each PR
+draft a worker makes (the draft reaches the Inbox only when review_finished() passes it; changes send it back),
+redo_pr() asks a worker to make a PR that conflicts with main again on the new main, give_crashes() hands the chat
+agent the app's errors (crashes.py) to turn into issues, and project_changed() tells it what the user changed (mode,
+goals).
+
 When an issue an agent has a job for goes from free to assigned (someone else is on it now: the
 tags say so, backend/issues_api.py), issue_taken() asks the user in the Inbox ("taken", one pending
 per job): Keep working tells the agent to go on; Stop the agent cancels the job, and when the agent
@@ -95,7 +106,7 @@ Everything here runs in the backend's event loop. notify() and the queue callbac
 from request threads, so they hand their work to the loop. version goes up on every change the
 agent list shows (status, history, context, queue), for the live feed.
 
-    agents = Agents(repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, ..., artifacts, your_repositories, issue_drafts)
+    agents = Agents(repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, ..., artifacts, your_repositories, issue_drafts, projects, crashes)
     await agents.start()
     agents.send(agent_id, "find good first issues in Python CLI tools")
 """
@@ -109,6 +120,7 @@ import secrets
 import shlex
 import tempfile
 import threading
+import traceback
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -145,8 +157,12 @@ LIVE_CHECK_SECONDS = 5
 
 
 class Agents:
-    def __init__(self, repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, repo_signals, issue_tags, explore, artifacts, your_repositories, issue_drafts):
+    def __init__(self, repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, repo_signals, issue_tags, explore, artifacts, your_repositories, issue_drafts, projects, crashes):
         self.repos = repos
+        # Your repositories agents develop all the time (projects.py), and the app's own errors (crashes.py): a turn
+        # that fails with an exception is one.
+        self.projects = projects
+        self.crashes = crashes
         # The user's repositories, read with their sign-in: a repository's agent reads its repo and gets its code through it.
         self.your_repositories = your_repositories
         # The issues repository agents drafted for the user (issue_drafts.py).
@@ -209,6 +225,9 @@ class Agents:
             # And from before repository agents (Live).
             record.setdefault("repo", None)
             record.setdefault("live", None)
+            # And from before projects.
+            record.setdefault("project", None)
+            record.setdefault("role", None)
             if record.get("awake") and self.pending[agent.id] and record["archived_at"] is None:
                 self.wake[agent.id].set()
             self.nudges[agent.id] = {"count": 0, "state": None}
@@ -331,6 +350,7 @@ class Agents:
                 await agent.run(prompt)
             except Exception as error:
                 agent.history.append({"type": "system", "text": f"Error: {error}", "time": datetime.now(UTC).isoformat()})
+                self.crashes.add("agent", f"{agent.name}'s turn failed: {type(error).__name__}: {error}", traceback.format_exc())
                 # Start over with a fresh connection next time; the conversation is resumed.
                 await agent.stop()
             finally:
@@ -484,6 +504,9 @@ class Agents:
                     # A repository's agent (Live): its repo, and how far its set-up is.
                     "repo": agent.record["repo"],
                     "live": agent.record["live"],
+                    # A project's worker or reviewer: its project, and which of the two it is.
+                    "project": agent.record["project"],
+                    "role": agent.record["role"],
                 }
             )
         return summaries
@@ -518,6 +541,8 @@ class Agents:
             "name_by": name_by,
             "repo": None,
             "live": None,
+            "project": None,
+            "role": None,
         }
         computer_tools = ComputerTools(self.vms, self.queue, agent_id, functools.partial(record.get, "target_vm"), record["history"])
         agent = Agent(record, computer_tools, WorkTools(self, record), self.changed)
@@ -1033,6 +1058,229 @@ class Agents:
             target = Path(temporary) / folder
             self.your_repositories.clone(repo, str(target))
             to_vm(vm, str(target), home)
+
+    def start_project(self, repo: str, vm_name: str) -> None:
+        """Development's Start (backend/projects_api.py made the project and its VM, vm_name): its chat agent is the
+        repository's agent (a new one when the repo has none: set_up_live, which sets the repo up on the VM's desktop
+        1), then its workers and reviewer come (project_agents). The chat agent hears what it is now."""
+        chat = self.live_agent(repo)
+        if chat is None:
+            chat = self.set_up_live(repo, vm_name)
+        self.projects.update(repo, chat=chat["id"])
+        self.project_agents(repo)
+        text = (
+            f"The user started development of {repo}: agents develop it all the time now (see Developing a project), and "
+            "you are its chat agent. It is in Drafts mode: what the user asks for, you write as issue drafts for them to "
+            "create. project_status shows where it stands."
+        )
+        self.pending[chat["id"]].append({"from": "System", "text": text, "shown": False})
+        self.save(self.agents[chat["id"]])
+        self.version += 1
+
+    def project_agents(self, repo: str) -> None:
+        """A project's workers, as many as it asks for, and its reviewer, aimed at its VM: missing ones are made, archived
+        ones come back, extra workers are archived (their issues go back, for the others to take). Every round of
+        backend/projects_api.py, while the project is on."""
+        project = self.projects.get(repo)
+        if project is None:
+            return
+        name = repo.split("/")[1]
+        vm_names = [vm_record.name for vm_record in self.vms.list()]
+        workers = [agent_id for agent_id in project["workers"] if agent_id in self.agents]
+        for agent_id in workers:
+            self.unarchive(agent_id)
+        while len(workers) < project["agents"]:
+            names = [agent.name for agent in self.agents.values()]
+            number = 1
+            while f"{name}-dev-{number}" in names:
+                number += 1
+            created = self.create(f"{name}-dev-{number}")
+            agent = self.agents[created["id"]]
+            agent.record["project"] = project["repo"]
+            agent.record["role"] = "worker"
+            if project["vm"] in vm_names:
+                self.set_target_vm(agent.id, project["vm"], by_agent=True)
+            self.save(agent)
+            workers.append(agent.id)
+        while len(workers) > project["agents"]:
+            agent_id = workers.pop()
+            for issue in project["issues"].values():
+                if issue["agent"] == agent_id and issue["state"] == "working":
+                    self.projects.drop_issue(repo, issue["number"])
+            self.loop.create_task(self.archive(agent_id))
+
+        reviewer = project["reviewer"]
+        if reviewer in self.agents:
+            self.unarchive(reviewer)
+        else:
+            names = [agent.name for agent in self.agents.values()]
+            reviewer_name = f"{name}-review"
+            number = 2
+            while reviewer_name in names:
+                reviewer_name = f"{name}-review-{number}"
+                number += 1
+            created = self.create(reviewer_name)
+            agent = self.agents[created["id"]]
+            agent.record["project"] = project["repo"]
+            agent.record["role"] = "reviewer"
+            if project["vm"] in vm_names:
+                self.set_target_vm(agent.id, project["vm"], by_agent=True)
+            self.save(agent)
+            reviewer = agent.id
+        self.projects.update(repo, workers=workers, reviewer=reviewer)
+
+    def give_issue(self, repo: str, issue: dict, agent_id: str, again: bool) -> dict:
+        """A project's next open issue ({"number", "title"}) for one of its workers (backend/projects_api.py): a fix_issue
+        job. again: it was denied, closed or done before and is open again (reopened, or Try again)."""
+        agent = self.agents[agent_id]
+        self.unarchive(agent_id)
+        project = self.projects.get(repo)
+        issue_id = f"{repo}#{issue['number']}"
+        title = f"Fix {issue_id}: {issue['title']}"
+        vm_name = agent.record["target_vm"]
+        job = self.jobs.create("fix_issue", title, agent_id, "user", issue=issue_id, vm=vm_name)
+        text = (
+            f"New job {job['id']}: {title}\n"
+            f"{repo} is a project the user has agents develop all the time, and this is its next open issue: work on it as in "
+            f"Developing a project. Check it first (repo_thread {issue['number']}, the code it is about, the other issues and pull "
+            f"requests), then reproduce it on the newest code in the VM (sync_code puts it in ~/{agent.name}). When it isn't worth "
+            "doing or can't be reproduced, deny it with deny_issue. Otherwise fix it, test it, show it, and draft_pr: the "
+            "project's reviewer reviews it before the user sees it."
+        )
+        if again:
+            text += "\nIt was denied, closed or done before and is open again: the user wants it. Don't deny it again for the same reason."
+        if project is not None and project["goals"]:
+            text += f"\nThe user's goals for {repo}:\n{project['goals']}"
+        if vm_name is None:
+            text += "\nYou have no target VM: pick the VM that suits the job with vms_list and choose_vm, then queue_for_vm when ready."
+        else:
+            text += f"\nIt is for {vm_name}. Use queue_for_vm when you are ready to reproduce it."
+        self.notify(agent_id, text)
+        return job
+
+    def give_review(self, draft: dict) -> None:
+        """A project worker's PR draft (work_tools.py draft_pr) for the project's reviewer: a review job. The draft waits
+        out of the Inbox until review_finished(). A project with no reviewer lets it through at once."""
+        project = self.projects.get(draft["repo"])
+        now = datetime.now(UTC).isoformat()
+        reviewer = None
+        if project is not None:
+            reviewer = project["reviewer"]
+        if reviewer not in self.agents:
+            self.inbox.set_review(draft["id"], {"state": "passed", "agent": None, "job": None, "notes": "The project has no reviewer, so nobody reviewed it.", "at": now})
+            return
+        self.unarchive(reviewer)
+        author = draft["agent"]
+        if author in self.agents:
+            author = self.agents[author].name
+        vm_name = self.agents[reviewer].record["target_vm"]
+        title = f"Review {draft['id']}: {draft['title']}"
+        job = self.jobs.create("review", title, reviewer, "user", issue=draft["target"], repo=draft["repo"], vm=vm_name)
+        self.inbox.set_review(draft["id"], {"state": "waiting", "agent": reviewer, "job": job["id"], "notes": "", "at": now})
+        text = (
+            f"New job {job['id']}: {title}\n{author} drafted this PR for {draft['target']}. Review it as in Reviewing a pull "
+            f"request: review_read {draft['id']}, then check it in the VM on its own code (sync_code, then apply its diff on its "
+            "base_sha), run its tests, look at its pictures, and end with review_done."
+        )
+        if vm_name is not None:
+            text += f"\nIt is for {vm_name}: queue_for_vm once you have read it."
+        self.notify(reviewer, text)
+
+    def review_finished(self, draft_id: str, passed: bool, notes: str) -> None:
+        """The reviewer's verdict on a project PR draft (project_tools.py review_done). Passed: it shows in the Inbox, and
+        its author hears so with its next message. Changes: it is rejected with the notes, so it never shows, and its
+        author's job is open again, to fix and draft again."""
+        draft = self.inbox.get(draft_id)
+        review = dict(draft["review"])
+        review["state"] = "passed" if passed else "changes"
+        review["notes"] = notes
+        review["at"] = datetime.now(UTC).isoformat()
+        self.inbox.set_review(draft_id, review)
+        if review["job"] is not None:
+            verdict = "Passed" if passed else "Asked for changes"
+            self.jobs.update(review["job"], status="done", notes=f"{verdict}: {notes}")
+        author = self.agents.get(draft["agent"])
+        if author is None:
+            return
+        if passed:
+            text = f"Your PR draft {draft_id} ({draft['title']}) passed review and is in the user's Inbox now. The reviewer's notes: {notes}"
+            self.pending[author.id].append({"from": "System", "text": text, "shown": False})
+            self.save(author)
+            self.version += 1
+            return
+        self.inbox.decide(draft_id, "rejected", notes)
+        job_name = "your work"
+        if draft["job"] is not None:
+            job = self.jobs.get(draft["job"])
+            job_name = job["id"]
+            if job["status"] == "waiting_on_user":
+                self.jobs.update(job["id"], status="queued")
+        text = (
+            f"The reviewer asked for changes on your PR draft {draft_id} ({draft['title']}) for {job_name}:\n{notes}\n"
+            "Make them (queue_for_vm when you need the VM), run the tests again with when: after, and draft_pr again: the new "
+            "draft is reviewed again."
+        )
+        self.notify(author.id, text)
+
+    def redo_pr(self, repo: str, pr: dict) -> None:
+        """A project's open PR conflicts with main now (backend/projects_api.py): its agent makes it again on the new main,
+        as a fix_issue job whose thread is that PR. Its draft replaces the PR, which is closed once the new one is on
+        GitHub."""
+        agent = self.agents.get(pr["agent"])
+        if agent is None:
+            return
+        self.unarchive(agent.id)
+        thread = f"{repo}#{pr['number']}"
+        issue_id = None
+        if pr["issue"] is not None:
+            issue_id = f"{repo}#{pr['issue']}"
+        branch = "your old branch"
+        try:
+            branch = f"your old branch {self.inbox.get(pr['draft'])['branch']}"
+        except KeyError:
+            pass
+        title = f"Redo #{pr['number']} on the new main: {pr['title']}"
+        vm_name = agent.record["target_vm"]
+        job = self.jobs.create("fix_issue", title, agent.id, "user", issue=issue_id, repo=repo, vm=vm_name, thread=thread)
+        text = (
+            f"New job {job['id']}: {title}\n"
+            f"Your PR {thread} ({pr['url']}) conflicts with {repo}'s main now: other work was merged first. Make it again on the "
+            f"newest main: sync_code, a new branch from origin/HEAD, and your change on top again ({branch} in your folder has "
+            "it: cherry-pick your own commits, or redo it by hand), with the conflicts resolved the way the new code wants. Then "
+            "as for any fix: the tests on the new main (when: before) and with your change (when: after), the before and after "
+            f"pictures again, and draft_pr. Its draft replaces {thread}: once the user opens the new PR, the old one is closed."
+        )
+        if vm_name is not None:
+            text += f"\nIt is for {vm_name}: queue_for_vm when ready."
+        self.notify(agent.id, text)
+
+    def give_crashes(self, repo: str, items: list[dict]) -> None:
+        """The app's new errors (crashes.py) for the chat agent of the app's own repo (backend/projects_api.py), to turn
+        into issues with crash_report."""
+        project = self.projects.get(repo)
+        if project is None or project["chat"] not in self.agents:
+            return
+        lines = []
+        for item in items:
+            line = f"- {item['id']} ({item['source']}, {item['count']} times, last {item['last_at'][:16]}, version {item['version']}): {item['message']}"
+            if item["issue"] is not None:
+                line += f" [it made #{item['issue']} before, and came back]"
+            if item["detail"]:
+                line += "\n  " + item["detail"][-1500:].replace("\n", "\n  ")
+            lines.append(line)
+        text = f"New errors in the app, {len(items)} of them. Deal with each with crash_report, as in The app's errors:\n" + "\n".join(lines)
+        self.notify(project["chat"], text)
+
+    def project_changed(self, repo: str, text: str) -> None:
+        """What the user changed on a project's Development page (its mode, goals), for its chat agent; it hears with its
+        next message, no turn of its own just for this."""
+        project = self.projects.get(repo)
+        if project is None or project["chat"] not in self.agents:
+            return
+        agent = self.agents[project["chat"]]
+        self.pending[agent.id].append({"from": "System", "text": text, "shown": False})
+        self.save(agent)
+        self.version += 1
 
     def issue_decided(self, draft: dict) -> None:
         """The user created one of the agent's issue drafts on GitHub, or discarded it, from its chat. It hears with its

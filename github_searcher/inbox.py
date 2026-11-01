@@ -20,7 +20,9 @@ Approve on a PR or comment also sends it to GitHub as them, first; "sent" then s
      "status": "pending" | "approved" | "rejected" | "replied", "reply": "the user's text",
      "created_at", "decided_at": null until decided, "sent": null | what went to GitHub (github_account.py),
      "update_of": "owner/name#n" | null (pr only: a new version of the user's open PR, see below),
-     "edited": bool (the user changed the title or text before deciding)}
+     "edited": bool (the user changed the title or text before deciding),
+     "review": null | {"state": "waiting" | "passed" | "changes", "agent", "job", "notes", "at"} (pr only, see below),
+     "replaces": "owner/name#n" | null (pr only: the project PR this one is made again of, see below)}
 
 "body" is what would be sent to GitHub; "overview" is only for the user, who doesn't know the
 project: plain words on what is wrong and what the draft does about it.
@@ -45,6 +47,13 @@ full technical report, "diff" the agent's code (every file new), "path" its fold
 rest for the user: {"paper", "claims", "verdict", "results": [{"what", "paper", "ours", "authors", "note"}, ...],
 "problems": [{"title", "what", "why", "evidence": "ev_..."}, ...], "unchecked": ["what couldn't be checked, and why"]}.
 Approving it ends the job; nothing is sent anywhere.
+
+A PR draft for a project (github_searcher/projects.py: one of your repositories agents develop all the time) is
+reviewed by the project's reviewer before you see it: "review" is waiting until the reviewer's verdict (Agents.give_review,
+review_finished). passed: it shows in the Inbox, with the reviewer's notes. changes: it went back to its author and is
+rejected with the reviewer's notes, so it never shows. The Inbox only lists drafts with no review or a passed one.
+"replaces" is the project's open PR that conflicted with main and was made again on the new main (Agents.redo_pr): once
+this one is on GitHub, backend/projects_api.py closes that one.
 
 "taken" is the one kind the app makes, not the agent (Agents.issue_taken): an issue an agent has a job
 for went from free to assigned. Its body says who seems to be on it; approved means keep working,
@@ -96,6 +105,9 @@ class Inbox:
             # And from before PR updates and editing.
             draft.setdefault("update_of", None)
             draft.setdefault("edited", False)
+            # And from before project reviews.
+            draft.setdefault("review", None)
+            draft.setdefault("replaces", None)
             self.drafts[draft["id"]] = draft
 
     def save(self, draft: dict) -> None:
@@ -132,7 +144,8 @@ class Inbox:
     def create(self, kind: str, agent: str, title: str, body: str, job: str | None = None,
                repo: str | None = None, target: str | None = None, diff: str = "", branch: str = "",
                base: str = "", base_sha: str = "", commits: list | None = None, vm: str | None = None, path: str | None = None, evidence: list | None = None,
-               overview: dict | None = None, template: str | None = None, update_of: str | None = None) -> dict:
+               overview: dict | None = None, template: str | None = None, update_of: str | None = None, review: dict | None = None,
+               replaces: str | None = None) -> dict:
         with self.lock:
             draft_id = "draft_" + secrets.token_hex(3)
             while draft_id in self.drafts:
@@ -163,6 +176,8 @@ class Inbox:
                 "sent": None,
                 "update_of": update_of,
                 "edited": False,
+                "review": copy.deepcopy(review),
+                "replaces": replaces,
             }
             self.drafts[draft_id] = draft
             self.save(draft)
@@ -224,6 +239,16 @@ class Inbox:
             if deleted:
                 self.version += 1
             return deleted
+
+    def set_review(self, draft_id: str, review: dict) -> dict:
+        """Where a project PR draft's review stands (see above). Returns the draft as it is now."""
+        with self.lock:
+            if draft_id not in self.drafts:
+                raise KeyError(f"No draft {draft_id}")
+            draft = self.drafts[draft_id]
+            draft["review"] = copy.deepcopy(review)
+            self.save(draft)
+            return copy.deepcopy(draft)
 
     def mark_sent(self, draft_id: str, sent: dict) -> dict:
         """What went to GitHub for this draft (github_account.py). Returns the draft as it is now."""

@@ -27,10 +27,15 @@ websocket closes with 4401, also as soon as the device is removed or signed out.
 
 The page itself comes from Vite in the dev copy (./run.sh). The live copy (deploy/, SERAPH_HOME set) serves its own
 built page (frontend/dist) from here, at /, so it needs no Vite.
+
+Every exception nobody caught (in a request, a background task on the event loop, or a thread) is reported to the app's
+own errors (github_searcher/crashes.py), which its agent turns into issues (backend/projects_api.py).
 """
 
 import asyncio
 import json
+import threading
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -44,8 +49,9 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
-from backend import agents_api, artifacts_api, explore_api, github_account_api, images_api, inbox_api, issues_api, github_api, notifications_api, pull_requests_api, remote_access_api, repo_live_api, repos_api, tracked_api, updates_api, vms_api, your_repositories_api
-from backend.shared import agents, explore, images, inbox, issue_drafts, issue_facts, issue_tags, issues, jobs, notifications, pr_tracking, remote_access, repo_signals, repos, resource_usage, tracked, tracked_issues, updates, vms, your_repositories
+from backend import agents_api, artifacts_api, explore_api, github_account_api, images_api, inbox_api, issues_api, github_api, notifications_api, projects_api, pull_requests_api, remote_access_api, repo_live_api, repos_api, tracked_api, updates_api, vms_api, your_repositories_api
+from backend.shared import agents, crashes, explore, images, inbox, issue_drafts, issue_facts, issue_tags, issues, jobs, notifications, pr_tracking, projects, remote_access, repo_signals, repos, resource_usage, tracked, tracked_issues, updates, vms, your_repositories
+from github_searcher.projects import SELF_REPO
 from github_searcher.remote_access import COOKIE, DOMAIN as REMOTE_DOMAIN
 from github_searcher.token_balancer import BALANCER
 from github_searcher.updates import HOME
@@ -64,7 +70,28 @@ async def lifespan(app: FastAPI):
     # The threads asyncio.to_thread uses (the agents' VM tools, Explore, the signals, every GitHub call). A GitHub call
     # can wait up to two minutes for a rate limit (token_balancer.py); with only the default 20 threads, a burst of
     # those took them all and everything else stalled behind them.
-    asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=THREADS))
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=THREADS))
+
+    # What fails in a background task or a thread is one of the app's errors too, as well as in the log as before.
+    def loop_error(loop, context: dict) -> None:
+        error = context.get("exception")
+        detail = ""
+        if error is not None:
+            detail = "".join(traceback.format_exception(error))
+        crashes.add("backend", context.get("message", "") + (f": {type(error).__name__}: {error}" if error is not None else ""), detail)
+        loop.default_exception_handler(context)
+
+    loop.set_exception_handler(loop_error)
+    thread_hook = threading.excepthook
+
+    def thread_error(args) -> None:
+        detail = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))
+        crashes.add("backend", f"A thread failed: {args.exc_type.__name__}: {args.exc_value}", detail)
+        thread_hook(args)
+
+    threading.excepthook = thread_error
+
     # Agents run on this event loop, so they start here and not at import.
     await agents.start()
     # An Explore run the restart cut off goes on, when only the code reloaded.
@@ -80,6 +107,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(your_repositories_api.keep_your_repositories()),
         asyncio.create_task(notifications_api.keep_notifications()),
         asyncio.create_task(updates_api.keep_updates()),
+        asyncio.create_task(projects_api.keep_projects()),
     ]
     yield
     explore.save_for_restart()
@@ -106,6 +134,7 @@ app.include_router(artifacts_api.router)
 app.include_router(remote_access_api.router)
 app.include_router(repo_live_api.router)
 app.include_router(updates_api.router)
+app.include_router(projects_api.router)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 
 
@@ -130,6 +159,14 @@ def github_error(request: Request, error: httpx.HTTPStatusError) -> JSONResponse
     except ValueError:
         message = "GitHub request failed."
     return JSONResponse(status_code=error.response.status_code, content={"detail": message})
+
+
+@app.exception_handler(Exception)
+def app_error(request: Request, error: Exception) -> JSONResponse:
+    """A request that failed with an exception nobody caught: one of the app's errors (crashes.py), then the usual 500."""
+    detail = "".join(traceback.format_exception(error))
+    crashes.add("backend", f"{request.method} {request.url.path}: {type(error).__name__}: {error}", detail)
+    return JSONResponse(status_code=500, content={"detail": f"Something went wrong in the app: {type(error).__name__}: {error}"})
 
 
 @app.websocket("/api/live")
@@ -158,7 +195,7 @@ async def live(websocket: WebSocket) -> None:
 async def feed(websocket: WebSocket, watch: dict) -> None:
     """The live feed of one browser, until it goes away."""
     # The version of each topic this browser has; None until it is sent.
-    sent = {"repos": None, "issues": None, "tracked": None, "explore": None, "github": None, "jobs": None, "inbox": None, "issue_drafts": None, "prs": None, "your_repos": None, "notifications": None, "agents": None, "vms": None, "images": None, "resource": None, "updates": None}
+    sent = {"repos": None, "issues": None, "tracked": None, "explore": None, "github": None, "jobs": None, "inbox": None, "issue_drafts": None, "prs": None, "your_repos": None, "notifications": None, "agents": None, "vms": None, "images": None, "resource": None, "updates": None, "projects": None, "crashes": None}
     outside = remote_access.from_outside(websocket.headers)
     cookie = websocket.cookies.get(COOKIE)
     while True:
@@ -217,9 +254,11 @@ async def feed(websocket: WebSocket, watch: dict) -> None:
         if sent["jobs"] != jobs.version:
             sent["jobs"] = jobs.version
             messages.append({"topic": "jobs", "data": jobs.list()})
+        # A project's PR draft only once its review passed (inbox.py): until then it isn't the user's to see.
         if sent["inbox"] != inbox.version:
             sent["inbox"] = inbox.version
-            messages.append({"topic": "inbox", "data": inbox.list()})
+            drafts = [draft for draft in inbox.list() if draft["review"] is None or draft["review"]["state"] == "passed"]
+            messages.append({"topic": "inbox", "data": drafts})
         # The issues repository agents drafted, shown as cards in their chats (issue_drafts.py).
         if sent["issue_drafts"] != issue_drafts.version:
             sent["issue_drafts"] = issue_drafts.version
@@ -255,6 +294,17 @@ async def feed(websocket: WebSocket, watch: dict) -> None:
         if sent["updates"] != updates.version:
             sent["updates"] = updates.version
             messages.append({"topic": "updates", "data": updates.summary()})
+        # Your repositories agents develop all the time (projects.py), and the app's own errors (crashes.py).
+        if sent["projects"] != projects.version:
+            sent["projects"] = projects.version
+            items = projects.list()
+            # The app's own repo: its Development page shows the app's errors too.
+            for item in items:
+                item["app"] = item["repo"].lower() == SELF_REPO.lower()
+            messages.append({"topic": "projects", "data": items})
+        if sent["crashes"] != crashes.version:
+            sent["crashes"] = crashes.version
+            messages.append({"topic": "crashes", "data": crashes.list()})
 
         try:
             for message in messages:

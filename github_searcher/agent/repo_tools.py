@@ -13,7 +13,11 @@ private repo), and need no VM:
 - repo_thread: one issue or PR in full, with its comments and reviews.
 draft_issue writes an issue for the user (github_searcher/issue_drafts.py): it shows in the chat as a card, and only
 the user's Create issue opens it on GitHub, as them. Its labels must be the repo's own, and like every draft it has no
-emoji. The chat's line for each call is in WorkTools.describe().
+emoji. When the repo is a project in Auto mode (github_searcher/projects.py), the user asked for issues to be made
+without them: draft_issue opens it on GitHub at once, as them, and the card says it was created. The chat's line for
+each call is in WorkTools.describe().
+
+A project's workers and reviewer get these too, for their project (their record's "project").
 
     tools = RepoTools(agents, record).list()
 """
@@ -44,12 +48,14 @@ class RepoTools:
     def __init__(self, agents, record: dict):
         # The Agents manager: your_repositories (the user's sign-in) and issue_drafts.
         self.agents = agents
-        # The agent's record (the same dict): its "repo" is the repository these act on.
+        # The agent's record (the same dict): its "repo" is the repository these act on, or for a project's worker or
+        # reviewer (github_searcher/projects.py), its "project".
         self.record = record
         self.agent_id = record["id"]
+        self.repo = record.get("repo") or record.get("project")
 
     def list(self) -> list:
-        repo = self.record["repo"]
+        repo = self.repo
         return [
             tool(
                 "repo_files",
@@ -117,7 +123,7 @@ class RepoTools:
         ]
 
     async def repo_files(self, args: dict) -> dict:
-        repo = self.record["repo"]
+        repo = self.repo
         try:
             tree = await asyncio.to_thread(self.agents.your_repositories.tree, repo)
         except (ValueError, httpx.HTTPError) as error:
@@ -142,7 +148,7 @@ class RepoTools:
         return {"content": [{"type": "text", "text": text}]}
 
     async def repo_read(self, args: dict) -> dict:
-        repo = self.record["repo"]
+        repo = self.repo
         start = max(args.get("start_line") or 1, 1)
         # All files at the same time instead of one after another.
         paths = [path.strip("/") for path in args["paths"]]
@@ -168,7 +174,7 @@ class RepoTools:
         return {"content": [{"type": "text", "text": "\n\n".join(parts)}]}
 
     async def repo_search_code(self, args: dict) -> dict:
-        repo = self.record["repo"]
+        repo = self.repo
         token = self.agents.your_repositories.token()
         if token is None:
             return {"content": [{"type": "text", "text": NOT_SIGNED_IN}], "is_error": True}
@@ -194,7 +200,7 @@ class RepoTools:
         return {"content": [{"type": "text", "text": json.dumps({"total_count": result["total_count"], "files": files})}]}
 
     async def repo_issues(self, args: dict) -> dict:
-        repo = self.record["repo"]
+        repo = self.repo
         search = (args.get("search") or "").strip()
         state = args.get("state") or "open"
         token = self.agents.your_repositories.token()
@@ -249,7 +255,7 @@ class RepoTools:
         return {"content": [{"type": "text", "text": json.dumps(report)}]}
 
     async def repo_pulls(self, args: dict) -> dict:
-        repo = self.record["repo"]
+        repo = self.repo
         state = args.get("state") or "open"
         try:
             data = await asyncio.to_thread(self.agents.your_repositories.pulls, repo, state)
@@ -274,7 +280,7 @@ class RepoTools:
         return {"content": [{"type": "text", "text": json.dumps(report)}]}
 
     async def repo_thread(self, args: dict) -> dict:
-        repo = self.record["repo"]
+        repo = self.repo
         number = args["number"]
         token = self.agents.your_repositories.token()
         if token is None:
@@ -344,7 +350,7 @@ class RepoTools:
         return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
     async def draft_issue(self, args: dict) -> dict:
-        repo = self.record["repo"]
+        repo = self.repo
         title = (args.get("title") or "").strip()
         body = (args.get("body") or "").strip()
         labels = args.get("labels") or []
@@ -366,6 +372,21 @@ class RepoTools:
                 return {"content": [{"type": "text", "text": text}], "is_error": True}
 
         draft = await asyncio.to_thread(self.agents.issue_drafts.create, self.agent_id, repo, title, body, labels)
+
+        # Auto mode: the user wants the issues made without them, so it is opened on GitHub now, as them.
+        project = self.agents.projects.get(repo)
+        if project is not None and project["on"] and project["mode"] == "auto":
+            fields = {"title": title, "body": body, "labels": labels}
+            try:
+                result = await asyncio.to_thread(self.agents.your_repositories.act, repo, "new_issue", None, "issue", fields)
+            except (ValueError, httpx.HTTPError) as error:
+                text = f"Drafted {draft['id']}, but it couldn't be opened on GitHub ({error}): it waits in your chat for the user's Create issue."
+                return {"content": [{"type": "text", "text": text}]}
+            number = int(result["url"].rstrip("/").split("/")[-1])
+            await asyncio.to_thread(self.agents.issue_drafts.decide, draft["id"], "created", result["url"], number)
+            text = f"Created {draft['id']} on GitHub as {repo}#{number} ({result['url']}), since the project is in Auto mode. A worker takes it next."
+            return {"content": [{"type": "text", "text": text}]}
+
         text = (
             f"Drafted {draft['id']}. It shows in your chat with the user as a card: Create issue opens it on GitHub as them, "
             "Discard drops it. You hear which with your next message; don't draft it again meanwhile."
