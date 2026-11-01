@@ -24,7 +24,8 @@ error. VERSION is written last, so a release folder with one is ready and checke
 never made ready: why is in error, and in the app's errors (crashes.py), so it becomes an issue. Neither is the release
 the last switch took back (failed).
 
-backend/updates_api.py installs a ready release by itself. switch() runs deploy/switch.sh outside the app
+Restart in the Update dialog installs a ready release (backend/updates_api.py; AUTO_INSTALL there would do it by
+itself). switch() runs deploy/switch.sh outside the app
 (systemd-run), since the app stops on the way. It stops the app, copies data/ to backups/, points current at the
 release and starts it. When the release doesn't answer on /api/health within a minute, data/ and current go back and
 the release before starts again. After that it watches the release for WATCH minutes (switch.sh): when it stops

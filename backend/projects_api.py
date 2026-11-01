@@ -9,7 +9,7 @@ GET  /api/projects/{owner}/{name}/release       Releases: the releases, what was
                                                 version and its notes, and the issues planned for it
 POST /api/projects/{owner}/{name}/plan          {"number", "add"}: an issue into or out of the next release
 POST /api/projects/{owner}/{name}/release       Release: the next version, as a GitHub release; for the app's own repo
-                                                the live copy installs it by itself (updates.py)
+                                                the live copy gets it ready and offers it as Update (updates.py)
 POST /api/projects/merge/{draft_id}             Merge: squash-merges the PR an approved draft opened
 POST /api/errors                                an error on a page ({"message", "stack", "page"}, frontend/src/main.tsx)
 
@@ -234,7 +234,7 @@ async def release(owner: str, name: str) -> dict:
         result = await asyncio.to_thread(projects.release, repo)
     except (ValueError, httpx.HTTPError) as error:
         raise HTTPException(status_code=400, detail=str(error))
-    # The app's own repo: the live copy gets it ready now, checks it and installs it (updates.py).
+    # The app's own repo: the live copy gets it ready now and checks it; Update installs it (updates.py).
     if repo.lower() == SELF_REPO.lower():
         updates.asked = True
     return result

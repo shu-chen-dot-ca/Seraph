@@ -13,8 +13,8 @@ off like on any restart, and the agent carries on after it (Agents.stop and star
 
 keep_updates(), which the app runs in the background, checks every CHECK_SECONDS, and at once when asked (Check for
 updates, or a Release on the app's own repo: backend/projects_api.py). A newer release that is ready (it passed its
-check, updates.py) is installed by itself, the way Restart does it. The state reaches the browser through /api/live
-(topic "updates").
+check, updates.py) waits for Restart in the Update dialog; with AUTO_INSTALL it is installed by itself, the same way.
+The state reaches the browser through /api/live (topic "updates").
 """
 
 import asyncio
@@ -29,6 +29,8 @@ router = APIRouter(prefix="/api")
 
 # The most the switch waits for agents to finish their tool calls.
 QUIET_SECONDS = 60
+# Install a ready release by itself. Off for now (the user's choice, 2026-11-01): Update in the header does it.
+AUTO_INSTALL = False
 # The switch that waits for its moment: kept here, so it isn't dropped while it waits.
 waiting = []
 
@@ -100,8 +102,8 @@ async def keep_updates() -> None:
             last = time.monotonic()
             updates.asked = False
             await asyncio.to_thread(updates.check)
-            # Ready: installed now (constant development; switch.sh takes it back if it goes wrong).
-            if updates.ready is not None and not updates.restarting:
+            # Ready: installed now (switch.sh takes it back if it goes wrong).
+            if AUTO_INSTALL and updates.ready is not None and not updates.restarting:
                 updates.restarting = True
                 updates.version += 1
                 waiting.append(asyncio.get_running_loop().create_task(switch_when_quiet(updates.ready, "")))
