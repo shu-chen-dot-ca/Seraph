@@ -7,7 +7,7 @@ Approving tells the agent. With the user's GitHub account connected (the GitHub 
 Approve on a PR or comment also sends it to GitHub as them, first; "sent" then says what went out
 (mark_sent). Each draft is one JSON file, DATA_DIR/inbox/<id>.json:
 
-    {"id": "draft_a1b2c3", "kind": "pr" | "comment" | "question" | "taken", "agent": "<agent id>",
+    {"id": "draft_a1b2c3", "kind": "pr" | "comment" | "question" | "taken" | "report", "agent": "<agent id>",
      "job": "job_..." | null, "repo": "owner/name" | null, "target": "owner/name#n" | null,
      "title", "body": "markdown",
      "diff": "unified diff (pr only)", "branch": "branch in the VM (pr only)", "base": "origin/main (pr only)",
@@ -39,6 +39,12 @@ so it learns how the user wants it written.
 
 "template" is the repo's PR template when a PR's body keeps all its headings (None: the repo has none, or the body
 is written another way, as the project's merged PRs or the user's instructions have it).
+
+"report" is an agent's report on a paper it reproduced (a reproduce_paper job, work_tools.py draft_report): "body" is the
+full technical report, "diff" the agent's code (every file new), "path" its folder in the VM, and "overview" holds the
+rest for the user: {"paper", "claims", "verdict", "results": [{"what", "paper", "ours", "authors", "note"}, ...],
+"problems": [{"title", "what", "why", "evidence": "ev_..."}, ...], "unchecked": ["what couldn't be checked, and why"]}.
+Approving it ends the job; nothing is sent anywhere.
 
 "taken" is the one kind the app makes, not the agent (Agents.issue_taken): an issue an agent has a job
 for went from free to assigned. Its body says who seems to be on it; approved means keep working,

@@ -60,7 +60,9 @@ Repos list (its Set up button) into a set_up_repo job: the agent reads the READM
 app with a clear frontend up and leaves it running on the VM's desktop (a server in the VM's demo
 service, so it outlives the agent's turn and VM restarts), or clones a library or other low-level
 repo and opens it in VS Code there, then writes a short introduction to the repo in its chat and
-the job's notes. decide() passes the user's decision on a draft back to its agent (with the link,
+the job's notes. reproduce_paper() turns a paper the user added on the Workspace tab's Papers page (a PDF, kept in the
+agent's artifacts under papers/) into a reproduce_paper job: the agent reads it, rebuilds it in the VM, compares the
+numbers, checks the claims and drafts a report (draft_report). decide() passes the user's decision on a draft back to its agent (with the link,
 when Approve sent it to GitHub, or pushed a new version onto the user's PR). When the user edited the draft
 before deciding, the agent also gets the final text, so it learns how they want it written.
 
@@ -841,6 +843,59 @@ class Agents:
         self.notify(agent_id, text)
         return job
 
+    def reproduce_paper(self, title: str, file_name: str, data: bytes, agent_id: str | None, vm_name: str | None,
+                        instructions: str = "", agent_name: str = "") -> dict:
+        """The user adds a paper (a PDF) on the Papers page for an agent (a new one when agent_id is None) to reproduce: a
+        reproduce_paper job (see "Reproducing a paper" in agent/prompt.md). The PDF goes in the agent's artifacts, under
+        papers/, where the agent reads it (paper_read). agent_name names that new agent; empty gives it "agent-N"."""
+        if not data.startswith(b"%PDF"):
+            raise ValueError("That file is not a PDF.")
+        if vm_name is not None and vm_name not in [vm_record.name for vm_record in self.vms.list()]:
+            raise ValueError(f"No VM named {vm_name}")
+        if agent_id is None:
+            agent_id = self.create(agent_name)["id"]
+        if agent_id not in self.agents:
+            raise KeyError(f"No agent {agent_id}")
+        agent = self.agents[agent_id]
+        # Raises ValueError while the agent waits for or holds another VM.
+        if vm_name is not None:
+            self.set_target_vm(agent_id, vm_name)
+        self.unarchive(agent_id)
+
+        # papers/<name>.pdf, with a number when the agent has a paper by that name already.
+        stem = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(file_name).stem).strip("-.")
+        if stem == "":
+            stem = "paper"
+        path = f"papers/{stem}.pdf"
+        number = 2
+        while self.artifacts.resolve(agent_id, path).exists():
+            path = f"papers/{stem}-{number}.pdf"
+            number += 1
+        self.artifacts.save(agent_id, path, data)
+
+        title = title.strip()
+        if title == "":
+            title = stem
+        title = f"Reproduce {title}"
+        vm_name = agent.record["target_vm"]
+        job = self.jobs.create("reproduce_paper", title, agent_id, "user", vm=vm_name, instructions=instructions, paper=path)
+        text = f"New job {job['id']}: {title}"
+        text += (
+            f"\nThe paper is {path} in your artifacts. Read all of it with paper_read first, a few pages at a time, then "
+            "reproduce it as in Reproducing a paper: rebuild it from the paper alone, compare the numbers, check the claims, "
+            "and end with draft_report."
+        )
+        if instructions:
+            text += f"\nInstructions from the user: {instructions}"
+        if agent.record["name_by"] == "auto":
+            text += f"\nYou still have the automatic name {agent.name}: give yourself a short name for your work with name_yourself."
+        if vm_name is None:
+            text += "\nYou have no target VM: pick the VM that suits the job with vms_list and choose_vm, then queue_for_vm when you have read the paper."
+        else:
+            text += f"\nIt is for {vm_name}. Use queue_for_vm when you have read the paper."
+        self.notify(agent_id, text)
+        return job
+
     def live_agent(self, repo: str) -> dict | None:
         """The record of the repository's agent (Live), or None when it has none yet."""
         for agent in self.agents.values():
@@ -1128,7 +1183,7 @@ class Agents:
         if job is not None and job["status"] == "waiting_on_user":
             job = self.jobs.update(job["id"], status="queued")
 
-        kinds = {"pr": "PR", "comment": "comment", "question": "question"}
+        kinds = {"pr": "PR", "comment": "comment", "question": "question", "report": "report"}
         about = f"your {kinds.get(draft['kind'], draft['kind'])} draft {draft_id} ({draft['title']})"
         job_name = job["id"] if job is not None else "your work"
         # Approve sends a PR or comment first when the user's GitHub account is connected (inbox_api.py): then it is on GitHub.
@@ -1157,6 +1212,8 @@ class Agents:
             text = f"The user approved {about}, and it is posted: {sent['url']}. Carry on with {job_name}."
         elif decision == "approved" and draft["kind"] == "comment":
             text = f"The user approved {about}. They post it themselves. Carry on with {job_name}."
+        elif decision == "approved" and draft["kind"] == "report":
+            text = f"The user approved {about}. It finishes {job_name}: mark the job done with job_update."
         elif decision == "approved":
             text = f"The user approved {about}. Carry on with {job_name}."
         elif decision == "rejected":
