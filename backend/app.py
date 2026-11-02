@@ -5,6 +5,7 @@ jobs, the inbox, your GitHub account, your PRs, the VMs, the VM queue and the ag
 own router in backend/*_api.py (the GitHub tab: github_api.py, its Account page: github_account_api.py, Your
 repositories: your_repositories_api.py, Notifications: notifications_api.py, the Workspace tab's Pull requests:
 pull_requests_api.py, a repository's Live tab on the Workspace tab: repo_live_api.py).
+topic_data() is each topic of the live feed below.
 
 The browser never polls. It keeps one websocket open on /api/live, gets every
 topic when it connects, then only the topics that changed. Every store has a
@@ -202,6 +203,89 @@ async def live(websocket: WebSocket) -> None:
             resource_usage.watchers -= 1
 
 
+# The live feed's topics, by name: what the pages show.
+TOPICS = ["repos", "issues", "tracked", "explore", "github", "jobs", "inbox", "issue_drafts", "prs", "your_repos", "notifications", "agents", "vms", "images", "resource", "updates", "projects", "crashes"]
+
+
+def topic_data(topic: str):
+    """One topic of the live feed as the pages get it."""
+    # Repos carry their signals (repo_signals.py).
+    if topic == "repos":
+        signals = repo_signals.all()
+        items = repos.items()
+        for item in items:
+            item["signals"] = signals.get(item["full_name"])
+        return {"items": items, "can_undo": repos.can_undo(), "can_redo": repos.can_redo()}
+    # Issues carry their facts (issue_facts.py) and tags (issue_tags.py), so the topic changes when any does.
+    if topic == "issues":
+        facts = issue_facts.all()
+        tags = issue_tags.all()
+        items = issues.items()
+        for item in items:
+            item["facts"] = facts.get(item["id"])
+            item["tags"] = tags.get(item["id"])
+        return {"items": items, "can_undo": issues.can_undo(), "can_redo": issues.can_redo()}
+    # Each tracked repo carries its latest check (tracked_issues.py), like issues carry their facts, each issue
+    # in it its tags (issue_tags.py), and the repo its signals (repo_signals.py), like on the Repos page.
+    if topic == "tracked":
+        checks = tracked_issues.all()
+        tags = issue_tags.all()
+        signals = repo_signals.all()
+        items = tracked.items()
+        for item in items:
+            item["signals"] = signals.get(item["full_name"])
+            item["check"] = checks.get(item["full_name"])
+            if item["check"] is None:
+                continue
+            for issue in item["check"]["issues"]:
+                issue["tags"] = tags.get(f"{item['full_name']}#{issue['number']}")
+        return {"items": items, "can_undo": tracked.can_undo(), "can_redo": tracked.can_redo()}
+    # The run in progress (or the last one), the found list and the profile.
+    if topic == "explore":
+        return explore.summary()
+    if topic == "github":
+        return BALANCER.status()
+    if topic == "jobs":
+        return jobs.list()
+    # A project's PR draft only once its review passed (inbox.py): until then it isn't the user's to see.
+    if topic == "inbox":
+        return [draft for draft in inbox.list() if draft["review"] is None or draft["review"]["state"] == "passed"]
+    # The issues repository agents drafted, shown as cards in their chats (issue_drafts.py).
+    if topic == "issue_drafts":
+        return issue_drafts.list()
+    # Your PRs on GitHub and how each stands (pr_tracking.py).
+    if topic == "prs":
+        return pr_tracking.summary()
+    # Your repositories and your GitHub notifications, read with your sign-in.
+    if topic == "your_repos":
+        return your_repositories.summary()
+    if topic == "notifications":
+        return notifications.summary()
+    if topic == "agents":
+        return agents.summaries()
+    if topic == "vms":
+        return [vms.summary(record) for record in vms.list()]
+    if topic == "images":
+        return images.summary()
+    # This computer's use (resource_usage.py).
+    if topic == "resource":
+        return resource_usage.summary()
+    # The live copy's updates (updates_api.py): the version that runs, and a newer one that is ready.
+    if topic == "updates":
+        return updates.summary()
+    # Your repositories agents develop all the time (projects.py), and the app's own errors (crashes.py).
+    if topic == "projects":
+        items = projects.list()
+        # The app's own repo: its Development page shows the app's errors too.
+        for item in items:
+            item["app"] = item["repo"].lower() == SELF_REPO.lower()
+        return items
+    if topic == "crashes":
+        return crashes.list()
+    raise ValueError(f"No topic {topic}: one of {', '.join(TOPICS)}")
+
+
+
 async def feed(websocket: WebSocket, watch: dict) -> None:
     """The live feed of one browser, until it goes away."""
     # The version of each topic this browser has; None until it is sent.
@@ -215,105 +299,65 @@ async def feed(websocket: WebSocket, watch: dict) -> None:
             return
         # The version is noted before the data is read: a change in between is sent again next tick, never lost.
         messages = []
-        # Repos carry their signals (repo_signals.py).
         if sent["repos"] != (repos.version, repo_signals.version):
             sent["repos"] = (repos.version, repo_signals.version)
-            signals = repo_signals.all()
-            items = repos.items()
-            for item in items:
-                item["signals"] = signals.get(item["full_name"])
-            data = {"items": items, "can_undo": repos.can_undo(), "can_redo": repos.can_redo()}
-            messages.append({"topic": "repos", "data": data})
-        # Issues carry their facts (issue_facts.py) and tags (issue_tags.py), so the topic changes when any does.
+            messages.append({"topic": "repos", "data": topic_data("repos")})
         if sent["issues"] != (issues.version, issue_facts.version, issue_tags.version):
             sent["issues"] = (issues.version, issue_facts.version, issue_tags.version)
-            facts = issue_facts.all()
-            tags = issue_tags.all()
-            items = issues.items()
-            for item in items:
-                item["facts"] = facts.get(item["id"])
-                item["tags"] = tags.get(item["id"])
-            data = {"items": items, "can_undo": issues.can_undo(), "can_redo": issues.can_redo()}
-            messages.append({"topic": "issues", "data": data})
-        # Each tracked repo carries its latest check (tracked_issues.py), like issues carry their facts, each issue
-        # in it its tags (issue_tags.py), and the repo its signals (repo_signals.py), like on the Repos page.
+            messages.append({"topic": "issues", "data": topic_data("issues")})
         if sent["tracked"] != (tracked.version, tracked_issues.version, issue_tags.version, repo_signals.version):
             sent["tracked"] = (tracked.version, tracked_issues.version, issue_tags.version, repo_signals.version)
-            checks = tracked_issues.all()
-            tags = issue_tags.all()
-            signals = repo_signals.all()
-            items = tracked.items()
-            for item in items:
-                item["signals"] = signals.get(item["full_name"])
-                item["check"] = checks.get(item["full_name"])
-                if item["check"] is None:
-                    continue
-                for issue in item["check"]["issues"]:
-                    issue["tags"] = tags.get(f"{item['full_name']}#{issue['number']}")
-            data = {"items": items, "can_undo": tracked.can_undo(), "can_redo": tracked.can_redo()}
-            messages.append({"topic": "tracked", "data": data})
-        # The run in progress (or the last one), the found list and the profile.
+            messages.append({"topic": "tracked", "data": topic_data("tracked")})
         if sent["explore"] != explore.version:
             sent["explore"] = explore.version
-            messages.append({"topic": "explore", "data": explore.summary()})
+            messages.append({"topic": "explore", "data": topic_data("explore")})
         # GitHub's rate limits per token (token_balancer.py): changes with every GitHub request, sent at most every tick.
         if sent["github"] != BALANCER.version:
             sent["github"] = BALANCER.version
-            messages.append({"topic": "github", "data": BALANCER.status()})
+            messages.append({"topic": "github", "data": topic_data("github")})
         if sent["jobs"] != jobs.version:
             sent["jobs"] = jobs.version
-            messages.append({"topic": "jobs", "data": jobs.list()})
-        # A project's PR draft only once its review passed (inbox.py): until then it isn't the user's to see.
+            messages.append({"topic": "jobs", "data": topic_data("jobs")})
         if sent["inbox"] != inbox.version:
             sent["inbox"] = inbox.version
-            drafts = [draft for draft in inbox.list() if draft["review"] is None or draft["review"]["state"] == "passed"]
-            messages.append({"topic": "inbox", "data": drafts})
-        # The issues repository agents drafted, shown as cards in their chats (issue_drafts.py).
+            messages.append({"topic": "inbox", "data": topic_data("inbox")})
         if sent["issue_drafts"] != issue_drafts.version:
             sent["issue_drafts"] = issue_drafts.version
-            messages.append({"topic": "issue_drafts", "data": issue_drafts.list()})
-        # Your PRs on GitHub and how each stands (pr_tracking.py).
+            messages.append({"topic": "issue_drafts", "data": topic_data("issue_drafts")})
         if sent["prs"] != pr_tracking.version:
             sent["prs"] = pr_tracking.version
-            messages.append({"topic": "prs", "data": pr_tracking.summary()})
-        # Your repositories and your GitHub notifications, read with your sign-in.
+            messages.append({"topic": "prs", "data": topic_data("prs")})
         if sent["your_repos"] != your_repositories.version:
             sent["your_repos"] = your_repositories.version
-            messages.append({"topic": "your_repos", "data": your_repositories.summary()})
+            messages.append({"topic": "your_repos", "data": topic_data("your_repos")})
         if sent["notifications"] != notifications.version:
             sent["notifications"] = notifications.version
-            messages.append({"topic": "notifications", "data": notifications.summary()})
+            messages.append({"topic": "notifications", "data": topic_data("notifications")})
         if sent["agents"] != agents.version:
             sent["agents"] = agents.version
-            messages.append({"topic": "agents", "data": agents.summaries()})
+            messages.append({"topic": "agents", "data": topic_data("agents")})
         if sent["vms"] != vms.version:
             sent["vms"] = vms.version
-            messages.append({"topic": "vms", "data": [vms.summary(record) for record in vms.list()]})
+            messages.append({"topic": "vms", "data": topic_data("vms")})
         # Images say which VMs were made from each, so they are sent again when the VM list changes too.
         # Not on every usage sample though: only the number of VMs and their images matter.
         vm_images = [(record.name, record.image_fingerprint) for record in vms.list()]
         if sent["images"] != (images.version, vm_images):
             sent["images"] = (images.version, vm_images)
-            messages.append({"topic": "images", "data": images.summary()})
+            messages.append({"topic": "images", "data": topic_data("images")})
         # This computer's use (resource_usage.py): a new reading about once a second.
         if sent["resource"] != resource_usage.version:
             sent["resource"] = resource_usage.version
-            messages.append({"topic": "resource", "data": resource_usage.summary()})
-        # The live copy's updates (updates_api.py): the version that runs, and a newer one that is ready.
+            messages.append({"topic": "resource", "data": topic_data("resource")})
         if sent["updates"] != updates.version:
             sent["updates"] = updates.version
-            messages.append({"topic": "updates", "data": updates.summary()})
-        # Your repositories agents develop all the time (projects.py), and the app's own errors (crashes.py).
+            messages.append({"topic": "updates", "data": topic_data("updates")})
         if sent["projects"] != projects.version:
             sent["projects"] = projects.version
-            items = projects.list()
-            # The app's own repo: its Development page shows the app's errors too.
-            for item in items:
-                item["app"] = item["repo"].lower() == SELF_REPO.lower()
-            messages.append({"topic": "projects", "data": items})
+            messages.append({"topic": "projects", "data": topic_data("projects")})
         if sent["crashes"] != crashes.version:
             sent["crashes"] = crashes.version
-            messages.append({"topic": "crashes", "data": crashes.list()})
+            messages.append({"topic": "crashes", "data": topic_data("crashes")})
 
         try:
             for message in messages:
