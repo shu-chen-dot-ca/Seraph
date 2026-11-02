@@ -7,9 +7,9 @@
 3. **Fix in a VM.** Every fix goes through the same steps: *understand → set up → reproduce → fix → test → draft*.
    - The project's own checks pass on the unchanged code first, then on the exact code being drafted.
    - The evidence is real screenshots of the project running.
-4. **Review.** The draft lands in the Inbox. It has an **Overview** in plain words, the **Diff**, and the **PR message** written to the project's contributing guide.
+4. **Review.** A reviewer agent checks every PR draft first, the way the project's maintainers will: every point the issue or a reviewer asked for, and the edge cases of its kind. Only then it lands in the Inbox. It has an **Overview** in plain words, with a **Checklist** of every point asked (what isn't done comes first) and what was **Also tested**, the **Diff**, and the **PR message** written to the project's contributing guide.
 5. **Send.** Approve rebuilds the change on your computer, pushes it to a new branch in your fork, and opens the pull request as you.
-6. **Follow up.** Every open PR of yours has an agent that owns it, and it hears about every change there: replies, reviews, checks, pushes, conflicts with main, labels, merged or closed. It first reproduces what was reported in a VM, then drafts the answer, the next version, a rebase or a new title and description, and it comes back to the Inbox. Nothing is posted or pushed until you approve it.
+6. **Follow up.** Every open PR of yours has an agent that owns it, and it hears about every change there: replies, reviews, checks, pushes, conflicts with main, labels, merged or closed. It first reproduces what was reported in a VM, and tests the rest of that kind of mistake too, then drafts the answer, the next version, a rebase or a new title and description, and it comes back to the Inbox. Nothing is posted or pushed until you approve it.
 
 ## Judging repos
 
