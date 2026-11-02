@@ -84,6 +84,7 @@ which draft it is and where it is ("replaying commit 3 of 6"), for the Inbox to 
 """
 
 import base64
+import hashlib
 import json
 import os
 import secrets
@@ -111,6 +112,8 @@ SCOPES = "repo workflow read:org gist notifications user"
 PICTURES_BRANCH = "pr-pictures"
 # Seconds a new fork may take before its branches can be used.
 FORK_WAIT = 120
+# A text file up to this size goes inside the tree it is in (tree()); a bigger one is uploaded on its own.
+INLINE_BYTES = 1_000_000
 # git without the user's own git settings, and never looking for a repo above the temporary folder.
 GIT_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CEILING_DIRECTORIES": tempfile.gettempdir()}
 
@@ -133,6 +136,9 @@ class GithubAccount:
         # Only changed with send_lock held. sending_draft is the draft being sent, None between sends.
         self.step = ""
         self.sending_draft = None
+        # What the send going on knows from GitHub already (send(), tree()).
+        self.listings = {}
+        self.blobs = {}
 
     def load(self) -> dict | None:
         if not self.path.is_file():
@@ -262,6 +268,10 @@ class GithubAccount:
                 raise SendError("Only PRs, comments and new titles and descriptions go to GitHub.")
             self.step = "starting"
             self.sending_draft = draft_id
+            # What this send already knows from GitHub (tree()): each tree's file list by its sha, and each file's
+            # content by its blob sha, so replaying many commits reads every file and list only once.
+            self.listings = {}
+            self.blobs = {}
             try:
                 with httpx.Client(base_url=API, headers=headers, timeout=60) as client:
                     if draft["kind"] == "pr" and draft["update_of"]:
@@ -400,13 +410,17 @@ class GithubAccount:
                     raise SendError(f"The diff renames a file with an unusual name ({old}). Download the .patch and send it yourself.")
                 paths.append(old)
 
-            # Those files as the base commit has them, from GitHub. The caller's step says which change this is.
-            response = client.get(f"/repos/{fork}/git/trees/{base_tree}", params={"recursive": "1"})
-            response.raise_for_status()
-            listing = response.json()
-            if listing["truncated"]:
-                raise SendError("The project has too many files for GitHub to list at once, so the change can't be built here. Download the .patch and send it yourself.")
-            entries = {item["path"]: item for item in listing["tree"]}
+            # Those files as the base commit has them, from GitHub: its file list, read once per send for the first
+            # tree (the next ones are known from what was changed), and each file once. The caller's step says which
+            # change this is.
+            entries = self.listings.get(base_tree)
+            if entries is None:
+                response = client.get(f"/repos/{fork}/git/trees/{base_tree}", params={"recursive": "1"})
+                response.raise_for_status()
+                listing = response.json()
+                if listing["truncated"]:
+                    raise SendError("The project has too many files for GitHub to list at once, so the change can't be built here. Download the .patch and send it yourself.")
+                entries = {item["path"]: item for item in listing["tree"]}
             for path in paths:
                 entry = entries.get(path)
                 # A new file.
@@ -414,9 +428,12 @@ class GithubAccount:
                     continue
                 if entry["type"] != "blob":
                     raise SendError(f"The change touches {path}, a folder or submodule in the project, which can't be sent from here.")
-                response = client.get(f"/repos/{fork}/git/blobs/{entry['sha']}")
-                response.raise_for_status()
-                content = base64.b64decode(response.json()["content"])
+                content = self.blobs.get(entry["sha"])
+                if content is None:
+                    response = client.get(f"/repos/{fork}/git/blobs/{entry['sha']}")
+                    response.raise_for_status()
+                    content = base64.b64decode(response.json()["content"])
+                    self.blobs[entry["sha"]] = content
                 target = work / path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if entry["mode"] == "120000":
@@ -432,8 +449,12 @@ class GithubAccount:
 
             # What each path is now: gone (deleted, or the old name of a rename), or a file to upload.
             # A link is read as a link, never followed, so nothing outside the folder can get in.
+            # A file GitHub has already (its blob sha, worked out here the way git does) is only named; a text file
+            # goes inside the tree itself, one request for all of them; only another kind is uploaded on its own.
             root = work.resolve()
             tree = []
+            changed = {}
+            made = {}
             for path in paths:
                 target = work / path
                 if target.parent.resolve() != root and root not in target.parent.resolve().parents:
@@ -441,6 +462,7 @@ class GithubAccount:
                 if not os.path.lexists(target):
                     if path in entries:
                         tree.append({"path": path, "mode": entries[path]["mode"], "type": "blob", "sha": None})
+                        changed[path] = None
                     continue
                 if target.is_symlink():
                     mode = "120000"
@@ -450,14 +472,41 @@ class GithubAccount:
                     if os.access(target, os.X_OK):
                         mode = "100755"
                     content = target.read_bytes()
+                sha = hashlib.sha1(b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest()
+                changed[path] = {"path": path, "mode": mode, "type": "blob", "sha": sha}
+                if sha in self.blobs:
+                    tree.append({"path": path, "mode": mode, "type": "blob", "sha": sha})
+                    continue
+                text = None
+                if len(content) < INLINE_BYTES:
+                    try:
+                        text = content.decode("utf-8")
+                    except UnicodeDecodeError:
+                        text = None
+                if text is not None:
+                    tree.append({"path": path, "mode": mode, "type": "blob", "content": text})
+                    made[sha] = content
+                    continue
                 encoded = base64.b64encode(content).decode()
                 response = client.post(f"/repos/{fork}/git/blobs", json={"content": encoded, "encoding": "base64"})
                 response.raise_for_status()
+                self.blobs[response.json()["sha"]] = content
                 tree.append({"path": path, "mode": mode, "type": "blob", "sha": response.json()["sha"]})
 
         response = client.post(f"/repos/{fork}/git/trees", json={"base_tree": base_tree, "tree": tree})
         response.raise_for_status()
-        return response.json()["sha"]
+        new_tree = response.json()["sha"]
+        # GitHub has the text files now too, and the new tree's file list is the old one with these changes.
+        self.blobs.update(made)
+        new_entries = dict(entries)
+        for path, entry in changed.items():
+            if entry is None:
+                new_entries.pop(path, None)
+            else:
+                new_entries[path] = entry
+        self.listings[base_tree] = entries
+        self.listings[new_tree] = new_entries
+        return new_tree
 
     def send_pr(self, client: httpx.Client, account: dict, draft: dict) -> dict:
         repo = draft["repo"]
