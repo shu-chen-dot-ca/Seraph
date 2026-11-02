@@ -35,6 +35,9 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   subject and the body the comment posted on the PR with the push (the draft's update_of, inbox.py). The rules
   (contributing_guide), the tests and the checks on the diff and commits apply as for a new PR; the PR template
   and pr_examples don't, and a follow_up job's change needs no before and after pair (its test runs show it works).
+  With rebase too, its commits replace the PR's (rebased onto a newer main, or squashed, reworded or signed off): base
+  is the commit the rewritten branch starts from, the draft keeps the PR's newest commit as rebase_of, Approve
+  force-pushes, and the PR's own commits (the user's noreply address) count as the user's.
 - Projects: on one of the user's own repositories that agents develop all the time (github_searcher/projects.py), the
   rules are the repo's own files, so draft_pr and run_tests don't wait for contributing_guide or pr_examples; a PR's
   title must be a Conventional Commit; and the draft goes to the project's reviewer first (Agents.give_review), so it
@@ -589,7 +592,13 @@ class WorkTools:
                 "title is then the commit message's subject (one more commit has it when you didn't commit everything), and "
                 "body the comment posted on the PR with the push: what changed, in a line or two. The project's rules "
                 "(contributing_guide) and the tests apply as for any PR; the PR template and pr_examples don't. problem is then "
-                "what the reviewer asked for or what failed.",
+                "what the reviewer asked for or what failed. "
+                "rebase: true (with pr) when your version replaces the PR's commits instead of adding to them: you rebased its "
+                "branch onto the project's newer main (a maintainer asked, or it conflicts with main), or squashed, reworded or "
+                "signed off its commits as a reviewer asked. Then base is the commit your branch now starts from (e.g. origin/main "
+                "after git fetch origin), the diff is the PR's whole change on top of it, and approving force-pushes your commits "
+                "onto the PR's branch (refused if the branch moved since). The PR's own commits may stay as they are (they are "
+                "the user's); title is the subject of your last commit.",
                 {
                     "type": "object",
                     "properties": {
@@ -599,6 +608,7 @@ class WorkTools:
                         "title": {"type": "string"},
                         "body": {"type": "string"},
                         "pr": {"type": "string", "description": "owner/name#number of the user's open PR this is the next version of; leave it out for a new PR."},
+                        "rebase": {"type": "boolean", "description": "With pr: your commits replace the PR's (a rebase, squash, reword or sign-off) and approving force-pushes them."},
                         "project": {"type": "string", "description": "One line: what the project is, e.g. 'matplotlib: a Python library that draws charts'."},
                         "problem": {
                             "type": "string",
@@ -790,6 +800,8 @@ class WorkTools:
             return f"Reading the paper, pages {args.get('pages')}"
         if name == "draft_report":
             return f"Drafting the report: {args.get('title')}"
+        if name == "draft_pr" and args.get("pr") and args.get("rebase") is True:
+            return f"Drafting a rebase of {args['pr']}: {args.get('title')}"
         if name == "draft_pr" and args.get("pr"):
             return f"Drafting a new version of {args['pr']}: {args.get('title')}"
         if name == "draft_pr":
@@ -2031,6 +2043,11 @@ class WorkTools:
             return {"content": [{"type": "text", "text": "pr must be owner/name#number: the user's open PR this is the next version of."}], "is_error": True}
         if pr is not None:
             repo = pr.split("#")[0]
+        # A rebase of that PR: its commits replace the PR's (rebased onto the newer main, or squashed, reworded or signed
+        # off), and approving force-pushes them.
+        rebase = args.get("rebase") is True
+        if rebase and pr is None:
+            return {"content": [{"type": "text", "text": "rebase is only for a new version of the user's open PR: give pr too."}], "is_error": True}
         # The user reads the overview first: it must be there, and short.
         overview = {
             "project": (args.get("project") or "").strip(),
@@ -2273,12 +2290,20 @@ class WorkTools:
             newest = ""
             if pull["commits"]["nodes"]:
                 newest = pull["commits"]["nodes"][0]["commit"]["oid"]
-            if newest != base_sha:
+            if not rebase and newest != base_sha:
                 text = (
                     f"base must be {pr}'s newest commit, {newest}, and {args['base']} is {base_sha}. Fetch its branch again, put "
-                    "your work on top of that commit, run the tests again (when: after, base that commit), then draft."
+                    "your work on top of that commit, run the tests again (when: after, base that commit), then draft. If you "
+                    "rebased it or rewrote its commits, draft with rebase: true and base the commit your branch starts from."
                 )
                 return {"content": [{"type": "text", "text": text}], "is_error": True}
+            if rebase and newest == base_sha:
+                text = f"{args['base']} is {pr}'s newest commit, so your commits go on top of it: that is a new version, not a rebase. Leave rebase out."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+        # What a rebase replaces: the PR's newest commit now. Sending refuses once the branch is anywhere else.
+        rebase_of = None
+        if rebase:
+            rebase_of = newest
 
         # Every commit must be the agent's own, by the VM's git address: never someone else's fix cherry-picked in, and no
         # co-authors (the user's rule). The first line printed is that address, possibly empty; the second how many
@@ -2297,10 +2322,17 @@ class WorkTools:
         if result.stdout.split("\n")[1:2] != ["0"]:
             text = "A commit message on your branch has a Co-authored-by line. Credit no co-author: reword it (git commit --amend or a rebase), then draft again."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
+        # A rebase keeps the PR's own commits, which went out as the user's (their name and GitHub noreply address):
+        # those are the user's too. Anyone else's still can't go out.
+        own_emails = [vm_email]
+        if rebase:
+            account = self.agents.your_repositories.github_account.load()
+            if account is not None:
+                own_emails.append(f"{account['id']}+{account['login']}@users.noreply.github.com")
         others = []
         for line in result.stdout.strip().split("\n")[2:]:
             fields = line.split("\x1f", 3)
-            if len(fields) == 4 and fields[0] != vm_email:
+            if len(fields) == 4 and fields[0] not in own_emails:
                 others.append(f"{fields[2]} by {fields[1]} <{fields[0]}>: {fields[3]}")
         if others:
             text = (
@@ -2337,8 +2369,9 @@ class WorkTools:
                     "sha": fields[0],
                     "message": fields[5].strip() + "\n",
                     "author": {"name": fields[2], "email": fields[3], "date": fields[4]},
-                    # The agent's own (by the VM's git address), as every one is now: they go out with the user's name.
-                    "own": fields[3] == vm_email,
+                    # The agent's own (by the VM's git address), as every one is now, or in a rebase the PR's own
+                    # commits, the user's: they go out with the user's name.
+                    "own": fields[3] in own_emails,
                     "vm_email": vm_email,
                     "diff": fields[6].lstrip("\n"),
                 })
@@ -2393,6 +2426,7 @@ class WorkTools:
             update_of=pr,
             review=review,
             replaces=replaces,
+            rebase_of=rebase_of,
         )
         fields = {"status": "waiting_on_user", "drafts": job["drafts"] + [draft["id"]]}
         # A PR draft is the draft step, even if the agent didn't say so.
@@ -2407,6 +2441,8 @@ class WorkTools:
         what = f"branch {branch} against {args['base']}"
         if pr is not None:
             what = f"a new version of {pr}, on top of its newest commit"
+        if rebase:
+            what = f"a rebase of {pr} on {base_sha[:10]}, replacing its commits when it is sent"
         text = (
             f"{draft['id']} is in the user's Inbox: {files} files, +{added} -{removed}, {what}, "
             f"with {len(job['evidence'])} pieces of evidence. "

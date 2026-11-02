@@ -52,11 +52,18 @@ commit, in your fork; then the PR's branch moves to the last one (a fast-forward
 draft's body is posted on the PR as your comment (when it has one). If GitHub refuses only the comment (a
 locked conversation, say), the push stays sent and "comment_error" says why.
 
+A rebase (update_of with rebase_of) replaces the PR's commits instead: the branch must still be at rebase_of, the
+PR's newest commit when the agent drafted it, so nothing it didn't see is lost. The commits are built the same way,
+on base_sha (the project's commit the rebased branch starts from, which an old fork may need to catch up to first),
+and the PR's branch is force-moved to them, only on your own PR's branch in your fork. Its commits that already were
+the PR's are yours (your noreply address), and go out with your name again.
+
 What was sent is kept on the draft as "sent" (Inbox.mark_sent):
 
     PR:      {"kind": "pr", "url", "number", "repo", "fork", "branch", "base_branch", "base_sha",
               "commit", "as": "<your login>", "at"}
     update:  the same with "update": True ("url" is the PR's, "base_sha" the commit it went on top of),
+             "rebase_of": the PR's commit it replaced (a rebase) | None,
              "comment_url": the comment posted with it | None, "comment_error": None | why it wasn't posted
     comment: {"kind": "comment", "url", "id", "repo", "number", "as", "at", "deleted_at" once deleted from the GitHub tab}
 
@@ -553,7 +560,8 @@ class GithubAccount:
 
     def send_update(self, client: httpx.Client, account: dict, draft: dict) -> dict:
         """The agent's next version of your open PR: its commits on top of the PR's newest commit, the PR's branch moved
-        to them (no force), then the body posted on the PR as your comment."""
+        to them (no force), then the body posted on the PR as your comment. A rebase (rebase_of): its commits on
+        base_sha instead, and the branch force-moved to them, only while it is still at rebase_of."""
         repo, _, number = (draft["update_of"] or "").rpartition("#")
         base_sha = draft["base_sha"]
         if repo == "" or not number.isdigit() or base_sha == "":
@@ -581,13 +589,23 @@ class GithubAccount:
             raise SendError("The PR's branch is gone: its fork was deleted.")
         if head["repo"]["owner"]["login"].lower() != account["login"].lower():
             raise SendError(f"The PR's branch is in {head['repo']['full_name']}, not in your fork.")
-        if head["sha"] != base_sha:
+        # Where the branch must still be: the PR's newest commit the agent saw. A new version starts there; a rebase
+        # replaces it.
+        rebase_of = draft["rebase_of"]
+        expected = base_sha
+        if rebase_of:
+            expected = rebase_of
+        if head["sha"] != expected:
             raise SendError("The PR's branch changed since the agent drafted this: Redraft, so the agent works on top of its newest commit.")
         fork = head["repo"]["full_name"]
         branch = head["ref"]
 
-        self.step = "reading the PR's newest commit"
+        self.step = "reading the commit the new version starts from"
         response = client.get(f"/repos/{fork}/git/commits/{base_sha}")
+        # A rebase starts on the project's newer commit: GitHub shares it with forks, but an old fork may need to catch up.
+        if response.status_code == 404 and rebase_of:
+            client.post(f"/repos/{fork}/merge-upstream", json={"branch": pull["base"]["ref"]})
+            response = client.get(f"/repos/{fork}/git/commits/{base_sha}")
         response.raise_for_status()
         base_tree = response.json()["tree"]["sha"]
 
@@ -626,9 +644,21 @@ class GithubAccount:
             commit = response.json()["sha"]
 
         # A fast-forward only: if the branch moved in the meantime, GitHub refuses and nothing is lost.
-        self.step = "pushing onto the PR's branch"
-        response = client.patch(f"/repos/{fork}/git/refs/heads/{branch}", json={"sha": commit, "force": False})
-        response.raise_for_status()
+        if not rebase_of:
+            self.step = "pushing onto the PR's branch"
+            response = client.patch(f"/repos/{fork}/git/refs/heads/{branch}", json={"sha": commit, "force": False})
+            response.raise_for_status()
+        # A rebase is a force push, which GitHub can't make wait for the branch to be where it was: it is read once
+        # more right before, so the time a push of yours could land in between and be lost is as short as can be.
+        if rebase_of:
+            self.step = "checking the PR's branch once more"
+            response = client.get(f"/repos/{fork}/git/ref/heads/{branch}")
+            response.raise_for_status()
+            if response.json()["object"]["sha"] != rebase_of:
+                raise SendError("The PR's branch changed while this was being sent: nothing was pushed. Redraft, so the agent works on its newest commit.")
+            self.step = "force-pushing onto the PR's branch"
+            response = client.patch(f"/repos/{fork}/git/refs/heads/{branch}", json={"sha": commit, "force": True})
+            response.raise_for_status()
 
         # The new version is on the PR now: a comment GitHub refuses (a locked conversation, say) doesn't undo that, so
         # it is kept with what was sent instead of failing the send.
@@ -647,6 +677,7 @@ class GithubAccount:
         return {
             "kind": "pr",
             "update": True,
+            "rebase_of": rebase_of,
             "url": pull["html_url"],
             "number": int(number),
             "repo": repo,

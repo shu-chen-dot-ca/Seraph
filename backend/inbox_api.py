@@ -6,7 +6,8 @@ Approving tells the agent. Only with send (the Inbox asks "are you sure?" first,
 GitHub account is connected: the GitHub tab, Account) does Approve on a PR or comment send it to GitHub as you,
 before the agent is told; if GitHub refuses, nothing is decided. POST /send does the same for one
 approved before (while no account was connected). Sending runs in a thread (github_account.py). A PR draft that is
-a new version of your open PR (update_of) is pushed onto that PR's branch, and its text posted there as your comment.
+a new version of your open PR (update_of) is pushed onto that PR's branch, and its text posted there as your comment
+(a rebase is force-pushed).
 
 POST /inbox/{id}/edit changes a pending PR or comment draft's title and text before you decide (the Inbox and the
 GitHub tab's thread pop-up); its agent is told with your decision that you edited it, and the final text.

@@ -1380,6 +1380,13 @@ class Agents:
                 f"{thread} and "
                 f"base {head['sha']}: its title is the commit message's subject, its body the comment posted on the PR with "
                 "the push (what changed, in a line or two)."
+                "\n- A rebase of the PR, when a maintainer asks for one, it conflicts with main, or a reviewer asks to squash, "
+                f"reword or sign off its commits. Fetch its branch the same way, then on pr-{number} `git fetch origin && git "
+                "rebase origin/<the branch it goes into>` (or rewrite the commits as asked), settle each conflict keeping what "
+                "both sides meant, commit, and run the checks the project's rules ask for before a PR, however long: run_tests "
+                "with when: after and base the commit your branch now starts from (e.g. origin/main). Then draft_pr with pr "
+                f"{thread}, that base and rebase: true; Approve force-pushes it. Its body is the comment posted with the push "
+                "(what it is rebased onto, and how each conflict was settled)."
             )
         text += (
             f"\n- Nothing, when nothing needs an answer (a thank-you, a bot's note, an approval without questions): job_update "
@@ -1442,6 +1449,11 @@ class Agents:
                 f"The user approved {about}, and it is pushed onto their PR {sent['url']} (branch {sent['branch']} of "
                 f"{sent['fork']}, now at {sent['commit'][:10]})."
             )
+            if sent.get("rebase_of"):
+                text = (
+                    f"The user approved {about}, and it is force-pushed onto their PR {sent['url']}: branch {sent['branch']} of "
+                    f"{sent['fork']} is now your rebased commits, at {sent['commit'][:10]}, instead of {sent['rebase_of'][:10]}."
+                )
             if sent["comment_url"]:
                 text += f" Your text is posted there as their comment: {sent['comment_url']}."
             if sent["comment_error"]:
@@ -1454,6 +1466,8 @@ class Agents:
             )
         elif decision == "approved" and draft["kind"] == "pr" and draft["update_of"]:
             text = f"The user approved {about}. They push it onto {draft['update_of']} themselves. If it finishes {job_name}, mark the job done with job_update."
+            if draft["rebase_of"]:
+                text = f"The user approved {about}. They force-push it onto {draft['update_of']} themselves. If it finishes {job_name}, mark the job done with job_update."
         elif decision == "approved" and draft["kind"] == "pr":
             text = f"The user approved {about}. They send it to GitHub themselves. If it finishes {job_name}, mark the job done with job_update."
         elif decision == "approved" and draft["kind"] == "comment" and sent is not None:

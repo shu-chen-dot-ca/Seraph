@@ -20,6 +20,7 @@ Approve on a PR or comment also sends it to GitHub as them, first; "sent" then s
      "status": "pending" | "approved" | "rejected" | "replied", "reply": "the user's text",
      "created_at", "decided_at": null until decided, "sent": null | what went to GitHub (github_account.py),
      "update_of": "owner/name#n" | null (pr only: a new version of the user's open PR, see below),
+     "rebase_of": "sha" | null (update_of only: the new version replaces the PR's commits, see below),
      "edited": bool (the user changed the title or text before deciding),
      "review": null | {"state": "waiting" | "passed" | "changes", "agent", "job", "notes", "at"} (pr only, see below),
      "replaces": "owner/name#n" | null (pr only: the project PR this one is made again of, see below)}
@@ -31,6 +32,11 @@ A PR draft with "update_of" is the next version of a PR that is open already (a 
 for changes, or its checks failed). Its commits start from the PR's newest commit (base_sha), "title" is the commit
 message's subject and "body" the comment posted on the PR with them. Approve pushes them onto the PR's branch
 instead of opening a new PR (github_account.py).
+
+One with "rebase_of" too is a rebase: its commits replace the PR's instead of going on top (rebased onto the
+project's newer main, or squashed, reworded or signed off as a reviewer asked). "rebase_of" is the PR's newest commit
+when it was drafted, and "base_sha" the commit the rewritten branch starts from. Approve force-pushes them, only while
+the PR's branch is still at "rebase_of".
 
 edit() lets the user change a pending PR or comment draft's title and text before deciding (the Inbox and the GitHub
 tab's thread pop-up). "edited" then says so, and its agent hears the final text with the decision (Agents.decide),
@@ -104,6 +110,7 @@ class Inbox:
             draft.setdefault("sent", None)
             # And from before PR updates and editing.
             draft.setdefault("update_of", None)
+            draft.setdefault("rebase_of", None)
             draft.setdefault("edited", False)
             # And from before project reviews.
             draft.setdefault("review", None)
@@ -145,7 +152,7 @@ class Inbox:
                repo: str | None = None, target: str | None = None, diff: str = "", branch: str = "",
                base: str = "", base_sha: str = "", commits: list | None = None, vm: str | None = None, path: str | None = None, evidence: list | None = None,
                overview: dict | None = None, template: str | None = None, update_of: str | None = None, review: dict | None = None,
-               replaces: str | None = None) -> dict:
+               replaces: str | None = None, rebase_of: str | None = None) -> dict:
         with self.lock:
             draft_id = "draft_" + secrets.token_hex(3)
             while draft_id in self.drafts:
@@ -175,6 +182,7 @@ class Inbox:
                 "decided_at": None,
                 "sent": None,
                 "update_of": update_of,
+                "rebase_of": rebase_of,
                 "edited": False,
                 "review": copy.deepcopy(review),
                 "replaces": replaces,
