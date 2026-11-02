@@ -32,6 +32,7 @@ export type RepoItem = {
   added_at: string;
   lane?: string; // repos Explore found: the profile lane it was found for ("prestige", "ai", ...)
   fit?: number; // repos Explore found: how well Claude thinks it fits the profile, 0..1
+  tag?: string; // the user's own group on the Repos or Tracked page; missing or "" when it has none
 };
 
 // What a repo's contribution files say about AI (github_searcher/repo_signals.py).

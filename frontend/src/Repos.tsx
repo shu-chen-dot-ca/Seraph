@@ -42,7 +42,7 @@ fit) is always one of a fixed set, so it ranks in a fixed order (*_RANK below). 
 pages rank it the same. The sort is remembered in this browser.
 
 Rows have no buttons of their own. Hovering a row shows its box on the left; ticking it picks that repo and turns on
-select mode, like Select (top right) does: Delete, Track and Untrack show on the left of the bar, Select stays lit (a
+select mode, like Select (top right) does: Delete, Tag, Track and Untrack show on the left of the bar, Select stays lit (a
 click on it ends select mode), every row shows its box, and a click picks the row instead of opening its pop-up. The box at
 the top left of the table's header picks every row (checked when all are, a dash when some are); a click when all are
 picked unpicks them. Rows are also picked like in a mail app (components/ui/row-selection.tsx): Ctrl-click, Shift-click,
@@ -50,6 +50,11 @@ dragging a rectangle, Ctrl+A, which turns on select mode too; a bar at the botto
 picked repos not tracked yet, Untrack stops tracking the tracked ones (each one undo step on the Tracked page); Delete
 deletes them at once, as one undo step (it asks first; Enter confirms). Delete only takes a repo off the list; Explore
 may find it again. Clearing the selection (Escape, the bar's x) ends select mode too.
+
+Tag groups repos for the user, nothing more: it opens the Tag pop-up (TagDialog.tsx: pick a tag, create one or delete
+one; Apply puts the picked repos under it, or with No tag takes them out of theirs) and ends select mode. Every group
+has a header (its name and how many) over its repos in the list's sort: the tags on top, A to Z, and No tag (the repos
+without one) at the bottom. A click on a header folds its repos away or opens them again, remembered in this browser.
 
 The last column, always there, has two buttons. Set up opens AssignDialog: pick an agent (or a new one), the VM and
 optional instructions, and Add job gives the repo to the agent as a set_up_repo job. The agent reads the README and
@@ -69,12 +74,13 @@ also undo what an agent or Explore changed.
 */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ArrowUp, Columns3, ExternalLink, Eye, EyeOff, ListFilter, Loader2, SquareCheck, Star, Trash2, Wrench } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronRight, Columns3, ExternalLink, Eye, EyeOff, ListFilter, Loader2, SquareCheck, Star, Tag, Trash2, Wrench } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import AssignDialog from "@/AssignDialog";
 import RepoTree from "@/RepoTree";
+import TagDialog from "@/TagDialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -100,6 +106,7 @@ const COUNT = new Intl.NumberFormat("en", { notation: "compact", maximumFraction
 // Beginner issues shown in the pop-up; the rest are on GitHub.
 const BEGINNER_SHOWN = 6;
 const SORT_STORAGE = "repos-sort";
+const FOLDED_STORAGE = "repos-folded-tags";
 
 type SortKey =
   | "name"
@@ -299,6 +306,17 @@ try {
   savedColumns = DEFAULT_COLUMNS;
 }
 
+// The tags this browser folded last. Storage can be blocked: then every tag starts open.
+let savedFolded: string[] = [];
+try {
+  const saved = JSON.parse(localStorage.getItem(FOLDED_STORAGE) ?? "[]");
+  if (Array.isArray(saved)) {
+    savedFolded = saved.filter((each: unknown) => typeof each === "string");
+  }
+} catch {
+  savedFolded = [];
+}
+
 export default function Repos() {
   const repos = useLive("repos");
   const issues = useLive("issues");
@@ -324,6 +342,10 @@ export default function Repos() {
   // Select mode: every row shows a box and a click picks it. Picking a row any other way shows the boxes too.
   const [selecting, setSelecting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Whether the Tag pop-up (TagDialog) is open.
+  const [tagging, setTagging] = useState(false);
+  // The tags whose repos are folded away under their header.
+  const [folded, setFolded] = useState<string[]>(savedFolded);
   // Repos whose Track / Untrack is waiting for the backend.
   const [tracking, setTracking] = useState<string[]>([]);
   // The repo whose Set up dialog is open.
@@ -355,6 +377,14 @@ export default function Repos() {
       // Storage blocked: the columns just aren't kept.
     }
   }, [shown]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(FOLDED_STORAGE, JSON.stringify(folded));
+    } catch {
+      // Storage blocked: the folded tags just aren't kept.
+    }
+  }, [folded]);
 
   const laneLabels: Record<string, string> = {};
   for (const line of lanesText.split("\n")) {
@@ -559,12 +589,37 @@ export default function Repos() {
     });
   }
 
+  // The tags in use, A to Z.
+  const tagNames: string[] = [];
+  for (const repo of repos.items) {
+    if ((repo.tag ?? "") !== "" && !tagNames.includes(repo.tag!)) {
+      tagNames.push(repo.tag!);
+    }
+  }
+  tagNames.sort((a, b) => a.localeCompare(b));
+
+  // What the list draws: each tag's header (repo null) over its repos unless folded, the tags A to Z, then the repos
+  // without a tag (tag "") last, under a No tag header.
+  const lines: { tag: string; repo: ListedRepo | null }[] = [];
+  for (const tag of [...tagNames, ""]) {
+    const tagRepos = rows.filter((repo) => (repo.tag ?? "") === tag);
+    if (tagRepos.length === 0) {
+      continue;
+    }
+    lines.push({ tag, repo: null });
+    const shownRepos = folded.includes(tag) ? [] : tagRepos;
+    for (const repo of shownRepos) {
+      lines.push({ tag, repo });
+    }
+  }
+
   const virtualizer = useVirtualizer({
-    count: rows.length,
+    count: lines.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => 88,
+    estimateSize: (index) => (lines[index].repo === null ? 28 : 88),
     overscan: 10,
-    getItemKey: (index) => rows[index].full_name,
+    // "#" is never in a repo's name, so a header's key can't be a repo's.
+    getItemKey: (index) => lines[index].repo?.full_name ?? `#${lines[index].tag}`,
   });
 
   // One click, one step: add the field to the sort (the best first), turn it round, then take it out.
@@ -654,7 +709,13 @@ export default function Repos() {
   }
 
   // Only repos still in the list count as selected (an undo, an agent or another tab may have taken some out).
-  const rowNames = rows.map((repo) => repo.full_name);
+  // The rows drawn: a folded tag's repos can't be clicked, so Shift-click and Select all skip them.
+  const rowNames: string[] = [];
+  for (const line of lines) {
+    if (line.repo !== null) {
+      rowNames.push(line.repo.full_name);
+    }
+  }
   const listed = repos.items.map((repo) => repo.full_name);
   const chosen = selected.filter((name) => listed.includes(name));
   // The picked repos the bar's Track would add (the ones not tracked yet), and the ones Untrack would take off the
@@ -981,6 +1042,9 @@ export default function Repos() {
             <Button variant="ghost" size="xs" disabled={chosen.length === 0} title="Delete the picked repos" onClick={() => setConfirmDelete(true)}>
               <Trash2 /> Delete
             </Button>
+            <Button variant="ghost" size="xs" disabled={chosen.length === 0} title="Put the picked repos under a tag" onClick={() => setTagging(true)}>
+              <Tag /> Tag
+            </Button>
             <Button
               variant="ghost"
               size="xs"
@@ -1108,7 +1172,26 @@ export default function Repos() {
 
           <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
             {virtualizer.getVirtualItems().map((item) => {
-              const repo = rows[item.index];
+              const line = lines[item.index];
+              // A tag's header: a click folds its repos away or opens them again.
+              if (line.repo === null) {
+                const open = !folded.includes(line.tag);
+                return (
+                  <div key={item.key} data-index={item.index} ref={virtualizer.measureElement} className="absolute left-0 w-full" style={{ top: item.start }}>
+                    <button
+                      type="button"
+                      className="flex h-7 w-full items-center gap-1 border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground hover:text-foreground"
+                      aria-expanded={open}
+                      onClick={() => setFolded(open ? [...folded, line.tag] : folded.filter((each) => each !== line.tag))}
+                    >
+                      <ChevronRight className={cn("size-3.5 transition-transform", open && "rotate-90")} />
+                      {line.tag === "" ? "No tag" : line.tag}
+                      <span className="ml-0.5 tabular-nums">{rows.filter((repo) => (repo.tag ?? "") === line.tag).length}</span>
+                    </button>
+                  </div>
+                );
+              }
+              const repo = line.repo;
               const signals = repo.signals;
               return (
                 <div
@@ -1495,6 +1578,22 @@ export default function Repos() {
         fixed="Name"
         onChange={(next) => setShown(next as ColumnKey[])}
       />
+
+      {tagging && (
+        <TagDialog
+          items={repos.items}
+          names={chosen}
+          url="/api/repos/tag"
+          onClose={() => setTagging(false)}
+          onTagged={(tag) => {
+            // Its header opens, so they show.
+            setTagging(false);
+            setFolded((current) => current.filter((each) => each !== tag));
+            onSelect([]);
+          }}
+          onDeleted={(tag) => setFolded((current) => current.filter((each) => each !== tag))}
+        />
+      )}
 
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <AlertDialogContent>

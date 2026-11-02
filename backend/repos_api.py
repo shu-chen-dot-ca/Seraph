@@ -11,6 +11,9 @@ GitHub for its own spelling, stars and description, and added by the user as one
 Remove only takes repos off the list: nothing is blocked, so Explore and agents may find and add them again. It takes
 many repos at once (the page's multi-select), as one undo step.
 
+Tag puts picked repos under one tag of the user's own, or takes them out of theirs, as one undo step. It is only
+grouping: the page shows each tag's repos on top, under a header that folds them away, and the rest under No tag.
+
 The signals (github_searcher/repo_signals.py) are kept fresh by keep_signals(), which the app runs in
 the background, for the Repos list and the Tracked list alike (the Tracked page shows them as tags under an
 open repo): a new repo gets them within SIGNALS_CHECK_SECONDS, and each is fetched again once it is
@@ -52,6 +55,11 @@ class AddRequest(BaseModel):
 
 class NamesRequest(BaseModel):
     names: list[str]
+
+
+class TagRequest(BaseModel):
+    names: list[str]
+    tag: str  # "" takes them out of their tag
 
 
 class SetUpRequest(BaseModel):
@@ -99,6 +107,14 @@ def remove_repos(body: NamesRequest) -> dict:
     if not removed:
         raise HTTPException(status_code=404, detail="None of them is in the list.")
     return {"removed": removed}
+
+
+@router.post("/repos/tag")
+def tag_repos(body: TagRequest) -> dict:
+    tagged = repos.set_tag(body.names, body.tag.strip())
+    if not tagged:
+        raise HTTPException(status_code=404, detail="None of them is in the list.")
+    return {"tagged": tagged}
 
 
 @router.post("/repos/set_up")

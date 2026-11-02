@@ -8,7 +8,9 @@ One JSON file, DATA_DIR/repos.json:
     {"items": [RepoItem, ...], "undo": [[RepoItem, ...], ...], "redo": [[RepoItem, ...], ...]}
 
     RepoItem = {"full_name", "description", "stars", "default_branch", "html_url",
-                "note", "added_by": "user" | "<agent id>", "added_at"}
+                "note", "added_by": "user" | "<agent id>", "added_at", "tag"?}
+
+"tag" is the user's own group for a repo on the Repos or Tracked page; missing or "" when it has none.
 
 Items are kept in the order they were added. Undo/redo is snapshot based, so it undoes an
 agent's change the same way as the user's: every change pushes a copy of the whole list onto
@@ -120,6 +122,21 @@ class RepoList:
             self.data["redo"] = []
             matches[0]["note"] = note
             self.save()
+
+    def set_tag(self, full_names: list[str], tag: str) -> list[str]:
+        """Put repos under a tag as one undo step ("" takes them out of theirs). Returns the names that were in the list."""
+        with self.lock:
+            matches = [item for item in self.data["items"] if item["full_name"] in full_names]
+            if not matches:
+                return []
+
+            self.data["undo"].append(copy.deepcopy(self.data["items"]))
+            self.data["undo"] = self.data["undo"][-UNDO_LIMIT:]
+            self.data["redo"] = []
+            for item in matches:
+                item["tag"] = tag
+            self.save()
+            return [item["full_name"] for item in matches]
 
     def undo(self) -> bool:
         """Go back one step. False when there is nothing to undo."""
