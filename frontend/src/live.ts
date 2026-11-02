@@ -513,6 +513,8 @@ export type TrackedPR = {
   agent_mode: AgentMode;
   relation: "author" | "commented"; // you opened it, or only commented on it
   head: { repo: string; branch: string; sha: string } | null; // its branch and newest commit (null: the branch is gone)
+  base: string | null; // the branch it goes into
+  mergeable: "yes" | "conflicts" | "unknown"; // whether it conflicts with base (unknown while GitHub works it out)
   last_activity: ThreadActivity | null;
   your_last_at: string | null; // your newest comment or review there
   checked_at: string;

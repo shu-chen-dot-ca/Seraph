@@ -9,7 +9,8 @@ to. When an open PR's checks wait for a maintainer, a line says why: GitHub runs
 contributor's PR until a maintainer approves it, so it only needs waiting. On the right, the Agent setting (only for the PRs
 and issues the GitHub tab lists): Off (no drafts; you write your own comments) or Drafts with one of your agents (turning it on
 picks the one whose PR or comment went there, else a new agent; change it next to it): when someone else writes there or a PR's checks fail, that agent drafts a reply or a fix, and each draft
-waits for your approval in the Inbox. Nothing goes to GitHub without it.
+waits for your approval in the Inbox. Nothing goes to GitHub without it. An open PR of yours always has an agent that
+owns it (unless you set Off), and that agent hears about every change there: pushes, conflicts, checks, labels, merged.
 Tabs (an issue has only Conversation):
 - Conversation: the description, then everything after it, oldest first: comments (tagged Maintainer or bot),
   reviews (Approved, Requested changes, Commented) with their code comments, each under its file and line with the

@@ -16,6 +16,7 @@ last changed, and in plain words where it stands:
 - Checks: "Waiting for a maintainer to approve the checks" (GitHub runs nothing for a first-time contributor's
   PR until a maintainer clicks approve, so this is normal and only needs waiting), running, passed, failed, or none.
 - Review: approved, changes asked for, reviewed with comments, or not reviewed yet.
+- Conflicts with main (or the branch it goes into), in red, when GitHub can't merge it as it is.
 - How many comments and who wrote the latest (a maintainer, a bot, you), and the issue it fixes, open or closed.
   "You commented" when it is someone else's PR you commented on.
 Each issue row: the state (open, closed as completed, closed as not planned), the title, the repo and number, its
@@ -351,6 +352,7 @@ export default function GitHub(props: { section: string; repo: string | null; st
                     {pr.relation === "commented" && <span>You commented</span>}
                     {pr.state === "open" && <span className={CHECKS_COLOR[pr.checks]}>{CHECKS_TEXT[pr.checks]}</span>}
                     {pr.state === "open" && <span className={REVIEW_COLOR[pr.review]}>{REVIEW_TEXT[pr.review]}</span>}
+                    {pr.state === "open" && pr.mergeable === "conflicts" && <span className="text-destructive">Conflicts with {pr.base ?? "its base branch"}</span>}
                     {pr.state === "merged" && pr.merged_by !== null && <span className="text-ok">Merged by {pr.merged_by}</span>}
                     {pr.state === "closed" && <span className="text-destructive">Closed without merging</span>}
                     <span>
