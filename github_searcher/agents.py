@@ -1446,7 +1446,11 @@ class Agents:
             "First read the whole thread with read_thread. Then reproduce what it reports or asks about, in the VM, before "
             "you change code or answer: the bug a reviewer saw, the failing check, the conflict with main, whether something "
             "works. Never act on reading alone; add what you saw as evidence. When it doesn't happen, change nothing and say "
-            "so in a reply, with what you ran. Then do one of these (see Following up on PRs and issues):\n"
+            "so in a reply, with what you ran. A reviewer's case is one example of a kind: once it reproduces, find and test "
+            "the rest of that kind too (other values, types, inputs, drivers, platforms, the same mistake elsewhere in the PR) "
+            "and fix the kind, not the example. Before a new version, go through every point anyone raised on the thread and "
+            "every requirement of the issue again (draft_pr's checklist). Then do one of these (see Following up on PRs and "
+            "issues):\n"
             f"- A reply, when someone asked something or waits for an answer: draft_comment with target {thread}. Short, "
             "friendly, in the project's tone, the way the user would write it."
         )
