@@ -47,7 +47,8 @@ ones have no assignee and no cross reference (a PR or issue that mentions them).
 newcomers: outside authors in that window who never opened a PR there before it (GitHub's own "first-time
 contributor" mark changes once a PR is merged, so each author is looked up instead; the NEWCOMER_AUTHORS most
 recent ones). Their first PRs: how many, merged, closed unmerged, the merge rate and the median days to a first
-reply; returned is how many opened a second PR. tag:
+reply; returned is how many opened a second PR. Only first PRs that are merged, closed, or open longer than NEW_DAYS
+days count: a PR opened a few days ago (over a holiday, say) may simply not have been looked at yet. tag:
     welcomes      most first PRs merged (MIN_SAMPLE or more finished) and a first reply within 3 days
     turned_away   most first PRs closed unmerged (a merge rate under 30%)
     left_waiting  most first PRs over LEFT_DAYS days old are still open: neither merged nor closed
@@ -163,6 +164,8 @@ MIN_ISSUES = 5
 MIN_NEWCOMERS = 3
 # A newcomer's first PR still open after this many days counts as left waiting.
 LEFT_DAYS = 30
+# A newcomer's first PR counts once it is merged, closed, or open longer than this many days.
+NEW_DAYS = 5
 # Outside authors looked up to tell newcomers (one GitHub search each, all in one call).
 NEWCOMER_AUTHORS = 30
 BEGINNER_ISSUES_KEPT = 30
@@ -398,7 +401,11 @@ class RepoSignals:
         returned = 0
         for login in newcomer_logins:
             theirs = sorted([pull for pull in window_prs if pull["login"] == login], key=lambda pull: pull["opened"])
-            first_prs.append(theirs[0])
+            first_pr = theirs[0]
+            # Still open and opened in the last NEW_DAYS days: too new to count, nobody may have looked yet (a holiday).
+            if not first_pr["merged"] and not first_pr["closed"] and first_pr["opened"] > now - timedelta(days=NEW_DAYS):
+                continue
+            first_prs.append(first_pr)
             if len(theirs) > 1:
                 returned += 1
         newcomer_merged = len([pull for pull in first_prs if pull["merged"]])
