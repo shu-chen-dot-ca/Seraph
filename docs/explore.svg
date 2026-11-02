@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 400" width="1280" height="400" role="img" aria-label="How Explore finds repos: it searches GitHub for each type in your profile, newest first, 300 to 15,000 stars. It works out each repo's signals and skips repos that are archived or forks, quiet for 30 days, merged no outside pull request in 90 days, merge under 30 percent of outside pull requests, or turn newcomers away. The agent reads the README for fit, takes a closer look at issues and pull requests, and the repo waits in the found list until you approve it into Repos." font-family="'Instrument Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <style>
+    .bg { fill: #faf9f7; }
+    .box { fill: #ffffff; stroke: #d3cec6; }
+    .t { fill: #1c1e24; }
+    .m { fill: #6a6e77; }
+    .line { fill: none; stroke: #8b8f98; stroke-width: 1.6; }
+    .head { fill: #8b8f98; }
+    .accent { fill: #2563eb; }
+    .accent-line { fill: none; stroke: #2563eb; stroke-width: 2; }
+    .on-accent { fill: #ffffff; }
+    .bad { fill: #c8344f; }
+    .bad-line { fill: none; stroke: #c8344f; stroke-width: 1.6; stroke-dasharray: 6 5; }
+    .bad-box { fill: #fdf1f3; stroke: #e7a3b0; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0e1015; }
+      .box { fill: #1b1f2a; stroke: #2f3546; }
+      .t { fill: #e8eaef; }
+      .m { fill: #9aa1ad; }
+      .line { stroke: #7d8492; }
+      .head { fill: #7d8492; }
+      .accent { fill: #4f8cff; }
+      .accent-line { stroke: #4f8cff; }
+      .on-accent { fill: #0e1015; }
+      .bad { fill: #f07a8c; }
+      .bad-line { stroke: #f07a8c; }
+      .bad-box { fill: #2a1a20; stroke: #6b2f3c; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" class="head"/>
+    </marker>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" class="accent"/>
+    </marker>
+    <marker id="arrow-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" class="bad"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1280" height="400" rx="18"/>
+
+  <text class="t" x="40" y="46" font-size="20" font-weight="600">How Explore finds repos</text>
+  <text class="m" x="1240" y="46" font-size="13" text-anchor="end">Raw numbers decide, not stars.</text>
+
+  <rect class="box" x="40" y="92" width="200" height="84" rx="10"/>
+  <text class="t" x="140" y="121" font-size="15" font-weight="600" text-anchor="middle">Search</text>
+  <text class="m" x="140" y="143" font-size="12" text-anchor="middle">each type in your profile</text>
+  <text class="m" x="140" y="161" font-size="12" text-anchor="middle">newest first · 300–15k stars</text>
+
+  <rect class="box" x="290" y="92" width="200" height="84" rx="10"/>
+  <text class="t" x="390" y="121" font-size="15" font-weight="600" text-anchor="middle">Signals</text>
+  <text class="m" x="390" y="143" font-size="12" text-anchor="middle">outside merge rate</text>
+  <text class="m" x="390" y="161" font-size="12" text-anchor="middle">newcomers · reply times</text>
+
+  <rect class="box" x="540" y="92" width="200" height="84" rx="10"/>
+  <text class="t" x="640" y="121" font-size="15" font-weight="600" text-anchor="middle">README read</text>
+  <text class="m" x="640" y="143" font-size="12" text-anchor="middle">is it a code project?</text>
+  <text class="m" x="640" y="161" font-size="12" text-anchor="middle">fit: strong to weak</text>
+
+  <rect class="box" x="790" y="92" width="200" height="84" rx="10"/>
+  <text class="t" x="890" y="121" font-size="15" font-weight="600" text-anchor="middle">Closer look</text>
+  <text class="m" x="890" y="143" font-size="12" text-anchor="middle">reads issues and PRs</text>
+  <text class="m" x="890" y="161" font-size="12" text-anchor="middle">with up to 3 helpers</text>
+
+  <rect class="box" x="1040" y="92" width="200" height="84" rx="10"/>
+  <text class="t" x="1140" y="121" font-size="15" font-weight="600" text-anchor="middle">Found</text>
+  <text class="m" x="1140" y="143" font-size="12" text-anchor="middle">waits for you</text>
+  <text class="m" x="1140" y="161" font-size="12" text-anchor="middle">kept across restarts</text>
+
+  <line class="line" x1="241" y1="134" x2="288" y2="134" marker-end="url(#arrow)"/>
+  <line class="line" x1="491" y1="134" x2="538" y2="134" marker-end="url(#arrow)"/>
+  <line class="line" x1="741" y1="134" x2="788" y2="134" marker-end="url(#arrow)"/>
+  <line class="line" x1="991" y1="134" x2="1038" y2="134" marker-end="url(#arrow)"/>
+
+  <!-- skipped -->
+  <line class="bad-line" x1="390" y1="177" x2="390" y2="234" marker-end="url(#arrow-bad)"/>
+  <text class="bad" x="402" y="210" font-size="12">any of these</text>
+  <rect class="bad-box" x="170" y="236" width="440" height="104" rx="10"/>
+  <text class="bad" x="190" y="262" font-size="14" font-weight="600">Skipped</text>
+  <text class="m" x="190" y="286" font-size="12">archived or a fork</text>
+  <text class="m" x="190" y="304" font-size="12">quiet for 30 days</text>
+  <text class="m" x="190" y="322" font-size="12">newcomers turned away</text>
+  <text class="m" x="400" y="286" font-size="12">no outside merge in 90 days</text>
+  <text class="m" x="400" y="304" font-size="12">merges under 30% of outside PRs</text>
+
+  <!-- approve -->
+  <line class="accent-line" x1="1140" y1="177" x2="1140" y2="258" marker-end="url(#arrow-accent)"/>
+  <rect class="accent" x="1080" y="203" width="120" height="26" rx="13"/>
+  <text class="on-accent" x="1140" y="221" font-size="13" font-weight="600" text-anchor="middle">you approve</text>
+  <rect class="box" x="1040" y="260" width="200" height="60" rx="10"/>
+  <text class="t" x="1140" y="286" font-size="15" font-weight="600" text-anchor="middle">Repos</text>
+  <text class="m" x="1140" y="306" font-size="12" text-anchor="middle">where agents pick issues</text>
+
+  <text class="m" x="40" y="376" font-size="13">Runs 1–16 workers at once, until it has found as many repos as you asked for.</text>
+</svg>

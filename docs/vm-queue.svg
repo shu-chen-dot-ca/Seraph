@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 416" width="1280" height="416" role="img" aria-label="How agents share a VM: a VM has up to three desktops and one agent works on each. Agents waiting for the VM stand in one waiting line, and the first takes the first free desktop, or the one it asked for. An agent whose long run (tests, installs, builds) is going steps aside into that desktop's priority line, and gets the desktop back first when the run is done." font-family="'Instrument Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <style>
+    .bg { fill: #faf9f7; }
+    .lane { fill: #f2f0ec; stroke: #e3dfd8; }
+    .box { fill: #ffffff; stroke: #d3cec6; }
+    .tile { fill: #f7f5f2; stroke: #d3cec6; }
+    .strip { fill: #e6e2db; }
+    .t { fill: #1c1e24; }
+    .m { fill: #6a6e77; }
+    .lab { fill: #8a8d94; font-size: 12px; font-weight: 600; letter-spacing: 0.08em; }
+    .line { fill: none; stroke: #8b8f98; stroke-width: 1.6; }
+    .head { fill: #8b8f98; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0e1015; }
+      .lane { fill: #151821; stroke: #232836; }
+      .box { fill: #1b1f2a; stroke: #2f3546; }
+      .tile { fill: #222736; stroke: #353c4f; }
+      .strip { fill: #303749; }
+      .t { fill: #e8eaef; }
+      .m { fill: #9aa1ad; }
+      .lab { fill: #7d8492; }
+      .line { stroke: #7d8492; }
+      .head { fill: #7d8492; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" class="head"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1280" height="416" rx="18"/>
+
+  <text class="t" x="40" y="46" font-size="20" font-weight="600">Sharing a VM</text>
+  <text class="m" x="1240" y="46" font-size="13" text-anchor="end">One agent per desktop. Long runs don't hold one.</text>
+
+  <!-- waiting line -->
+  <rect class="lane" x="40" y="80" width="280" height="276" rx="14"/>
+  <text class="lab" x="64" y="104">WAITING LINE · ONE PER VM</text>
+  <rect class="box" x="60" y="120" width="240" height="52" rx="9"/>
+  <text class="t" x="76" y="142" font-size="13" font-weight="600">agent-4</text>
+  <text class="m" x="76" y="160" font-size="11.5">1st · any desktop</text>
+  <rect class="box" x="60" y="184" width="240" height="52" rx="9"/>
+  <text class="t" x="76" y="206" font-size="13" font-weight="600">agent-5</text>
+  <text class="m" x="76" y="224" font-size="11.5">2nd · wants Desktop 3</text>
+
+  <!-- VM -->
+  <rect class="lane" x="400" y="80" width="480" height="276" rx="14"/>
+  <text class="lab" x="424" y="104">VM1</text>
+
+  <rect class="box" x="420" y="112" width="440" height="68" rx="10"/>
+  <rect class="tile" x="434" y="122" width="84" height="48" rx="5"/>
+  <rect class="strip" x="435" y="123" width="82" height="7" rx="3"/>
+  <text class="t" x="536" y="141" font-size="14" font-weight="600">Desktop 1</text>
+  <text class="m" x="536" y="161" font-size="12">free</text>
+
+  <rect class="box" x="420" y="196" width="440" height="68" rx="10"/>
+  <rect class="tile" x="434" y="206" width="84" height="48" rx="5"/>
+  <rect class="strip" x="435" y="207" width="82" height="7" rx="3"/>
+  <text class="t" x="536" y="225" font-size="14" font-weight="600">Desktop 2</text>
+  <text class="m" x="536" y="245" font-size="12">held by agent-1</text>
+  <text class="m" x="844" y="235" font-size="12" text-anchor="end">fixing an issue</text>
+
+  <rect class="box" x="420" y="280" width="440" height="68" rx="10"/>
+  <rect class="tile" x="434" y="290" width="84" height="48" rx="5"/>
+  <rect class="strip" x="435" y="291" width="82" height="7" rx="3"/>
+  <text class="t" x="536" y="309" font-size="14" font-weight="600">Desktop 3</text>
+  <text class="m" x="536" y="329" font-size="12">held by agent-2</text>
+  <text class="m" x="844" y="319" font-size="12" text-anchor="end">setting up a repo</text>
+
+  <!-- priority line -->
+  <rect class="lane" x="960" y="80" width="280" height="276" rx="14"/>
+  <text class="lab" x="984" y="104">PRIORITY LINE · PER DESKTOP</text>
+  <rect class="box" x="980" y="200" width="240" height="60" rx="9"/>
+  <text class="t" x="996" y="223" font-size="13" font-weight="600">agent-3</text>
+  <text class="m" x="996" y="243" font-size="11.5">test suite running</text>
+  <text class="m" x="984" y="296" font-size="12">Tests, installs and builds run</text>
+  <text class="m" x="984" y="314" font-size="12">in the background while the</text>
+  <text class="m" x="984" y="332" font-size="12">agent waits here.</text>
+
+  <!-- arrows -->
+  <line class="line" x1="301" y1="146" x2="418" y2="146" marker-end="url(#arrow)"/>
+  <text class="m" x="360" y="138" font-size="12" text-anchor="middle">takes it</text>
+
+  <line class="line" x1="861" y1="214" x2="978" y2="214" marker-end="url(#arrow)"/>
+  <text class="m" x="920" y="206" font-size="12" text-anchor="middle">steps aside</text>
+  <line class="line" x1="979" y1="246" x2="862" y2="246" marker-end="url(#arrow)"/>
+  <text class="m" x="920" y="264" font-size="12" text-anchor="middle">run done</text>
+
+  <text class="m" x="40" y="392" font-size="13">You can Take over a desktop, Give it to an agent, move one to the front, or Skip the holder.</text>
+  <text class="m" x="1240" y="392" font-size="13" text-anchor="end">The priority line goes before the waiting line.</text>
+</svg>

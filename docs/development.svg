@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 500" width="1280" height="500" role="img" aria-label="Developing your own repository: you chat with the chat agent, which writes issue drafts (Drafts mode) or creates issues that fit your Goals (Auto mode); crashes and errors become issues too. Workers pick issues, check and reproduce them, then fix them or deny them. A reviewer reads and tests each pull request before it reaches your Inbox. You approve to open the pull request, merge it, and release; the next version comes from the pull request titles." font-family="'Instrument Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <style>
+    .bg { fill: #faf9f7; }
+    .box { fill: #ffffff; stroke: #d3cec6; }
+    .ghost { fill: none; stroke: #d3cec6; stroke-dasharray: 4 4; }
+    .t { fill: #1c1e24; }
+    .m { fill: #6a6e77; }
+    .line { fill: none; stroke: #8b8f98; stroke-width: 1.6; }
+    .head { fill: #8b8f98; }
+    .accent { fill: #2563eb; }
+    .accent-line { fill: none; stroke: #2563eb; stroke-width: 2; }
+    .on-accent { fill: #ffffff; }
+    .bad { fill: #c8344f; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0e1015; }
+      .box { fill: #1b1f2a; stroke: #2f3546; }
+      .ghost { stroke: #353c4f; }
+      .t { fill: #e8eaef; }
+      .m { fill: #9aa1ad; }
+      .line { stroke: #7d8492; }
+      .head { fill: #7d8492; }
+      .accent { fill: #4f8cff; }
+      .accent-line { stroke: #4f8cff; }
+      .on-accent { fill: #0e1015; }
+      .bad { fill: #f07a8c; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" class="head"/>
+    </marker>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" class="accent"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1280" height="500" rx="18"/>
+
+  <text class="t" x="40" y="46" font-size="20" font-weight="600">Developing your own repository</text>
+  <text class="m" x="1240" y="46" font-size="13" text-anchor="end">Opening, merging and releasing stay your clicks.</text>
+
+  <!-- row 1 -->
+  <rect class="box" x="60" y="110" width="320" height="76" rx="10"/>
+  <text class="t" x="220" y="138" font-size="15" font-weight="600" text-anchor="middle">You</text>
+  <text class="m" x="220" y="158" font-size="12" text-anchor="middle">ask in plain words</text>
+  <text class="m" x="220" y="175" font-size="12" text-anchor="middle">set the Goals</text>
+
+  <rect class="ghost" x="560" y="64" width="160" height="26" rx="13"/>
+  <text class="m" x="640" y="82" font-size="12" text-anchor="middle">crashes and errors</text>
+  <line class="line" x1="640" y1="91" x2="640" y2="108" marker-end="url(#arrow)"/>
+
+  <rect class="box" x="480" y="110" width="320" height="76" rx="10"/>
+  <text class="t" x="640" y="138" font-size="15" font-weight="600" text-anchor="middle">Chat agent</text>
+  <text class="m" x="640" y="158" font-size="12" text-anchor="middle">Drafts: you create the issues</text>
+  <text class="m" x="640" y="175" font-size="12" text-anchor="middle">Auto: creates ones that fit your Goals</text>
+
+  <rect class="box" x="900" y="110" width="320" height="76" rx="10"/>
+  <text class="t" x="1060" y="138" font-size="15" font-weight="600" text-anchor="middle">Issues on your repo</text>
+  <text class="m" x="1060" y="158" font-size="12" text-anchor="middle">the Next release milestone first</text>
+  <text class="m" x="1060" y="175" font-size="12" text-anchor="middle">then the oldest</text>
+
+  <line class="line" x1="381" y1="148" x2="478" y2="148" marker-end="url(#arrow)"/>
+  <text class="m" x="430" y="140" font-size="12" text-anchor="middle">chat</text>
+  <line class="line" x1="801" y1="148" x2="898" y2="148" marker-end="url(#arrow)"/>
+  <text class="m" x="850" y="140" font-size="12" text-anchor="middle">issues</text>
+
+  <!-- row 2 -->
+  <line class="line" x1="1060" y1="187" x2="1060" y2="248" marker-end="url(#arrow)"/>
+  <text class="m" x="1072" y="222" font-size="12">picks one</text>
+
+  <rect class="box" x="900" y="250" width="320" height="76" rx="10"/>
+  <text class="t" x="1060" y="278" font-size="15" font-weight="600" text-anchor="middle">Workers, 1 to 3</text>
+  <text class="m" x="1060" y="298" font-size="12" text-anchor="middle">check · reproduce · fix</text>
+  <text class="m" x="1060" y="315" font-size="12" text-anchor="middle">one desktop each, in one VM</text>
+  <text class="bad" x="1060" y="350" font-size="12" text-anchor="middle">or deny it: duplicate · not valid · can't reproduce</text>
+
+  <rect class="box" x="480" y="250" width="320" height="76" rx="10"/>
+  <text class="t" x="640" y="278" font-size="15" font-weight="600" text-anchor="middle">Reviewer</text>
+  <text class="m" x="640" y="298" font-size="12" text-anchor="middle">reads and tests each pull request</text>
+  <text class="m" x="640" y="315" font-size="12" text-anchor="middle">before you see it</text>
+
+  <rect class="box" x="60" y="250" width="320" height="76" rx="10"/>
+  <text class="t" x="220" y="278" font-size="15" font-weight="600" text-anchor="middle">Inbox</text>
+  <text class="m" x="220" y="298" font-size="12" text-anchor="middle">Overview · Diff · review notes</text>
+  <text class="m" x="220" y="315" font-size="12" text-anchor="middle">titles in Conventional Commits</text>
+
+  <line class="line" x1="899" y1="288" x2="802" y2="288" marker-end="url(#arrow)"/>
+  <text class="m" x="850" y="280" font-size="12" text-anchor="middle">pull request</text>
+  <line class="line" x1="479" y1="288" x2="382" y2="288" marker-end="url(#arrow)"/>
+  <text class="m" x="430" y="280" font-size="12" text-anchor="middle">passes</text>
+
+  <!-- row 3 -->
+  <line class="accent-line" x1="220" y1="327" x2="220" y2="388" marker-end="url(#arrow-accent)"/>
+  <rect class="accent" x="160" y="345" width="120" height="24" rx="12"/>
+  <text class="on-accent" x="220" y="362" font-size="12.5" font-weight="600" text-anchor="middle">you approve</text>
+
+  <rect class="box" x="60" y="390" width="320" height="76" rx="10"/>
+  <text class="t" x="220" y="418" font-size="15" font-weight="600" text-anchor="middle">Pull request</text>
+  <text class="m" x="220" y="438" font-size="12" text-anchor="middle">opened as you</text>
+  <text class="m" x="220" y="455" font-size="12" text-anchor="middle">Merge waits for green checks</text>
+
+  <rect class="box" x="480" y="390" width="320" height="76" rx="10"/>
+  <text class="t" x="640" y="418" font-size="15" font-weight="600" text-anchor="middle">Releases</text>
+  <text class="m" x="640" y="438" font-size="12" text-anchor="middle">next version from the PR titles</text>
+  <text class="m" x="640" y="455" font-size="12" text-anchor="middle">feat: minor bump · else: patch</text>
+
+  <rect class="box" x="900" y="390" width="320" height="76" rx="10"/>
+  <text class="t" x="1060" y="418" font-size="15" font-weight="600" text-anchor="middle">GitHub release</text>
+  <text class="m" x="1060" y="438" font-size="12" text-anchor="middle">notes from the merged PRs</text>
+  <text class="m" x="1060" y="455" font-size="12" text-anchor="middle">for Seraph itself: Update in the app</text>
+
+  <line class="accent-line" x1="381" y1="428" x2="478" y2="428" marker-end="url(#arrow-accent)"/>
+  <text class="accent" x="430" y="420" font-size="12" font-weight="600" text-anchor="middle">you merge</text>
+  <line class="accent-line" x1="801" y1="428" x2="898" y2="428" marker-end="url(#arrow-accent)"/>
+  <text class="accent" x="850" y="420" font-size="12" font-weight="600" text-anchor="middle">you release</text>
+</svg>
