@@ -28,17 +28,19 @@ and the agent's other runs), Problems (each problem it found, with the run that 
 file new, like a diff). Approve accepts it and ends the job; nothing is sent anywhere.
 A new version of one of your open PRs (the agent fixed what a review asked for, or its failing checks) says so on top,
 with a link to that PR in the GitHub tab's pop-up, and its last tab is Commit and comment: the title is the commit
-message, the text the comment posted on the PR with it.
+message, the text the comment posted on the PR with it. A rebase of one (the agent rebased it onto the newer main, or
+squashed, reworded or signed off its commits as a reviewer asked) says so instead: its commits replace the PR's.
 The bar at the bottom of the pop-up decides, with a note for the agent: Reject, Discuss, Redraft or Approve (a
 question: Reject, Reply or Approve; Taken: Stop the agent or Keep working). Redraft: the agent drafts it again with
 your note. Discuss: your note goes to the agent's chat, saying which draft it is about, and the draft keeps waiting.
 A decision goes to the agent (and the draft's job goes back to the agent's queue).
 With your GitHub account connected (Account on the GitHub tab), Approve on a PR or comment first asks "are you sure?"
-(Open PR / Post comment / Push changes), then sends it to GitHub as you (github_searcher/github_account.py): a PR from
+(Open PR / Post comment / Push changes / Force push), then sends it to GitHub as you (github_searcher/github_account.py): a PR from
 a new branch in your fork, its pictures uploaded there; a new version's commits pushed onto your PR's branch in your
-fork (never forced), with its text posted on the PR as a comment. If GitHub refuses (also when the PR's branch moved
+fork (never forced, except a rebase's, and only while the branch is where the agent saw it), with its text posted
+on the PR as a comment. If GitHub refuses (also when the PR's branch moved
 since), nothing is decided and the error shows. Without an account nothing is
-sent; you send it yourself. A sent item's bar links to it on GitHub (a new version: Pushed to PR #n, and why when GitHub refused its comment). One approved but not sent (approved before you
+sent; you send it yourself. A sent item's bar links to it on GitHub (a new version: Pushed to PR #n, a rebase: Force-pushed to PR #n, and why when GitHub refused its comment). One approved but not sent (approved before you
 signed in) has Send to GitHub, with the same question; while you aren't signed in, its bar says in amber it isn't on
 GitHub yet, with a link to Account on the GitHub tab to sign in with GitHub. The bar says who Approve sends as.
 A project's PR (a repository agents develop all the time, Development.tsx) reaches the Inbox only once the project's
@@ -575,6 +577,8 @@ export default function Inbox(props: { selected: string | null }) {
   const isEditing = draft !== undefined && editing !== null && editing.id === draft.id;
   // A new version of your open PR "owner/name#n": its commits go onto that PR's branch, its text as a comment there.
   const updateOf = draft !== undefined && draft.kind === "pr" ? draft.update_of : null;
+  // A rebase of it: its commits replace the PR's, so Approve force-pushes.
+  const rebase = updateOf !== null && draft !== undefined && draft.rebase_of !== null;
   // A project's PR that Approve opened (projects.py): its checks, and Merge.
   const project = draft === undefined || draft.repo === null ? undefined : projects.find((each) => each.repo.toLowerCase() === draft.repo?.toLowerCase());
   const projectPR = project !== undefined && draft !== undefined && draft.sent !== null && !draft.sent.update ? project.prs[String(draft.sent.number)] : undefined;
@@ -587,6 +591,10 @@ export default function Inbox(props: { selected: string | null }) {
     confirmTitle = `Merge PR #${draft.sent.number} into main?`;
     confirmText = `It is squash-merged as @${account?.login}: one commit on main, titled "${draft.title} (#${draft.sent.number})". The next release takes it.`;
     confirmLabel = "Merge";
+  } else if (draft !== undefined && rebase) {
+    confirmTitle = `Force-push this rebase to ${updateOf}?`;
+    confirmText = `It replaces the commits on your PR's branch in your fork with the ones shown here, as @${account?.login}, and posts the comment shown here on the PR. The old commits are no longer part of the PR. Anyone can see it.`;
+    confirmLabel = "Force push";
   } else if (draft !== undefined && updateOf !== null) {
     confirmTitle = `Push these changes to ${updateOf}?`;
     confirmText = `It pushes a new commit to your PR's branch in your fork as @${account?.login}, and posts the comment shown here on the PR. Anyone can see them.`;
@@ -803,7 +811,17 @@ export default function Inbox(props: { selected: string | null }) {
 
                   <DialogTitle className="leading-normal">{draft.title}</DialogTitle>
 
-                  {updateOf !== null && (
+                  {rebase && (
+                    <div className="text-xs text-muted-foreground">
+                      A rebase of your PR{" "}
+                      <a href={`#/github/pulls?open=${encodeURIComponent(updateOf ?? "")}`} className="text-primary hover:underline">
+                        {updateOf}
+                      </a>
+                      : its commits replace the ones on the PR's branch in your fork (a force push), and its text is posted on the PR as a comment.
+                    </div>
+                  )}
+
+                  {updateOf !== null && !rebase && (
                     <div className="text-xs text-muted-foreground">
                       A new version of your PR{" "}
                       <a href={`#/github/pulls?open=${encodeURIComponent(updateOf)}`} className="text-primary hover:underline">
@@ -1062,7 +1080,9 @@ export default function Inbox(props: { selected: string | null }) {
                   <div className="flex items-center gap-2 max-md:flex-wrap">
                     <span className="text-xs text-muted-foreground">
                       {isEditing && "Save or cancel your edit first."}
-                      {!isEditing && sends && account !== null && account.connected && updateOf !== null &&
+                      {!isEditing && sends && account !== null && account.connected && rebase &&
+                        `Approve force-pushes this rebase to ${updateOf} as @${account.login}, after you confirm; the agent is told, with your note.`}
+                      {!isEditing && sends && account !== null && account.connected && updateOf !== null && !rebase &&
                         `Approve pushes these changes to ${updateOf} as @${account.login}, after you confirm; the agent is told, with your note.`}
                       {!isEditing && sends && account !== null && account.connected && updateOf === null &&
                         `Approve ${draft.kind === "pr" ? "opens this PR" : "posts this comment"} on GitHub as @${account.login}, after you confirm; the agent is told, with your note.`}
@@ -1122,7 +1142,8 @@ export default function Inbox(props: { selected: string | null }) {
                     {draft.decided_at !== null && <span className="text-xs text-muted-foreground">{new Date(draft.decided_at).toLocaleString()}</span>}
                     {draft.sent !== null && (
                       <a href={draft.sent.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-primary hover:underline">
-                        {draft.sent.kind === "pr" && draft.sent.update && `Pushed to PR #${draft.sent.number}`}
+                        {draft.sent.kind === "pr" && draft.sent.update && draft.sent.rebase_of && `Force-pushed to PR #${draft.sent.number}`}
+                        {draft.sent.kind === "pr" && draft.sent.update && !draft.sent.rebase_of && `Pushed to PR #${draft.sent.number}`}
                         {draft.sent.kind === "pr" && !draft.sent.update && `PR #${draft.sent.number}`}
                         {draft.sent.kind === "comment" && "Comment"} on GitHub, as @{draft.sent.as} <ExternalLink className="size-3" />
                       </a>

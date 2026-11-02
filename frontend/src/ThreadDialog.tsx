@@ -1282,7 +1282,8 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
                     <MessageSquare className="size-3.5 shrink-0 text-muted-foreground" />
                   )}
                   <span className="shrink-0 text-xs text-muted-foreground">
-                    {each.kind === "pr" && each.update_of !== null && "New commits for this PR"}
+                    {each.kind === "pr" && each.update_of !== null && each.rebase_of !== null && "Rebase of this PR"}
+                    {each.kind === "pr" && each.update_of !== null && each.rebase_of === null && "New commits for this PR"}
                     {each.kind === "pr" && each.update_of === null && "PR draft"}
                     {each.kind !== "pr" && "Draft reply"} by {agentNames[each.agent] ?? each.agent}, waiting in the Inbox:
                   </span>

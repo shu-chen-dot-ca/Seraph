@@ -434,6 +434,7 @@ export type Draft = {
   commits: DraftCommit[]; // PRs: the branch's commits since base, replayed when it is sent ([]: one commit)
   sent: DraftSent | null; // what went to GitHub as you (github_searcher/github_account.py); null until then
   update_of: string | null; // PR: a new version of your open PR "owner/name#n"; approving pushes it onto that PR
+  rebase_of: string | null; // PR update: a rebase, its commits replace the PR's; the PR's commit it replaces (approving force-pushes)
   edited: boolean; // you edited its title or text before deciding
   review: DraftReview | null; // a project's PR: its review (only passed ones reach the Inbox)
   replaces: string | null; // a project's PR made again on the new main: the PR "owner/name#n" it replaces
@@ -475,6 +476,7 @@ export type DraftSent = {
   id?: number; // comment: its id on GitHub
   deleted_at?: string; // comment: when you deleted it on the GitHub tab
   update?: boolean; // PR: a new version pushed onto a PR that was already open
+  rebase_of?: string | null; // PR update: the PR's commit a rebase replaced (a force push)
   comment_url?: string | null; // PR update: the comment posted with it (null: none was)
   comment_error?: string | null; // PR update: why GitHub refused the comment, when it did (the push went through)
 };
