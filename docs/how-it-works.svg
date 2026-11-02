@@ -1,0 +1,166 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 650" width="1280" height="650" role="img" aria-label="How an issue becomes a pull request in Seraph: repos and issues are read from GitHub with search tokens, found and listed on your computer, assigned by you to an agent that fixes it inside a sandbox VM desktop, drafted into the Inbox, and sent to GitHub as you only after you approve. Replies and failing checks come back as follow-ups. No GitHub token ever enters a VM." font-family="'Instrument Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <style>
+    .bg { fill: #faf9f7; }
+    .lane { fill: #f2f0ec; stroke: #e3dfd8; }
+    .box { fill: #ffffff; stroke: #d3cec6; }
+    .tile { fill: #f7f5f2; stroke: #d3cec6; }
+    .strip { fill: #e6e2db; }
+    .ghost { fill: none; stroke: #d3cec6; stroke-dasharray: 4 4; }
+    .t { fill: #1c1e24; }
+    .m { fill: #6a6e77; }
+    .lab { fill: #8a8d94; font-size: 12px; font-weight: 600; letter-spacing: 0.08em; }
+    .line { fill: none; stroke: #8b8f98; stroke-width: 1.6; }
+    .dash { stroke-dasharray: 6 5; }
+    .head { fill: #8b8f98; }
+    .badge { fill: #3a3d45; }
+    .badge-t { fill: #faf9f7; font-size: 11px; font-weight: 700; }
+    .accent { fill: #2563eb; }
+    .accent-line { fill: none; stroke: #2563eb; stroke-width: 2; }
+    .on-accent { fill: #ffffff; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0e1015; }
+      .lane { fill: #151821; stroke: #232836; }
+      .box { fill: #1b1f2a; stroke: #2f3546; }
+      .tile { fill: #222736; stroke: #353c4f; }
+      .strip { fill: #303749; }
+      .ghost { stroke: #353c4f; }
+      .t { fill: #e8eaef; }
+      .m { fill: #9aa1ad; }
+      .lab { fill: #7d8492; }
+      .line { stroke: #7d8492; }
+      .head { fill: #7d8492; }
+      .badge { fill: #d5d9e1; }
+      .badge-t { fill: #0e1015; }
+      .accent { fill: #4f8cff; }
+      .accent-line { stroke: #4f8cff; }
+      .on-accent { fill: #0e1015; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" class="head"/>
+    </marker>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" class="accent"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1280" height="650" rx="18"/>
+
+  <text class="t" x="40" y="46" font-size="20" font-weight="600">From issue to pull request</text>
+  <text class="m" x="1240" y="46" font-size="13" text-anchor="end">Nothing reaches GitHub until you approve it.</text>
+
+  <!-- GitHub -->
+  <rect class="lane" x="40" y="72" width="1200" height="112" rx="14"/>
+  <text class="lab" x="64" y="98">GITHUB</text>
+
+  <rect class="box" x="80" y="110" width="320" height="60" rx="10"/>
+  <text class="t" x="240" y="136" font-size="14" font-weight="600" text-anchor="middle">Open-source repos and issues</text>
+  <text class="m" x="240" y="156" font-size="12" text-anchor="middle">issues · pull requests · code · READMEs</text>
+
+  <rect class="box" x="880" y="110" width="320" height="60" rx="10"/>
+  <text class="t" x="1040" y="136" font-size="14" font-weight="600" text-anchor="middle">Pull request from your fork</text>
+  <text class="m" x="1040" y="156" font-size="12" text-anchor="middle">sent as you, from the reviewed diff</text>
+
+  <!-- Your computer -->
+  <rect class="lane" x="40" y="232" width="1200" height="196" rx="14"/>
+  <text class="lab" x="64" y="258">YOUR COMPUTER</text>
+
+  <rect class="box" x="80" y="276" width="210" height="84" rx="10"/>
+  <text class="t" x="185" y="305" font-size="15" font-weight="600" text-anchor="middle">Find</text>
+  <text class="m" x="185" y="327" font-size="12" text-anchor="middle">Explore · Tracked repos</text>
+  <text class="m" x="185" y="345" font-size="12" text-anchor="middle">the agents' own search</text>
+
+  <rect class="box" x="383" y="276" width="210" height="84" rx="10"/>
+  <text class="t" x="488" y="305" font-size="15" font-weight="600" text-anchor="middle">Repos and Issues</text>
+  <text class="m" x="488" y="327" font-size="12" text-anchor="middle">raw repo signals</text>
+  <text class="m" x="488" y="345" font-size="12" text-anchor="middle">easy · medium · hard</text>
+
+  <rect class="box" x="686" y="276" width="210" height="84" rx="10"/>
+  <text class="t" x="791" y="305" font-size="15" font-weight="600" text-anchor="middle">Agents</text>
+  <text class="m" x="791" y="327" font-size="12" text-anchor="middle">Claude Agent SDK</text>
+  <text class="m" x="791" y="345" font-size="12" text-anchor="middle">jobs with fixed steps</text>
+
+  <rect class="box" x="989" y="276" width="210" height="84" rx="10"/>
+  <text class="t" x="1094" y="305" font-size="15" font-weight="600" text-anchor="middle">Inbox</text>
+  <text class="m" x="1094" y="327" font-size="12" text-anchor="middle">Overview · Diff</text>
+  <text class="m" x="1094" y="345" font-size="12" text-anchor="middle">PR message</text>
+
+  <rect class="ghost" x="989" y="376" width="210" height="30" rx="15"/>
+  <text class="m" x="1094" y="395" font-size="12" text-anchor="middle">your GitHub sign-in stays here</text>
+
+  <!-- Sandbox VMs -->
+  <rect class="lane" x="40" y="488" width="1200" height="140" rx="14"/>
+  <text class="lab" x="64" y="514">SANDBOX VMS · INCUS</text>
+
+  <text class="m" x="80" y="552" font-size="13">Real Linux desktops the agents see</text>
+  <text class="m" x="80" y="572" font-size="13">and drive, one agent per desktop.</text>
+  <text class="t" x="80" y="602" font-size="13" font-weight="600">No GitHub token ever enters a VM.</text>
+
+  <rect class="box" x="560" y="528" width="462" height="84" rx="10"/>
+  <text class="t" x="576" y="547" font-size="12" font-weight="600">vm1</text>
+  <rect class="tile" x="576" y="556" width="130" height="46" rx="6"/>
+  <rect class="strip" x="577" y="557" width="128" height="7" rx="3"/>
+  <text class="t" x="641" y="580" font-size="12" text-anchor="middle">Desktop 1</text>
+  <text class="m" x="641" y="595" font-size="11" text-anchor="middle">agent-1</text>
+  <rect class="tile" x="726" y="556" width="130" height="46" rx="6"/>
+  <rect class="strip" x="727" y="557" width="128" height="7" rx="3"/>
+  <text class="t" x="791" y="580" font-size="12" text-anchor="middle">Desktop 2</text>
+  <text class="m" x="791" y="595" font-size="11" text-anchor="middle">agent-2</text>
+  <rect class="tile" x="876" y="556" width="130" height="46" rx="6"/>
+  <rect class="strip" x="877" y="557" width="128" height="7" rx="3"/>
+  <text class="t" x="941" y="580" font-size="12" text-anchor="middle">Desktop 3</text>
+  <text class="m" x="941" y="595" font-size="11" text-anchor="middle">free</text>
+
+  <rect class="box" x="1042" y="528" width="158" height="84" rx="10"/>
+  <text class="t" x="1058" y="547" font-size="12" font-weight="600">vm2</text>
+  <rect class="tile" x="1058" y="556" width="126" height="46" rx="6"/>
+  <rect class="strip" x="1059" y="557" width="124" height="7" rx="3"/>
+  <text class="t" x="1121" y="580" font-size="12" text-anchor="middle">Desktop 1</text>
+  <text class="m" x="1121" y="595" font-size="11" text-anchor="middle">free</text>
+
+  <!-- 1: read from GitHub -->
+  <line class="line" x1="194" y1="171" x2="194" y2="274" marker-end="url(#arrow)"/>
+  <circle class="badge" cx="217" cy="208" r="9"/>
+  <text class="badge-t" x="217" y="212" text-anchor="middle">1</text>
+  <text class="m" x="233" y="212" font-size="12">read with search tokens</text>
+
+  <!-- Find adds to the lists -->
+  <line class="line" x1="291" y1="318" x2="381" y2="318" marker-end="url(#arrow)"/>
+  <text class="m" x="336" y="309" font-size="12" text-anchor="middle">adds</text>
+
+  <!-- 2: you assign -->
+  <line class="accent-line" x1="594" y1="318" x2="684" y2="318" marker-end="url(#arrow-accent)"/>
+  <circle class="badge" cx="639" cy="288" r="9"/>
+  <text class="badge-t" x="639" y="292" text-anchor="middle">2</text>
+  <text class="accent" x="639" y="309" font-size="12" font-weight="600" text-anchor="middle">you assign</text>
+
+  <!-- 3: fix in a VM -->
+  <line class="line" x1="771" y1="361" x2="771" y2="526" marker-end="url(#arrow)"/>
+  <line class="line" x1="811" y1="527" x2="811" y2="362" marker-end="url(#arrow)"/>
+  <circle class="badge" cx="791" cy="456" r="9"/>
+  <text class="badge-t" x="791" y="460" text-anchor="middle">3</text>
+  <text class="m" x="759" y="450" font-size="12" text-anchor="end">code copied in</text>
+  <text class="m" x="759" y="466" font-size="12" text-anchor="end">screen · keys · shell</text>
+  <text class="m" x="823" y="450" font-size="12">diff · test runs</text>
+  <text class="m" x="823" y="466" font-size="12">screenshots</text>
+
+  <!-- 4: drafts -->
+  <line class="line" x1="897" y1="318" x2="987" y2="318" marker-end="url(#arrow)"/>
+  <circle class="badge" cx="942" cy="288" r="9"/>
+  <text class="badge-t" x="942" y="292" text-anchor="middle">4</text>
+  <text class="m" x="942" y="309" font-size="12" text-anchor="middle">drafts</text>
+
+  <!-- 5: you approve -->
+  <line class="accent-line" x1="1094" y1="275" x2="1094" y2="173" marker-end="url(#arrow-accent)"/>
+  <rect class="accent" x="1029" y="194" width="130" height="28" rx="14"/>
+  <text class="on-accent" x="1094" y="213" font-size="13" font-weight="600" text-anchor="middle">you approve</text>
+  <circle class="badge" cx="1009" cy="208" r="9"/>
+  <text class="badge-t" x="1009" y="212" text-anchor="middle">5</text>
+
+  <!-- 6: follow-ups -->
+  <line class="line dash" x1="930" y1="171" x2="867" y2="273" marker-end="url(#arrow)"/>
+  <circle class="badge" cx="751" cy="208" r="9"/>
+  <text class="badge-t" x="751" y="212" text-anchor="middle">6</text>
+  <text class="m" x="886" y="212" font-size="12" text-anchor="end">replies · failing checks</text>
+</svg>

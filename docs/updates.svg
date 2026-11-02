@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 320" width="1280" height="320" role="img" aria-label="How the live copy updates: a new release is found every 15 minutes, prepared, and checked on a copy of your data. When you press Restart, your data is backed up and the app switches to the release, then it is watched for 10 minutes. If it does not answer within 60 seconds, or is down for a minute or logs 3 errors while watched, it rolls back to the previous release and the data copy." font-family="'Instrument Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <style>
+    .bg { fill: #faf9f7; }
+    .box { fill: #ffffff; stroke: #d3cec6; }
+    .t { fill: #1c1e24; }
+    .m { fill: #6a6e77; }
+    .line { fill: none; stroke: #8b8f98; stroke-width: 1.6; }
+    .head { fill: #8b8f98; }
+    .accent { fill: #2563eb; }
+    .accent-line { fill: none; stroke: #2563eb; stroke-width: 2; }
+    .on-accent { fill: #ffffff; }
+    .bad { fill: #c8344f; }
+    .bad-line { fill: none; stroke: #c8344f; stroke-width: 1.6; stroke-dasharray: 6 5; }
+    .bad-box { fill: #fdf1f3; stroke: #e7a3b0; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0e1015; }
+      .box { fill: #1b1f2a; stroke: #2f3546; }
+      .t { fill: #e8eaef; }
+      .m { fill: #9aa1ad; }
+      .line { stroke: #7d8492; }
+      .head { fill: #7d8492; }
+      .accent { fill: #4f8cff; }
+      .accent-line { stroke: #4f8cff; }
+      .on-accent { fill: #0e1015; }
+      .bad { fill: #f07a8c; }
+      .bad-line { stroke: #f07a8c; }
+      .bad-box { fill: #2a1a20; stroke: #6b2f3c; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" class="head"/>
+    </marker>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" class="accent"/>
+    </marker>
+    <marker id="arrow-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" class="bad"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1280" height="320" rx="18"/>
+
+  <text class="t" x="40" y="44" font-size="20" font-weight="600">Updating the live copy</text>
+  <text class="m" x="1240" y="44" font-size="13" text-anchor="end">Your data is copied before every switch.</text>
+
+  <rect class="box" x="40" y="92" width="192" height="76" rx="10"/>
+  <text class="t" x="136" y="121" font-size="15" font-weight="600" text-anchor="middle">New release</text>
+  <text class="m" x="136" y="142" font-size="12" text-anchor="middle">checked every 15 min</text>
+  <text class="m" x="136" y="158" font-size="12" text-anchor="middle">on GitHub Releases</text>
+
+  <rect class="box" x="292" y="92" width="192" height="76" rx="10"/>
+  <text class="t" x="388" y="121" font-size="15" font-weight="600" text-anchor="middle">Prepare</text>
+  <text class="m" x="388" y="142" font-size="12" text-anchor="middle">download · uv sync</text>
+  <text class="m" x="388" y="158" font-size="12" text-anchor="middle">npm build</text>
+
+  <rect class="box" x="544" y="92" width="192" height="76" rx="10"/>
+  <text class="t" x="640" y="121" font-size="15" font-weight="600" text-anchor="middle">Check</text>
+  <text class="m" x="640" y="142" font-size="12" text-anchor="middle">runs on a copy of data/</text>
+  <text class="m" x="640" y="158" font-size="12" text-anchor="middle">health · page · live feed</text>
+
+  <rect class="box" x="796" y="92" width="192" height="76" rx="10"/>
+  <text class="t" x="892" y="121" font-size="15" font-weight="600" text-anchor="middle">Switch</text>
+  <text class="m" x="892" y="142" font-size="12" text-anchor="middle">back up data/</text>
+  <text class="m" x="892" y="158" font-size="12" text-anchor="middle">point current at it</text>
+
+  <rect class="box" x="1048" y="92" width="192" height="76" rx="10"/>
+  <text class="t" x="1144" y="121" font-size="15" font-weight="600" text-anchor="middle">Watch</text>
+  <text class="m" x="1144" y="142" font-size="12" text-anchor="middle">for 10 minutes</text>
+  <text class="m" x="1144" y="158" font-size="12" text-anchor="middle">health every 10 s</text>
+
+  <line class="line" x1="233" y1="130" x2="290" y2="130" marker-end="url(#arrow)"/>
+  <line class="line" x1="485" y1="130" x2="542" y2="130" marker-end="url(#arrow)"/>
+  <line class="accent-line" x1="737" y1="130" x2="794" y2="130" marker-end="url(#arrow-accent)"/>
+  <rect class="accent" x="690" y="58" width="152" height="26" rx="13"/>
+  <text class="on-accent" x="766" y="76" font-size="13" font-weight="600" text-anchor="middle">you press Restart</text>
+  <line class="line" x1="989" y1="130" x2="1046" y2="130" marker-end="url(#arrow)"/>
+  <text class="m" x="1017" y="122" font-size="12" text-anchor="middle">healthy</text>
+
+  <line class="bad-line" x1="892" y1="169" x2="892" y2="234" marker-end="url(#arrow-bad)"/>
+  <text class="bad" x="880" y="206" font-size="12" text-anchor="end">no answer in 60 s</text>
+  <line class="bad-line" x1="1144" y1="169" x2="1144" y2="234" marker-end="url(#arrow-bad)"/>
+  <text class="bad" x="1132" y="206" font-size="12" text-anchor="end">down 1 min, or 3 errors</text>
+
+  <rect class="bad-box" x="796" y="236" width="444" height="60" rx="10"/>
+  <text class="bad" x="1018" y="262" font-size="15" font-weight="600" text-anchor="middle">Roll back</text>
+  <text class="m" x="1018" y="282" font-size="12" text-anchor="middle">to the previous release and the data copy taken at the switch</text>
+
+  <text class="m" x="40" y="258" font-size="13">The Update button shows up once a release has passed its check.</text>
+  <text class="m" x="40" y="280" font-size="13">Settings → About → Previous version goes back by hand.</text>
+</svg>
