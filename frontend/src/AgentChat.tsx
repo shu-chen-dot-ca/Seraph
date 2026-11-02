@@ -441,12 +441,12 @@ export default function AgentChat(props: { agentId: string; compact?: boolean })
       topics.vms.map((vm) => ({
         name: vm.name,
         status: vm.status,
-        holders: vm.desktops.map((desktop) => desktop.holder),
+        holders: Object.fromEntries(vm.desktops.map((desktop) => [desktop.number, desktop.holder])),
         responding: vm.usage === null || !vm.usage.on || vm.usage.responding,
       })),
     ),
   );
-  const vms = JSON.parse(vmsText) as { name: string; status: VMStatus; holders: (string | null)[]; responding: boolean }[];
+  const vms = JSON.parse(vmsText) as { name: string; status: VMStatus; holders: Record<number, string | null>; responding: boolean }[];
   const agentsLoaded = useLoaded("agents");
 
   // entries[0] is history[start] on the server.
@@ -822,7 +822,7 @@ export default function AgentChat(props: { agentId: string; compact?: boolean })
   const vmNames = vms.map((vm) => vm.name);
   const queueVM = vms.find((vm) => vm.name === summary.vm);
   // Who holds the desktop the agent waits for (undefined: not known yet).
-  const queueHolder = queueVM !== undefined && summary.desktop !== null ? queueVM.holders[summary.desktop - 1] : undefined;
+  const queueHolder = queueVM !== undefined && summary.desktop !== null ? queueVM.holders[summary.desktop] : undefined;
   const agentNames: Record<string, string> = {};
   for (const agent of agents) {
     agentNames[agent.id] = agent.name;

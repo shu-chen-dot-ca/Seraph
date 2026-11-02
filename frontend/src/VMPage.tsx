@@ -9,9 +9,11 @@ In phone mode (App.tsx, a screen under 768px wide) the queue is under the deskto
 half the width each.
 
 A VM has one to three desktops. Each has its own screen, mouse, keyboard and home folder, so agents on different
-desktops work at the same time without getting in each other's way. With more than one, buttons Desktop 1,
-Desktop 2, ... above the desktop pick which one the desktop area, its Lock, and the queue panel (its holder, Priority
-and Runs) are about; each button's tooltip says who holds it. + after them adds a desktop and shows it once it is up
+desktops work at the same time without getting in each other's way. Each keeps its number: removing desktop 1 leaves
+desktops 2 and 3 as they are, and the next new one is desktop 1 again (the lowest number free). With more than one,
+buttons Desktop 1, Desktop 2, ... above the desktop pick which one the desktop area, its Lock, and the queue panel (its
+holder, Priority and Runs) are about; each button's tooltip says who holds it. × removes the desktop shown (it asks
+first). + after them adds a desktop and shows it once it is up
 (while the VM runs it is set up right away: under a minute the first time), and × after the last one removes that
 one (it asks first; its home folder stays). Both work running or not; Settings > Resources sets the number too. Waiting
 is one line for the whole VM: the next agent gets the first desktop that frees up, unless it asked for one ("for
@@ -171,8 +173,16 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
   const vm = vms.find((each) => each.name === name);
   const running = vm !== undefined && vm.status === "running";
   const count = vm !== undefined ? vm.desktops.length : 1;
-  // A desktop that went away (fewer desktops now) falls back to desktop 1.
-  const shown = desk <= count ? desk : 1;
+  // The VM's desktops by number, e.g. [2, 3] after desktop 1 was removed.
+  const numbers = vm !== undefined ? vm.desktops.map((each) => each.number) : [1];
+  const numbersKey = numbers.join(",");
+  // A desktop that went away falls back to the VM's first one.
+  const shown = numbers.includes(desk) ? desk : numbers[0];
+  // The number the next new desktop gets: the lowest one free.
+  let nextNumber = 1;
+  while (numbers.includes(nextNumber)) {
+    nextNumber++;
+  }
   const lockedBy = vm !== undefined ? (vm.locked_by[shown] ?? null) : null;
   const locked = lockedBy !== null;
   const desktopUrl = desktopUrls[shown] ?? null;
@@ -191,7 +201,7 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
       try {
         const urls: Record<number, string> = {};
         let terminal = false;
-        for (let number = 1; number <= count; number++) {
+        for (const number of numbersKey.split(",").map(Number)) {
           const answer = await api<{ desktop: string | null; terminal: string | null }>(
             `/api/vms/${encodeURIComponent(name)}/viewer?desktop=${number}`,
           );
@@ -222,7 +232,7 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
       stopped = true;
       window.clearTimeout(timer);
     };
-  }, [name, running, count]);
+  }, [name, running, numbersKey]);
 
   // Reload the desktop when the VM answers again after a while (a blip of a second or two doesn't count).
   useEffect(() => {
@@ -263,7 +273,7 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
   }
   const error = vm.error;
   // The desktop shown: who holds it, who waits for it, and the runs going on it.
-  const line = vm.desktops[shown - 1];
+  const line = vm.desktops.find((each) => each.number === shown) ?? vm.desktops[0];
   const holder = line.holder;
   const runs = vm.runs.filter((run) => (run.desktop ?? 1) === shown);
   const holderAgent = holder !== null && holder !== "user" ? agentById[holder] : undefined;
@@ -399,13 +409,12 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
 
   // Answers once the new desktop is up, then shows it.
   async function addDesktop() {
-    const number = count + 1;
     setBusy("add_desktop");
     try {
-      await api(`/api/vms/${encodeURIComponent(name)}/desktops`, { method: "POST" });
-      showDesktop(number);
+      const answer = await api<{ desktop: number }>(`/api/vms/${encodeURIComponent(name)}/desktops`, { method: "POST" });
+      showDesktop(answer.desktop);
     } catch (err) {
-      toast.error(`Could not add desktop ${number}: ${err instanceof Error ? err.message : err}`);
+      toast.error(`Could not add desktop ${nextNumber}: ${err instanceof Error ? err.message : err}`);
     }
     setBusy("");
   }
@@ -488,11 +497,12 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
               <ResizablePanel defaultSize="76" minSize="30">
                 <div className="flex h-full flex-col">
                   <div className="flex h-7 shrink-0 items-center gap-1 border-b bg-muted/40 px-2 text-xs">
-                    {(terminalOnly || count === 1) && <span className="font-medium text-muted-foreground">{terminalOnly ? "Terminal" : "Desktop"}</span>}
+                    {terminalOnly && <span className="font-medium text-muted-foreground">Terminal</span>}
+                    {!terminalOnly && count === 1 && <span className="font-medium text-muted-foreground">{numbers[0] === 1 ? "Desktop" : `Desktop ${numbers[0]}`}</span>}
                     {!terminalOnly &&
                       count > 1 &&
-                      vm.desktops.map((each, index) => {
-                        const number = index + 1;
+                      vm.desktops.map((each) => {
+                        const number = each.number;
                         let heldBy = "Free";
                         if (each.holder === "user") {
                           heldBy = "Held by you";
@@ -516,8 +526,8 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                       <Button
                         variant="ghost"
                         size="icon-xs"
-                        title={`Remove desktop ${count}`}
-                        aria-label={`Remove desktop ${count}`}
+                        title={`Remove desktop ${shown}`}
+                        aria-label={`Remove desktop ${shown}`}
                         disabled={busy !== ""}
                         onClick={() => setConfirmRemove(true)}
                       >
@@ -528,7 +538,7 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                       <Button
                         variant="ghost"
                         size="icon-xs"
-                        title={busy === "add_desktop" ? `Setting up desktop ${count + 1}…` : "New desktop"}
+                        title={busy === "add_desktop" ? `Setting up desktop ${nextNumber}…` : "New desktop"}
                         aria-label="New desktop"
                         disabled={busy !== ""}
                         onClick={addDesktop}
@@ -559,9 +569,9 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                   </div>
                   <div className="relative min-h-0 flex-1 bg-muted/30">
                     {running &&
-                      opened.map((number) => {
+                      (opened.includes(shown) ? opened : [...opened, shown]).map((number) => {
                         const url = desktopUrls[number];
-                        if (url === undefined || number > count) {
+                        if (url === undefined || !numbers.includes(number)) {
                           return null;
                         }
                         if (REMOTE && terminalOnly) {
@@ -1063,15 +1073,16 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
       <AlertDialog open={confirmRemove} onOpenChange={setConfirmRemove}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove desktop {count} of {vm.name}?</AlertDialogTitle>
+            <AlertDialogTitle>Remove desktop {shown} of {vm.name}?</AlertDialogTitle>
             <AlertDialogDescription>
               {running && "Its windows close. "}
-              Its home folder stays, with everything in it, and comes back with a new desktop {count}.
+              The other desktops keep their numbers. Its home folder stays, with everything in it, for when {vm.name} gets
+              a desktop {shown} again.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => removeDesktop(count)}>Remove</AlertDialogAction>
+            <AlertDialogAction onClick={() => removeDesktop(shown)}>Remove</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

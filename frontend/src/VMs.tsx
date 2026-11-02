@@ -440,9 +440,9 @@ export default function VMs(props: { tab: "vms" | "images" | "defaults" }) {
                   )}
                   {/* Several desktops: one line each, Desktop n and who holds it. */}
                   {vm.desktops.length > 1 &&
-                    vm.desktops.map((desktop, index) => (
-                      <div key={index} className="truncate text-xs">
-                        <span className="text-muted-foreground">Desktop {index + 1}: </span>
+                    vm.desktops.map((desktop) => (
+                      <div key={desktop.number} className="truncate text-xs">
+                        <span className="text-muted-foreground">Desktop {desktop.number}: </span>
                         {desktop.holder === null && <span className="text-muted-foreground">Nobody</span>}
                         {desktop.holder === "user" && "You"}
                         {desktop.holder !== null && desktop.holder !== "user" && (

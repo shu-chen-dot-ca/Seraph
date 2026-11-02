@@ -713,6 +713,7 @@ export type VMNote = {
 
 // One desktop of a VM: who uses it, and who stepped aside from it. Each has its own screen, mouse, keyboard and home folder.
 export type VMDesktop = {
+  number: number; // fixed: removing a desktop never renumbers the others, and a new one takes the lowest number free
   holder: string | null; // null, "user" or an agent id
   priority: string[]; // agents that stepped aside while their run goes; they come before the queue, first = checked first
 };
@@ -747,7 +748,7 @@ export type VMSummary = {
   autostart: boolean;
   status: VMStatus;
   created_at: string;
-  desktops: VMDesktop[]; // desktop 1 first; agents on different desktops work at the same time
+  desktops: VMDesktop[]; // lowest number first; agents on different desktops work at the same time
   queue: string[]; // agent ids waiting for a desktop, first = next
   wants: Record<string, number>; // the desktop some of them asked for (the others take the first that frees up)
   runs: VMRun[]; // long commands agents left going in the VM

@@ -3,11 +3,13 @@ screen (the VMs overview's Desktop card), each VM's queue, the user's side of it
 Notes tab, see sandbox/vms.py), and copying files between this computer and a VM (the
 Resources tab, desktop 1's home; only the user can, see sandbox/file_transfer.py).
 
-A VM has one to three desktops (sandbox/vm.py), each with its own holder and priority line, and one waiting line for
-them all: the viewer, the screen picture, the lock, Take over, Release and Give name the desktop (1 when left out);
-Front, Skip and Remove name an agent. The number of desktops is set with CPU and memory (Resources, only while the VM
-is stopped), or one at a time at any time (the desktop bar's + and ×: add one, or remove the last); a desktop in use
-can't go, and new ones go to the agents waiting.
+A VM has one to three desktops (sandbox/vm.py), each with a fixed number, its own holder and priority line, and one
+waiting line for them all: the viewer, the screen picture, the lock, Take over, Release and Give name the desktop by
+its number (the viewer and the screen picture take the VM's first desktop when left out, the others 1); Front, Skip
+and Remove name an agent. The number of desktops is set with CPU and memory (Resources, only while the VM is
+stopped), or one at a time at any time (the desktop bar's + and ×: add one, which takes the lowest number free, or
+remove any one but the last left; the others keep their numbers); a desktop in use can't go, and new ones go to the
+agents waiting.
 
 Create, start, stop and restart run in background threads inside
 sandbox/vms.py and answer at once; the browser follows the state through
@@ -250,9 +252,9 @@ def remove_note(name: str, note_id: str) -> dict:
 
 
 @router.get("/vms/{name}/viewer")
-def vm_viewer(name: str, desktop: int = 1) -> dict:
-    """Where the browser finds one of the VM's desktops (noVNC; desktop n's is on NOVNC_PORT + n - 1), or its terminal
-    (ttyd) when it has no desktop.
+def vm_viewer(name: str, desktop: int | None = None) -> dict:
+    """Where the browser finds one of the VM's desktops (noVNC; desktop n's is on NOVNC_PORT + n - 1; None: its first
+    one), or its terminal (ttyd) when it has no desktop.
 
     The browser loads it straight from the VM's address on the Incus bridge,
     which only this machine can reach. Pages through the remote access domain use /vms/{name}/vnc instead.
@@ -269,7 +271,9 @@ def vm_viewer(name: str, desktop: int = 1) -> dict:
     # A terminal-only image: terminal 1, the same tmux session every time.
     if not record.vm.has_desktop():
         return {"desktop": None, "terminal": f"http://{address}:{TERMINAL_PORT}/?arg=1"}
-    if desktop < 1 or desktop > len(record.desktops):
+    if desktop is None:
+        desktop = list(record.desktops)[0]
+    if desktop not in record.desktops:
         raise HTTPException(status_code=404, detail=f"{name} has no desktop {desktop}.")
     port = int(NOVNC_PORT) + desktop - 1
     # bell=off: no ding in the browser each time the desktop beeps (e.g. while the agent types).
@@ -301,7 +305,7 @@ async def vm_vnc(websocket: WebSocket, name: str, desktop: int = 1) -> None:
     except VMsError:
         await websocket.close(code=1008)
         return
-    if desktop < 1 or desktop > len(record.desktops):
+    if desktop not in record.desktops:
         await websocket.close(code=1008)
         return
     # An Incus call that blocks, so in a thread. None while the VM is off or still has no address: the page tries
@@ -346,14 +350,17 @@ async def vm_vnc(websocket: WebSocket, name: str, desktop: int = 1) -> None:
 
 
 @router.get("/vms/{name}/screen")
-def vm_screen(name: str, desktop: int = 1) -> Response:
-    """A small JPEG of one of the VM's desktops right now, for the Desktop card on the VMs overview. Only looks:
-    nothing reaches the desktop. 409 while the desktop isn't up (off, booting, or a terminal-only image)."""
+def vm_screen(name: str, desktop: int | None = None) -> Response:
+    """A small JPEG of one of the VM's desktops right now (None: its first one), for the Desktop card on the VMs
+    overview. Only looks: nothing reaches the desktop. 409 while the desktop isn't up (off, booting, or a terminal-only
+    image)."""
     try:
         record = vms.get(name)
     except VMsError as error:
         raise HTTPException(status_code=404, detail=str(error))
-    if desktop < 1 or desktop > len(record.desktops):
+    if desktop is None:
+        desktop = list(record.desktops)[0]
+    if desktop not in record.desktops:
         raise HTTPException(status_code=404, detail=f"{name} has no desktop {desktop}.")
     try:
         jpeg = Computer(record.desktop_vm(desktop)).preview()
@@ -433,23 +440,24 @@ def set_resources(name: str, body: ResourcesRequest) -> dict:
 
 @router.post("/vms/{name}/desktops")
 def add_desktop(name: str) -> dict:
-    """One more desktop, running or not. While the VM runs it is set up first: under a minute the first time."""
+    """One more desktop, running or not, with the lowest number free; answers with it. While the VM runs it is set up
+    first: under a minute the first time."""
     try:
         record = vms.get(name)
     except VMsError as error:
         raise HTTPException(status_code=404, detail=str(error))
     try:
-        record.add_desktop(queue.lock)
+        number = record.add_desktop(queue.lock)
         # The new desktop goes to the agents waiting.
         queue.fill(name)
     except VMsError as error:
         raise HTTPException(status_code=409, detail=str(error))
-    return {}
+    return {"desktop": number}
 
 
 @router.delete("/vms/{name}/desktops/{number}")
 def remove_desktop(name: str, number: int) -> dict:
-    """Take the last desktop away, running or not. A desktop in use can't go."""
+    """Take a desktop away, running or not; the others keep their numbers. Not the last one left, nor one in use."""
     try:
         record = vms.get(name)
     except VMsError as error:

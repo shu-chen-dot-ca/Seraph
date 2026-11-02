@@ -74,10 +74,10 @@ export default function PhoneVM() {
   let held: VMSummary | null = null;
   let heldDesktop = 1;
   for (const vm of vms) {
-    for (let index = 0; index < vm.desktops.length; index++) {
-      if (held === null && vm.desktops[index].holder === "user") {
+    for (const line of vm.desktops) {
+      if (held === null && line.holder === "user") {
         held = vm;
-        heldDesktop = index + 1;
+        heldDesktop = line.number;
       }
     }
   }
@@ -319,8 +319,8 @@ export default function PhoneVM() {
             </SelectTrigger>
             <SelectContent>
               {vms.map((vm) =>
-                vm.desktops.map((line, index) => {
-                  const number = index + 1;
+                vm.desktops.map((line) => {
+                  const number = line.number;
                   let heldBy = "Free";
                   if (line.holder === "user") {
                     heldBy = "Held by you";

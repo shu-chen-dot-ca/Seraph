@@ -37,7 +37,7 @@ export default function AgentCursor(props: { vm: VMSummary; desktop: number }) {
   // The agent that last put the mouse there, while it is still on that desktop: it holds it, or stepped aside from
   // it and nobody else holds it.
   const pointer = props.vm.pointers[props.desktop] ?? null;
-  const line = props.vm.desktops[props.desktop - 1] ?? null;
+  const line = props.vm.desktops.find((each) => each.number === props.desktop) ?? null;
   let agent: AgentSummary | null = null;
   if (pointer !== null && line !== null) {
     const here = line.holder === pointer.agent || (line.holder === null && line.priority.includes(pointer.agent));
