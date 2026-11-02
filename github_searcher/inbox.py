@@ -44,7 +44,9 @@ edit() lets the user change a pending PR or comment draft's title and text befor
 tab's thread pop-up). "edited" then says so, and its agent hears the final text with the decision (Agents.decide),
 so it learns how the user wants it written.
 
-    pr:      {"project", "problem", "cause", "fix", "risks": ["what could go wrong", ...]}
+    pr:      {"project", "problem", "cause", "fix", "risks": ["what could go wrong", ...],
+              "checklist": [{"item": "a point that was asked", "done": bool, "how": "what shows it, or why not"}, ...],
+              "also_tested": ["a case of the same kind beyond the asked example, and what came out", ...]}
     comment: {"project", "problem", "why"}  (why post this comment now)
 
 "template" is the repo's PR template when a PR's body keeps all its headings (None: the repo has none, or the body

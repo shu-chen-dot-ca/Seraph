@@ -38,6 +38,9 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   With rebase too, its commits replace the PR's (rebased onto a newer main, or squashed, reworded or signed off): base
   is the commit the rewritten branch starts from, the draft keeps the PR's newest commit as rebase_of, Approve
   force-pushes, and the PR's own commits (the user's noreply address) count as the user's.
+  Every PR draft has a checklist (each point that was asked: the issue's requirements, or the reviewers' points for a
+  new version, done or not and how it was shown) and also_tested (the cases of the same kind beyond the asked example
+  that the agent ran), so the user sees the gaps before approving, and maintainers don't find them one round at a time.
 - Projects: on one of the user's own repositories that agents develop all the time (github_searcher/projects.py), the
   rules are the repo's own files, so draft_pr and run_tests don't wait for contributing_guide or pr_examples; a PR's
   title must be a Conventional Commit; and the draft goes to the project's reviewer first (Agents.give_review), so it
@@ -169,6 +172,12 @@ OVERVIEW_PROJECT_CHARS = 150
 OVERVIEW_PART_CHARS = 400
 OVERVIEW_RISK_CHARS = 250
 OVERVIEW_RISKS_MAX = 3
+# A PR draft's checklist (every point that was asked) and also_tested (the cases of the same kind it ran too).
+CHECKLIST_MAX = 40
+CHECKLIST_ITEM_CHARS = 200
+CHECKLIST_HOW_CHARS = 300
+ALSO_TESTED_MAX = 15
+ALSO_TESTED_CHARS = 250
 # A question's options are buttons in the Inbox: a few, each a few words.
 QUESTION_OPTIONS_MAX = 4
 QUESTION_OPTION_CHARS = 80
@@ -619,6 +628,8 @@ class WorkTools:
                 "go in the body as ![before](evidence:ev_...) (a Before / After table); they are uploaded with the PR. You push and send "
                 "nothing: the user reviews it, approving sends it from their account, and you get a message with their decision. project, problem, cause, fix and "
                 "risks are only for the user, who reads them first to understand and judge the PR. " + PLAIN + " "
+                "checklist and also_tested are for the user and the reviewer: every point that was asked, each done or not and "
+                "how you showed it, and the cases of the same kind you ran beyond the asked example. "
                 "pr: only for the next version of the user's own open PR (owner/name#number; a follow_up job: a reviewer asked "
                 "for changes, or its checks failed). Then base is the PR's newest commit (the sha the follow-up message gave), "
                 "and your work is on top of it; approving pushes your commits onto the PR's branch instead of opening a new PR. "
@@ -657,8 +668,30 @@ class WorkTools:
                             "description": "1 to 3 ways this change could still go wrong or be turned down: real, specific ones (who or what "
                             "could be affected, what a maintainer might object to), not 'tests might fail'.",
                         },
+                        "checklist": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {"item": {"type": "string"}, "done": {"type": "boolean"}, "how": {"type": "string"}},
+                                "required": ["item", "done", "how"],
+                            },
+                            "description": "Every point that was asked, one by one. A new PR: each requirement of the issue (every "
+                            "acceptance criterion and every part of its spec or request; for a plain bug, the behaviour it asks for). "
+                            "A new version: each point the reviewers and bots raised on the PR, and any requirement of the issue still "
+                            "open. item: the point in a few plain words. done: whether this draft does it. how: for done, what you ran "
+                            "that shows it (the test, on which drivers, platforms or backends); for not done, why not, and that the PR "
+                            "text says so. Never done for something you didn't run.",
+                        },
+                        "also_tested": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "1 to 15 cases of the same kind beyond the issue's or the reviewer's own example that you ran, "
+                            "each with what came out: other values (limits, empty, huge, special characters, every type a value can "
+                            "have), inputs, platforms, drivers or backends the change supports, cancel or failure halfway, the same "
+                            "mistake elsewhere in the change. A maintainer will try these next: find them first.",
+                        },
                     },
-                    "required": ["job_id", "path", "base", "title", "body", "project", "problem", "cause", "fix", "risks"],
+                    "required": ["job_id", "path", "base", "title", "body", "project", "problem", "cause", "fix", "risks", "checklist", "also_tested"],
                 },
             )(self.draft_pr),
             tool(
@@ -2202,7 +2235,46 @@ class WorkTools:
                 text = f"A risk is {len(risk)} characters; keep each under {OVERVIEW_RISK_CHARS}."
                 return {"content": [{"type": "text", "text": text}], "is_error": True}
         overview["risks"] = risks
-        found = EMOJI.findall(" ".join([args["title"], args["body"], overview["project"], overview["problem"], overview["cause"], overview["fix"]] + risks))
+        # Every point that was asked, done or not and how it was shown: the user sees the gaps before approving, and the
+        # reviewer checks them against the issue and the thread. Maintainers shouldn't be the ones to find them.
+        checklist = []
+        for point in args.get("checklist") or []:
+            if not isinstance(point, dict):
+                return {"content": [{"type": "text", "text": "Each checklist point is an object with item, done and how."}], "is_error": True}
+            item = str(point.get("item") or "").strip()
+            how = str(point.get("how") or "").strip()
+            if not item or not how or not isinstance(point.get("done"), bool):
+                text = "Each checklist point needs item (the point), done (true or false) and how (what you ran that shows it, or why it isn't done)."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+            if len(item) > CHECKLIST_ITEM_CHARS or len(how) > CHECKLIST_HOW_CHARS:
+                text = f"Keep each checklist point's item under {CHECKLIST_ITEM_CHARS} characters and its how under {CHECKLIST_HOW_CHARS}."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+            checklist.append({"item": item, "done": point["done"], "how": how})
+        if not checklist or len(checklist) > CHECKLIST_MAX:
+            text = (
+                f"Give the checklist, 1 to {CHECKLIST_MAX} points: every point that was asked, one by one (each requirement of "
+                "the issue, its acceptance criteria and every part of its spec; for a new version, each point the reviewers and "
+                "bots raised), done or not, and how you showed it. Go through the issue and the thread again for it."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        also_tested = [str(case).strip() for case in (args.get("also_tested") or []) if str(case).strip()]
+        if not also_tested or len(also_tested) > ALSO_TESTED_MAX:
+            text = (
+                f"Give also_tested, 1 to {ALSO_TESTED_MAX} cases of the same kind beyond the issue's or the reviewer's own example "
+                "that you ran, each with what came out (other values, limits, types, inputs, platforms, drivers or backends). "
+                "If you only tried the asked example, try the rest of its kind now, before you draft."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        for case in also_tested:
+            if len(case) > ALSO_TESTED_CHARS:
+                text = f"A case in also_tested is {len(case)} characters; keep each under {ALSO_TESTED_CHARS}."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+        overview["checklist"] = checklist
+        overview["also_tested"] = also_tested
+        everything = [args["title"], args["body"], overview["project"], overview["problem"], overview["cause"], overview["fix"]] + risks + also_tested
+        for point in checklist:
+            everything += [point["item"], point["how"]]
+        found = EMOJI.findall(" ".join(everything))
         if found:
             return {"content": [{"type": "text", "text": NO_EMOJI + " ".join(sorted(set(found)))}], "is_error": True}
         # One of the user's projects (github_searcher/projects.py): its rules are its own files (CLAUDE.md, README, docs),
@@ -2590,6 +2662,9 @@ class WorkTools:
                 f"asks for changes you get a message with them. Nothing was pushed or sent. {job['id']} waits meanwhile; move on "
                 f"to your next job (release_vm if none is left for {vm_name})."
             )
+        not_done = [point["item"] for point in checklist if not point["done"]]
+        if not_done:
+            text += f" Not done, as your checklist says (the user sees these first): {'; '.join(not_done)}."
         return {"content": [{"type": "text", "text": text}]}
 
     async def evidence_add(self, args: dict) -> dict:
