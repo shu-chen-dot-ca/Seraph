@@ -94,9 +94,10 @@ STEPS = {
     # (show), then a short introduction to it (introduce).
     "set_up_repo": ["understand", "set_up", "show", "introduce"],
     "task": ["understand", "work", "check", "report"],
-    # Answer what happened on a PR or issue the agent follows: read it (understand), make the change or write the reply
-    # (work), the tests when the PR's code changed (test), then the draft.
-    "follow_up": ["understand", "work", "test", "draft"],
+    # Answer what happened on a PR or issue the agent follows: read it (understand), see what was reported or asked for
+    # for itself in the VM (reproduce), make the change or write the reply (work), the tests when the PR's code changed
+    # (test), then the draft.
+    "follow_up": ["understand", "reproduce", "work", "test", "draft"],
     # Reproduce a paper: read it (read), get its language and data in the VM (set_up), write the method from the paper
     # alone (rebuild), run it and the authors' own code and line the numbers up (compare), test the claims (check),
     # then the report.

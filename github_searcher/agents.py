@@ -1341,7 +1341,10 @@ class Agents:
         for job in self.jobs.for_agent(agent.id):
             if job["kind"] != "follow_up" or job["thread"] != thread or job["status"] in ["done", "cancelled"]:
                 continue
-            text = f"More on {thread} ({entry['title']}) for {job['id']}: {entry['reason']}. Read it again with read_thread and take it into account."
+            text = (
+                f"More on {thread} ({entry['title']}) for {job['id']}: {entry['reason']}. Read it again with read_thread and take "
+                "it into account: reproduce anything new it reports or asks about in the VM before you act on it."
+            )
             if entry["failed_sha"]:
                 text += f" Its checks failed on {entry['failed_sha'][:10]}: see which and why on {entry['url']}/checks."
             if own_pr:
@@ -1362,9 +1365,14 @@ class Agents:
                 "(a flaky test, a broken main branch) needs no new version: a short reply saying so, or nothing."
             )
         text += (
-            "\nYou follow it for the user: when someone else writes there or its checks fail, you suggest what to do, and the "
-            "user decides. You never post, push or send anything yourself; only the user's Approve does, as them.\n"
-            "First read the whole thread with read_thread. Then do one of these (see Following up on PRs and issues):\n"
+            "\nYou follow it for the user: whatever someone else writes there (a question, a review, a request, a bug report) "
+            "or when its checks fail, you do the work it needs yourself and draft it, and the user approves every push and "
+            "comment before it goes out (Approve sends it as them). Never ask the user to do any of it by hand: no push, "
+            "rebase, conflict or edit for them to do. You never post, push or send anything yourself.\n"
+            "First read the whole thread with read_thread. Then reproduce what it reports or asks about, in the VM, before "
+            "you change code or answer: the bug a reviewer saw, the failing check, the conflict with main, whether something "
+            "works. Never act on reading alone; add what you saw as evidence. When it doesn't happen, change nothing and say "
+            "so in a reply, with what you ran. Then do one of these (see Following up on PRs and issues):\n"
             f"- A reply, when someone asked something or waits for an answer: draft_comment with target {thread}. Short, "
             "friendly, in the project's tone, the way the user would write it."
         )
@@ -1397,9 +1405,15 @@ class Agents:
         if agent.record["name_by"] == "auto":
             text += f"\nYou still have the automatic name {agent.name}: give yourself a short name for your work with name_yourself."
         if vm_name is None:
-            text += "\nYou have no target VM. A reply needs none; for a new version, pick one with vms_list and choose_vm, then queue_for_vm."
+            text += (
+                "\nYou have no target VM. Reproducing and a new version need one: pick it with vms_list and choose_vm, then "
+                "queue_for_vm. Only a reply with nothing to reproduce (a thank-you, a question about plans) needs none."
+            )
         else:
-            text += f"\nIt is for {vm_name}: queue_for_vm only when you need the VM (a new version does, a reply doesn't)."
+            text += (
+                f"\nIt is for {vm_name}: queue_for_vm to reproduce and for a new version. Only a reply with nothing to reproduce "
+                "(a thank-you, a question about plans) needs no VM."
+            )
         self.notify(agent.id, text)
         return job
 
