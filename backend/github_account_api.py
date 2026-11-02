@@ -12,7 +12,8 @@ Sign in (github_searcher/github_account.py has how it works):
 The token goes one way: nothing ever sends it back. GET only says who it is, what the token may do and whether sign in
 is set up. Approve in the Inbox then sends PRs and comments as that account (backend/inbox_api.py), and the GitHub
 tab's buttons (Comment, close or reopen a PR, delete a branch or a comment) act as that account (backend/github_api.py).
-DELETE is Sign out: the app forgets the token.
+DELETE is Sign out: the app forgets the token. GET /api/github_account/sending says what a send going on is doing (the
+Inbox shows it while you wait).
 """
 
 from urllib.parse import urlencode
@@ -38,6 +39,16 @@ class AppRequest(BaseModel):
 @router.get("/github_account")
 def account_status() -> dict:
     return github_account.status()
+
+
+@router.get("/github_account/sending")
+def sending() -> dict:
+    """What a send going on is doing, for the Inbox while you wait: {"draft": id | None, "step"}."""
+    draft = github_account.sending_draft
+    step = ""
+    if draft is not None:
+        step = github_account.step
+    return {"draft": draft, "step": step}
 
 
 @router.put("/github_account")

@@ -79,7 +79,8 @@ issue's conversation in the thread pop-up). It
 checks first that the PR is yours and the branch is in your fork. Following your PRs is pr_tracking.py.
 
 Sends go one at a time (a second click waits, then finds the draft sent). A failure raises SendError
-with what GitHub said and at which step; nothing is kept on the draft then.
+with what GitHub said and at which step; nothing is kept on the draft then. While one goes, sending_draft and step say
+which draft it is and where it is ("replaying commit 3 of 6"), for the Inbox to show.
 """
 
 import base64
@@ -128,8 +129,10 @@ class GithubAccount:
         # started here can sign you in. One at a time; a newer one replaces it.
         self.sign_in_state = None
         self.send_lock = threading.Lock()
-        # The step a send is at, for its error message. Only changed with send_lock held.
+        # The step a send is at, for its error message and for the Inbox while it waits (backend/github_account_api.py).
+        # Only changed with send_lock held. sending_draft is the draft being sent, None between sends.
         self.step = ""
+        self.sending_draft = None
 
     def load(self) -> dict | None:
         if not self.path.is_file():
@@ -258,6 +261,7 @@ class GithubAccount:
             if draft["kind"] not in ["pr", "comment", "edit"]:
                 raise SendError("Only PRs, comments and new titles and descriptions go to GitHub.")
             self.step = "starting"
+            self.sending_draft = draft_id
             try:
                 with httpx.Client(base_url=API, headers=headers, timeout=60) as client:
                     if draft["kind"] == "pr" and draft["update_of"]:
@@ -289,6 +293,8 @@ class GithubAccount:
                 raise SendError(f"GitHub refused while {self.step}: {message}") from None
             except httpx.HTTPError as error:
                 raise SendError(f"Could not reach GitHub while {self.step}: {error}") from None
+            finally:
+                self.sending_draft = None
             return self.inbox.mark_sent(draft_id, sent)
 
     def fork(self, client: httpx.Client, account: dict, repo: str) -> str:
@@ -394,8 +400,7 @@ class GithubAccount:
                     raise SendError(f"The diff renames a file with an unusual name ({old}). Download the .patch and send it yourself.")
                 paths.append(old)
 
-            # Those files as the base commit has them, from GitHub.
-            self.step = "reading the files the change touches"
+            # Those files as the base commit has them, from GitHub. The caller's step says which change this is.
             response = client.get(f"/repos/{fork}/git/trees/{base_tree}", params={"recursive": "1"})
             response.raise_for_status()
             listing = response.json()
@@ -427,7 +432,6 @@ class GithubAccount:
 
             # What each path is now: gone (deleted, or the old name of a rename), or a file to upload.
             # A link is read as a link, never followed, so nothing outside the folder can get in.
-            self.step = "uploading the change"
             root = work.resolve()
             tree = []
             for path in paths:
@@ -491,6 +495,7 @@ class GithubAccount:
 
         body = self.pictures(client, account, fork, draft)
         # Exactly the diff you reviewed: where the commits must end.
+        self.step = "building the change you reviewed"
         tree = self.tree(client, fork, base_tree, draft["diff"])
         you = {"name": account["name"], "email": f"{account['id']}+{account['login']}@users.noreply.github.com"}
 
@@ -498,8 +503,8 @@ class GithubAccount:
         commit = base_sha
         commit_tree = base_tree
         try:
-            for each in draft["commits"]:
-                self.step = f"replaying the commit {each['sha'][:10]}"
+            for index, each in enumerate(draft["commits"]):
+                self.step = f"replaying commit {index + 1} of {len(draft['commits'])} ({each['sha'][:10]})"
                 each_tree = commit_tree
                 if each["diff"].strip() != "":
                     each_tree = self.tree(client, fork, commit_tree, each["diff"])
@@ -616,6 +621,7 @@ class GithubAccount:
 
         body = self.pictures(client, account, fork, draft)
         # Exactly the diff you reviewed: where the commits must end.
+        self.step = "building the change you reviewed"
         tree = self.tree(client, fork, base_tree, draft["diff"])
         you = {"name": account["name"], "email": f"{account['id']}+{account['login']}@users.noreply.github.com"}
 
@@ -623,8 +629,8 @@ class GithubAccount:
         commit = base_sha
         commit_tree = base_tree
         try:
-            for each in draft["commits"]:
-                self.step = f"replaying the commit {each['sha'][:10]}"
+            for index, each in enumerate(draft["commits"]):
+                self.step = f"replaying commit {index + 1} of {len(draft['commits'])} ({each['sha'][:10]})"
                 each_tree = commit_tree
                 if each["diff"].strip() != "":
                     each_tree = self.tree(client, fork, commit_tree, each["diff"])
