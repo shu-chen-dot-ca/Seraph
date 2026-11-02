@@ -1316,10 +1316,12 @@ class Agents:
             self.inbox.create("taken", job["agent"], f"{issue_id} isn't free anymore", body, job=job["id"], repo=job["repo"], target=issue_id, vm=job["vm"])
 
     def follow_up(self, entry: dict) -> dict | None:
-        """Someone else wrote on a PR or issue an agent follows for the user (agent mode Drafts on the GitHub tab), or the
-        PR's checks failed: an entry of pr_tracking.needs_reply ({"id", "kind", "relation", "title", "url", "agent", "reason",
-        "at", "failed_sha", "head"}; only the user's own PR, relation author, gets offered a new version). The agent's open follow_up job for that thread hears about it; else a new one is made.
-        Returns the job, or None when the agent is gone. Any thread."""
+        """Someone else wrote on a PR or issue an agent follows for the user (agent mode Drafts on the GitHub tab), the
+        PR's checks failed, or anything else changed on the user's own PR (merged, closed, a push, a conflict, ...): an
+        entry of pr_tracking.needs_reply ({"id", "kind", "relation", "state", "title", "url", "agent", "reason", "at",
+        "failed_sha", "head", "base", "signals"}; only the user's own open PR, relation author, gets offered a new version
+        or a rebase, and only the user's own PR or issue a new title or description). The agent's open follow_up job for
+        that thread hears about it; else a new one is made. Returns the job, or None when the agent is gone. Any thread."""
         agent = self.agents.get(entry["agent"])
         if agent is None:
             return None
@@ -1330,9 +1332,10 @@ class Agents:
         what = "issue"
         if entry["kind"] == "pr":
             what = "PR"
-        # A new version goes on the PR's own branch, which only the user's own PR has (not one they only commented on).
+        # A new version goes on the PR's own branch, which only the user's own open PR has (not one they only commented on).
         own = entry.get("relation", "author") == "author"
-        own_pr = entry["kind"] == "pr" and head is not None and own
+        ended = entry.get("state", "open") != "open"
+        own_pr = entry["kind"] == "pr" and head is not None and own and not ended
         # It comes back from the archive for it, as for a job the user gives it. unarchive() wakes it: on the loop.
         if threading.get_ident() == self.loop_thread:
             self.unarchive(agent.id)
@@ -1349,7 +1352,16 @@ class Agents:
             if entry["failed_sha"]:
                 text += f" Its checks failed on {entry['failed_sha'][:10]}: see which and why on {entry['url']}/checks."
             if own_pr:
-                text += f" Its branch {head['branch']} in {head['repo']} is at {head['sha']} now: a new version goes on top of that commit."
+                text += (
+                    f" Its branch {head['branch']} in {head['repo']} is at {head['sha']} now: a new version goes on top of that "
+                    "commit. When it conflicts with the branch it goes into, adding commits doesn't settle that: rebase it "
+                    "onto the newest one (with your change, if you have one) and draft_pr with rebase: true."
+                )
+            if ended:
+                text += (
+                    f" It is {entry['state']} now, so nothing more goes there: mark {job['id']} done with a note, and tidy up "
+                    "what you left for it in a VM (its branch's note)."
+                )
             if job["status"] == "waiting_on_user":
                 text += " Your draft for it still waits in the user's Inbox; if it no longer fits, draft a new one and say why in it."
             self.notify(agent.id, text)
@@ -1359,6 +1371,16 @@ class Agents:
         vm_name = agent.record["target_vm"]
         job = self.jobs.create("follow_up", title, agent.id, "user", repo=repo, vm=vm_name, thread=thread)
         text = f"New job {job['id']}: {title}\n{entry['reason']} on the {what} {thread} ({entry['title']}): {entry['url']}"
+        # Merged or closed: only its end to take in.
+        if ended:
+            text += (
+                f"\nIt is {entry['state']} now, so nothing more goes there. You own it for the user: read it with read_thread, "
+                f"then mark {job['id']} done (job_update) with a note on how it ended, and tidy up what you left for it in a "
+                "VM (its branch's note) the next time you hold that VM. If a maintainer asked something on the way out, a short "
+                f"reply is still fine: draft_comment with target {thread}."
+            )
+            self.notify(agent.id, text)
+            return job
         if entry["failed_sha"]:
             text += (
                 f"\nIts checks failed on {entry['failed_sha'][:10]}: see which and why on its checks page ({entry['url']}/checks, "
@@ -1403,8 +1425,9 @@ class Agents:
                 f"matches what it does: draft_edit with target {thread}. Approve changes them on GitHub as the user."
             )
         text += (
-            f"\n- Nothing, when nothing needs an answer (a thank-you, a bot's note, an approval without questions): job_update "
-            f"{job['id']} with status done and a note on why."
+            f"\n- Nothing, when nothing needs an answer (a thank-you, a bot's note with no findings, checks that passed, a "
+            f"label, an approval without questions): job_update {job['id']} with status done and a note on why. You own it "
+            "for the user: you hear about every change there, and a new job comes with the next one."
         )
         if entry["kind"] == "pr" and not own_pr:
             text += "\nThe PR's code isn't the user's to change: a reply or nothing."

@@ -19,8 +19,11 @@ It keeps, in DATA_DIR/pr_tracking.json, by "owner/name#number", each PR in "prs"
      "comments": int, "last_comment": {"login", "role", "at", "text"} | None,
      "issues": [{"number", "title", "url", "state": "open" | "closed", "reason", "assignees"}, ...],
      "relation": "author" | "commented",
-     "head": {"repo": "you/name", "branch", "sha"} | None,
+     "head": {"repo": "you/name", "branch", "sha"} | None, "base": the branch it goes into,
+     "mergeable": "yes" | "conflicts" | "unknown",
      "last_activity": {"login", "at", "what": "comment" | "review"} | None, "your_last_at": str | None,
+     "bot_activity": {"login", "at", "what"} | None,
+     "signals": {"state", "draft", "title", "head", "checks", "mergeable", "labels", "bot_at"},
      "draft_id": "draft_..." | None, "job": "job_..." | None,
      "agent": "<agent id>" | None, "agent_mode": "drafts" | "off",
      "checked_at", "error": str | None}
@@ -39,21 +42,28 @@ Approve, and the checks list shows nothing), else running, passed or failed, or 
 checks. review weighs each reviewer's latest review: approved (and nobody asks for changes), changes_requested,
 commented, or none. issues are the issues the PR says it fixes. role is GitHub's word for the person (MEMBER,
 COLLABORATOR, OWNER, CONTRIBUTOR, NONE, or BOT). relation: author (you opened it) or commented (you only commented).
-head is the PR's branch and newest commit, None once the branch is deleted. last_activity is the newest comment or
-review there by someone other than you, your_last_at your newest; bots never count (GitHub's Bot accounts, or logins
-ending in [bot]). draft_id and job link a PR the app sent to its draft.
+head is the PR's branch and newest commit, None once the branch is deleted. mergeable says whether it conflicts with
+base (unknown while GitHub works it out, e.g. right after a push). last_activity is the newest comment or review there
+by someone other than you, your_last_at your newest; bots never count there (GitHub's Bot accounts, or logins ending in
+[bot]): bot_activity is a bot's newest instead. signals is what its agent hears a change of. draft_id and job link a
+PR the app sent to its draft.
 
 Agents: each PR or issue has two modes. drafts: its agent drafts a reply or a fix when someone else writes there or
 (your PR) its checks fail, and you approve each in the Inbox; off: no drafts. Nothing goes to GitHub without your
-approval. "agent_settings" keeps, by id, {"mode": "drafts" | "off" | None, "agent", "answered_at", "failed_sha"}:
-mode and agent are what you picked (set_agent, the thread pop-up's Agent setting; None: you never did), answered_at
-the last activity an agent was already given, failed_sha the newest commit whose failed checks it was given. agent and
-agent_mode on each record are what holds: your pick, else drafts with the agent of the first draft that went there
-(a PR Approve sent, or a comment the app posted on it), else off.
+approval. "agent_settings" keeps, by id, {"mode": "drafts" | "off" | None, "agent", "answered_at", "failed_sha",
+"told"}: mode and agent are what you picked (set_agent, the thread pop-up's Agent setting; None: you never did; the
+app picks one for a PR of yours that has none, backend/github_api.py), answered_at the last activity an agent was
+already given, failed_sha the newest commit whose failed checks it was given, and told the signals it was last told
+of (the first read's, or the ones when its agent was picked: it hears what changes after). agent and agent_mode on
+each record are what holds: your pick, else drafts with the agent of the first draft that went there (a PR Approve
+sent, or a comment the app posted on it), else off.
 
 needs_reply() lists the open threads in drafts mode with an agent where someone else wrote after you and after
-answered_at, or (your PR) the checks failed on a newest commit no agent was given yet; backend/github_api.py gives each
-to its agent as a follow_up job, then calls mark_answered(). A closed or merged thread never needs a reply.
+answered_at, or (your PR) the checks failed on a newest commit no agent was given yet, or anything else changed on
+your PR since told: merged, closed or reopened, made a draft or ready for review, a new title, a new commit nobody
+drafted here (you or a maintainer pushed), its checks passed or wait for a maintainer, it conflicts with its base
+branch now (or no longer), labels added or removed, a bot wrote. backend/github_api.py gives each to its agent as a
+follow_up job, then calls mark_answered(). A closed or merged thread only has its end to hear about, once.
 
 refresh() reads them all again, one GraphQL query each (and one Actions call per PR); a merged or closed one whose
 updated_at in the search didn't change isn't read again. The backend calls it every few minutes, soon after something
@@ -108,6 +118,10 @@ class PRTracking:
             pr.setdefault("last_activity", None)
             pr.setdefault("your_last_at", None)
             pr.setdefault("agent_mode", "drafts" if pr["agent"] is not None else "off")
+            pr.setdefault("base", None)
+            pr.setdefault("mergeable", "unknown")
+            pr.setdefault("bot_activity", None)
+            pr.setdefault("signals", None)
 
     def save(self) -> None:
         """Write to disk. Called with the lock held, after every change."""
@@ -139,13 +153,17 @@ class PRTracking:
         if mode == "off":
             agent = None
         with self.lock:
-            empty = {"mode": None, "agent": None, "answered_at": None, "failed_sha": None}
+            empty = {"mode": None, "agent": None, "answered_at": None, "failed_sha": None, "told": None}
             setting = self.data["agent_settings"].setdefault(thread_id, empty)
             setting["mode"] = mode
             setting["agent"] = agent
             if thread_id in self.data["prs"]:
                 self.data["prs"][thread_id]["agent"] = agent
                 self.data["prs"][thread_id]["agent_mode"] = mode
+                # Its agent hears what changes from now on, and about a conflict it has already.
+                setting["told"] = copy.deepcopy(self.data["prs"][thread_id].get("signals"))
+                if setting["told"] is not None:
+                    setting["told"]["mergeable"] = "unknown"
             if thread_id in self.data["issues"]:
                 self.data["issues"][thread_id]["agent"] = agent
                 self.data["issues"][thread_id]["agent_mode"] = mode
@@ -155,8 +173,10 @@ class PRTracking:
     def needs_reply(self) -> list[dict]:
         """The open threads whose agent should follow up now: drafts mode with an agent, and someone else wrote after
         you and after what an agent was given already, or (your PR) its checks failed on a newest commit no agent was
-        given yet. Each: {"id", "kind": "pr" | "issue", "relation": "author" | "commented", "title", "url", "agent",
-        "reason", "at": activity time | None, "failed_sha": sha | None, "head": {"repo", "branch", "sha"} | None}."""
+        given yet, or anything else changed on your PR since its agent was last told (the module docstring). Each:
+        {"id", "kind": "pr" | "issue", "relation": "author" | "commented", "state", "title", "url", "agent", "reason",
+        "at": activity time | None, "failed_sha": sha | None, "head": {"repo", "branch", "sha"} | None, "base",
+        "signals": what to keep as told | None}."""
         threads = []
         with self.lock:
             for pr in self.data["prs"].values():
@@ -165,11 +185,63 @@ class PRTracking:
                 threads.append(("issue", copy.deepcopy(issue)))
             settings = copy.deepcopy(self.data["agent_settings"])
 
+        # What the app itself sent to each PR: a commit of its own there, or a title its agent changed, is no news to it.
+        sent_commits = []
+        sent_titles = {}
+        for draft in self.inbox.list():
+            sent = draft["sent"]
+            if sent is None:
+                continue
+            if sent["kind"] == "pr":
+                sent_commits.append(sent["commit"])
+            if sent["kind"] == "edit":
+                sent_titles.setdefault(f"{sent['repo']}#{sent['number']}", []).append(sent["title"])
+
         entries = []
         for kind, record in threads:
-            if record["state"] != "open" or record["agent_mode"] != "drafts" or record["agent"] is None:
+            if record["agent_mode"] != "drafts" or record["agent"] is None:
                 continue
             setting = settings.get(record["id"], {})
+            told = setting.get("told")
+            signals = record.get("signals")
+            # Your PR's other changes since its agent was last told.
+            changes = []
+            if kind == "pr" and record["relation"] == "author" and told is not None and signals is not None:
+                if signals["state"] != told["state"] and signals["state"] == "merged":
+                    changes.append(f"it was merged by @{record['merged_by']}")
+                if signals["state"] != told["state"] and signals["state"] == "closed":
+                    changes.append("it was closed without being merged")
+                if signals["state"] != told["state"] and signals["state"] == "open":
+                    changes.append("it was reopened")
+                if signals["draft"] != told["draft"] and signals["draft"]:
+                    changes.append("it was turned into a draft")
+                if signals["draft"] != told["draft"] and not signals["draft"]:
+                    changes.append("it was marked ready for review")
+                if signals["title"] != told["title"] and signals["title"] not in sent_titles.get(record["id"], []):
+                    changes.append(f"its title was changed to \"{signals['title']}\"")
+                if signals["head"] != told["head"] and signals["head"] is not None and signals["head"] not in sent_commits:
+                    changes.append(f"its branch has a new commit, {signals['head'][:10]}, that no draft here made (the user or a maintainer pushed it)")
+                # The checks of a new newest commit are news too, even when the last ones had passed as well.
+                checks_changed = signals["checks"] != told["checks"] or signals["head"] != told["head"]
+                if checks_changed and signals["checks"] == "passed":
+                    changes.append("its checks passed")
+                if checks_changed and signals["checks"] == "waiting":
+                    changes.append("its checks wait for a maintainer to approve them")
+                if signals["mergeable"] == "conflicts" and told["mergeable"] != "conflicts":
+                    changes.append(f"it conflicts with {record['base']} now")
+                if signals["mergeable"] == "yes" and told["mergeable"] == "conflicts":
+                    changes.append(f"it no longer conflicts with {record['base']}")
+                added = [label for label in signals["labels"] if label not in told["labels"]]
+                removed = [label for label in told["labels"] if label not in signals["labels"]]
+                if added:
+                    changes.append("it got the label " + ", ".join(added))
+                if removed:
+                    changes.append("it lost the label " + ", ".join(removed))
+                if signals["bot_at"] != told["bot_at"] and record["bot_activity"] is not None:
+                    changes.append(f"@{record['bot_activity']['login']} {record['bot_activity']['what']}")
+            # A closed or merged thread only has its end to hear about, once.
+            if record["state"] != "open" and not changes:
+                continue
             answered_at = setting.get("answered_at")
             activity = record["last_activity"]
             reasons = []
@@ -194,19 +266,21 @@ class PRTracking:
 
             # Your PR's checks failed on its newest commit, and no agent was given that commit yet.
             failed_sha = None
-            if kind == "pr" and record["relation"] == "author" and record["checks"] == "failed" and record["head"] is not None:
+            if kind == "pr" and record["relation"] == "author" and record["state"] == "open" and record["checks"] == "failed" and record["head"] is not None:
                 failed_sha = record["head"]["sha"]
             if failed_sha is not None and failed_sha == setting.get("failed_sha"):
                 failed_sha = None
             if failed_sha is not None:
                 reasons.append("its checks failed")
 
+            reasons.extend(changes)
             if not reasons:
                 continue
             entries.append({
                 "id": record["id"],
                 "kind": kind,
                 "relation": record["relation"],
+                "state": record["state"],
                 "title": record["title"],
                 "url": record["url"],
                 "agent": record["agent"],
@@ -214,19 +288,27 @@ class PRTracking:
                 "at": at,
                 "failed_sha": failed_sha,
                 "head": record.get("head"),
+                "base": record.get("base"),
+                "signals": signals,
             })
         return entries
 
-    def mark_answered(self, thread_id: str, at: str | None, failed_sha: str | None) -> None:
-        """An agent was given the thread's activity up to at, and the failed checks of the commit failed_sha (None: not
-        given that part)."""
+    def mark_answered(self, thread_id: str, at: str | None, failed_sha: str | None, signals: dict | None = None) -> None:
+        """An agent was given the thread's activity up to at, the failed checks of the commit failed_sha, and the PR as
+        signals has it (None: not given that part)."""
         with self.lock:
-            empty = {"mode": None, "agent": None, "answered_at": None, "failed_sha": None}
+            empty = {"mode": None, "agent": None, "answered_at": None, "failed_sha": None, "told": None}
             setting = self.data["agent_settings"].setdefault(thread_id, empty)
             if at is not None:
                 setting["answered_at"] = at
             if failed_sha is not None:
                 setting["failed_sha"] = failed_sha
+            if signals is not None:
+                told = copy.deepcopy(signals)
+                # Unknown is GitHub still working it out: what it was told about a conflict holds until it knows.
+                if told["mergeable"] == "unknown" and setting.get("told") is not None:
+                    told["mergeable"] = setting["told"]["mergeable"]
+                setting["told"] = told
             self.save()
 
     def refresh(self) -> None:
@@ -385,11 +467,18 @@ class PRTracking:
                 me = author
             last_activity = None
             your_last_at = None
+            # A bot's newest (a review bot's findings, a CI note): a change its agent hears about, kept apart.
+            bot_activity = None
             for comment in pull["comments"]["nodes"]:
-                if comment["author"] is None or comment["author"]["__typename"] == "Bot" or comment["author"]["login"].endswith("[bot]"):
+                if comment["author"] is None:
                     continue
                 login = comment["author"]["login"]
                 at = comment["createdAt"]
+                bot = comment["author"]["__typename"] == "Bot" or login.endswith("[bot]")
+                if bot and (bot_activity is None or at > bot_activity["at"]):
+                    bot_activity = {"login": login, "at": at, "what": "commented"}
+                if bot:
+                    continue
                 if login == me and (your_last_at is None or at > your_last_at):
                     your_last_at = at
                 if login != me and (last_activity is None or at > last_activity["at"]):
@@ -397,10 +486,13 @@ class PRTracking:
             for each in pull["reviews"]["nodes"]:
                 if each["author"] is None or each["state"] == "PENDING":
                     continue
-                if each["author"]["__typename"] == "Bot" or each["author"]["login"].endswith("[bot]"):
-                    continue
                 login = each["author"]["login"]
                 at = each["submittedAt"]
+                bot = each["author"]["__typename"] == "Bot" or login.endswith("[bot]")
+                if bot and (bot_activity is None or at > bot_activity["at"]):
+                    bot_activity = {"login": login, "at": at, "what": "reviewed it"}
+                if bot:
+                    continue
                 if login == me and (your_last_at is None or at > your_last_at):
                     your_last_at = at
                 if login != me and (last_activity is None or at > last_activity["at"]):
@@ -410,6 +502,24 @@ class PRTracking:
             head = None
             if pull["headRepository"] is not None and pull["headRef"] is not None:
                 head = {"repo": pull["headRepository"]["nameWithOwner"], "branch": pull["headRefName"], "sha": pull["headRefOid"]}
+            mergeable = "unknown"
+            if pull["mergeable"] == "MERGEABLE":
+                mergeable = "yes"
+            if pull["mergeable"] == "CONFLICTING":
+                mergeable = "conflicts"
+            labels = [label["name"] for label in pull["labels"]["nodes"]]
+
+            # What its agent hears a change of (needs_reply).
+            signals = {
+                "state": pull["state"].lower(),
+                "draft": pull["isDraft"],
+                "title": pull["title"],
+                "head": head["sha"] if head is not None else None,
+                "checks": checks,
+                "mergeable": mergeable,
+                "labels": sorted(labels),
+                "bot_at": bot_activity["at"] if bot_activity is not None else None,
+            }
 
             issues = []
             for issue in pull["closingIssuesReferences"]["nodes"]:
@@ -438,7 +548,7 @@ class PRTracking:
                 "updated_at": pull["updatedAt"],
                 "closed_at": pull["closedAt"],
                 "merged_by": pull["mergedBy"]["login"] if pull["mergedBy"] else None,
-                "labels": [label["name"] for label in pull["labels"]["nodes"]],
+                "labels": labels,
                 "checks": checks,
                 "waiting_runs": waiting_runs,
                 "review": review,
@@ -448,8 +558,12 @@ class PRTracking:
                 "issues": issues,
                 "relation": link["relation"],
                 "head": head,
+                "base": pull["baseRefName"],
+                "mergeable": mergeable,
                 "last_activity": last_activity,
                 "your_last_at": your_last_at,
+                "bot_activity": bot_activity,
+                "signals": signals,
                 "draft_id": link["draft_id"],
                 "job": link["job"],
                 "agent": agent,
@@ -459,6 +573,13 @@ class PRTracking:
             }
             with self.lock:
                 self.data["prs"][pr_id] = record
+                # The first read is where its agent starts from: it only hears what changes after. A conflict it has
+                # already is still news: it has to be settled before the PR can be merged.
+                empty = {"mode": None, "agent": None, "answered_at": None, "failed_sha": None, "told": None}
+                setting = self.data["agent_settings"].setdefault(pr_id, empty)
+                if setting.get("told") is None:
+                    setting["told"] = copy.deepcopy(signals)
+                    setting["told"]["mergeable"] = "unknown"
                 self.save()
 
         for issue_id, link in follow_issues.items():

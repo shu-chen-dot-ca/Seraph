@@ -617,14 +617,15 @@ def get_tracked_issues(owner: str, repo: str) -> dict:
 
 
 # One PR as it stands, for the GitHub tab (pr_tracking.py): its state, its branch (headRef is null once the branch is
-# deleted), labels, reviews, the latest 10 comments (oldest first: the newest is the last), the issues it says it
-# fixes, and its newest commit's checks. The agents' draft_pr reads its state and newest commit too, and draft_edit its
-# title and description (body) as they are now (agent/work_tools.py).
+# deleted), the branch it goes into and whether it conflicts with it (mergeable: MERGEABLE, CONFLICTING, or UNKNOWN
+# while GitHub works it out), labels, reviews, the latest 10 comments (oldest first: the newest is the last), the issues
+# it says it fixes, and its newest commit's checks. The agents' draft_pr reads its state and newest commit too, and
+# draft_edit its title and description (body) as they are now (agent/work_tools.py).
 PR_STATUS_QUERY = """
 query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
-      number title body url state isDraft createdAt updatedAt closedAt mergedAt reviewDecision
+      number title body url state isDraft createdAt updatedAt closedAt mergedAt reviewDecision mergeable baseRefName
       author { login }
       mergedBy { login }
       headRefName headRefOid headRepository { nameWithOwner } headRef { name }

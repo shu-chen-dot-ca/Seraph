@@ -14,9 +14,10 @@ and "failed_runs" a PR's newest commit's failed GitHub Actions runs (to run thei
 POST /api/github/agent sets one followed PR's or issue's agent: drafts (with an agent; none makes a new one) or off.
 Turning drafts on checks the thread at once. keep_prs(), which the app runs in the background, reads the PRs and
 issues again every PRS_REFRESH_SECONDS, at once when Approve just sent something, and soon after you comment or delete
-a comment here. After every read (Check now's too), each thread pr_tracking.needs_reply() lists (someone else wrote
-there, or your PR's checks failed) goes to its agent as a follow_up job (agents.follow_up); what the agent drafts then
-waits for you in the Inbox.
+a comment here. After every read (Check now's too), every open PR of yours without an agent gets one that owns it
+(unless you set it to Off), and each thread pr_tracking.needs_reply() lists (someone else wrote there, your PR's
+checks failed, or anything else changed on your PR) goes to its agent as a follow_up job (agents.follow_up); what the
+agent drafts then waits for you in the Inbox.
 
 The buttons (each asks "are you sure?" in the browser first): post a comment as you, delete one of your comments
 (refused when it isn't yours; a draft that posted it keeps when it was deleted), close or reopen one of your PRs,
@@ -361,7 +362,7 @@ async def set_agent(body: AgentRequest) -> dict:
             continue
         job = agents.follow_up(entry)
         if job is not None:
-            pr_tracking.mark_answered(entry["id"], entry["at"], entry["failed_sha"])
+            pr_tracking.mark_answered(entry["id"], entry["at"], entry["failed_sha"], entry["signals"])
     return setting
 
 
@@ -459,6 +460,25 @@ async def keep_prs() -> None:
         entries = []
         if pr_tracking.data["checked_at"] != followed_up:
             followed_up = pr_tracking.data["checked_at"]
+            # Every open PR of yours has an agent that owns it: the one whose draft opened it, or your pick. One you
+            # opened by hand, or whose agent was deleted, gets the agent that last had a job on its repo, else a new
+            # one. One you set to Off stays off.
+            followed = pr_tracking.summary()
+            settings = pr_tracking.data["agent_settings"]
+            for pr in followed["items"]:
+                if pr["relation"] != "author" or pr["state"] != "open":
+                    continue
+                if pr["agent"] is not None and pr["agent"] in agents.agents:
+                    continue
+                if settings.get(pr["id"], {}).get("mode") == "off":
+                    continue
+                owner = None
+                for job in agents.jobs.list():
+                    if owner is None and job["repo"] is not None and job["repo"].lower() == pr["repo"].lower() and job["agent"] in agents.agents:
+                        owner = job["agent"]
+                if owner is None:
+                    owner = agents.create()["id"]
+                pr_tracking.set_agent(pr["id"], "drafts", owner)
             entries = pr_tracking.needs_reply()
         for entry in entries:
             job = None
@@ -467,5 +487,5 @@ async def keep_prs() -> None:
             except Exception as error:
                 print(f"[github] could not give {entry['id']} to its agent: {error}")
             if job is not None:
-                pr_tracking.mark_answered(entry["id"], entry["at"], entry["failed_sha"])
+                pr_tracking.mark_answered(entry["id"], entry["at"], entry["failed_sha"], entry["signals"])
         await asyncio.sleep(PRS_CHECK_SECONDS)
