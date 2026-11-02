@@ -54,15 +54,21 @@ turns on select mode, like Select (top right) does: Select stays lit (a click on
 its box, and a click picks the row instead of opening it. The box at the top left of the table's header picks every row
 (checked when all are, a dash when some are); a click when all are picked unpicks them. Rows are also picked like in a mail app (components/ui/row-selection.tsx):
 Ctrl-click, Shift-click, dragging a rectangle, Ctrl+A, which turns on select mode too. A bar at the bottom then stops
-tracking them at once, as one undo step (it asks first; Enter confirms). Clearing the selection (Escape, the bar's x)
-ends select mode too.
+tracking them at once, as one undo step (it asks first; Enter confirms), or Tag opens the Tag pop-up (TagDialog.tsx,
+the same as on the Repos page, with this page's own tags) and ends select mode. Clearing the selection (Escape, the
+bar's x) ends select mode too.
+
+Tags group repos for the user, nothing more. Every group has a header (its name and how many) over its repos in the
+list's sort: the tags on top, A to Z, and No tag (the repos without one) at the bottom. A click on a header folds its
+repos away or opens them again, remembered in this browser. Shift-click and Select all skip a folded tag's repos.
 */
 
-import { ArrowDown, ArrowUp, CheckCheck, ExternalLink, Loader2, MessageSquare, Plus, RefreshCw, SquareCheck, Star, Tags, X } from "lucide-react";
+import { ArrowDown, ArrowUp, CheckCheck, ChevronRight, ExternalLink, Loader2, MessageSquare, Plus, RefreshCw, SquareCheck, Star, Tag, Tags, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import IssueDetailsDialog from "@/IssueDetailsDialog";
+import TagDialog from "@/TagDialog";
 import { Badge } from "@/components/ui/badge";
 import {
   AlertDialog,
@@ -136,6 +142,19 @@ const CONFIRMED = /\b(accepted|confirmed|approved|triaged)\b/i;
 
 type IssueTab = "free" | "assigned" | "all";
 
+const FOLDED_STORAGE = "tracked-folded-tags";
+
+// The tags this browser folded last ("" for No tag). Storage can be blocked: then every tag starts open.
+let savedFolded: string[] = [];
+try {
+  const saved = JSON.parse(localStorage.getItem(FOLDED_STORAGE) ?? "[]");
+  if (Array.isArray(saved)) {
+    savedFolded = saved.filter((each: unknown) => typeof each === "string");
+  }
+} catch {
+  savedFolded = [];
+}
+
 export default function Tracked() {
   const tracked = useLive("tracked");
   const issues = useLive("issues");
@@ -161,6 +180,9 @@ export default function Tracked() {
   const [selecting, setSelecting] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  // Whether the Tag pop-up (TagDialog) is open, and the tags whose repos are folded away under their header.
+  const [tagging, setTagging] = useState(false);
+  const [folded, setFolded] = useState<string[]>(savedFolded);
   const [, setTick] = useState(0);
 
   // "3h ago" goes stale on its own: draw again every minute.
@@ -168,6 +190,14 @@ export default function Tracked() {
     const timer = setInterval(() => setTick((tick) => tick + 1), 60_000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(FOLDED_STORAGE, JSON.stringify(folded));
+    } catch {
+      // Storage blocked: the folded tags just aren't kept.
+    }
+  }, [folded]);
 
   const inIssues = new Set(issues.items.map((issue) => issue.id));
   // An issue is new for three days after it was opened, assigned or not, unless Mark all as read saw it. How many of
@@ -329,18 +359,49 @@ export default function Tracked() {
     }
   }
 
+  // The tags in use, A to Z.
+  const tagNames: string[] = [];
+  for (const repo of tracked.items) {
+    if ((repo.tag ?? "") !== "" && !tagNames.includes(repo.tag!)) {
+      tagNames.push(repo.tag!);
+    }
+  }
+  tagNames.sort((a, b) => a.localeCompare(b));
+
+  // What the list draws: each tag's header (repo null) over its repos unless folded, the tags A to Z, then the repos
+  // without a tag (tag "") last, under a No tag header.
+  const lines: { tag: string; repo: TrackedRepo | null }[] = [];
+  for (const tag of [...tagNames, ""]) {
+    const tagRepos = rows.filter((repo) => (repo.tag ?? "") === tag);
+    if (tagRepos.length === 0) {
+      continue;
+    }
+    lines.push({ tag, repo: null });
+    const shownRepos = folded.includes(tag) ? [] : tagRepos;
+    for (const repo of shownRepos) {
+      lines.push({ tag, repo });
+    }
+  }
+
   // Only repos still tracked count as selected (an undo, an agent or another tab may have taken some out).
   const names = rows.map((repo) => repo.full_name);
   const chosen = selected.filter((name) => names.includes(name));
+  // The rows drawn: a folded tag's repos can't be clicked, so Shift-click and Select all skip them.
+  const shownNames: string[] = [];
+  for (const line of lines) {
+    if (line.repo !== null) {
+      shownNames.push(line.repo.full_name);
+    }
+  }
 
   // A ctrl-click picks or unpicks one row; a shift-click does the same to every row from the last one clicked.
   function select(name: string, shift: boolean) {
     const on = !chosen.includes(name);
     let range = [name];
-    if (shift && anchor !== null && names.includes(anchor)) {
-      const from = names.indexOf(anchor);
-      const to = names.indexOf(name);
-      range = names.slice(Math.min(from, to), Math.max(from, to) + 1);
+    if (shift && anchor !== null && shownNames.includes(anchor)) {
+      const from = shownNames.indexOf(anchor);
+      const to = shownNames.indexOf(name);
+      range = shownNames.slice(Math.min(from, to), Math.max(from, to) + 1);
     }
     setSelected(on ? [...chosen.filter((each) => !range.includes(each)), ...range] : chosen.filter((each) => !range.includes(each)));
     setAnchor(name);
@@ -354,7 +415,7 @@ export default function Tracked() {
     }
   }
   const selectMode = selecting || chosen.length > 0;
-  const allPicked = names.length > 0 && names.every((name) => chosen.includes(name));
+  const allPicked = shownNames.length > 0 && shownNames.every((name) => chosen.includes(name));
 
   async function checkNow(full_name: string) {
     setChecking((current) => [...current, full_name]);
@@ -616,8 +677,8 @@ export default function Tracked() {
                 className="flex h-5 items-center self-start"
                 aria-label={allPicked ? "Unselect all" : "Select all"}
                 title={allPicked ? "Unselect all" : "Select all (Ctrl+A)"}
-                disabled={names.length === 0}
-                onClick={() => (allPicked ? onSelect([]) : setSelected(names))}
+                disabled={shownNames.length === 0}
+                onClick={() => (allPicked ? onSelect([]) : setSelected([...new Set([...chosen, ...shownNames])]))}
               >
                 <SelectBox checked={allPicked} partial={chosen.length > 0} />
               </button>
@@ -657,7 +718,25 @@ export default function Tracked() {
               <span />
               <span />
             </div>
-            {rows.map((repo) => {
+            {lines.map((line) => {
+              // A tag's header: a click folds its repos away or opens them again.
+              if (line.repo === null) {
+                const open = !folded.includes(line.tag);
+                return (
+                  <button
+                    key={`#${line.tag}`}
+                    type="button"
+                    className="col-span-full flex h-7 items-center gap-1 border-t bg-muted/40 px-3 text-xs font-medium text-muted-foreground hover:text-foreground"
+                    aria-expanded={open}
+                    onClick={() => setFolded(open ? [...folded, line.tag] : folded.filter((each) => each !== line.tag))}
+                  >
+                    <ChevronRight className={cn("size-3.5 transition-transform", open && "rotate-90")} />
+                    {line.tag === "" ? "No tag" : line.tag}
+                    <span className="ml-0.5 tabular-nums">{rows.filter((repo) => (repo.tag ?? "") === line.tag).length}</span>
+                  </button>
+                );
+              }
+              const repo = line.repo;
               const check = repo.check;
               const signals = repo.signals;
               const free = check !== null ? check.issues.filter((issue) => issue.assignees === 0 && issue.tags?.status === "free").length : 0;
@@ -767,11 +846,30 @@ export default function Tracked() {
           </div>
         )}
       </div>
-      <RowSelection listRef={listRef} ids={names} selected={chosen} onSelect={onSelect}>
+      <RowSelection listRef={listRef} ids={shownNames} selected={chosen} onSelect={onSelect}>
         <Button size="xs" variant="ghost" onClick={() => setConfirmRemove(true)}>
           <X /> Stop tracking
         </Button>
+        <Button size="xs" variant="ghost" title="Put the picked repos under a tag" onClick={() => setTagging(true)}>
+          <Tag /> Tag
+        </Button>
       </RowSelection>
+
+      {tagging && (
+        <TagDialog
+          items={tracked.items}
+          names={chosen}
+          url="/api/tracked/tag"
+          onClose={() => setTagging(false)}
+          onTagged={(tag) => {
+            // Its header opens, so they show.
+            setTagging(false);
+            setFolded((current) => current.filter((each) => each !== tag));
+            onSelect([]);
+          }}
+          onDeleted={(tag) => setFolded((current) => current.filter((each) => each !== tag))}
+        />
+      )}
 
       {/* The open repo's issues. Its top stays put: the name, the row's buttons with their names, the description and
           the last check, then the tabs. Only the issues scroll, sideways too when the pop-up is narrower than them. */}

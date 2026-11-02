@@ -94,6 +94,20 @@ def remove_tracked(body: NamesRequest) -> dict:
     return {"removed": removed}
 
 
+class TagRequest(BaseModel):
+    names: list[str]
+    tag: str  # "" takes them out of their tag
+
+
+@router.post("/tracked/tag")
+def tag_tracked(body: TagRequest) -> dict:
+    """Put tracked repos under one tag of the user's own ("" takes them out of theirs) as one undo step. Only grouping."""
+    tagged = tracked.set_tag(body.names, body.tag.strip())
+    if not tagged:
+        raise HTTPException(status_code=404, detail="None of them is tracked.")
+    return {"tagged": tagged}
+
+
 @router.post("/tracked/from_repos")
 def track_from_repos(body: NamesRequest) -> dict:
     """Track repos of the Repos list (the Repos page's multi-select) as one undo step. Repos already tracked are skipped.
