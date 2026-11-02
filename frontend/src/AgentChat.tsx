@@ -184,6 +184,7 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   draft_question: CircleHelp,
   draft_issue: CircleDot,
   queue_for_vm: ListOrdered,
+  desktop_add: ListOrdered,
   release_vm: ListOrdered,
   vm_queue_status: ListOrdered,
   browser_open: Globe,

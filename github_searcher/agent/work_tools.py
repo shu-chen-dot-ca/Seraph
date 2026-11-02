@@ -707,6 +707,16 @@ class WorkTools:
                 {"type": "object", "properties": {"desktop": {"type": "integer"}}, "required": []},
             )(self.queue_for_vm),
             tool(
+                "desktop_add",
+                "Add a desktop to your target VM, running or not, when all of its desktops are taken and you would otherwise "
+                "wait: a VM has at most 3. It gets the lowest number free (desktops keep their numbers, so with 2 and 3 taken "
+                "the new one is desktop 1) and its own user, home folder, screen and browser. Setting it up takes under a "
+                "minute (a few more the first time). The agents already waiting in the VM's queue get it first; then "
+                "queue_for_vm. Each desktop takes memory from the others, so only when you would really wait, never a "
+                "second one for yourself.",
+                {},
+            )(self.desktop_add),
+            tool(
                 "release_vm",
                 "Give your VM's desktop back so the next agent in line can use it. Do it as soon as your jobs for it are done or waiting on the user. "
                 "While you wait in a VM's queue, it takes you out of the queue instead (e.g. when your jobs there were cancelled). "
@@ -814,6 +824,8 @@ class WorkTools:
             return f"Queuing for desktop {args.get('desktop')} of {self.record['target_vm']}"
         if name == "queue_for_vm":
             return f"Queuing for {self.record['target_vm']}"
+        if name == "desktop_add":
+            return f"Adding a desktop to {self.record['target_vm']}"
         if name == "release_vm":
             return "Releasing its VM (or leaving the queue)"
         if name == "vm_queue_status":
@@ -2964,6 +2976,27 @@ class WorkTools:
                 text += f"\n- {note['id']} by {agent_names.get(note['by'], note['by'])}, {note['at'][:10]}{on}: {note['text']}"
         else:
             text += "\nIt has no notes yet: nobody wrote down what is set up in it."
+        return {"content": [{"type": "text", "text": text}]}
+
+    async def desktop_add(self, args: dict) -> dict:
+        vm_name = self.record["target_vm"]
+        if vm_name is None:
+            text = "You have no target VM. Pick the VM that suits your jobs with vms_list and choose_vm first."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        try:
+            vm_record = self.agents.vms.get(vm_name)
+            number = await asyncio.to_thread(vm_record.add_desktop, self.agents.queue.lock)
+            # The new desktop goes to the agents waiting, maybe this one.
+            await asyncio.to_thread(self.agents.queue.fill, vm_name)
+        except VMsError as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        holder = vm_record.desktops[number]["holder"]
+        if holder == self.agent_id:
+            text = f"{vm_name} has desktop {number} now, and it is yours: you get a message with your jobs for it."
+        elif holder is not None:
+            text = f"{vm_name} has desktop {number} now; the agent first in its queue got it. queue_for_vm for a desktop of your own."
+        else:
+            text = f"{vm_name} has desktop {number} now, and it is free: queue_for_vm to take it."
         return {"content": [{"type": "text", "text": text}]}
 
     async def vm_note_add(self, args: dict) -> dict:
