@@ -30,12 +30,14 @@ A new version of one of your open PRs (the agent fixed what a review asked for, 
 with a link to that PR in the GitHub tab's pop-up, and its last tab is Commit and comment: the title is the commit
 message, the text the comment posted on the PR with it. A rebase of one (the agent rebased it onto the newer main, or
 squashed, reworded or signed off its commits as a reviewer asked) says so instead: its commits replace the PR's.
+An edit (a new title and description for your own PR or issue) has Overview, Changes (what is different, like a diff)
+and Title and description (the new text, which Edit can change).
 The bar at the bottom of the pop-up decides, with a note for the agent: Reject, Discuss, Redraft or Approve (a
 question: Reject, Reply or Approve; Taken: Stop the agent or Keep working). Redraft: the agent drafts it again with
 your note. Discuss: your note goes to the agent's chat, saying which draft it is about, and the draft keeps waiting.
 A decision goes to the agent (and the draft's job goes back to the agent's queue).
 With your GitHub account connected (Account on the GitHub tab), Approve on a PR or comment first asks "are you sure?"
-(Open PR / Post comment / Push changes / Force push), then sends it to GitHub as you (github_searcher/github_account.py): a PR from
+(Open PR / Post comment / Push changes / Force push / Save changes), then sends it to GitHub as you (github_searcher/github_account.py): a PR from
 a new branch in your fork, its pictures uploaded there; a new version's commits pushed onto your PR's branch in your
 fork (never forced, except a rebase's, and only while the branch is where the agent saw it), with its text posted
 on the PR as a comment. If GitHub refuses (also when the PR's branch moved
@@ -92,7 +94,7 @@ import { cn } from "@/lib/utils";
 // Phone mode (App.tsx) leaves out Agent and Target, so Title keeps its room.
 const COLUMNS = "grid grid-cols-[12px_88px_120px_190px_minmax(0,1fr)_44px] items-center gap-2 max-md:grid-cols-[12px_88px_minmax(0,1fr)_32px]";
 
-const KIND_LABEL: Record<string, string> = { pr: "PR", comment: "Comment", question: "Question", taken: "Taken", report: "Report" };
+const KIND_LABEL: Record<string, string> = { pr: "PR", comment: "Comment", question: "Question", taken: "Taken", report: "Report", edit: "Edit" };
 
 const DECISION_LABEL: Record<string, string> = { pending: "Pending", approved: "Approved", rejected: "Rejected", replied: "Replied" };
 // A Taken notice is decided with Keep working (approved) or Stop the agent (rejected).
@@ -388,6 +390,9 @@ export default function Inbox(props: { selected: string | null }) {
         if (sent.kind === "pr") {
           what = sent.update ? `Changes pushed to ${sent.repo}#${sent.number}` : `PR opened: ${sent.repo}#${sent.number}`;
         }
+        if (sent.kind === "edit") {
+          what = `Title and description changed on ${sent.repo}#${sent.number}`;
+        }
         toast.success(what, {
           action: { label: "Open", onClick: () => window.open(sent.url, "_blank", "noopener,noreferrer") },
         });
@@ -462,6 +467,9 @@ export default function Inbox(props: { selected: string | null }) {
         let what = `Comment posted on ${sent.repo}#${sent.number}`;
         if (sent.kind === "pr") {
           what = sent.update ? `Changes pushed to ${sent.repo}#${sent.number}` : `PR opened: ${sent.repo}#${sent.number}`;
+        }
+        if (sent.kind === "edit") {
+          what = `Title and description changed on ${sent.repo}#${sent.number}`;
         }
         toast.success(what, {
           action: { label: "Open", onClick: () => window.open(sent.url, "_blank", "noopener,noreferrer") },
@@ -557,10 +565,10 @@ export default function Inbox(props: { selected: string | null }) {
   const targetMatch = draft !== undefined && draft.target !== null ? draft.target.match(/^(.+)#(\d+)$/) : null;
   const targetUrl = targetMatch !== null ? `https://github.com/${targetMatch[1]}/issues/${targetMatch[2]}` : null;
   const reply = draft !== undefined ? (replies[draft.id] ?? "") : "";
-  // A question and a Taken notice are only their overview; only PRs and reports have a diff, only reports have results
-  // and problems, and a report has no message.
+  // A question and a Taken notice are only their overview; only PRs, edits and reports have a diff, only reports have
+  // results and problems, and a report has no message.
   let shownTab = prTab;
-  if (draft === undefined || draft.kind === "question" || draft.kind === "taken" || (shownTab === "diff" && draft.kind !== "pr" && draft.kind !== "report")) {
+  if (draft === undefined || draft.kind === "question" || draft.kind === "taken" || (shownTab === "diff" && draft.kind !== "pr" && draft.kind !== "report" && draft.kind !== "edit")) {
     shownTab = "overview";
   }
   if (draft !== undefined && draft.kind !== "report" && (shownTab === "results" || shownTab === "problems")) {
@@ -569,11 +577,11 @@ export default function Inbox(props: { selected: string | null }) {
   if (draft !== undefined && draft.kind === "report" && shownTab === "message") {
     shownTab = "overview";
   }
-  // Only a PR or comment goes to GitHub when approved.
-  const sends = draft !== undefined && (draft.kind === "pr" || draft.kind === "comment");
+  // Only a PR, comment or edit goes to GitHub when approved.
+  const sends = draft !== undefined && (draft.kind === "pr" || draft.kind === "comment" || draft.kind === "edit");
   const showTabs = draft !== undefined && draft.kind !== "question" && draft.kind !== "taken";
-  // Only a pending PR or comment can be edited; the fields show while Edit is on for this item.
-  const canEdit = draft !== undefined && draft.status === "pending" && (draft.kind === "pr" || draft.kind === "comment");
+  // Only a pending PR, comment or edit can be edited; the fields show while Edit is on for this item.
+  const canEdit = draft !== undefined && draft.status === "pending" && (draft.kind === "pr" || draft.kind === "comment" || draft.kind === "edit");
   const isEditing = draft !== undefined && editing !== null && editing.id === draft.id;
   // A new version of your open PR "owner/name#n": its commits go onto that PR's branch, its text as a comment there.
   const updateOf = draft !== undefined && draft.kind === "pr" ? draft.update_of : null;
@@ -581,7 +589,7 @@ export default function Inbox(props: { selected: string | null }) {
   const rebase = updateOf !== null && draft !== undefined && draft.rebase_of !== null;
   // A project's PR that Approve opened (projects.py): its checks, and Merge.
   const project = draft === undefined || draft.repo === null ? undefined : projects.find((each) => each.repo.toLowerCase() === draft.repo?.toLowerCase());
-  const projectPR = project !== undefined && draft !== undefined && draft.sent !== null && !draft.sent.update ? project.prs[String(draft.sent.number)] : undefined;
+  const projectPR = project !== undefined && draft !== undefined && draft.kind === "pr" && draft.sent !== null && !draft.sent.update ? project.prs[String(draft.sent.number)] : undefined;
   const canMerge = projectPR !== undefined && projectPR.state === "open" && projectPR.mergeable !== false && (projectPR.checks === "passed" || projectPR.checks === "none");
   // The "are you sure?" before Approve (or Send to GitHub) sends it, in words for what goes out.
   let confirmTitle = "";
@@ -591,6 +599,10 @@ export default function Inbox(props: { selected: string | null }) {
     confirmTitle = `Merge PR #${draft.sent.number} into main?`;
     confirmText = `It is squash-merged as @${account?.login}: one commit on main, titled "${draft.title} (#${draft.sent.number})". The next release takes it.`;
     confirmLabel = "Merge";
+  } else if (draft !== undefined && draft.kind === "edit") {
+    confirmTitle = `Change the title and description of ${draft.target}?`;
+    confirmText = `They change on GitHub as @${account?.login}, to the text shown here. Anyone can see it, and GitHub keeps the old text in its edit history.`;
+    confirmLabel = "Save changes";
   } else if (draft !== undefined && rebase) {
     confirmTitle = `Force-push this rebase to ${updateOf}?`;
     confirmText = `It replaces the commits on your PR's branch in your fork with the ones shown here, as @${account?.login}, and posts the comment shown here on the PR. The old commits are no longer part of the PR. Anyone can see it.`;
@@ -681,6 +693,7 @@ export default function Inbox(props: { selected: string | null }) {
                   {each.kind === "question" && <CircleHelp className="size-3.5" />}
                   {each.kind === "taken" && <UserX className="size-3.5" />}
                   {each.kind === "report" && <FileText className="size-3.5" />}
+                  {each.kind === "edit" && <Pencil className="size-3.5" />}
                   {KIND_LABEL[each.kind] ?? each.kind}
                 </span>
                 <span className="truncate max-md:hidden">{agentNames[each.agent] ?? each.agent}</span>
@@ -774,6 +787,7 @@ export default function Inbox(props: { selected: string | null }) {
                       {draft.kind === "question" && <CircleHelp />}
                       {draft.kind === "taken" && <UserX />}
                       {draft.kind === "report" && <FileText />}
+                      {draft.kind === "edit" && <Pencil />}
                       {KIND_LABEL[draft.kind] ?? draft.kind}
                     </Badge>
                     {draft.target !== null && targetUrl !== null && (
@@ -810,6 +824,12 @@ export default function Inbox(props: { selected: string | null }) {
                   </div>
 
                   <DialogTitle className="leading-normal">{draft.title}</DialogTitle>
+
+                  {draft.kind === "edit" && (
+                    <div className="text-xs text-muted-foreground">
+                      A new title and description for your {draft.target}: Changes shows what is different, and Approve makes the change on GitHub.
+                    </div>
+                  )}
 
                   {rebase && (
                     <div className="text-xs text-muted-foreground">
@@ -874,13 +894,15 @@ export default function Inbox(props: { selected: string | null }) {
                             <span className="text-xs text-muted-foreground tabular-nums">{(draft.overview.problems ?? []).length}</span>
                           </TabsTrigger>
                         )}
-                        {(draft.kind === "pr" || draft.kind === "report") && (
+                        {(draft.kind === "pr" || draft.kind === "report" || draft.kind === "edit") && (
                           <TabsTrigger value="diff" className="px-2.5">
-                            {draft.kind === "pr" ? "Diff" : "Files"}
+                            {draft.kind === "pr" && "Diff"}
+                            {draft.kind === "report" && "Files"}
+                            {draft.kind === "edit" && "Changes"}
                             <span className="text-xs text-muted-foreground tabular-nums">
                               {files.length} {files.length === 1 ? "file" : "files"}
                             </span>
-                            {draft.kind === "pr" && (
+                            {(draft.kind === "pr" || draft.kind === "edit") && (
                               <span className="font-mono text-xs tabular-nums">
                                 <span className="text-ok">+{totalAdded}</span> <span className="text-destructive">−{totalRemoved}</span>
                               </span>
@@ -891,7 +913,8 @@ export default function Inbox(props: { selected: string | null }) {
                           <TabsTrigger value="message" className="px-2.5">
                             {draft.kind === "pr" && updateOf === null && "PR message"}
                             {draft.kind === "pr" && updateOf !== null && "Commit and comment"}
-                            {draft.kind !== "pr" && "Comment"}
+                            {draft.kind === "edit" && "Title and description"}
+                            {draft.kind !== "pr" && draft.kind !== "edit" && "Comment"}
                           </TabsTrigger>
                         )}
                       </TabsList>
@@ -1010,8 +1033,8 @@ export default function Inbox(props: { selected: string | null }) {
                       </div>
                     )}
                     {updateOf !== null && <div className="text-xs font-medium text-muted-foreground">Commit message</div>}
-                    {draft.kind === "pr" && !isEditing && <div className="text-[15px] font-semibold">{draft.title}</div>}
-                    {draft.kind === "pr" && isEditing && editing !== null && (
+                    {(draft.kind === "pr" || draft.kind === "edit") && !isEditing && <div className="text-[15px] font-semibold">{draft.title}</div>}
+                    {(draft.kind === "pr" || draft.kind === "edit") && isEditing && editing !== null && (
                       <Input
                         className="text-[15px] font-semibold"
                         value={editing.title}
@@ -1080,11 +1103,13 @@ export default function Inbox(props: { selected: string | null }) {
                   <div className="flex items-center gap-2 max-md:flex-wrap">
                     <span className="text-xs text-muted-foreground">
                       {isEditing && "Save or cancel your edit first."}
+                      {!isEditing && sends && account !== null && account.connected && draft.kind === "edit" &&
+                        `Approve changes the title and description of ${draft.target} on GitHub as @${account.login}, after you confirm; the agent is told, with your note.`}
                       {!isEditing && sends && account !== null && account.connected && rebase &&
                         `Approve force-pushes this rebase to ${updateOf} as @${account.login}, after you confirm; the agent is told, with your note.`}
                       {!isEditing && sends && account !== null && account.connected && updateOf !== null && !rebase &&
                         `Approve pushes these changes to ${updateOf} as @${account.login}, after you confirm; the agent is told, with your note.`}
-                      {!isEditing && sends && account !== null && account.connected && updateOf === null &&
+                      {!isEditing && sends && account !== null && account.connected && updateOf === null && draft.kind !== "edit" &&
                         `Approve ${draft.kind === "pr" ? "opens this PR" : "posts this comment"} on GitHub as @${account.login}, after you confirm; the agent is told, with your note.`}
                       {!isEditing && draft.kind === "report" && "Approve accepts the report and ends the job; nothing is sent anywhere."}
                       {!isEditing && draft.kind !== "report" && (!sends || account === null || !account.connected) &&
@@ -1145,7 +1170,8 @@ export default function Inbox(props: { selected: string | null }) {
                         {draft.sent.kind === "pr" && draft.sent.update && draft.sent.rebase_of && `Force-pushed to PR #${draft.sent.number}`}
                         {draft.sent.kind === "pr" && draft.sent.update && !draft.sent.rebase_of && `Pushed to PR #${draft.sent.number}`}
                         {draft.sent.kind === "pr" && !draft.sent.update && `PR #${draft.sent.number}`}
-                        {draft.sent.kind === "comment" && "Comment"} on GitHub, as @{draft.sent.as} <ExternalLink className="size-3" />
+                        {draft.sent.kind === "comment" && "Comment"}
+                        {draft.sent.kind === "edit" && `Changed #${draft.sent.number}`} on GitHub, as @{draft.sent.as} <ExternalLink className="size-3" />
                       </a>
                     )}
                     {/* A new version went onto the PR, but GitHub refused its comment. */}

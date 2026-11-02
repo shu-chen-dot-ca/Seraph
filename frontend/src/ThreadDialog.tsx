@@ -1285,7 +1285,8 @@ export default function ThreadDialog(props: { id: string | null; onClose: () => 
                     {each.kind === "pr" && each.update_of !== null && each.rebase_of !== null && "Rebase of this PR"}
                     {each.kind === "pr" && each.update_of !== null && each.rebase_of === null && "New commits for this PR"}
                     {each.kind === "pr" && each.update_of === null && "PR draft"}
-                    {each.kind !== "pr" && "Draft reply"} by {agentNames[each.agent] ?? each.agent}, waiting in the Inbox:
+                    {each.kind === "edit" && "New title and description"}
+                    {each.kind !== "pr" && each.kind !== "edit" && "Draft reply"} by {agentNames[each.agent] ?? each.agent}, waiting in the Inbox:
                   </span>
                   <span className="min-w-0 truncate">{each.title}</span>
                   <Button variant="outline" size="sm" className="ml-auto" asChild>

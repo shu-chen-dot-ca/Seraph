@@ -411,7 +411,7 @@ export type DraftStatus = "pending" | "approved" | "rejected" | "replied";
 
 export type Draft = {
   id: string;
-  kind: "pr" | "comment" | "question" | "taken" | "report"; // taken: made by the app, an issue an agent works on isn't free anymore; report: on a paper
+  kind: "pr" | "comment" | "question" | "taken" | "report" | "edit"; // taken: made by the app, an issue an agent works on isn't free anymore; report: on a paper; edit: a new title and description for your own PR or issue
   agent: string;
   job: string | null;
   repo: string | null;
@@ -438,6 +438,7 @@ export type Draft = {
   edited: boolean; // you edited its title or text before deciding
   review: DraftReview | null; // a project's PR: its review (only passed ones reach the Inbox)
   replaces: string | null; // a project's PR made again on the new main: the PR "owner/name#n" it replaces
+  previous: { title: string; body: string } | null; // edit: the title and description as they were when drafted
 };
 
 // A project's PR draft is reviewed by the project's reviewer before it reaches the Inbox (github_searcher/inbox.py).
@@ -462,7 +463,7 @@ export type DraftCommit = {
 
 // A PR or comment Approve sent to GitHub from your account. PRs keep what following them up will need.
 export type DraftSent = {
-  kind: "pr" | "comment";
+  kind: "pr" | "comment" | "edit";
   url: string;
   number: number;
   repo: string;
@@ -475,6 +476,7 @@ export type DraftSent = {
   commit?: string;
   id?: number; // comment: its id on GitHub
   deleted_at?: string; // comment: when you deleted it on the GitHub tab
+  title?: string; // edit: the new title it set
   update?: boolean; // PR: a new version pushed onto a PR that was already open
   rebase_of?: string | null; // PR update: the PR's commit a rebase replaced (a force push)
   comment_url?: string | null; // PR update: the comment posted with it (null: none was)
