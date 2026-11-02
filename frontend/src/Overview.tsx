@@ -3,7 +3,9 @@ A draft's Overview tab in the Inbox: what it is about and the proof, written for
 
 Top: the project in one line, then the agent's plain-words explanation (github_searcher/inbox.py): the
 problem as someone using the project sees it, its cause, the fix and what could still go wrong (for a
-comment: the problem and why post it; a question, and the app's "taken" notice, are shown as they are).
+comment: the problem and why post it; a question, and the app's "taken" notice, are shown as they are). A PR then has
+its Checklist, every point that was asked (the issue's requirements, or the reviewers' points for a new version), with
+what isn't done first, and what the agent Also tested beyond the asked example.
 
 Below, "Before and after": the agent's evidence, grouped by topic in the order it was added. Each topic
 starts with its context (what is shown and how to read it), then its before and after side by side (an
@@ -97,6 +99,9 @@ export default function Overview(props: { draft: Draft; part?: string; files: nu
     rows.push({ label: "Why post this", text: overview.why });
   }
   const risks = overview.risks ?? [];
+  // What isn't done first: the gaps are what you need to see before approving.
+  const checklist = [...(overview.checklist ?? [])].sort((a, b) => Number(a.done) - Number(b.done));
+  const alsoTested = overview.also_tested ?? [];
 
   async function loadOutput(file: string) {
     setOutputs((current) => ({ ...current, [file]: "" }));
@@ -217,6 +222,34 @@ export default function Overview(props: { draft: Draft; part?: string; files: nu
               <ul className="max-w-3xl list-disc space-y-1 pl-4">
                 {risks.map((risk) => (
                   <li key={risk}>{risk}</li>
+                ))}
+              </ul>
+            </>
+          )}
+          {checklist.length > 0 && (
+            <>
+              <span className="font-medium">Checklist</span>
+              <ul className="max-w-3xl space-y-1.5">
+                {checklist.map((point, index) => (
+                  <li key={index} className="flex items-baseline gap-2">
+                    <Badge variant={point.done ? "ok" : "warn"} className="shrink-0">
+                      {point.done ? "Done" : "Not done"}
+                    </Badge>
+                    <span className="min-w-0">
+                      {point.item}
+                      <span className="block text-xs text-muted-foreground">{point.how}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {alsoTested.length > 0 && (
+            <>
+              <span className="font-medium">Also tested</span>
+              <ul className="max-w-3xl list-disc space-y-1 pl-4">
+                {alsoTested.map((item) => (
+                  <li key={item}>{item}</li>
                 ))}
               </ul>
             </>

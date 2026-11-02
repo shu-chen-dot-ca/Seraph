@@ -383,15 +383,17 @@ export type TestRun = {
   at: string;
 };
 
-// What a draft is about, in plain words for the user (github_searcher/inbox.py). PRs have problem, cause, fix and
-// risks; comments have problem and why. A report on a paper (draft_report) has paper, claims, verdict, results,
-// problems and unchecked.
+// What a draft is about, in plain words for the user (github_searcher/inbox.py). PRs have problem, cause, fix, risks,
+// checklist and also_tested; comments have problem and why. A report on a paper (draft_report) has paper, claims,
+// verdict, results, problems and unchecked.
 export type DraftOverview = {
   project?: string;
   problem?: string;
   cause?: string;
   fix?: string;
   risks?: string[];
+  checklist?: ChecklistPoint[]; // every point that was asked, done or not (PRs from before it have none)
+  also_tested?: string[]; // the cases of the same kind the agent ran beyond the asked example
   why?: string;
   paper?: string;
   claims?: string;
@@ -400,6 +402,10 @@ export type DraftOverview = {
   problems?: ReportProblem[];
   unchecked?: string[];
 };
+
+// One point a PR draft was asked for (the issue's requirement, or a reviewer's point): whether it does it, and what shows
+// it or why not.
+export type ChecklistPoint = { item: string; done: boolean; how: string };
 
 // One number of a paper next to the agent's (and what the authors' own code gives, "" when not run).
 export type ReportResult = { what: string; paper: string; ours: string; authors: string; note: string };
