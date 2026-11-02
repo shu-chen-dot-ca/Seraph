@@ -9,7 +9,7 @@
    - The evidence is real screenshots of the project running.
 4. **Review.** The draft lands in the Inbox. It has an **Overview** in plain words, the **Diff**, and the **PR message** written to the project's contributing guide.
 5. **Send.** Approve rebuilds the change on your computer, pushes it to a new branch in your fork, and opens the pull request as you.
-6. **Follow up.** When someone replies or a check fails, an agent drafts the next version, and it comes back to the Inbox.
+6. **Follow up.** Every open PR of yours has an agent that owns it, and it hears about every change there: replies, reviews, checks, pushes, conflicts with main, labels, merged or closed. It first reproduces what was reported in a VM, then drafts the answer, the next version, a rebase or a new title and description, and it comes back to the Inbox. Nothing is posted or pushed until you approve it.
 
 ## Judging repos
 
@@ -46,9 +46,10 @@ Every issue is also tagged **free**, **assigned** or **waiting**. An issue with 
 
 | Kind | Tabs | Approve |
 |---|---|---|
-| **PR** | Overview, Diff, PR message | Opens the pull request as you, or pushes a new version to one you already opened |
+| **PR** | Overview, Diff, PR message | Opens the pull request as you, pushes a new version to one you already opened, or force-pushes a rebase of it |
 | **Comment** | Overview, Comment | Posts it as you |
-| **Question** | – | You **Reply** instead |
+| **Edit** | Overview, Changes, Title and description | Changes the title and description of your own PR or issue |
+| **Question** | – | You **Reply**, or pick one of the answers the agent offers |
 | **Taken** | – | **Keep working** or **Stop the agent** |
 | **Report** | Overview, Results, Problems, Files | Ends a [paper](papers.md) job. Nothing is sent. |
 
