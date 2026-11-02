@@ -9,7 +9,8 @@ The user adds one by hand (add_repo): a GitHub link or owner/name, from the box 
 GitHub for its own spelling, stars and description, and added by the user as one undo step.
 
 Remove only takes repos off the list: nothing is blocked, so Explore and agents may find and add them again. It takes
-many repos at once (the page's multi-select), as one undo step.
+many repos at once (the page's multi-select), as one undo step, and stops tracking them too (an undo step on Tracked).
+When they have issues in the Issues list, the page asks whether those go too (an undo step on Issues).
 
 Tag puts picked repos under one tag of the user's own, or takes them out of theirs, as one undo step. It is only
 grouping: the page shows each tag's repos on top, under a header that folds them away, and the rest under No tag.
@@ -34,7 +35,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.shared import agents, repo_signals, repos, tracked
+from backend.shared import agents, issues, repo_signals, repos, tracked
 from github_searcher.search import get_contents, get_readme, get_repository, get_tree
 from sandbox.vms import VMsError
 
@@ -53,8 +54,9 @@ class AddRequest(BaseModel):
     name: str  # "owner/name" or a GitHub link to the repo
 
 
-class NamesRequest(BaseModel):
+class RemoveRequest(BaseModel):
     names: list[str]
+    issues: bool = False  # True: their issues leave the Issues list too
 
 
 class TagRequest(BaseModel):
@@ -102,11 +104,23 @@ def add_repo(body: AddRequest) -> dict:
 
 
 @router.post("/repos/remove")
-def remove_repos(body: NamesRequest) -> dict:
+def remove_repos(body: RemoveRequest) -> dict:
+    """Delete repos from Repos and stop tracking them too; with issues, their issues leave the Issues list too, but not
+    the ones an agent is working on (working lists them). Each list one undo step of its own."""
     removed = repos.remove(body.names)
     if not removed:
         raise HTTPException(status_code=404, detail="None of them is in the list.")
-    return {"removed": removed}
+    # The Tracked list may spell a name its own way (GitHub's), so names are compared without case.
+    removed_lower = [name.lower() for name in removed]
+    untracked = [item["full_name"] for item in tracked.items() if item["full_name"].lower() in removed_lower]
+    if untracked:
+        tracked.remove(untracked)
+    working = []
+    if body.issues:
+        ids = [item["id"] for item in issues.items() if item["repo"].lower() in removed_lower]
+        if ids:
+            working = issues.remove(ids)["working"]
+    return {"removed": removed, "working": working}
 
 
 @router.post("/repos/tag")

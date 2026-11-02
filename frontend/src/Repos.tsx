@@ -48,8 +48,11 @@ the top left of the table's header picks every row (checked when all are, a dash
 picked unpicks them. Rows are also picked like in a mail app (components/ui/row-selection.tsx): Ctrl-click, Shift-click,
 dragging a rectangle, Ctrl+A, which turns on select mode too; a bar at the bottom says how many. Track tracks the
 picked repos not tracked yet, Untrack stops tracking the tracked ones (each one undo step on the Tracked page); Delete
-deletes them at once, as one undo step (it asks first; Enter confirms). Delete only takes a repo off the list; Explore
-may find it again. Clearing the selection (Escape, the bar's x) ends select mode too.
+deletes them at once, as one undo step (it asks first; Enter confirms), and stops tracking them too (an undo step
+on the Tracked page). When they have issues in the Issues list, it asks whether those go too: Delete repos only (what
+Enter does) or Delete repos and issues (an undo step on the Issues page; one an agent is working on stays, and a toast
+says so). Delete only takes a repo off the lists; Explore may find it again. Clearing the selection
+(Escape, the bar's x) ends select mode too.
 
 Tag groups repos for the user, nothing more: it opens the Tag pop-up (TagDialog.tsx: pick a tag, create one or delete
 one; Apply puts the picked repos under it, or with No tag takes them out of theirs) and ends select mode. Every group
@@ -698,11 +701,16 @@ export default function Repos() {
     }
   }
 
-  async function remove(names: string[]) {
+  // Delete repos (they stop being tracked too); with withIssues their issues leave the Issues list too, but not the ones
+  // an agent is working on.
+  async function remove(names: string[], withIssues: boolean) {
     try {
-      await api("/api/repos/remove", { method: "POST", body: { names } });
+      const result = await api<{ removed: string[]; working: string[] }>("/api/repos/remove", { method: "POST", body: { names, issues: withIssues } });
       setSelected((current) => current.filter((name) => !names.includes(name)));
       setSelecting(false);
+      if (result.working.length > 0) {
+        toast.warning(`Kept ${result.working.join(", ")} in Issues: an agent is working on ${result.working.length === 1 ? "it" : "them"}. Cancel its job first.`);
+      }
     } catch (err) {
       toast.error(`Could not delete: ${err instanceof Error ? err.message : err}`);
     }
@@ -723,6 +731,8 @@ export default function Repos() {
   const untrackedChosen = chosen.filter((name) => !trackedNames.includes(name.toLowerCase()));
   const chosenLower = chosen.map((name) => name.toLowerCase());
   const trackedChosen = tracked.items.filter((each) => chosenLower.includes(each.full_name.toLowerCase())).map((each) => each.full_name);
+  // How many issues the picked repos have in the Issues list: Delete asks whether those go too.
+  const chosenIssues = issues.items.filter((issue) => chosenLower.includes(issue.repo.toLowerCase())).length;
 
   // A ctrl-click picks or unpicks one row; a shift-click does the same to every row shown from the last one clicked.
   function select(name: string, shift: boolean) {
@@ -1601,12 +1611,21 @@ export default function Repos() {
             <AlertDialogTitle>
               Delete {chosen.length} {chosen.length === 1 ? "repo" : "repos"}?
             </AlertDialogTitle>
-            <AlertDialogDescription>They leave the list; Explore may find them again. Undo brings them back.</AlertDialogDescription>
+            <AlertDialogDescription>
+              They leave Repos and Tracked; Explore may find them again. Undo on each page brings them back.
+              {chosenIssues > 0 && ` They have ${chosenIssues} ${chosenIssues === 1 ? "issue" : "issues"} in Issues: delete ${chosenIssues === 1 ? "it" : "those"} too?`}
+            </AlertDialogDescription>
           </AlertDialogHeader>
+          {/* The first button gets the focus, so Enter keeps the issues. */}
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction variant="destructive" onClick={() => remove(chosen)}>
-              Delete
+            {chosenIssues > 0 && (
+              <AlertDialogAction variant="outline" onClick={() => remove(chosen, false)}>
+                Delete repos only
+              </AlertDialogAction>
+            )}
+            <AlertDialogAction variant="destructive" onClick={() => remove(chosen, chosenIssues > 0)}>
+              {chosenIssues > 0 ? "Delete repos and issues" : "Delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

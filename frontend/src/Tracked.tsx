@@ -56,7 +56,7 @@ its box, and a click picks the row instead of opening it. The box at the top lef
 Ctrl-click, Shift-click, dragging a rectangle, Ctrl+A, which turns on select mode too. A bar at the bottom then stops
 tracking them at once, as one undo step (it asks first; Enter confirms), or Tag opens the Tag pop-up (TagDialog.tsx,
 the same as on the Repos page, with this page's own tags) and ends select mode. Clearing the selection (Escape, the
-bar's x) ends select mode too.
+bar's x) ends select mode too. Deleting a repo on the Repos page stops tracking it too.
 
 Tags group repos for the user, nothing more. Every group has a header (its name and how many) over its repos in the
 list's sort: the tags on top, A to Z, and No tag (the repos without one) at the bottom. A click on a header folds its
