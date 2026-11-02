@@ -16,7 +16,8 @@ set up, else the GitHub tab's Account page, which walks you through setting it u
 and @login, a link to Account (GitHub.tsx), where Sign out is. Before those, in the live copy: Update once a newer
 release is ready (UpdateDialog.tsx), and Restarting… while the app restarts on it. Then this repo on GitHub (a new tab, so the app stays open),
 found from git's origin remote (vite.config.ts), so no account name is written here; none when it isn't on GitHub. Reset view is in Settings
-(SettingsDialog), opened from the bottom of Home's sidebar.
+(SettingsDialog), opened from the bottom of Home's sidebar. Sherpa's round button sits at the bottom right of every
+page (Sherpa.tsx): a chat that does things in the app for you.
 
 Phone mode, on a narrow screen (under 768px, a phone): no tabs and no left list. The header's left has Menu instead
 (with how many drafts wait in the Inbox) and the open page's name. Menu slides in one list with every page of all three
@@ -58,6 +59,7 @@ import GitHub from "@/GitHub";
 import GitHubNav from "@/GitHubNav";
 import GitHubOverview from "@/GitHubOverview";
 import Home from "@/Home";
+import Sherpa from "@/Sherpa";
 import Inbox from "@/Inbox";
 import Issues from "@/Issues";
 import Jobs from "@/Jobs";
@@ -488,7 +490,9 @@ export default function App() {
         onResetView={resetView}
       />
       <UpdateDialog open={updateOpen} onOpenChange={setUpdateOpen} />
-      <Toaster theme={theme} position="bottom-right" />
+      {/* Toasts sit above Sherpa's round button. */}
+      <Toaster theme={theme} position="bottom-right" offset={{ bottom: 72 }} />
+      <Sherpa />
       <TitleTooltips />
     </TooltipProvider>
   );

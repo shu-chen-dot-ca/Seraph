@@ -4,8 +4,8 @@ The pieces are made once in backend/shared.py (the Repos, Issues and Tracked lis
 jobs, the inbox, your GitHub account, your PRs, the VMs, the VM queue and the agents), and each page has its
 own router in backend/*_api.py (the GitHub tab: github_api.py, its Account page: github_account_api.py, Your
 repositories: your_repositories_api.py, Notifications: notifications_api.py, the Workspace tab's Pull requests:
-pull_requests_api.py, a repository's Live tab on the Workspace tab: repo_live_api.py).
-topic_data() is each topic of the live feed below.
+pull_requests_api.py, a repository's Live tab on the Workspace tab: repo_live_api.py, Sherpa: sherpa_api.py).
+topic_data() is each topic of the live feed below; Sherpa reads the pages' data through it too.
 
 The browser never polls. It keeps one websocket open on /api/live, gets every
 topic when it connects, then only the topics that changed. Every store has a
@@ -55,8 +55,8 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
-from backend import agents_api, artifacts_api, explore_api, github_account_api, images_api, inbox_api, issues_api, github_api, notifications_api, projects_api, pull_requests_api, remote_access_api, repo_live_api, repos_api, tracked_api, updates_api, vms_api, your_repositories_api
-from backend.shared import agents, crashes, explore, images, inbox, issue_drafts, issue_facts, issue_tags, issues, jobs, notifications, pr_tracking, projects, remote_access, repo_signals, repos, resource_usage, tracked, tracked_issues, updates, vms, your_repositories
+from backend import agents_api, artifacts_api, explore_api, github_account_api, images_api, inbox_api, issues_api, github_api, notifications_api, projects_api, pull_requests_api, remote_access_api, repo_live_api, repos_api, sherpa_api, tracked_api, updates_api, vms_api, your_repositories_api
+from backend.shared import agents, crashes, explore, images, inbox, issue_drafts, issue_facts, issue_tags, issues, jobs, notifications, pr_tracking, projects, remote_access, repo_signals, repos, resource_usage, sherpa, tracked, tracked_issues, updates, vms, your_repositories
 from github_searcher.projects import SELF_REPO
 from github_searcher.remote_access import COOKIE, DOMAIN as REMOTE_DOMAIN
 from github_searcher.token_balancer import BALANCER
@@ -128,24 +128,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-app.include_router(inbox_api.router)
-app.include_router(github_api.router)
-app.include_router(github_account_api.router)
-app.include_router(your_repositories_api.router)
-app.include_router(notifications_api.router)
-app.include_router(pull_requests_api.router)
-app.include_router(issues_api.router)
-app.include_router(repos_api.router)
-app.include_router(explore_api.router)
-app.include_router(tracked_api.router)
-app.include_router(agents_api.router)
-app.include_router(vms_api.router)
-app.include_router(images_api.router)
-app.include_router(artifacts_api.router)
-app.include_router(remote_access_api.router)
-app.include_router(repo_live_api.router)
-app.include_router(updates_api.router)
-app.include_router(projects_api.router)
+# Every page's router; Sherpa gets their endpoints too (below).
+ROUTERS = [inbox_api.router, github_api.router, github_account_api.router, your_repositories_api.router, notifications_api.router, pull_requests_api.router, issues_api.router, repos_api.router, explore_api.router, tracked_api.router, agents_api.router, vms_api.router, images_api.router, artifacts_api.router, remote_access_api.router, repo_live_api.router, updates_api.router, projects_api.router, sherpa_api.router]
+for router in ROUTERS:
+    app.include_router(router)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 
 
@@ -203,7 +189,7 @@ async def live(websocket: WebSocket) -> None:
             resource_usage.watchers -= 1
 
 
-# The live feed's topics, by name: what the pages show.
+# The live feed's topics, by name: what the pages show, the same for Sherpa's look (github_searcher/sherpa.py).
 TOPICS = ["repos", "issues", "tracked", "explore", "github", "jobs", "inbox", "issue_drafts", "prs", "your_repos", "notifications", "agents", "vms", "images", "resource", "updates", "projects", "crashes"]
 
 
@@ -284,6 +270,10 @@ def topic_data(topic: str):
         return crashes.list()
     raise ValueError(f"No topic {topic}: one of {', '.join(TOPICS)}")
 
+
+# Sherpa works the app through its endpoints and reads what its pages show (github_searcher/sherpa.py).
+sherpa.routes = [route for router in ROUTERS for route in router.routes]
+sherpa.topic_data = topic_data
 
 
 async def feed(websocket: WebSocket, watch: dict) -> None:
