@@ -169,6 +169,9 @@ OVERVIEW_PROJECT_CHARS = 150
 OVERVIEW_PART_CHARS = 400
 OVERVIEW_RISK_CHARS = 250
 OVERVIEW_RISKS_MAX = 3
+# A question's options are buttons in the Inbox: a few, each a few words.
+QUESTION_OPTIONS_MAX = 4
+QUESTION_OPTION_CHARS = 80
 CONTEXT_CHARS = 500
 # Agents never use emoji, in drafts or anywhere (the user's rule): pictographs, dingbats and symbols drawn as emoji,
 # flags, and the joiners and selectors that make emoji. Plain arrows and math signs are fine.
@@ -452,10 +455,16 @@ class WorkTools:
                 "draft_question",
                 "Ask the user a question through their Inbox when you are blocked and need their decision or information. "
                 "job_id is the job it is about (leave it out if none). The job waits on the user until they answer. "
-                "Not for a secret to fill in (env_var_add, then say so in your message), nor to ask whether to go on.",
+                "Not for a secret to fill in (env_var_add, then say so in your message), nor to ask whether to go on. "
+                "options: when the answer is a choice, the 2 to 4 answers they can pick, each a few words (the question says what "
+                "each means); the Inbox shows each as a button, and you hear which one they picked. Put the one you recommend first.",
                 {
                     "type": "object",
-                    "properties": {"job_id": {"type": "string"}, "question": {"type": "string"}},
+                    "properties": {
+                        "job_id": {"type": "string"},
+                        "question": {"type": "string"},
+                        "options": {"type": "array", "items": {"type": "string"}},
+                    },
                     "required": ["question"],
                 },
             )(self.draft_question),
@@ -1537,7 +1546,15 @@ class WorkTools:
         question = args["question"].strip()
         if not question:
             return {"content": [{"type": "text", "text": "The question is empty."}], "is_error": True}
-        found = EMOJI.findall(question)
+        options = [option.strip() for option in (args.get("options") or []) if option.strip()]
+        if len(options) == 1 or len(options) > QUESTION_OPTIONS_MAX:
+            text = f"Give 2 to {QUESTION_OPTIONS_MAX} options, or none when the user answers in their own words."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        for option in options:
+            if len(option) > QUESTION_OPTION_CHARS:
+                text = f"An option is {len(option)} characters; keep each under {QUESTION_OPTION_CHARS}: it is a button. The question says what each means."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+        found = EMOJI.findall(" ".join([question] + options))
         if found:
             return {"content": [{"type": "text", "text": NO_EMOJI + " ".join(sorted(set(found)))}], "is_error": True}
         job = None
@@ -1555,13 +1572,13 @@ class WorkTools:
         # The subject line is the question's first line.
         title = question.split("\n")[0][:120]
         if job is None:
-            self.agents.inbox.create("question", self.agent_id, title, question)
+            self.agents.inbox.create("question", self.agent_id, title, question, options=options)
             text = "Your question is in the user's Inbox. You'll get a message with their answer."
             return {"content": [{"type": "text", "text": text}]}
 
         # A follow-up's question is about its PR or issue.
         target = job["thread"] or job["issue"]
-        draft = self.agents.inbox.create("question", self.agent_id, title, question, job=job["id"], repo=job["repo"], target=target, evidence=job["evidence"])
+        draft = self.agents.inbox.create("question", self.agent_id, title, question, job=job["id"], repo=job["repo"], target=target, evidence=job["evidence"], options=options)
         self.agents.jobs.update(job["id"], status="waiting_on_user", drafts=job["drafts"] + [draft["id"]])
         text = f"Your question is in the user's Inbox. {job['id']} waits on the user now; move on to your next job. You'll get a message with their answer."
         return {"content": [{"type": "text", "text": text}]}

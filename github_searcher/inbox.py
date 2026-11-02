@@ -24,7 +24,8 @@ Approve on a PR or comment also sends it to GitHub as them, first; "sent" then s
      "edited": bool (the user changed the title or text before deciding),
      "review": null | {"state": "waiting" | "passed" | "changes", "agent", "job", "notes", "at"} (pr only, see below),
      "replaces": "owner/name#n" | null (pr only: the project PR this one is made again of, see below),
-     "previous": {"title", "body"} | null (edit only, see below)}
+     "previous": {"title", "body"} | null (edit only, see below),
+     "options": ["what the user can pick", ...] (question only: [] when they answer in their own words)}
 
 "body" is what would be sent to GitHub; "overview" is only for the user, who doesn't know the
 project: plain words on what is wrong and what the draft does about it.
@@ -67,6 +68,9 @@ it, or the text no longer matches the PR; work_tools.py draft_edit): "target" is
 "previous" the text as it was when drafted, "diff" the change between them (one part for the title, one for the
 description), and "overview" {"project", "problem", "why"} like a comment's. Approve changes them on GitHub, only while
 they are still "previous" (github_account.py).
+
+A question can come with "options": the answers the agent offers. The Inbox shows each as a button, and picking one is
+a reply with that answer (with the user's note, if any), so the agent always knows which one was meant.
 
 "taken" is the one kind the app makes, not the agent (Agents.issue_taken): an issue an agent has a job
 for went from free to assigned. Its body says who seems to be on it; approved means keep working,
@@ -122,8 +126,9 @@ class Inbox:
             # And from before project reviews.
             draft.setdefault("review", None)
             draft.setdefault("replaces", None)
-            # And from before edits.
+            # And from before edits and question options.
             draft.setdefault("previous", None)
+            draft.setdefault("options", [])
             self.drafts[draft["id"]] = draft
 
     def save(self, draft: dict) -> None:
@@ -161,7 +166,8 @@ class Inbox:
                repo: str | None = None, target: str | None = None, diff: str = "", branch: str = "",
                base: str = "", base_sha: str = "", commits: list | None = None, vm: str | None = None, path: str | None = None, evidence: list | None = None,
                overview: dict | None = None, template: str | None = None, update_of: str | None = None, review: dict | None = None,
-               replaces: str | None = None, rebase_of: str | None = None, previous: dict | None = None) -> dict:
+               replaces: str | None = None, rebase_of: str | None = None, previous: dict | None = None,
+               options: list | None = None) -> dict:
         with self.lock:
             draft_id = "draft_" + secrets.token_hex(3)
             while draft_id in self.drafts:
@@ -196,6 +202,7 @@ class Inbox:
                 "review": copy.deepcopy(review),
                 "replaces": replaces,
                 "previous": copy.deepcopy(previous),
+                "options": list(options or []),
             }
             self.drafts[draft_id] = draft
             self.save(draft)
