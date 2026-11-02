@@ -7,7 +7,7 @@ Approving tells the agent. With the user's GitHub account connected (the GitHub 
 Approve on a PR or comment also sends it to GitHub as them, first; "sent" then says what went out
 (mark_sent). Each draft is one JSON file, DATA_DIR/inbox/<id>.json:
 
-    {"id": "draft_a1b2c3", "kind": "pr" | "comment" | "question" | "taken" | "report", "agent": "<agent id>",
+    {"id": "draft_a1b2c3", "kind": "pr" | "comment" | "question" | "taken" | "report" | "edit", "agent": "<agent id>",
      "job": "job_..." | null, "repo": "owner/name" | null, "target": "owner/name#n" | null,
      "title", "body": "markdown",
      "diff": "unified diff (pr only)", "branch": "branch in the VM (pr only)", "base": "origin/main (pr only)",
@@ -23,7 +23,8 @@ Approve on a PR or comment also sends it to GitHub as them, first; "sent" then s
      "rebase_of": "sha" | null (update_of only: the new version replaces the PR's commits, see below),
      "edited": bool (the user changed the title or text before deciding),
      "review": null | {"state": "waiting" | "passed" | "changes", "agent", "job", "notes", "at"} (pr only, see below),
-     "replaces": "owner/name#n" | null (pr only: the project PR this one is made again of, see below)}
+     "replaces": "owner/name#n" | null (pr only: the project PR this one is made again of, see below),
+     "previous": {"title", "body"} | null (edit only, see below)}
 
 "body" is what would be sent to GitHub; "overview" is only for the user, who doesn't know the
 project: plain words on what is wrong and what the draft does about it.
@@ -60,6 +61,12 @@ review_finished). passed: it shows in the Inbox, with the reviewer's notes. chan
 rejected with the reviewer's notes, so it never shows. The Inbox only lists drafts with no review or a passed one.
 "replaces" is the project's open PR that conflicted with main and was made again on the new main (Agents.redo_pr): once
 this one is on GitHub, backend/projects_api.py closes that one.
+
+"edit" is a new title and description for one of the user's own PRs or issues (a follow-up: a maintainer asked for
+it, or the text no longer matches the PR; work_tools.py draft_edit): "target" is it, "title" and "body" the new text,
+"previous" the text as it was when drafted, "diff" the change between them (one part for the title, one for the
+description), and "overview" {"project", "problem", "why"} like a comment's. Approve changes them on GitHub, only while
+they are still "previous" (github_account.py).
 
 "taken" is the one kind the app makes, not the agent (Agents.issue_taken): an issue an agent has a job
 for went from free to assigned. Its body says who seems to be on it; approved means keep working,
@@ -115,6 +122,8 @@ class Inbox:
             # And from before project reviews.
             draft.setdefault("review", None)
             draft.setdefault("replaces", None)
+            # And from before edits.
+            draft.setdefault("previous", None)
             self.drafts[draft["id"]] = draft
 
     def save(self, draft: dict) -> None:
@@ -152,7 +161,7 @@ class Inbox:
                repo: str | None = None, target: str | None = None, diff: str = "", branch: str = "",
                base: str = "", base_sha: str = "", commits: list | None = None, vm: str | None = None, path: str | None = None, evidence: list | None = None,
                overview: dict | None = None, template: str | None = None, update_of: str | None = None, review: dict | None = None,
-               replaces: str | None = None, rebase_of: str | None = None) -> dict:
+               replaces: str | None = None, rebase_of: str | None = None, previous: dict | None = None) -> dict:
         with self.lock:
             draft_id = "draft_" + secrets.token_hex(3)
             while draft_id in self.drafts:
@@ -186,6 +195,7 @@ class Inbox:
                 "edited": False,
                 "review": copy.deepcopy(review),
                 "replaces": replaces,
+                "previous": copy.deepcopy(previous),
             }
             self.drafts[draft_id] = draft
             self.save(draft)
@@ -209,7 +219,7 @@ class Inbox:
             return copy.deepcopy(draft)
 
     def edit(self, draft_id: str, title: str, body: str) -> dict:
-        """The user changes a pending PR or comment draft's title and text before deciding. Returns the draft as it is now."""
+        """The user changes a pending PR, comment or edit draft's title and text before deciding. Returns the draft as it is now."""
         title = title.strip()
         body = body.strip()
         if title == "" or body == "":
@@ -221,8 +231,8 @@ class Inbox:
             draft = self.drafts[draft_id]
             if draft["status"] != "pending":
                 raise ValueError(f"{draft_id} was already {draft['status']}")
-            if draft["kind"] not in ["pr", "comment"]:
-                raise ValueError("Only a PR or a comment can be edited.")
+            if draft["kind"] not in ["pr", "comment", "edit"]:
+                raise ValueError("Only a PR, a comment or a new title and description can be edited.")
             # Saved as it was: nothing changed, so it isn't edited.
             if title == draft["title"] and body == draft["body"].strip():
                 return copy.deepcopy(draft)

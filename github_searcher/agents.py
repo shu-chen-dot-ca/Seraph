@@ -1331,7 +1331,8 @@ class Agents:
         if entry["kind"] == "pr":
             what = "PR"
         # A new version goes on the PR's own branch, which only the user's own PR has (not one they only commented on).
-        own_pr = entry["kind"] == "pr" and head is not None and entry.get("relation", "author") == "author"
+        own = entry.get("relation", "author") == "author"
+        own_pr = entry["kind"] == "pr" and head is not None and own
         # It comes back from the archive for it, as for a job the user gives it. unarchive() wakes it: on the loop.
         if threading.get_ident() == self.loop_thread:
             self.unarchive(agent.id)
@@ -1396,6 +1397,11 @@ class Agents:
                 f"{thread}, that base and rebase: true; Approve force-pushes it. Its body is the comment posted with the push "
                 "(what it is rebased onto, and how each conflict was settled)."
             )
+        if own:
+            text += (
+                f"\n- A new title or description, when someone asks for one on the user's own {what}, or its text no longer "
+                f"matches what it does: draft_edit with target {thread}. Approve changes them on GitHub as the user."
+            )
         text += (
             f"\n- Nothing, when nothing needs an answer (a thank-you, a bot's note, an approval without questions): job_update "
             f"{job['id']} with status done and a note on why."
@@ -1452,7 +1458,7 @@ class Agents:
         if job is not None and job["status"] == "waiting_on_user":
             job = self.jobs.update(job["id"], status="queued")
 
-        kinds = {"pr": "PR", "comment": "comment", "question": "question", "report": "report"}
+        kinds = {"pr": "PR", "comment": "comment", "question": "question", "report": "report", "edit": "title and description"}
         about = f"your {kinds.get(draft['kind'], draft['kind'])} draft {draft_id} ({draft['title']})"
         job_name = job["id"] if job is not None else "your work"
         # Approve sends a PR or comment first when the user's GitHub account is connected (inbox_api.py): then it is on GitHub.
@@ -1484,6 +1490,10 @@ class Agents:
                 text = f"The user approved {about}. They force-push it onto {draft['update_of']} themselves. If it finishes {job_name}, mark the job done with job_update."
         elif decision == "approved" and draft["kind"] == "pr":
             text = f"The user approved {about}. They send it to GitHub themselves. If it finishes {job_name}, mark the job done with job_update."
+        elif decision == "approved" and draft["kind"] == "edit" and sent is not None:
+            text = f"The user approved {about}, and {sent['repo']}#{sent['number']} has the new text on GitHub now: {sent['url']}. Carry on with {job_name}."
+        elif decision == "approved" and draft["kind"] == "edit":
+            text = f"The user approved {about}. They change it on GitHub themselves. Carry on with {job_name}."
         elif decision == "approved" and draft["kind"] == "comment" and sent is not None:
             text = f"The user approved {about}, and it is posted: {sent['url']}. Carry on with {job_name}."
         elif decision == "approved" and draft["kind"] == "comment":
@@ -1508,7 +1518,7 @@ class Agents:
         # The user changed the text before deciding: the agent sees how they wanted it, to write it that way next time.
         if draft["edited"]:
             final = draft["body"]
-            if draft["kind"] == "pr":
+            if draft["kind"] in ["pr", "edit"]:
                 final = f"{draft['title']}\n\n{draft['body']}"
             text += f"\nThe user edited your draft before deciding. The final text:\n{final}\nSee what they changed, and write it their way next time."
         if job is not None and job["status"] == "queued" and job["vm"] is not None:

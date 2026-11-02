@@ -97,6 +97,7 @@ tools (repo_tools.py).
 
 import asyncio
 import base64
+import difflib
 import hashlib
 import html
 import json
@@ -115,7 +116,7 @@ from claude_agent_sdk import tool
 from github_searcher.artifacts import ArtifactsError
 from github_searcher.jobs import EVIDENCE_DIR
 from github_searcher.projects import TITLE, TITLE_CHARS
-from github_searcher.search import get_contents, get_merged_prs, get_pr_status, get_readme, get_repository, get_thread, get_tree
+from github_searcher.search import get_contents, get_issue_status, get_merged_prs, get_pr_status, get_readme, get_repository, get_thread, get_tree
 from sandbox.agent import long_runs
 from sandbox.agent.computer_use import Computer, ComputerError
 from sandbox.agent.tools import HIDE_MIN_LENGTH
@@ -424,6 +425,29 @@ class WorkTools:
                     "required": ["job_id", "target", "body", "project", "problem", "why"],
                 },
             )(self.draft_comment),
+            tool(
+                "draft_edit",
+                "Draft a new title and description for one of the user's own PRs or issues (target: owner/name#number; a "
+                "follow_up job's thread), for the user's Inbox: when a maintainer asks for it (follow the PR template, a "
+                "Conventional Commit title, say what was tested), or when the PR's text no longer matches its code. title is the "
+                "whole new title, body the whole new description, as they would be on GitHub (leave one out to keep it as it "
+                "is). The app reads the text as it is now and shows the user the change. Nothing is changed yet: the user "
+                "decides, approving changes it on GitHub as them, and you get a message with their decision. project, problem "
+                "and why are only for the user. " + PLAIN,
+                {
+                    "type": "object",
+                    "properties": {
+                        "job_id": {"type": "string"},
+                        "target": {"type": "string"},
+                        "title": {"type": "string"},
+                        "body": {"type": "string"},
+                        "project": {"type": "string", "description": "One line: what the project is, e.g. 'matplotlib: a Python library that draws charts'."},
+                        "problem": {"type": "string", "description": "What was asked for, or what the text gets wrong now, in 1 to 2 sentences."},
+                        "why": {"type": "string", "description": "Why this change to the text, in 1 to 2 sentences."},
+                    },
+                    "required": ["job_id", "target", "project", "problem", "why"],
+                },
+            )(self.draft_edit),
             tool(
                 "draft_question",
                 "Ask the user a question through their Inbox when you are blocked and need their decision or information. "
@@ -796,6 +820,8 @@ class WorkTools:
             return f"Drafting a comment on {args.get('target')}"
         if name == "draft_question":
             return "Asking: " + (args.get("question") or "").split("\n")[0][:120]
+        if name == "draft_edit":
+            return f"Drafting a new title and description for {args.get('target')}"
         if name == "paper_read":
             return f"Reading the paper, pages {args.get('pages')}"
         if name == "draft_report":
@@ -1416,6 +1442,94 @@ class WorkTools:
         text = (
             f"{draft['id']} is in the user's Inbox. Nothing was posted: the user decides, and you'll get a message with their "
             f"decision. {job['id']} waits on the user now; move on to your next job."
+        )
+        return {"content": [{"type": "text", "text": text}]}
+
+    async def draft_edit(self, args: dict) -> dict:
+        try:
+            job = self.agents.jobs.get(args["job_id"])
+        except KeyError:
+            return {"content": [{"type": "text", "text": f"No job {args['job_id']}."}], "is_error": True}
+        if job["agent"] != self.agent_id:
+            return {"content": [{"type": "text", "text": f"{job['id']} is not your job."}], "is_error": True}
+        if job["status"] in CLOSED_STATUSES:
+            text = f"{job['id']} is {job['status']} (the user may have cancelled it): no drafts for it anymore. Move on."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        target = (args.get("target") or "").strip()
+        repo = target.split("#")[0]
+        if "#" not in target or repo.count("/") != 1 or not target.split("#")[-1].isdigit():
+            return {"content": [{"type": "text", "text": "target must be owner/name#number: the user's own PR or issue."}], "is_error": True}
+        overview = {
+            "project": (args.get("project") or "").strip(),
+            "problem": (args.get("problem") or "").strip(),
+            "why": (args.get("why") or "").strip(),
+        }
+        for part, text in overview.items():
+            limit = OVERVIEW_PROJECT_CHARS if part == "project" else OVERVIEW_PART_CHARS
+            if not text:
+                return {"content": [{"type": "text", "text": f"Give {part}: the user reads it to understand the change."}], "is_error": True}
+            if len(text) > limit:
+                text = f"{part} is {len(text)} characters; keep it under {limit}. Short and plain: the user reads it at a glance."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        # Its text as it is now, never cached: what the user sees changed, and what sending checks is still there.
+        owner = repo.split("/")[0]
+        name = repo.split("/")[1]
+        number = int(target.split("#")[1])
+        try:
+            thread = await asyncio.to_thread(get_pr_status, owner, name, number)
+            if thread is None:
+                thread = await asyncio.to_thread(get_issue_status, owner, name, number)
+        except (httpx.HTTPError, ValueError) as error:
+            # GraphQL says "Could not resolve" for a number that is an issue when asked for a PR.
+            try:
+                thread = await asyncio.to_thread(get_issue_status, owner, name, number)
+            except (httpx.HTTPError, ValueError) as second:
+                return {"content": [{"type": "text", "text": f"Could not read {target}: {error}; {second}"}], "is_error": True}
+        if thread is None:
+            return {"content": [{"type": "text", "text": f"{target} is not a PR or issue on GitHub."}], "is_error": True}
+        # Only the user's own: with their sign-in the app knows who they are (sending checks it again).
+        account = self.agents.your_repositories.github_account.status()
+        author = ""
+        if thread["author"] is not None:
+            author = thread["author"]["login"]
+        if account["connected"] and author.lower() != account["login"].lower():
+            text = f"{target} was opened by {author}, not the user: only the user's own PR or issue can get a new title or description. A draft_comment can suggest one."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        previous = {"title": thread["title"], "body": (thread["body"] or "").replace("\r\n", "\n")}
+        title = (args.get("title") or "").strip() or previous["title"]
+        body = previous["body"]
+        if args.get("body") is not None:
+            body = args["body"].strip()
+        if title == previous["title"] and body.strip() == previous["body"].strip():
+            return {"content": [{"type": "text", "text": f"That is the text {target} has already: nothing changes."}], "is_error": True}
+        found = EMOJI.findall(" ".join([title, body] + list(overview.values())))
+        if found:
+            return {"content": [{"type": "text", "text": NO_EMOJI + " ".join(sorted(set(found)))}], "is_error": True}
+        pictures = [item["id"] for item in job["evidence"] if item["kind"] in ["screenshot", "image"]]
+        unknown = [evidence_id for evidence_id in re.findall(r"evidence:(ev_[0-9a-f]{6})", body) if evidence_id not in pictures]
+        if unknown:
+            text = f"The description shows {', '.join(unknown)}, which aren't pictures of {job['id']}: use the ids evidence_add gave your screenshots and images."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        # The change for the user to read, like a PR's diff: one part for the title, one for the description.
+        parts = []
+        for part, old, new in [("Title", previous["title"], title), ("Description", previous["body"], body)]:
+            if old.strip() == new.strip():
+                continue
+            lines = list(difflib.unified_diff(old.split("\n"), new.split("\n"), f"a/{part}", f"b/{part}", lineterm=""))
+            parts.append(f"diff --git a/{part} b/{part}\n" + "\n".join(lines))
+        diff = "\n".join(parts) + "\n"
+
+        draft = self.agents.inbox.create(
+            "edit", self.agent_id, title, body, job=job["id"], repo=repo, target=target, diff=diff, evidence=job["evidence"],
+            overview=overview, previous=previous,
+        )
+        self.agents.jobs.update(job["id"], status="waiting_on_user", drafts=job["drafts"] + [draft["id"]])
+        text = (
+            f"{draft['id']} is in the user's Inbox. Nothing was changed on GitHub: the user decides, and you'll get a message "
+            f"with their decision. {job['id']} waits on the user now; move on to your next job."
         )
         return {"content": [{"type": "text", "text": text}]}
 

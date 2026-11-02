@@ -22,7 +22,7 @@ either; only the Inbox's Approve and Send to GitHub (backend/inbox_api.py) and t
 (backend/github_api.py) use the token. It is kept apart from the search tokens in .env (token_balancer.py), which only
 read.
 
-send(draft_id) sends a PR or comment draft once, as it was shown in the Inbox. A PR:
+send(draft_id) sends a PR, comment or edit draft once, as it was shown in the Inbox. A PR:
 1. Your fork of the project, made the first time (GitHub keeps it). Your own repo is its own fork.
 2. The pictures the body shows (evidence:ev_...) go on your fork's pr-pictures branch, one folder per
    draft, and the body links to them there: GitHub's API has no way to attach a picture to a PR.
@@ -42,6 +42,8 @@ send(draft_id) sends a PR or comment draft once, as it was shown in the Inbox. A
    the project's default branch), with the draft's title and body. If GitHub refuses it, the new
    branch is deleted again, so trying again starts clean.
 A comment is posted on its issue or PR (its pictures go to your fork the same way).
+An edit (a new title and description for your own PR or issue) changes them on GitHub, only when it is yours and still
+has the text the agent saw ("previous"), else it refuses (the agent redrafts on the text as it is now).
 
 A PR draft with update_of is the agent's next version of your open PR (a follow-up: a reviewer asked for
 changes, or its checks failed), not a new PR. The PR is read first, with your token: it must be open, opened
@@ -66,6 +68,7 @@ What was sent is kept on the draft as "sent" (Inbox.mark_sent):
              "rebase_of": the PR's commit it replaced (a rebase) | None,
              "comment_url": the comment posted with it | None, "comment_error": None | why it wasn't posted
     comment: {"kind": "comment", "url", "id", "repo", "number", "as", "at", "deleted_at" once deleted from the GitHub tab}
+    edit:    {"kind": "edit", "url", "repo", "number", "title", "as", "at"}
 
 comment(target, body) posts your own comment, as you, on a PR or issue: the comment box of the GitHub tab's
 thread pop-up (backend/github_api.py), after its "are you sure?". No agent and no draft is involved.
@@ -252,8 +255,8 @@ class GithubAccount:
             draft = self.inbox.get(draft_id)
             if draft["sent"] is not None:
                 raise SendError(f"It is on GitHub already: {draft['sent']['url']}")
-            if draft["kind"] not in ["pr", "comment"]:
-                raise SendError("Only PRs and comments go to GitHub.")
+            if draft["kind"] not in ["pr", "comment", "edit"]:
+                raise SendError("Only PRs, comments and new titles and descriptions go to GitHub.")
             self.step = "starting"
             try:
                 with httpx.Client(base_url=API, headers=headers, timeout=60) as client:
@@ -261,6 +264,8 @@ class GithubAccount:
                         sent = self.send_update(client, account, draft)
                     elif draft["kind"] == "pr":
                         sent = self.send_pr(client, account, draft)
+                    elif draft["kind"] == "edit":
+                        sent = self.send_edit(client, account, draft)
                     else:
                         sent = self.post_comment(client, account, draft)
             except httpx.HTTPStatusError as error:
@@ -711,6 +716,41 @@ class GithubAccount:
             "id": comment["id"],
             "repo": repo,
             "number": int(number),
+            "as": account["login"],
+            "at": datetime.now(UTC).isoformat(),
+        }
+
+    def send_edit(self, client: httpx.Client, account: dict, draft: dict) -> dict:
+        """A new title and description for your own PR or issue, only while it still has the text the agent saw."""
+        repo, _, number = (draft["target"] or "").rpartition("#")
+        if repo == "" or not number.isdigit() or draft["previous"] is None:
+            raise SendError("This draft doesn't say which PR or issue it is for. Reply to the agent to draft it again.")
+        # GitHub's issues API is the PR's too, for its title and description.
+        self.step = "reading it"
+        response = client.get(f"/repos/{repo}/issues/{number}")
+        response.raise_for_status()
+        thread = response.json()
+        if thread["user"]["login"].lower() != account["login"].lower():
+            raise SendError(f"{repo}#{number} isn't yours: it was opened by {thread['user']['login']}.")
+        # Someone may have changed it since (you, on GitHub): nothing of theirs is written over. Line ends as GitHub's
+        # web editor saves them don't count.
+        now_title = thread["title"]
+        now_body = (thread["body"] or "").replace("\r\n", "\n").strip()
+        if now_title != draft["previous"]["title"] or now_body != draft["previous"]["body"].replace("\r\n", "\n").strip():
+            raise SendError("Its title or description changed since the agent drafted this: Redraft, so the agent works on the text as it is now.")
+        body = draft["body"]
+        if any(item["file"] is not None and f"evidence:{item['id']}" in body for item in draft["evidence"]):
+            fork = self.fork(client, account, repo)
+            body = self.pictures(client, account, fork, draft)
+        self.step = "changing the title and description"
+        response = client.patch(f"/repos/{repo}/issues/{number}", json={"title": draft["title"], "body": body})
+        response.raise_for_status()
+        return {
+            "kind": "edit",
+            "url": thread["html_url"],
+            "repo": repo,
+            "number": int(number),
+            "title": draft["title"],
             "as": account["login"],
             "at": datetime.now(UTC).isoformat(),
         }

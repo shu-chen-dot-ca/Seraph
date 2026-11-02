@@ -7,9 +7,9 @@ GitHub account is connected: the GitHub tab, Account) does Approve on a PR or co
 before the agent is told; if GitHub refuses, nothing is decided. POST /send does the same for one
 approved before (while no account was connected). Sending runs in a thread (github_account.py). A PR draft that is
 a new version of your open PR (update_of) is pushed onto that PR's branch, and its text posted there as your comment
-(a rebase is force-pushed).
+(a rebase is force-pushed). An edit draft changes the title and description of your own PR or issue.
 
-POST /inbox/{id}/edit changes a pending PR or comment draft's title and text before you decide (the Inbox and the
+POST /inbox/{id}/edit changes a pending PR, comment or edit draft's title and text before you decide (the Inbox and the
 GitHub tab's thread pop-up); its agent is told with your decision that you edited it, and the final text.
 
 Every decision goes through Agents.decide, which also puts the draft's job back in the queue and
@@ -138,7 +138,11 @@ async def send(draft_id: str) -> dict:
         raise HTTPException(status_code=400, detail=str(error))
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error))
-    what = "PR" if draft["kind"] == "pr" else "comment"
+    what = "comment"
+    if draft["kind"] == "pr":
+        what = "PR"
+    if draft["kind"] == "edit":
+        what = "title and description"
     text = f"The user sent your approved {what} draft {draft_id} ({draft['title']}) to GitHub: {draft['sent']['url']}"
     if draft["sent"].get("update"):
         text = f"The user pushed your approved draft {draft_id} ({draft['title']}) onto their PR: {draft['sent']['url']}"
