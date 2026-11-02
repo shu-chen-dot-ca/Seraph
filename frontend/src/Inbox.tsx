@@ -37,6 +37,7 @@ question: Reject, Reply or Approve, or one button per answer when the agent offe
 it, so the agent knows which was meant; Taken: Stop the agent or Keep working). Redraft: the agent drafts it again with
 your note. Discuss: your note goes to the agent's chat, saying which draft it is about, and the draft keeps waiting.
 A decision goes to the agent (and the draft's job goes back to the agent's queue).
+While Approve or Send to GitHub sends, a line above the buttons says where it is ("replaying commit 3 of 6").
 With your GitHub account connected (Account on the GitHub tab), Approve on a PR or comment first asks "are you sure?"
 (Open PR / Post comment / Push changes / Force push / Save changes), then sends it to GitHub as you (github_searcher/github_account.py): a PR from
 a new branch in your fork, its pictures uploaded there; a new version's commits pushed onto your PR's branch in your
@@ -121,6 +122,20 @@ export default function Inbox(props: { selected: string | null }) {
   // Diff files folded open or shut by hand, by "draft id:path"; others follow BIG_FILE_LINES.
   const [fileOpen, setFileOpen] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState("");
+  // While a send goes, where it is ("replaying commit 3 of 6"), asked every second (backend/github_account_api.py).
+  const [sendStep, setSendStep] = useState("");
+  useEffect(() => {
+    if (busy !== "send") {
+      setSendStep("");
+      return;
+    }
+    const timer = window.setInterval(() => {
+      api<{ draft: string | null; step: string }>("/api/github_account/sending")
+        .then((answer) => setSendStep(answer.step))
+        .catch(() => {});
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [busy]);
   // Your GitHub account (Account on the GitHub tab): who Approve sends PRs and comments as (null until known).
   const [account, setAccount] = useState<GithubAccountStatus | null>(null);
   // The "are you sure?" before sending: for Approve, or for Send to GitHub on an approved item.
@@ -1107,6 +1122,11 @@ export default function Inbox(props: { selected: string | null }) {
                       }
                     }}
                   />
+                  {busy === "send" && (
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <Loader2 className="size-3 animate-spin" /> Sending to GitHub: {sendStep || "starting"}
+                    </div>
+                  )}
                   <div className="flex items-center gap-2 max-md:flex-wrap">
                     <span className="text-xs text-muted-foreground">
                       {isEditing && "Save or cancel your edit first."}
@@ -1244,6 +1264,11 @@ export default function Inbox(props: { selected: string | null }) {
                       )}
                     </div>
                   </div>
+                  {busy === "send" && (
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <Loader2 className="size-3 animate-spin" /> Sending to GitHub: {sendStep || "starting"}
+                    </div>
+                  )}
                   {draft.reply !== "" && <div className="mt-1 border-l-2 border-muted-foreground/30 pl-3 whitespace-pre-wrap">{draft.reply}</div>}
                   <Textarea
                     placeholder={
