@@ -2359,13 +2359,14 @@ class WorkTools:
         # What GitNexus writes by itself when an agent builds its index (analyze): its block in AGENTS.md and CLAUDE.md
         # (the symbol counts), its skills in .claude/skills/gitnexus/ and its .gitnexus/ folder. None of it is the fix.
         tool_files = []
+        # (file, not path: path is the repo folder the draft keeps.)
         for chunk in diff.split("\ndiff --git "):
-            path = chunk.split("\n")[0].split(" b/")[-1]
+            file = chunk.split("\n")[0].split(" b/")[-1]
             changed = [line for line in chunk.split("\n")[1:] if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))]
-            if path.startswith((".gitnexus/", ".claude/skills/gitnexus/")):
-                tool_files.append(path)
-            elif path.split("/")[-1] in ["AGENTS.md", "CLAUDE.md"] and any("gitnexus" in line.lower() for line in changed):
-                tool_files.append(path)
+            if file.startswith((".gitnexus/", ".claude/skills/gitnexus/")):
+                tool_files.append(file)
+            elif file.split("/")[-1] in ["AGENTS.md", "CLAUDE.md"] and any("gitnexus" in line.lower() for line in changed):
+                tool_files.append(file)
         if tool_files:
             text = (
                 f"The diff changes what GitNexus writes by itself when it builds its index: {', '.join(tool_files)}. That isn't "
