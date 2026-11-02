@@ -6,10 +6,12 @@ The VM's address comes from the host's DHCP leases, never from what the VM
 itself reports.
 
 A VM has 1 to MAX_DESKTOPS desktops, each with its own user, home folder, screen, mouse and keyboard, so agents on
-different desktops work at the same time without getting in each other's way. VM(name, desktop) runs commands
-as that desktop's user, and they get SANDBOX_DESKTOP (its number):
+different desktops work at the same time without getting in each other's way. Each has a fixed number, 1 to
+MAX_DESKTOPS, and a VM may have any of them (e.g. 2 and 3). VM(name, desktop) runs commands as that desktop's user,
+and they get SANDBOX_DESKTOP (its number):
 - Desktop 1 is the image's own: the uid 1000 user, logged in by the display manager on display :0, its VNC server
-  (x11vnc) on VNC_PORT and noVNC on NOVNC_PORT, the demo service `demo`.
+  (x11vnc) on VNC_PORT and noVNC on NOVNC_PORT, the demo service `demo`. That session always runs (the VM's start
+  waits for it); while the VM doesn't have desktop 1, only its demo and browser stop.
 - Desktop n (2 and up) is set up at every start (set_up_desktops): the user desktop<n> with its own home, a desktop
   of the same kind (GNOME, KDE) on a TigerVNC screen of its own (display :<10+n>, DESKTOP_SIZE, VNC on 5900+10+n,
   only inside the VM), noVNC on NOVNC_PORT+n-1, and the demo service `demo-<n>` (its start command in
@@ -47,8 +49,9 @@ HUNG_BOOT_SECONDS = 180
 # The most desktops a VM can have, and the screen size of desktops 2 and up (desktop 1's comes with the image).
 MAX_DESKTOPS = 3
 DESKTOP_SIZE = "1280x800"
-# Desktops 2 and up, as root at every start (set_up_desktops), with count and size set before it. TigerVNC comes from
-# the system's own packages, the first time. A terminal-only image gets only the users and demo services.
+# Desktops 2 and up, as root at every start (set_up_desktops), with numbers (the VM's desktops, e.g. "1 3") and size
+# set before it. TigerVNC comes from the system's own packages, the first time. A terminal-only image gets only the
+# users and demo services.
 DESKTOPS_SCRIPT = r"""
 set -e
 main=$(id -nu 1000)
@@ -56,7 +59,7 @@ has_desktop=yes
 if [ -f /etc/sandbox-no-desktop ]; then
     has_desktop=no
 fi
-if [ $count -gt 1 ] && [ $has_desktop = yes ] && [ ! -x /usr/libexec/tigervncsession-start ] && [ ! -x /usr/libexec/vncsession-start ]; then
+if [ "$numbers" != 1 ] && [ $has_desktop = yes ] && [ ! -x /usr/libexec/tigervncsession-start ] && [ ! -x /usr/libexec/vncsession-start ]; then
     if command -v apt-get > /dev/null; then
         export DEBIAN_FRONTEND=noninteractive
         apt-get -y -o DPkg::Lock::Timeout=600 install tigervnc-standalone-server > /dev/null || {
@@ -85,11 +88,15 @@ if [ -z "$session" ] && [ $has_desktop = yes ]; then
     session=$(basename "$(ls /usr/share/xsessions/*.desktop | head -1)" .desktop)
 fi
 
+# Desktop 1's session always runs; while the VM doesn't have it, its demo stops.
+if ! echo " $numbers " | grep -q " 1 "; then
+    systemctl disable --now demo > /dev/null 2>&1 || true
+fi
 for n in $(seq 2 $max); do
     user=desktop$n
     display=:$((10 + n))
-    if [ $n -gt $count ]; then
-        # Fewer desktops now: this one stops. Its user and home stay, with everything in them.
+    if ! echo " $numbers " | grep -q " $n "; then
+        # Not one of the VM's desktops (now): it stops. Its user and home stay, with everything in them.
         systemctl disable --now sandbox-desktop-$n sandbox-novnc-$n demo-$n > /dev/null 2>&1 || true
         continue
     fi
@@ -656,9 +663,9 @@ done
         if result.returncode != 0:
             raise VMError(f"Could not set Firefox's graphics card name in {self.name}: {result.stderr.strip()}")
 
-    def set_up_browser(self, desktops: int = 1, restart: bool = True) -> None:
-        """Put the agents' browser in the VM (sandbox/agent/browser_service.py) and start one for each of its desktops.
-        Safe to run again; a desktop the VM no longer has loses its browser.
+    def set_up_browser(self, numbers: list[int], restart: bool = True) -> None:
+        """Put the agents' browser in the VM (sandbox/agent/browser_service.py) and start one for each of its desktops
+        (numbers, e.g. [1, 3]). Safe to run again; a desktop the VM no longer has loses its browser.
 
         Each runs as a systemd service: sandbox-browser for desktop 1, sandbox-browser-<n> for desktop n. The first
         time in a VM the start installs what they need (BROWSER_INSTALL), which takes a few minutes and doesn't hold
@@ -672,7 +679,7 @@ done
         self.write_file(f"{BROWSER_DIR}/browser_service.py", BROWSER_SERVICE.read_text())
         self.write_file(f"{BROWSER_DIR}/install.sh", BROWSER_INSTALL, "0755")
         units = []
-        for desktop in range(1, desktops + 1):
+        for desktop in numbers:
             unit = "sandbox-browser"
             user = "1000"
             after = ""
@@ -690,7 +697,15 @@ done
             )
             self.write_file(f"/etc/systemd/system/{unit}.service", text)
             units.append(unit)
-        gone = " ".join([f"sandbox-browser-{desktop}" for desktop in range(desktops + 1, MAX_DESKTOPS + 1)])
+        gone = []
+        for desktop in range(1, MAX_DESKTOPS + 1):
+            if desktop in numbers:
+                continue
+            if desktop == 1:
+                gone.append("sandbox-browser")
+            else:
+                gone.append(f"sandbox-browser-{desktop}")
+        gone = " ".join(gone)
         units = " ".join(units)
         # start does nothing to a browser that already runs.
         action = "restart"
@@ -711,10 +726,12 @@ done
         if result.returncode != 0:
             raise VMError(f"Could not start the browser in {self.name}: {result.stderr.strip()}")
 
-    def set_up_desktops(self, desktops: int) -> None:
-        """Make desktops 2 to `desktops` and start them, and stop the ones above that (DESKTOPS_SCRIPT). Safe to run
-        again. The first time it installs TigerVNC (under a minute); it doesn't wait for the desktops to come up."""
-        script = f"count={desktops}\nmax={MAX_DESKTOPS}\nsize={DESKTOP_SIZE}\nnovnc_port={NOVNC_PORT}\n" + DESKTOPS_SCRIPT
+    def set_up_desktops(self, numbers: list[int]) -> None:
+        """Make the VM's desktops (numbers, e.g. [1, 3]) and start them, and stop the ones it doesn't have
+        (DESKTOPS_SCRIPT). Safe to run again. The first time it installs TigerVNC (under a minute); it doesn't wait for
+        the desktops to come up."""
+        listed = " ".join([str(number) for number in numbers])
+        script = f'numbers="{listed}"\nmax={MAX_DESKTOPS}\nsize={DESKTOP_SIZE}\nnovnc_port={NOVNC_PORT}\n' + DESKTOPS_SCRIPT
         result = self.exec_root(script, timeout=900)
         if result.returncode != 0:
             raise VMError(f"Could not set up the desktops of {self.name}: {result.stderr.strip()[-500:]}")

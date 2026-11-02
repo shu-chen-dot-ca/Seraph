@@ -2856,7 +2856,7 @@ class WorkTools:
         vms = []
         for vm_record in self.agents.vms.list():
             desktops = []
-            for number, line in enumerate(vm_record.desktops, start=1):
+            for number, line in vm_record.desktops.items():
                 holder = line["holder"]
                 if holder == self.agent_id:
                     holder = "you"
@@ -3025,12 +3025,12 @@ class WorkTools:
             desktop = vm_record.desktop_of(self.agent_id)
             if desktop is not None:
                 status["you"] += f", desktop {desktop}"
-            if desktop is not None and self.agent_id in vm_record.desktops[desktop - 1]["priority"]:
+            if desktop is not None and self.agent_id in vm_record.desktops[desktop]["priority"]:
                 status["you"] = f"number {place} in the priority line of desktop {desktop} of {vm_name} (you stepped aside; you get it back first)"
             status["vm_status"] = vm_record.status
             status["desktops"] = [
                 {"desktop": number, "holder": line["holder"], "priority": list(line["priority"])}
-                for number, line in enumerate(vm_record.desktops, start=1)
+                for number, line in vm_record.desktops.items()
             ]
             status["queue"] = list(vm_record.queue)
             status["asked_for"] = dict(vm_record.wants)

@@ -236,7 +236,7 @@ class Agents:
         # The queues are saved with the VMs: take out agents whose record is gone.
         for vm_record in self.vms.list():
             waiting = list(vm_record.queue)
-            for line in vm_record.desktops:
+            for line in vm_record.desktops.values():
                 waiting += [line["holder"]] + list(line["priority"])
             for agent_id in waiting:
                 if agent_id is None or agent_id == "user" or agent_id in self.agents:
@@ -449,7 +449,7 @@ class Agents:
             for vm_record in self.vms.list():
                 if vm_record.name == vm_name:
                     desktop = vm_record.desktop_of(agent.id)
-                for line in vm_record.desktops:
+                for line in vm_record.desktops.values():
                     if agent.id in line["priority"]:
                         status = "in_priority"
             if place == 0:
@@ -1569,7 +1569,7 @@ class Agents:
         else:
             text = f"Your run {run['id']} in {vm_record.name} ended: `{run['label'][:200]}`, " + agent.computer_tools.bash_result(vm_record, run, ended)
         agent.history.append({"type": "system", "text": f"Its run in {vm_record.name} ended: {run['label'][:120]}", "time": datetime.now(UTC).isoformat()})
-        if not [line for line in vm_record.desktops if agent.id in line["priority"]]:
+        if not [line for line in vm_record.desktops.values() if agent.id in line["priority"]]:
             self.notify(agent.id, text)
             return
         text += f"\nYou get {vm_record.name} back first, with a message, as soon as it is free; until then end your turn."

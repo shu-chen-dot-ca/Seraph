@@ -163,7 +163,7 @@ async def delete_vm(name: str) -> dict:
 
     # Read after the delete: an agent may have joined the queue while it ran.
     waiting = list(record.queue)
-    for line in record.desktops:
+    for line in record.desktops.values():
         waiting += [line["holder"]] + list(line["priority"])
     for agent_id in waiting:
         if agent_id is None or agent_id == "user":

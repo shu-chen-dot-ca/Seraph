@@ -1,7 +1,8 @@
 """Who uses each VM: one holder and a priority line per desktop, and one line of agents waiting for a desktop.
 
 A VM has one to three desktops (sandbox/vm.py), each with its own screen, mouse, keyboard and home folder, so agents
-on different desktops work at the same time. An agent joins its target VM (queue_for_vm), maybe asking for one
+on different desktops work at the same time. Each has a fixed number (record.desktops is {number: line}), so a VM may
+have desktops 2 and 3 only. An agent joins its target VM (queue_for_vm), maybe asking for one
 desktop (where its project is set up). If a desktop nobody holds is there (the one it asked for, or any), it holds
 it at once; otherwise it waits in the VM's line, even while the VM is off. When a holder releases, the desktop goes
 to the next one (next_holder) and Agents hears about it (on_grant), which wakes that agent. An agent is in at most
@@ -57,7 +58,7 @@ class VMQueue:
         """Only with the lock held, on a desktop nobody holds: makes the next one its holder, and returns it (None when
         nobody can take it). Its priority line first, in turn: an agent whose run still goes goes to the end of that
         line. Then the first in the waiting line that asked for this desktop or for none."""
-        line = record.desktops[desktop - 1]
+        line = record.desktops[desktop]
         for _ in range(len(line["priority"])):
             agent_id = line["priority"].pop(0)
             if not [run for run in record.runs if run["agent"] == agent_id]:
@@ -81,7 +82,7 @@ class VMQueue:
         """
         with self.lock:
             record = self.vms.get(vm_name)
-            for line in record.desktops:
+            for line in record.desktops.values():
                 if line["holder"] == agent_id:
                     return 0
                 if agent_id in line["priority"]:
@@ -91,15 +92,16 @@ class VMQueue:
             for other in self.vms.list():
                 if other.desktop_of(agent_id) is not None or agent_id in other.queue:
                     raise ValueError(f"Already in {other.name}'s queue; release_vm takes you out of it")
-            if desktop is not None and (desktop < 1 or desktop > len(record.desktops)):
-                raise ValueError(f"{vm_name} has desktops 1 to {len(record.desktops)}")
+            if desktop is not None and desktop not in record.desktops:
+                numbers = ", ".join([str(number) for number in record.desktops])
+                raise ValueError(f"{vm_name} has no desktop {desktop}; its desktops are {numbers}")
             # A desktop nobody holds: the one asked for, or the first such one.
             free = None
-            for number, line in enumerate(record.desktops, start=1):
+            for number, line in record.desktops.items():
                 if line["holder"] is None and free is None and desktop in [None, number]:
                     free = number
             if free is not None:
-                record.desktops[free - 1]["holder"] = agent_id
+                record.desktops[free]["holder"] = agent_id
                 record.save()
                 place = 0
             else:
@@ -118,9 +120,9 @@ class VMQueue:
             record = self.vms.get(vm_name)
             if desktop is None:
                 desktop = record.holding(who)
-            if desktop is None or desktop > len(record.desktops) or record.desktops[desktop - 1]["holder"] != who:
+            if desktop not in record.desktops or record.desktops[desktop]["holder"] != who:
                 raise ValueError(f"{who} doesn't hold {vm_name}")
-            record.desktops[desktop - 1]["holder"] = None
+            record.desktops[desktop]["holder"] = None
             granted = self.next_holder(record, desktop)
             record.save()
         if self.on_change is not None:
@@ -139,7 +141,7 @@ class VMQueue:
             desktop = record.holding(agent_id)
             if desktop is None:
                 raise ValueError(f"{agent_id} doesn't hold {vm_name}")
-            line = record.desktops[desktop - 1]
+            line = record.desktops[desktop]
             line["holder"] = None
             granted = self.next_holder(record, desktop)
             if granted is None and by_user:
@@ -166,9 +168,9 @@ class VMQueue:
         kicked = None
         with self.lock:
             record = self.vms.get(vm_name)
-            if desktop < 1 or desktop > len(record.desktops):
-                raise ValueError(f"{vm_name} has desktops 1 to {len(record.desktops)}")
-            line = record.desktops[desktop - 1]
+            if desktop not in record.desktops:
+                raise ValueError(f"{vm_name} has no desktop {desktop}")
+            line = record.desktops[desktop]
             if line["holder"] == "user":
                 return
             if line["holder"] is not None:
@@ -188,13 +190,13 @@ class VMQueue:
         kicked = None
         with self.lock:
             record = self.vms.get(vm_name)
-            if desktop < 1 or desktop > len(record.desktops):
-                raise ValueError(f"{vm_name} has desktops 1 to {len(record.desktops)}")
-            line = record.desktops[desktop - 1]
+            if desktop not in record.desktops:
+                raise ValueError(f"{vm_name} has no desktop {desktop}")
+            line = record.desktops[desktop]
             if line["holder"] == agent_id:
                 return
             waiting = agent_id in record.queue
-            for other in record.desktops:
+            for other in record.desktops.values():
                 if agent_id in other["priority"]:
                     waiting = True
                     other["priority"].remove(agent_id)
@@ -221,7 +223,7 @@ class VMQueue:
         grants = []
         with self.lock:
             record = self.vms.get(vm_name)
-            for number, line in enumerate(record.desktops, start=1):
+            for number, line in record.desktops.items():
                 if line["holder"] is None:
                     granted = self.next_holder(record, number)
                     if granted is not None:
@@ -251,7 +253,7 @@ class VMQueue:
         reason = None
         with self.lock:
             record = self.vms.get(vm_name)
-            for number, line in enumerate(record.desktops, start=1):
+            for number, line in record.desktops.items():
                 if line["holder"] == agent_id:
                     reason = f"The user removed you from desktop {number} of {vm_name}; you don't hold it anymore."
                     line["holder"] = None
@@ -284,7 +286,7 @@ class VMQueue:
                 if agent_id in record.queue:
                     record.queue.remove(agent_id)
                 record.wants.pop(agent_id, None)
-                for number, line in enumerate(record.desktops, start=1):
+                for number, line in record.desktops.items():
                     if agent_id in line["priority"]:
                         line["priority"].remove(agent_id)
                     if line["holder"] == agent_id:
@@ -305,7 +307,7 @@ class VMQueue:
         the VM record's desktop_of(agent_id)."""
         with self.lock:
             for record in self.vms.list():
-                for line in record.desktops:
+                for line in record.desktops.values():
                     if line["holder"] == agent_id:
                         return record.name, 0
                     if agent_id in line["priority"]:
@@ -367,7 +369,7 @@ class VMQueue:
             # Runs from before desktops were all on desktop 1.
             desktops = [run.get("desktop", 1) for run in record.runs if run["id"] == run_id]
             record.runs = [run for run in record.runs if run["id"] != run_id]
-            if desktops and desktops[0] <= len(record.desktops) and record.desktops[desktops[0] - 1]["holder"] is None:
+            if desktops and desktops[0] in record.desktops and record.desktops[desktops[0]]["holder"] is None:
                 granted = self.next_holder(record, desktops[0])
             record.save()
         if self.on_change is not None:

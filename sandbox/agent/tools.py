@@ -608,7 +608,7 @@ class ComputerTools:
         others = [run for run in record.runs if run["agent"] != self.agent_id]
         if others:
             raise ValueError(f"Another agent's run is going in this VM (`{others[0]['label'][:100]}`); shutting it down would end it. Leave the VM on.")
-        working = [line["holder"] for line in record.desktops if line["holder"] not in [None, self.agent_id]]
+        working = [line["holder"] for line in record.desktops.values() if line["holder"] not in [None, self.agent_id]]
         if working:
             raise ValueError("Someone else works on another desktop of this VM; shutting it down would end their work. Leave the VM on.")
         await asyncio.to_thread(record.stop)
@@ -661,7 +661,7 @@ class ComputerTools:
         # Another agent's run, or its work on another desktop, would end with it; a VM that no longer answers has lost
         # them anyway.
         others = [run for run in record.runs if run["agent"] != self.agent_id]
-        working = [line["holder"] for line in record.desktops if line["holder"] not in [None, self.agent_id]]
+        working = [line["holder"] for line in record.desktops.values() if line["holder"] not in [None, self.agent_id]]
         if (others or working) and await asyncio.to_thread(record.vm.responds):
             what = "Someone else works on another desktop of this VM"
             if others:
