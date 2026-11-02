@@ -58,9 +58,10 @@ rest for the user: {"paper", "claims", "verdict", "results": [{"what", "paper", 
 "problems": [{"title", "what", "why", "evidence": "ev_..."}, ...], "unchecked": ["what couldn't be checked, and why"]}.
 Approving it ends the job; nothing is sent anywhere.
 
-A PR draft for a project (github_searcher/projects.py: one of your repositories agents develop all the time) is
-reviewed by the project's reviewer before you see it: "review" is waiting until the reviewer's verdict (Agents.give_review,
-review_finished). passed: it shows in the Inbox, with the reviewer's notes. changes: it went back to its author and is
+Every PR draft is reviewed by a reviewer agent before you see it: a project's (github_searcher/projects.py: one of your
+repositories agents develop all the time) by the project's reviewer, any other by that repo's own reviewer. "review" is
+waiting until the reviewer's verdict (Agents.give_review, review_finished). Drafts from before every PR was reviewed
+have none (null). passed: it shows in the Inbox, with the reviewer's notes. changes: it went back to its author and is
 rejected with the reviewer's notes, so it never shows. The Inbox only lists drafts with no review or a passed one.
 "replaces" is the project's open PR that conflicted with main and was made again on the new main (Agents.redo_pr): once
 this one is on GitHub, backend/projects_api.py closes that one.

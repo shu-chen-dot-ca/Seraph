@@ -102,8 +102,8 @@ STEPS = {
     # alone (rebuild), run it and the authors' own code and line the numbers up (compare), test the claims (check),
     # then the report.
     "reproduce_paper": ["read", "set_up", "rebuild", "compare", "check", "report"],
-    # Review a project's PR draft before it reaches the user (github_searcher/projects.py): read it and its pictures
-    # (read), run its tests on its code in the VM (test), then pass it or send it back (verdict).
+    # Review a PR draft before it reaches the user (Agents.give_review): read it, its pictures and what was asked (read),
+    # check it on its code in the VM (test), then pass it or send it back (verdict).
     "review": ["read", "test", "verdict"],
 }
 

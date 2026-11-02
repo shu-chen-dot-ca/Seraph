@@ -41,11 +41,12 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   Every PR draft has a checklist (each point that was asked: the issue's requirements, or the reviewers' points for a
   new version, done or not and how it was shown) and also_tested (the cases of the same kind beyond the asked example
   that the agent ran), so the user sees the gaps before approving, and maintainers don't find them one round at a time.
+  Every PR draft goes to a reviewer agent first (Agents.give_review) and reaches the Inbox only once the review passes:
+  a project's reviewer, or else the repo's own reviewer, which checks it on the author's desktop.
 - Projects: on one of the user's own repositories that agents develop all the time (github_searcher/projects.py), the
   rules are the repo's own files, so draft_pr and run_tests don't wait for contributing_guide or pr_examples; a PR's
-  title must be a Conventional Commit; and the draft goes to the project's reviewer first (Agents.give_review), so it
-  reaches the Inbox only once the review passes. A fix_issue job with a thread there makes that PR again on the new main:
-  its draft replaces it.
+  title must be a Conventional Commit. A fix_issue job with a thread there makes that PR again on the new main: its
+  draft replaces it.
 - Evidence: what the user looks at to decide on a draft. Real screenshots of the project running on
   the VM's desktop (its window, or a terminal running it), screen recordings (GIF) and command runs
   (a test failing, then passing), each "before" or "after" the agent's change, under a topic that
@@ -626,7 +627,8 @@ class WorkTools:
                 "sections, tone, and whether they keep the PR template's headings; the result says which headings you left out). "
                 "Read both first. The user's instructions on the form win. No emoji anywhere. Your before and after pictures "
                 "go in the body as ![before](evidence:ev_...) (a Before / After table); they are uploaded with the PR. You push and send "
-                "nothing: the user reviews it, approving sends it from their account, and you get a message with their decision. project, problem, cause, fix and "
+                "nothing: a reviewer agent checks it first, then the user reviews it, approving sends it from their account, and you "
+                "get a message with each decision. project, problem, cause, fix and "
                 "risks are only for the user, who reads them first to understand and judge the PR. " + PLAIN + " "
                 "checklist and also_tested are for the user and the reviewer: every point that was asked, each done or not and "
                 "how you showed it, and the cases of the same kind you ran beyond the asked example. "
@@ -2602,12 +2604,11 @@ class WorkTools:
         target = job["issue"]
         if pr is not None:
             target = pr
-        # A project's PR draft goes to its reviewer first, and reaches the Inbox only when the review passes. One made
-        # again on the new main replaces the PR its job is about (Agents.redo_pr).
-        review = None
+        # Every PR draft goes to a reviewer first, and reaches the Inbox only when the review passes (Agents.give_review). A
+        # project's one made again on the new main replaces the PR its job is about (Agents.redo_pr).
+        review = {"state": "waiting", "agent": None, "job": None, "notes": "", "at": datetime.now(UTC).isoformat()}
         replaces = None
         if project is not None:
-            review = {"state": "waiting", "agent": None, "job": None, "notes": "", "at": datetime.now(UTC).isoformat()}
             replaces = job["thread"]
         draft = self.agents.inbox.create(
             "pr",
@@ -2647,24 +2648,25 @@ class WorkTools:
             what = f"a new version of {pr}, on top of its newest commit"
         if rebase:
             what = f"a rebase of {pr} on {base_sha[:10]}, replacing its commits when it is sent"
+        self.agents.give_review(draft, desktop)
         text = (
-            f"{draft['id']} is in the user's Inbox: {files} files, +{added} -{removed}, {what}, "
-            f"with {len(job['evidence'])} pieces of evidence. "
-            f"Nothing was pushed or sent: the user reviews it, and you'll get a message with their decision. "
-            f"{job['id']} waits on the user now; move on to your next job (release_vm if none is left for {vm_name})."
-            f"{left_out}"
+            f"{draft['id']} goes to {repo}'s reviewer first: {files} files, +{added} -{removed}, {what}, with "
+            f"{len(job['evidence'])} pieces of evidence. When the review passes it reaches the user's Inbox; when the reviewer "
+            f"asks for changes you get a message with them. Nothing was pushed or sent. {job['id']} waits meanwhile; move on "
+            f"to your next job (release_vm if none is left for {vm_name})."
         )
-        if project is not None:
-            self.agents.give_review(draft)
+        if project is None:
             text = (
                 f"{draft['id']} goes to {repo}'s reviewer first: {files} files, +{added} -{removed}, {what}, with "
-                f"{len(job['evidence'])} pieces of evidence. When the review passes it reaches the user's Inbox; when the reviewer "
-                f"asks for changes you get a message with them. Nothing was pushed or sent. {job['id']} waits meanwhile; move on "
-                f"to your next job (release_vm if none is left for {vm_name})."
+                f"{len(job['evidence'])} pieces of evidence. It checks the draft in {path} on desktop {desktop} of {vm_name}, so "
+                "leave that folder as it is until you hear back. When the review passes it reaches the user's Inbox; when the "
+                f"reviewer asks for changes you get a message with them. Nothing was pushed or sent. {job['id']} waits meanwhile; "
+                f"release_vm now unless you have other jobs for {vm_name}: the reviewer needs this desktop."
             )
         not_done = [point["item"] for point in checklist if not point["done"]]
         if not_done:
             text += f" Not done, as your checklist says (the user sees these first): {'; '.join(not_done)}."
+        text += left_out
         return {"content": [{"type": "text", "text": text}]}
 
     async def evidence_add(self, args: dict) -> dict:

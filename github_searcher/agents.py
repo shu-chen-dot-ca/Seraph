@@ -96,6 +96,11 @@ redo_pr() asks a worker to make a PR that conflicts with main again on the new m
 agent the app's errors (crashes.py) to turn into issues, and project_changed() tells it what the user changed (mode,
 goals).
 
+Every other repo's PR drafts are reviewed too, before they reach the Inbox: give_review() hands each to that repo's own
+reviewer (record "role": "reviewer", "reviews": the repo, made the first time), which checks it the way the repo's
+maintainers will, every point asked and the edge cases of its kind, on the author's desktop, so they don't find what
+was missed one review round at a time.
+
 When an issue an agent has a job for goes from free to assigned (someone else is on it now: the
 tags say so, backend/issues_api.py), issue_taken() asks the user in the Inbox ("taken", one pending
 per job): Keep working tells the agent to go on; Stop the agent cancels the job, and when the agent
@@ -1158,18 +1163,48 @@ class Agents:
         self.notify(agent_id, text)
         return job
 
-    def give_review(self, draft: dict) -> None:
-        """A project worker's PR draft (work_tools.py draft_pr) for the project's reviewer: a review job. The draft waits
-        out of the Inbox until review_finished(). A project with no reviewer lets it through at once."""
-        project = self.projects.get(draft["repo"])
+    def give_review(self, draft: dict, desktop: int) -> None:
+        """A PR draft (work_tools.py draft_pr, made on desktop of draft["vm"]) for a reviewer: a review job. The draft waits
+        out of the Inbox until review_finished(). A project's draft goes to the project's reviewer; a project with no
+        reviewer lets it through at once. Any other repo's draft goes to that repo's own reviewer (record "role":
+        "reviewer", "reviews": the repo), made the first time, aimed at the draft's VM: it checks the draft the way the
+        repo's maintainers will, in the author's folder on the author's desktop, where the project is set up and built."""
         now = datetime.now(UTC).isoformat()
+        if draft["repo"] is None:
+            self.inbox.set_review(draft["id"], {"state": "passed", "agent": None, "job": None, "notes": "It names no repo, so nobody reviewed it.", "at": now})
+            return
+        project = self.projects.get(draft["repo"])
         reviewer = None
         if project is not None:
             reviewer = project["reviewer"]
-        if reviewer not in self.agents:
-            self.inbox.set_review(draft["id"], {"state": "passed", "agent": None, "job": None, "notes": "The project has no reviewer, so nobody reviewed it.", "at": now})
-            return
+            if reviewer not in self.agents:
+                self.inbox.set_review(draft["id"], {"state": "passed", "agent": None, "job": None, "notes": "The project has no reviewer, so nobody reviewed it.", "at": now})
+                return
+        else:
+            for agent in self.agents.values():
+                if agent.record.get("role") == "reviewer" and agent.record.get("reviews") == draft["repo"].lower():
+                    reviewer = agent.id
+            if reviewer is None:
+                names = [agent.name for agent in self.agents.values()]
+                reviewer_name = f"{draft['repo'].split('/')[1]}-review"
+                number = 2
+                while reviewer_name in names:
+                    reviewer_name = f"{draft['repo'].split('/')[1]}-review-{number}"
+                    number += 1
+                created = self.create(reviewer_name)
+                agent = self.agents[created["id"]]
+                agent.record["role"] = "reviewer"
+                agent.record["reviews"] = draft["repo"].lower()
+                self.save(agent)
+                reviewer = agent.id
         self.unarchive(reviewer)
+        # It checks the draft where it was made. While it holds or waits for another VM it keeps that one, and its
+        # message says where to go next.
+        if project is None and draft["vm"] is not None:
+            try:
+                self.set_target_vm(reviewer, draft["vm"], by_agent=True)
+            except ValueError:
+                pass
         author = draft["agent"]
         if author in self.agents:
             author = self.agents[author].name
@@ -1177,13 +1212,29 @@ class Agents:
         title = f"Review {draft['id']}: {draft['title']}"
         job = self.jobs.create("review", title, reviewer, "user", issue=draft["target"], repo=draft["repo"], vm=vm_name)
         self.inbox.set_review(draft["id"], {"state": "waiting", "agent": reviewer, "job": job["id"], "notes": "", "at": now})
+        if project is not None:
+            text = (
+                f"New job {job['id']}: {title}\n{author} drafted this PR for {draft['target']}. Review it as in Reviewing a pull "
+                f"request: review_read {draft['id']}, then check it in the VM on its own code (sync_code, then apply its diff on its "
+                "base_sha), run its tests, look at its pictures, and end with review_done."
+            )
+            if vm_name is not None:
+                text += f"\nIt is for {vm_name}: queue_for_vm once you have read it."
+            self.notify(reviewer, text)
+            return
+        what = "a new PR"
+        if draft["update_of"] is not None:
+            what = f"the next version of the user's PR {draft['update_of']}"
         text = (
-            f"New job {job['id']}: {title}\n{author} drafted this PR for {draft['target']}. Review it as in Reviewing a pull "
-            f"request: review_read {draft['id']}, then check it in the VM on its own code (sync_code, then apply its diff on its "
-            "base_sha), run its tests, look at its pictures, and end with review_done."
+            f"New job {job['id']}: {title}\n{author} drafted {what} for {draft['target']} in {draft['repo']}, someone else's "
+            "project. Before it reaches the user's Inbox, check it the way that project's maintainers will, as in Reviewing a "
+            f"PR before it goes out: review_read {draft['id']}, read the whole thread it is for, go through every point that was "
+            "asked, then try to break it in the VM, and end with review_done.\n"
+            f"It was made in {draft['path']} on desktop {desktop} of {draft['vm']}, where the project is set up and built: "
+            f"queue_for_vm with desktop {desktop} once you have read it, check in that folder, and leave it as you found it."
         )
-        if vm_name is not None:
-            text += f"\nIt is for {vm_name}: queue_for_vm once you have read it."
+        if vm_name != draft["vm"]:
+            text += f"\nYour target VM is {vm_name}: once you hold none, choose_vm {draft['vm']} for this one."
         self.notify(reviewer, text)
 
     def review_finished(self, draft_id: str, passed: bool, notes: str) -> None:

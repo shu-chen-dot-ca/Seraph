@@ -14,10 +14,12 @@ A worker (record "project", role "worker"):
   user's sign-in and copies it in as a git bundle, and the token never enters the VM.
 - deny_issue: closes the job's issue as not planned, as the user, with the agent's reason as a comment, and ends the job.
 
-The reviewer (role "reviewer"):
-- sync_code, as above;
-- review_read: a PR draft it was given to review, as the user would see it (title, text, overview, commits, diff, the
-  test runs, the evidence with its pictures as pictures), and, while it holds the VM, the diff in ~/review-<draft id>.diff;
+The reviewer (role "reviewer"): a project's, or the reviewer of another repo's PR drafts (record "reviews": the repo,
+Agents.give_review), which checks them in the author's folder on the author's desktop instead of its own:
+- sync_code, as above (a project's reviewer only);
+- review_read: a PR draft it was given to review, as the user would see it (title, text, overview with its checklist,
+  commits, diff, the test runs, the evidence with its pictures as pictures), and, while it holds the VM, the diff in
+  ~/review-<draft id>.diff;
 - review_done: pass (the draft goes to the user's Inbox) or changes (back to its author, with the notes).
 
 Each tool returns its result as text; a bad call returns is_error. describe() gives the chat's line for each call.
@@ -122,21 +124,21 @@ class ProjectTools:
                 )(self.deny_issue),
             ]
         if self.record.get("role") == "reviewer":
-            return [
-                sync_code,
+            tools = [
                 tool(
                     "review_read",
                     "Read a PR draft you were given to review (draft_...): its title and text as they would go to GitHub, the "
-                    "overview for the user, its commits, the diff, the test runs and the evidence, with the pictures. While you "
-                    "hold the VM, the whole diff is also put in ~/review-<draft id>.diff, to apply on the commit it starts "
-                    "from (base_sha) in your folder.",
+                    "overview for the user (with the author's checklist of every point asked, and the cases it also tested), its "
+                    "commits, the diff, the test runs and the evidence, with the pictures. While you hold the VM, the whole diff "
+                    "is also put in ~/review-<draft id>.diff, to apply on the commit it starts from (base_sha).",
                     {"draft_id": str},
                 )(self.review_read),
                 tool(
                     "review_done",
                     "Your verdict on a PR draft you reviewed. pass: it goes to the user's Inbox, with your notes. changes: it "
                     "goes back to its author with your notes, and never reaches the user. notes: for pass, what you checked "
-                    "in a few lines; for changes, exactly what must change and why, each point on its own line. No emoji.",
+                    "in a few lines; for changes, exactly what must change and why, each point on its own line, with the "
+                    "failing case (the input, what came out, what should). No emoji.",
                     {
                         "type": "object",
                         "properties": {"draft_id": {"type": "string"}, "verdict": {"type": "string", "enum": ["pass", "changes"]}, "notes": {"type": "string"}},
@@ -144,6 +146,10 @@ class ProjectTools:
                     },
                 )(self.review_done),
             ]
+            # Another repo's reviewer works in the author's folder, so only a project's reviewer gets the code itself.
+            if self.repo is not None:
+                tools = [sync_code] + tools
+            return tools
         return []
 
     def describe(self, name: str, args: dict) -> str | None:
@@ -377,8 +383,19 @@ class ProjectTools:
             body = diff if diff.endswith("\n") else diff + "\n"
             try:
                 result = await asyncio.to_thread(vm.exec, f"cat > {name}", 120, body)
-                if result.returncode == 0:
+                if result.returncode == 0 and self.repo is not None:
                     text += f"\n\nThe diff is in ~/{name}: `git -C ~/<folder> switch --detach {draft['base_sha']} && git -C ~/<folder> apply ~/{name}`."
+                # Another repo's reviewer checks it in the author's folder, where it was drafted and the project is built.
+                if result.returncode == 0 and self.repo is None:
+                    folder = shlex.quote(draft["path"] or "")
+                    copy = f"~/review-{draft['id']}"
+                    text += (
+                        f"\n\nThe diff is in ~/{name}. The draft was made in {draft['path']}: check its code is still the draft's "
+                        f"(`cd {folder} && git add -A -N . && git diff {draft['base_sha']} | cmp - ~/{name} && echo same`) and work "
+                        f"there, leaving it as you found it. If the author changed it since, check a copy instead: `git -C {folder} "
+                        f"worktree add {copy} {draft['base_sha']} && git -C {copy} apply ~/{name}` (and `git -C {folder} worktree "
+                        f"remove --force {copy}` when done)."
+                    )
             except Exception as error:
                 text += f"\n\nThe diff couldn't be put in the VM: {error}"
 
