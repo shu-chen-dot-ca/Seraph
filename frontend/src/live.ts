@@ -1035,8 +1035,7 @@ export type Crash = {
 export type Topics = {
   repos: ListData<ListedRepo>;
   issues: ListData<IssueItem>;
-  // auto_add: whether Auto-add (the Tracked page's switch) is on.
-  tracked: ListData<TrackedRepo> & { auto_add: boolean };
+  tracked: ListData<TrackedRepo>;
   explore: ExploreData;
   github: GithubStatus | null;
   jobs: Job[];
@@ -1060,7 +1059,7 @@ const store = {
   topics: {
     repos: { items: [], can_undo: false, can_redo: false },
     issues: { items: [], can_undo: false, can_redo: false },
-    tracked: { items: [], can_undo: false, can_redo: false, auto_add: false },
+    tracked: { items: [], can_undo: false, can_redo: false },
     explore: { profile: { about: "", lanes: [] }, run: null, found: [] },
     github: null,
     jobs: [],

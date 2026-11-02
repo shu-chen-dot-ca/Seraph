@@ -2,12 +2,11 @@
 The Tracked list: repos the user wants to keep an eye on for new issues. The user tracks them from the Repos page (its
 Track column); agents can add and remove them too (their tracked_* tools), and undo / redo (Ctrl+Z / Ctrl+Y) works on
 both, like Repos. The bar on top has Refresh all (Check now for every repo, then Claude reads every issue tagged Free
-again and the page says which ones aren't free anymore: claimed in the comments, a PR came, ...; minutes for many) and
-Mark all as read (every issue new now isn't anymore; only ones found later are new). On the right, before Select,
-the Auto-add switch: while it is on, the backend puts every good new issue of the tracked repos into the Issues list
-by itself (its repo into Repos too), within seconds: free (no assignee, tagged Free, not Out of scope), no comments,
-opened in the last 3 days, in a repo whose AI policy is AI welcome. Each issue only once: one removed from the Issues
-list stays out (backend/tracked_api.py).
+again and the page says which ones aren't free anymore: claimed in the comments, a PR came, ...; minutes for many),
+Add to Issues and Mark all as read (every issue new now isn't anymore; only ones found later are new). Add to Issues
+puts every free issue of the tracked repos into the Issues list (its repo into Repos too), each time it is pressed:
+no assignee, tagged Free, not Out of scope, in a repo whose AI policy isn't No AI. Each issue only once: one removed
+from the Issues list stays out, and a later press adds the ones found since (backend/tracked_api.py).
 
 The backend checks each repo's open issues every few minutes (github_searcher/tracked_issues.py): the newest
 ones and every good first or help wanted one. An issue is new for three days after it was opened, assigned or not,
@@ -77,7 +76,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { Switch } from "@/components/ui/switch";
 import { NewcomersTag, PolicyTag } from "@/components/ui/repo-tags";
 import { RowSelection, SelectBox } from "@/components/ui/row-selection";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -148,6 +146,7 @@ export default function Tracked() {
   const [checking, setChecking] = useState<string[]>([]);
   const [retagging, setRetagging] = useState<string[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [addingFree, setAddingFree] = useState(false);
   // The issue open in the pop-up, by repo and number, so it shows the live one (new tags arrive while it is open).
   const [details, setDetails] = useState<{ repo: string; number: number } | null>(null);
   // The pop-up's issues' order, the same for every repo: newest first (none), or by these columns, like the list's.
@@ -405,12 +404,20 @@ export default function Tracked() {
     setRefreshing(false);
   }
 
-  async function setAutoAdd(on: boolean) {
+  // Add to Issues: every free issue of the tracked repos goes into the Issues list, each one once.
+  async function addFree() {
+    setAddingFree(true);
     try {
-      await api("/api/tracked/auto_add", { method: "POST", body: { on } });
+      const result = await api<{ added: string[] }>("/api/tracked/add_free", { method: "POST" });
+      if (result.added.length === 0) {
+        toast.success("No new free issues to add.");
+      } else {
+        toast.success(`Added ${result.added.length} free issue${result.added.length === 1 ? "" : "s"} to Issues.`);
+      }
     } catch (err) {
-      toast.error(`Could not turn Auto-add ${on ? "on" : "off"}: ${err instanceof Error ? err.message : err}`);
+      toast.error(`Could not add the free issues: ${err instanceof Error ? err.message : err}`);
     }
+    setAddingFree(false);
   }
 
   async function markAllRead() {
@@ -549,7 +556,7 @@ export default function Tracked() {
 
   return (
     <div className="relative flex h-full flex-col">
-      {/* The same bar as on the other pages: Refresh all and Mark all as read on the left. */}
+      {/* The same bar as on the other pages: Refresh all, Add to Issues and Mark all as read on the left. */}
       <div className="flex h-9 shrink-0 items-center border-b px-3 max-md:h-auto max-md:min-h-9 max-md:flex-wrap max-md:py-1 max-md:gap-y-1">
         {names.length > 0 && (
           <span className="flex items-center gap-1">
@@ -562,19 +569,21 @@ export default function Tracked() {
             >
               <RefreshCw className={cn((refreshing || checking.length > 0) && "animate-spin")} /> Refresh all
             </Button>
+            <Button
+              variant="ghost"
+              size="xs"
+              disabled={addingFree}
+              title="Put every free issue of these repos into the Issues list: no assignee, tagged Free, not Out of scope, not from a repo that says no AI. Each one once: one you removed from Issues stays out"
+              onClick={() => addFree()}
+            >
+              {addingFree ? <Loader2 className="animate-spin" /> : <Plus />} Add to Issues
+            </Button>
             <Button variant="ghost" size="xs" disabled={newTotal === 0} title="The issues new now aren't new anymore; only ones found later are" onClick={() => markAllRead()}>
               <CheckCheck /> Mark all as read
             </Button>
           </span>
         )}
         <span className="ml-auto flex items-center gap-1">
-          <label
-            className="flex items-center gap-1.5 px-2 text-xs"
-            title="Put good new issues into the Issues list by themselves: free, no comments, opened in the last 3 days, in a repo whose AI policy is AI welcome. Each one once"
-          >
-            <Switch size="sm" checked={tracked.auto_add} onCheckedChange={setAutoAdd} />
-            Auto-add to Issues
-          </label>
           <Button
             variant={selectMode ? "secondary" : "ghost"} size="xs"
             disabled={!selectMode && names.length === 0}

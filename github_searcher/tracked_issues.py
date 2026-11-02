@@ -19,13 +19,13 @@ Mark all as read saw (mark_read), kept from check to check while they stay open.
 format (2026-10-23T03:39:11Z), so they compare as text. error is why the last check failed (the issues of
 the check before stay).
 
-Auto-add, the switch on the Tracked page, is kept here too, in DATA_DIR/tracked_auto_add.json:
+What the Tracked page's Add to Issues took up is kept here too, in DATA_DIR/tracked_auto_add.json (named after
+the Auto-add switch it replaced):
 
-    {"on": bool, "added": ["owner/name#n", ...]}
+    {"added": ["owner/name#n", ...]}
 
-While it is on, the backend puts every good new issue of a tracked repo into the Issues list by itself
-(backend/tracked_api.py keep_tracked says which). added is every issue it took up, so each one is added once: one
-the user removes from the Issues list stays out.
+Each press puts every free issue of the tracked repos into the Issues list (backend/tracked_api.py add_free says
+which). added is every issue it took up, so each one is added once: one the user removes from the Issues list stays out.
 
 Kept apart from the list on purpose, like issue_facts.py: the list's undo/redo should only undo what
 agents and the user did, not bring back old checks. The backend checks every tracked repo now and then
@@ -63,10 +63,10 @@ class TrackedIssues:
         self.checks = {}
         if self.path.exists():
             self.checks = json.loads(self.path.read_text())
-        self.auto_add_path = DATA_DIR / "tracked_auto_add.json"
-        self.auto_add_settings = {"on": False, "added": []}
-        if self.auto_add_path.exists():
-            self.auto_add_settings = json.loads(self.auto_add_path.read_text())
+        self.added_path = DATA_DIR / "tracked_auto_add.json"
+        self.added_ids = []
+        if self.added_path.exists():
+            self.added_ids = json.loads(self.added_path.read_text())["added"]
 
     def save(self) -> None:
         """Write the checks to disk. Called with the lock held, after every change."""
@@ -148,22 +148,18 @@ class TrackedIssues:
             }
             self.save()
 
-    def auto_add(self) -> dict:
-        """Auto-add: {"on": bool, "added": [issue id, ...]}."""
+    def added(self) -> list[str]:
+        """Every issue Add to Issues took up, by id ("owner/name#n")."""
         with self.lock:
-            return copy.deepcopy(self.auto_add_settings)
+            return list(self.added_ids)
 
-    def set_auto_add(self, on: bool | None = None, added: list[str] | None = None) -> None:
-        """Turn Auto-add on or off, or note issues it took up (added to the ones before)."""
+    def note_added(self, ids: list[str]) -> None:
+        """Note issues Add to Issues took up (added to the ones before)."""
         with self.lock:
-            if on is not None:
-                self.auto_add_settings["on"] = on
-            if added is not None:
-                self.auto_add_settings["added"] = self.auto_add_settings["added"] + added
-            self.version += 1
-            temporary = self.auto_add_path.with_name(self.auto_add_path.name + ".tmp")
-            temporary.write_text(json.dumps(self.auto_add_settings))
-            temporary.replace(self.auto_add_path)
+            self.added_ids = self.added_ids + ids
+            temporary = self.added_path.with_name(self.added_path.name + ".tmp")
+            temporary.write_text(json.dumps({"added": self.added_ids}))
+            temporary.replace(self.added_path)
 
     def mark_read(self) -> None:
         """Mark all as read: every issue the checks found so far isn't new anymore. Ones found later are."""
