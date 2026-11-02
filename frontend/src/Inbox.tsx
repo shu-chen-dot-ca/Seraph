@@ -33,7 +33,8 @@ squashed, reworded or signed off its commits as a reviewer asked) says so instea
 An edit (a new title and description for your own PR or issue) has Overview, Changes (what is different, like a diff)
 and Title and description (the new text, which Edit can change).
 The bar at the bottom of the pop-up decides, with a note for the agent: Reject, Discuss, Redraft or Approve (a
-question: Reject, Reply or Approve; Taken: Stop the agent or Keep working). Redraft: the agent drafts it again with
+question: Reject, Reply or Approve, or one button per answer when the agent offers answers: picking one replies with
+it, so the agent knows which was meant; Taken: Stop the agent or Keep working). Redraft: the agent drafts it again with
 your note. Discuss: your note goes to the agent's chat, saying which draft it is about, and the draft keeps waiting.
 A decision goes to the agent (and the draft's job goes back to the agent's queue).
 With your GitHub account connected (Account on the GitHub tab), Approve on a PR or comment first asks "are you sure?"
@@ -366,11 +367,15 @@ export default function Inbox(props: { selected: string | null }) {
   );
 
   // send: Approve also sends the PR or comment to GitHub as you, first (after the "are you sure?").
-  async function decide(action: "approve" | "reject" | "reply", send = false) {
+  // picked: one of a question's options, sent as the reply (with the note, if any).
+  async function decide(action: "approve" | "reject" | "reply", send = false, picked = "") {
     if (draft === undefined) {
       return;
     }
-    const text = (replies[draft.id] ?? "").trim();
+    let text = (replies[draft.id] ?? "").trim();
+    if (picked !== "") {
+      text = text === "" ? `I pick: ${picked}` : `I pick: ${picked}\n${text}`;
+    }
     if (action === "reply" && text === "") {
       toast.error("Write a reply first.");
       return;
@@ -1084,7 +1089,9 @@ export default function Inbox(props: { selected: string | null }) {
                 <div className="shrink-0 space-y-2 border-t bg-muted/30 px-4 py-2">
                   <Textarea
                     placeholder={
-                      draft.kind === "question"
+                      draft.kind === "question" && draft.options.length > 0
+                        ? "Pick an answer below (this note goes with it), or write your own and Reply."
+                        : draft.kind === "question"
                         ? "Your answer. Ctrl+Enter sends it as a reply."
                         : "A note for the agent (optional for Approve and Reject; needed for Discuss and Redraft). Ctrl+Enter redrafts."
                     }
@@ -1112,7 +1119,8 @@ export default function Inbox(props: { selected: string | null }) {
                       {!isEditing && sends && account !== null && account.connected && updateOf === null && draft.kind !== "edit" &&
                         `Approve ${draft.kind === "pr" ? "opens this PR" : "posts this comment"} on GitHub as @${account.login}, after you confirm; the agent is told, with your note.`}
                       {!isEditing && draft.kind === "report" && "Approve accepts the report and ends the job; nothing is sent anywhere."}
-                      {!isEditing && draft.kind !== "report" && (!sends || account === null || !account.connected) &&
+                      {!isEditing && draft.kind === "question" && draft.options.length > 0 && "Your pick goes to the agent, with your note. Nothing is sent to GitHub."}
+                      {!isEditing && draft.kind !== "report" && !(draft.kind === "question" && draft.options.length > 0) && (!sends || account === null || !account.connected) &&
                         "Approve sends nothing to GitHub; the agent is told, with your note."}
                     </span>
                     <div className="ml-auto flex shrink-0 items-center gap-1.5 max-md:shrink max-md:flex-wrap max-md:justify-end">
@@ -1130,30 +1138,44 @@ export default function Inbox(props: { selected: string | null }) {
                         </Button>
                       )}
                       {draft.kind === "question" && (
-                        <Button size="sm" disabled={busy !== "" || reply.trim() === ""} onClick={() => decide("reply")}>
+                        <Button
+                          variant={draft.options.length > 0 ? "outline" : "default"}
+                          size="sm"
+                          disabled={busy !== "" || reply.trim() === ""}
+                          onClick={() => decide("reply")}
+                        >
                           {busy === "reply" ? <Loader2 className="animate-spin" /> : <Reply />} Reply
                         </Button>
                       )}
+                      {/* A question's options: each one answers it, so there is no Approve to guess from. */}
+                      {draft.kind === "question" &&
+                        draft.options.map((option, index) => (
+                          <Button key={option} variant={index === 0 ? "default" : "outline"} size="sm" disabled={busy !== ""} onClick={() => decide("reply", false, option)}>
+                            {option}
+                          </Button>
+                        ))}
                       {draft.kind !== "question" && (
                         <Button variant="outline" size="sm" disabled={busy !== "" || isEditing || reply.trim() === ""} onClick={() => decide("reply")}>
                           {busy === "reply" ? <Loader2 className="animate-spin" /> : <RotateCcw />} Redraft
                         </Button>
                       )}
-                      <Button
-                        variant={draft.kind === "question" ? "outline" : "default"}
-                        size="sm"
-                        disabled={busy !== "" || isEditing}
-                        onClick={() => {
-                          if (sends && account !== null && account.connected) {
-                            setConfirming("approve");
-                          } else {
-                            decide("approve");
-                          }
-                        }}
-                      >
-                        {busy === "approve" || busy === "send" ? <Loader2 className="animate-spin" /> : <Check />}
-                        {busy === "send" ? "Sending…" : "Approve"}
-                      </Button>
+                      {(draft.kind !== "question" || draft.options.length === 0) && (
+                        <Button
+                          variant={draft.kind === "question" ? "outline" : "default"}
+                          size="sm"
+                          disabled={busy !== "" || isEditing}
+                          onClick={() => {
+                            if (sends && account !== null && account.connected) {
+                              setConfirming("approve");
+                            } else {
+                              decide("approve");
+                            }
+                          }}
+                        >
+                          {busy === "approve" || busy === "send" ? <Loader2 className="animate-spin" /> : <Check />}
+                          {busy === "send" ? "Sending…" : "Approve"}
+                        </Button>
+                      )}
                     </div>
                   </div>
                 </div>

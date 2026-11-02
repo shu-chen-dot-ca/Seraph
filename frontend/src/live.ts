@@ -439,6 +439,7 @@ export type Draft = {
   review: DraftReview | null; // a project's PR: its review (only passed ones reach the Inbox)
   replaces: string | null; // a project's PR made again on the new main: the PR "owner/name#n" it replaces
   previous: { title: string; body: string } | null; // edit: the title and description as they were when drafted
+  options: string[]; // question: the answers to pick from, one button each ([]: answer in your own words)
 };
 
 // A project's PR draft is reviewed by the project's reviewer before it reaches the Inbox (github_searcher/inbox.py).
