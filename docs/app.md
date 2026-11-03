@@ -37,10 +37,22 @@ These pages read GitHub with your own sign-in. Every button that changes somethi
 | **Pull requests** | Created by me, Assigned to me, Mentioned, Review requests |
 | **Papers** | **Add paper**: see [papers](papers.md) |
 
+## Workflow
+
+Your own repositories, developed one small issue at a time: see [Workflow](workflow.md).
+
+| Tab | |
+|---|---|
+| **Overview** | What waits for you, where the work is, pull requests per day, how often the review agent's advice matched yours, what changed by area, and what each agent is on |
+| **Pull requests** | Open and Closed. One shows the review agent's advice, its proof, **Merge** and **Reject** |
+| **Issues** | Open and Closed, **New issue** |
+| **Chat** | The chat agent, which turns what you ask for into issues |
+| **Settings** | **Take new issues**, **Approve and merge** (You or Review agent), where pull requests and issues are, workers, **Remove repository** |
+
 ## Settings and phone
 
 - **Settings** holds the theme and accent color, environment variables for all VMs, [remote access](../remote_access/README.md), and **About**, which has **Check for updates** and **Previous version**.
-- **On a phone.** Below 768 px wide, one **Menu** drawer holds all three tabs. A VM page lets you take over a desktop, with an on-screen bar for Esc, Ctrl, Alt, Tab and the arrow keys.
+- **On a phone.** Below 768 px wide, one **Menu** drawer holds all four tabs. A VM page lets you take over a desktop, with an on-screen bar for Esc, Ctrl, Alt, Tab and the arrow keys.
 
 ## Sherpa
 
