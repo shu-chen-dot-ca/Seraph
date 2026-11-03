@@ -9,8 +9,10 @@ Repos page's link), then a chip with the repo's name and an X to show them all a
 Each row shows what helps decide whether an issue is worth fixing, from its facts (github_searcher/issue_facts.py,
 kept fresh by the backend; Refresh on top fetches them all now, then has Claude read every open issue and its comments
 again, to see if it is still free or anything changed; it spins until both are done, minutes for many, then says
-which ones were free and aren't anymore): repo stars,
-when it was opened, its last activity, when Claude last read it and updated its tags (Checked), comments,
+which ones were free and aren't anymore):
+when it was opened, who opened it (Author: their login and their role in the repo, Owner, Maintainer for a member or
+collaborator, Contributor for someone who had a change merged there before, None for anyone else, Bot for a bot;
+sorted owners first), its last activity, when Claude last read it and updated its tags (Checked), comments,
 and amber words when someone is assigned or a PR is open for it. The list is a table like the Repos and Explore
 pages': #, Title (taking the room left over), then ISSUE_COLUMNS, every column as wide as its widest cell over the
 rows shown (a hidden copy of them, the sizer at the bottom, measures them: lib/column-widths.ts), the text in the
@@ -37,7 +39,7 @@ Free (a newcomer can start now) or Assigned (someone is on it: an assignee, a cl
 Self-assigned (blue: you are on it, your GitHub account from the GitHub tab's Account page is an assignee or has an
 open PR for it; not counted as Assigned), or Fixed (muted: still open on GitHub, but a merged PR or a commit already
 does what it asks, so it only needs closing), or Closed (muted, whatever its tags say, when the issue is closed on
-GitHub; it sorts last), its Kind, its Lines (a rough guess of how many lines the fix adds and removes, tests included, shown
+GitHub; it sorts last), its Lines (a rough guess of how many lines the fix adds and removes, tests included, shown
 as ~40), and Merge: whether a pull request from us would get merged, not how hard the code is. By fixed rules
 (github_searcher/issue_tags.py) from six yes / no checks Claude answers, the status, the repo's numbers and your merged
 PRs there: Likely (green), Fixed (muted, see Free), or the first thing in the way (red): Claimed, Maintainers only, Waiting, No outside PRs (the
@@ -114,7 +116,6 @@ import { api, useLive, useLoaded, type GithubAccountStatus, type IssueItem, type
 import { useColumnWidths } from "@/lib/column-widths";
 import { cn, timeAgo } from "@/lib/utils";
 
-const STARS = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
 
 // GitHub's author association, said plainly. Owners, members and collaborators are the maintainers.
 const ROLE: Record<string, string> = {
@@ -129,8 +130,22 @@ const ROLE: Record<string, string> = {
   BOT: "bot",
 };
 const MAINTAINERS = ["OWNER", "MEMBER", "COLLABORATOR"];
+// The Author column's role: owner, maintainer, contributor, or none (no part in the repo's code: a first-timer too), and
+// its order for sorting, owners first.
+const AUTHOR_ROLE: Record<string, string> = {
+  OWNER: "Owner",
+  MEMBER: "Maintainer",
+  COLLABORATOR: "Maintainer",
+  CONTRIBUTOR: "Contributor",
+  FIRST_TIME_CONTRIBUTOR: "None",
+  FIRST_TIMER: "None",
+  MANNEQUIN: "None",
+  NONE: "None",
+  BOT: "Bot",
+};
+const AUTHOR_RANK: Record<string, number> = { Owner: 4, Maintainer: 3, Contributor: 2, None: 1, Bot: 0 };
 
-type SortKey = "number" | "title" | "repo" | "free" | "marked" | "merge" | "lines" | "kind" | "stars" | "opened" | "active" | "read" | "comments" | "status" | "agent";
+type SortKey = "number" | "title" | "repo" | "free" | "marked" | "merge" | "lines" | "opened" | "author" | "active" | "read" | "comments" | "status" | "agent";
 
 // The table's columns: # and Title (which takes the room left over), then the rest. All but Title are measured by the
 // sizer. better says which way the first click on a header sorts: higher first, or A to Z.
@@ -143,11 +158,10 @@ const ISSUE_COLUMNS: IssueColumn[] = [
   { key: "marked", label: "Marked", title: "What the maintainers marked it with on GitHub: good first issue, help wanted (they want an outside PR) or confirmed. Hover for all its labels", better: "higher" },
   { key: "merge", label: "Merge", title: "Whether a pull request from us would get merged, by fixed rules: Likely first, else the first thing in the way (hover for why); Out of scope when we don't take it", better: "higher" },
   { key: "lines", label: "Lines", title: "A rough guess of how many lines the fix adds and removes, tests included; the most first", better: "higher" },
-  { key: "kind", label: "Kind", title: "Bug, docs, feature or question: A to Z", better: "text" },
-  { key: "stars", label: "Stars", title: "The repo's stars", better: "higher" },
   { key: "opened", label: "Opened", title: "When the issue was opened on GitHub", better: "higher" },
+  { key: "author", label: "Author", title: "Who opened it, and their role in the repo: owner, maintainer (a member or collaborator), contributor (had a change merged there before) or none; owners first", better: "higher" },
   { key: "active", label: "Updated", title: "Its last change on GitHub: a comment, a label, an edit…", better: "higher" },
-  { key: "read", label: "Checked", title: "When Claude last read it and its comments and updated its tags (Free, Merge, Lines, Kind)", better: "higher" },
+  { key: "read", label: "Checked", title: "When Claude last read it and its comments and updated its tags (Free, Merge, Lines)", better: "higher" },
   { key: "comments", label: "Comments", title: "Comments", better: "higher" },
   { key: "status", label: "Status", title: "What is being done about it (its latest job): in progress first", better: "higher" },
   { key: "agent", label: "Agent", title: "The agent on its latest job", better: "text" },
@@ -291,10 +305,6 @@ export default function Issues(props: { repo: string | null; open: string | null
   for (const agent of agents) {
     agentNames[agent.id] = agent.name;
   }
-  const repoStars: Record<string, number> = {};
-  for (const repo of repos.items) {
-    repoStars[repo.full_name] = repo.stars;
-  }
   // Each repo's tag by its name without case ("" when it has none), and the tags in use, A to Z.
   const repoTag: Record<string, string> = {};
   const tagNames: string[] = [];
@@ -405,12 +415,6 @@ export default function Issues(props: { repo: string | null; open: string | null
     if (key === "lines") {
       return issue.tags?.lines ?? null;
     }
-    if (key === "kind") {
-      return issue.tags?.kind ?? null;
-    }
-    if (key === "stars") {
-      return facts?.repo_stars ?? repoStars[issue.repo] ?? null;
-    }
     if (key === "comments") {
       return facts?.comments ?? issue.comments;
     }
@@ -425,6 +429,9 @@ export default function Issues(props: { repo: string | null; open: string | null
     }
     if (facts === null || facts === undefined) {
       return null;
+    }
+    if (key === "author") {
+      return AUTHOR_RANK[AUTHOR_ROLE[facts.author_role] ?? "None"];
     }
     return new Date(key === "opened" ? facts.created_at : facts.updated_at).getTime();
   }
@@ -573,16 +580,6 @@ export default function Issues(props: { repo: string | null; open: string | null
         </span>
       );
     }
-    if (key === "kind") {
-      if (!issue.tags?.kind) {
-        return <span title={issue.tags ? issue.tags.reason : "Being tagged"}>{issue.tags ? "–" : "…"}</span>;
-      }
-      return (
-        <span className="capitalize" title={issue.tags.reason}>
-          {issue.tags.kind}
-        </span>
-      );
-    }
     if (key === "merge") {
       // Missing until Claude read it (again, for tags from before Merge).
       if (!issue.tags?.merge) {
@@ -604,12 +601,18 @@ export default function Issues(props: { repo: string | null; open: string | null
       }
       return <span title={issue.tags.reason}>~{issue.tags.lines}</span>;
     }
-    if (key === "stars") {
-      const stars = facts !== null ? facts.repo_stars : repoStars[issue.repo];
-      return stars !== undefined ? STARS.format(stars) : "–";
-    }
     if (key === "opened") {
       return facts !== null ? <span title={new Date(facts.created_at).toLocaleString()}>{timeAgo(facts.created_at)}</span> : "–";
+    }
+    if (key === "author") {
+      if (facts === null) {
+        return "–";
+      }
+      return (
+        <span>
+          {facts.author} <span className="text-muted-foreground">· {AUTHOR_ROLE[facts.author_role] ?? "None"}</span>
+        </span>
+      );
     }
     if (key === "active") {
       return facts !== null ? <span title={new Date(facts.updated_at).toLocaleString()}>{timeAgo(facts.updated_at)}</span> : "–";
@@ -1228,7 +1231,6 @@ export default function Issues(props: { repo: string | null; open: string | null
                       </Badge>
                     )}
                     {shownTags.lines !== undefined && shownTags.lines !== null && <Badge variant="secondary">~{shownTags.lines} lines</Badge>}
-                    {shownTags.kind !== null && <Badge variant="secondary">{shownTags.kind}</Badge>}
                     <span>{shownTags.reason}</span>
                     <Button variant="ghost" size="xs" disabled={retagging.includes(shown.id)} title="Claude reads it and its comments again now" onClick={() => tagAgain(shown.id)}>
                       {retagging.includes(shown.id) ? <Loader2 className="animate-spin" /> : <Tags />} Tag again
@@ -1301,10 +1303,8 @@ export default function Issues(props: { repo: string | null; open: string | null
                       ))}
                     </span>
 
-                    <span className="text-muted-foreground">Repo</span>
-                    <span>
-                      {STARS.format(shownFacts.repo_stars)} stars · last push {timeAgo(shownFacts.repo_pushed_at)}
-                    </span>
+                    <span className="text-muted-foreground">Last push</span>
+                    <span>{timeAgo(shownFacts.repo_pushed_at)}</span>
 
                     <span className="col-span-2 text-xs text-muted-foreground">From GitHub {timeAgo(shownFacts.fetched_at)}</span>
                   </div>
