@@ -21,6 +21,11 @@ Title, Repo) up to Free; with none, it is the list's order. Every sorted header 
 blue with an arrow. A table wider than the page scrolls sideways, the header
 with it. Times re-render every minute.
 
+The rows are grouped by their repo's tag (the one the Repos page gives it), the same way the Repos page groups repos:
+which repo an issue is in doesn't matter, only its repo's tag. Every group has a header (its name and how many) over
+its issues in the list's sort: the tags on top, A to Z, and No tag (issues whose repo has none) at the bottom. A click
+on a header folds its issues away or opens them again, remembered in this browser; folded issues can't be picked.
+
 Marked (next to Free) says what the maintainers marked the issue with on GitHub, from its labels (only maintainers can
 label an issue), each spelled however the repo spells it: Good first issue (green: good first issue, first-timers,
 beginner, starter, newcomer), Help wanted (green: help wanted, contributions or PRs welcome, up for grabs, accepting
@@ -76,7 +81,7 @@ undo / redo keep it too (the backend checks, for agents as well). Cancel its job
 */
 
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Activity, ArrowDown, ArrowUp, ChevronDown, ExternalLink, Loader2, RefreshCw, Redo2, SquareCheck, Tags, Undo2, UserPlus, UserX, X } from "lucide-react";
+import { Activity, ArrowDown, ArrowUp, ChevronDown, ChevronRight, ExternalLink, Loader2, RefreshCw, Redo2, SquareCheck, Tags, Undo2, UserPlus, UserX, X } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -170,6 +175,18 @@ const LEVEL_VARIANT: Record<string, "ok" | "warn" | "bad" | "secondary"> = {
 };
 const LEVEL_LABEL: Record<string, string> = { easy: "Easy", medium: "Medium", hard: "Hard", "out of scope": "Out of scope" };
 const OUT_OF_SCOPE = "Out of scope, so it can't be assigned (its Level says why)";
+const FOLDED_STORAGE = "issues-folded-tags";
+
+// The tags this browser folded last. Storage can be blocked: then every tag starts open.
+let savedFolded: string[] = [];
+try {
+  const saved = JSON.parse(localStorage.getItem(FOLDED_STORAGE) ?? "[]");
+  if (Array.isArray(saved)) {
+    savedFolded = saved.filter((each: unknown) => typeof each === "string");
+  }
+} catch {
+  savedFolded = [];
+}
 
 // open: the issue shown in the pop-up (#/issues?open=owner/name%23n), null when none is.
 export default function Issues(props: { repo: string | null; open: string | null }) {
@@ -197,6 +214,8 @@ export default function Issues(props: { repo: string | null; open: string | null
   const [refreshing, setRefreshing] = useState(false);
   // Issues Claude is reading again (Tag again).
   const [retagging, setRetagging] = useState<string[]>([]);
+  // The repo tags whose issues are folded away under their header.
+  const [folded, setFolded] = useState<string[]>(savedFolded);
   const [, setTick] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   // The hidden copy of every shown row's cells (but the title's), and the widths it gives each column.
@@ -221,6 +240,14 @@ export default function Issues(props: { repo: string | null; open: string | null
     return () => clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(FOLDED_STORAGE, JSON.stringify(folded));
+    } catch {
+      // Storage blocked: the folded tags just aren't kept.
+    }
+  }, [folded]);
+
   // Latest job and all jobs of each issue, and agent names for the links.
   const latestJob: Record<string, Job> = {};
   const issueJobs: Record<string, Job[]> = {};
@@ -242,6 +269,16 @@ export default function Issues(props: { repo: string | null; open: string | null
   for (const repo of repos.items) {
     repoStars[repo.full_name] = repo.stars;
   }
+  // Each repo's tag by its name without case ("" when it has none), and the tags in use, A to Z.
+  const repoTag: Record<string, string> = {};
+  const tagNames: string[] = [];
+  for (const repo of repos.items) {
+    repoTag[repo.full_name.toLowerCase()] = repo.tag ?? "";
+    if ((repo.tag ?? "") !== "" && !tagNames.includes(repo.tag!)) {
+      tagNames.push(repo.tag!);
+    }
+  }
+  tagNames.sort((a, b) => a.localeCompare(b));
 
   // Issues an agent is working on: a job on it queued, working or waiting on you. Nothing here removes them (the
   // backend keeps them anyway).
@@ -624,13 +661,29 @@ export default function Issues(props: { repo: string | null; open: string | null
     setRefreshing(false);
   }
 
-  // Every row is one line, 28px high (h-7).
+  // What the list draws: each repo tag's header (issue null) over its issues unless folded, the tags A to Z, then the
+  // issues whose repo has no tag (tag "") last, under a No tag header.
+  const lines: { tag: string; issue: IssueItem | null }[] = [];
+  for (const tag of [...tagNames, ""]) {
+    const tagIssues = rows.filter((issue) => (repoTag[issue.repo.toLowerCase()] ?? "") === tag);
+    if (tagIssues.length === 0) {
+      continue;
+    }
+    lines.push({ tag, issue: null });
+    const shownIssues = folded.includes(tag) ? [] : tagIssues;
+    for (const issue of shownIssues) {
+      lines.push({ tag, issue });
+    }
+  }
+
+  // Every line is 28px high (h-7), headers too.
   const virtualizer = useVirtualizer({
-    count: rows.length,
+    count: lines.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 28,
     overscan: 10,
-    getItemKey: (index) => rows[index].id,
+    // An issue's id never starts with "#", so a header's key can't be an issue's.
+    getItemKey: (index) => lines[index].issue?.id ?? `#${lines[index].tag}`,
   });
 
   async function undo() {
@@ -660,7 +713,13 @@ export default function Issues(props: { repo: string | null; open: string | null
   }
 
   // Only issues still in the list count as selected (an undo, an agent or another tab may have taken some out).
-  const rowIds = rows.map((issue) => issue.id);
+  // The rows drawn: a folded tag's issues can't be clicked, so Shift-click and Select all skip them.
+  const rowIds: string[] = [];
+  for (const line of lines) {
+    if (line.issue !== null) {
+      rowIds.push(line.issue.id);
+    }
+  }
   const listedIds = issues.items.map((issue) => issue.id);
   const chosen = selected.filter((id) => listedIds.includes(id));
   // The picked ones the bottom bar may remove: not the ones an agent is working on.
@@ -860,7 +919,26 @@ export default function Issues(props: { repo: string | null; open: string | null
 
           <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
             {virtualizer.getVirtualItems().map((item) => {
-              const issue = rows[item.index];
+              const line = lines[item.index];
+              // A tag's header: a click folds its issues away or opens them again.
+              if (line.issue === null) {
+                const open = !folded.includes(line.tag);
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    className="absolute left-0 flex h-7 w-full items-center gap-1 border-b bg-muted/40 px-3 text-xs font-medium text-muted-foreground hover:text-foreground"
+                    style={{ top: item.start }}
+                    aria-expanded={open}
+                    onClick={() => setFolded(open ? [...folded, line.tag] : folded.filter((each) => each !== line.tag))}
+                  >
+                    <ChevronRight className={cn("size-3.5 transition-transform", open && "rotate-90")} />
+                    {line.tag === "" ? "No tag" : line.tag}
+                    <span className="ml-0.5 tabular-nums">{rows.filter((issue) => (repoTag[issue.repo.toLowerCase()] ?? "") === line.tag).length}</span>
+                  </button>
+                );
+              }
+              const issue = line.issue;
               const facts = issue.facts ?? null;
               const state = facts !== null ? facts.state : issue.state;
               const openPRs = facts !== null ? facts.linked_prs.filter((pull) => pull.state === "OPEN") : [];
