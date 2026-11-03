@@ -422,8 +422,8 @@ class WorkTools:
             )(self.run_tests),
             tool(
                 "draft_comment",
-                "Draft a comment on an issue or PR (target: owner/name#number) for the user's Inbox, e.g. \"I'd like to work on this\", "
-                "or a follow_up job's reply (target: its thread). "
+                "Draft a follow_up job's reply on an issue or PR (target: its thread, owner/name#number) for the user's Inbox. "
+                "Not on a fix_issue job: we never claim an issue, ask to be assigned or ask maintainers and wait. "
                 "Nothing is posted: the user decides, and you get a message with their decision. The job waits on the user meanwhile. "
                 "body is the comment as it would be posted. project, problem and why are only for the user, in the Inbox's overview. " + PLAIN,
                 {
@@ -1484,6 +1484,14 @@ class WorkTools:
             return {"content": [{"type": "text", "text": f"{job['id']} is not your job."}], "is_error": True}
         if job["status"] in CLOSED_STATUSES:
             text = f"{job['id']} is {job['status']} (the user may have cancelled it): no drafts for it anymore. Move on."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        # We don't comment and wait for other people: a fix goes straight to a PR.
+        if job["kind"] == "fix_issue":
+            text = (
+                "No comments on a fix_issue job: we never claim an issue, ask to be assigned or ask the maintainers and wait, "
+                "even when CONTRIBUTING asks contributors to ask first. Fix it and draft the PR; decide anything open yourself "
+                "and say in the PR what you chose and why."
+            )
             return {"content": [{"type": "text", "text": text}], "is_error": True}
 
         draft = self.agents.inbox.create(
