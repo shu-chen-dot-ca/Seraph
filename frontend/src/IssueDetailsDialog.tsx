@@ -14,9 +14,19 @@ import { Markdown } from "@/components/ui/markdown";
 import { api, type Thread, type TrackedIssue } from "@/live";
 import { timeAgo } from "@/lib/utils";
 
-// The level's soft color, like LeetCode's green / amber / red, grey when out of scope (the same as the Issues page's).
-const LEVEL_VARIANT: Record<string, "ok" | "warn" | "bad" | "secondary"> = { easy: "ok", medium: "warn", hard: "bad", "out of scope": "secondary" };
-const LEVEL_LABEL: Record<string, string> = { easy: "Easy", medium: "Medium", hard: "Hard", "out of scope": "Out of scope" };
+// Merge's names (the same as the Issues page's). Its Badge is green when likely, grey when out of scope, red otherwise.
+const MERGE_LABEL: Record<string, string> = {
+  likely: "Likely",
+  "can't validate": "Can't validate",
+  "big change": "Big change",
+  "large feature": "Large feature",
+  "no outside prs": "No outside PRs",
+  waiting: "Waiting",
+  "maintainers only": "Maintainers only",
+  claimed: "Claimed",
+  "out of scope": "Out of scope",
+  fixed: "Fixed",
+};
 
 export default function IssueDetailsDialog(props: { repo: string; issue: TrackedIssue | null; onClose: () => void }) {
   const [thread, setThread] = useState<Thread | null>(null);
@@ -85,8 +95,8 @@ export default function IssueDetailsDialog(props: { repo: string; issue: Tracked
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               {isAssigned && <Badge variant="warn">assigned</Badge>}
               {!isAssigned && tags?.status === "free" && <Badge variant="ok">free</Badge>}
-              {tags !== null && tags.level !== null && (
-                <Badge variant={LEVEL_VARIANT[tags.level]}>{LEVEL_LABEL[tags.level]}</Badge>
+              {tags !== null && tags.merge !== undefined && (
+                <Badge variant={tags.merge === "likely" ? "ok" : tags.merge === "out of scope" || tags.merge === "fixed" ? "secondary" : "bad"}>{MERGE_LABEL[tags.merge]}</Badge>
               )}
               {tags !== null && tags.lines !== undefined && tags.lines !== null && <Badge variant="secondary">~{tags.lines} lines</Badge>}
               {tags !== null && tags.kind !== null && <Badge variant="secondary">{tags.kind}</Badge>}

@@ -19,10 +19,10 @@ wanted, contributions or PRs welcome, up for grabs, accepting PRs) and Confirmed
 triaged); "–" when none, and hovering shows all its labels. Sorted, good first issue counts most, then help wanted,
 then confirmed, and one marked more ways goes higher.
 GitHub's labels aren't shown otherwise: each issue carries the app's own tags instead, the same as on the Issues page
-(github_searcher/issue_tags.py, made by Claude in the background): Free or Assigned, Easy / Medium / Hard (how hard
-the fix is for our agent in its VM, by fixed rules, the same as on the Issues page; kept until the issue changes) or
-Out of scope (grey: we don't take it, as our agent can't do it yet, like a plugin the project wants as its own
-repository, or it touches politics: activist or politically sensitive, or against another country's laws), its Lines
+(github_searcher/issue_tags.py, made by Claude in the background): Free or Assigned, Merge (whether a pull request
+from us would get merged, by fixed rules, the same as on the Issues page: Likely in green, else the first thing in the
+way in red) or Out of scope (grey: we don't take it, like a plugin or add-on for a third-party product's users, or it
+touches politics: activist or politically sensitive, or against another country's laws), its Lines
 (a rough guess of how many lines the fix adds and removes, tests included, shown as ~40) and its kind, each in its own column, the reason on hover. Assigned on GitHub counts as Assigned at once, without waiting
 for the tags. Tag again (on the repo's row and in its pop-up) has Claude read all its unassigned issues again now.
 
@@ -30,7 +30,7 @@ The list is a table like the Explore page's: Name, then the repo's fields in two
 its description under them, from the name on. The header has two lines of names to match: each column holds a
 first-line field over a second-line one. The first line (FIRST_LINE) is how outside contributors fare, from the repo's
 signals (the same as the Repos page's columns): AI policy, newcomers and reply speed; hover a tag for what it means.
-The second (SECOND_LINE): stars and its issues' numbers (Free, Easy). Every column is as wide as its widest cell (one
+The second (SECOND_LINE): stars and its issues' numbers (Free, Likely). Every column is as wide as its widest cell (one
 CSS grid, each row a subgrid) and all of them sit on the left, the room left over going before the row's buttons. The
 text is in the page's own color (green for free issues; the tags' own colors). A click on a field's name in the
 header adds it to the sort, the best first (the most, the fastest reply, the friendliest tag; A to Z for the name); again the other way round; again takes it out. Many fields sort at once, like on the Explore page:
@@ -93,7 +93,7 @@ import { cn, timeAgo } from "@/lib/utils";
 const COMPACT = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
 // The columns after Name, each sorted by a click on its header: the best first (the most, the latest; the least for
 // lower: the fastest reply). First the repo's tags, from its signals (the same as the Repos page's columns).
-type TrackedKey = "name" | "ai_policy" | "newcomers" | "reply" | "stars" | "free" | "easy";
+type TrackedKey = "name" | "ai_policy" | "newcomers" | "reply" | "stars" | "free" | "likely";
 type TrackedColumn = { key: TrackedKey; label: string; title: string; better?: "lower" };
 // Each row has two lines, so it isn't too long. The first: how outside contributors fare.
 const FIRST_LINE: TrackedColumn[] = [
@@ -105,7 +105,7 @@ const FIRST_LINE: TrackedColumn[] = [
 const SECOND_LINE: TrackedColumn[] = [
   { key: "stars", label: "Stars", title: "Stars on GitHub" },
   { key: "free", label: "Free", title: "Open issues a newcomer can start on now: nobody is on it and the maintainers want it done" },
-  { key: "easy", label: "Easy", title: "Free issues that are easy: our agent can write the fix, see it and prove it in its VM" },
+  { key: "likely", label: "Likely", title: "Free issues a pull request from us would likely get merged for (their Merge is Likely)" },
 ];
 // Every column in sort order (the first line from left to right, then the second), and the table's columns after
 // Name: each holds a first-line field over a second-line one.
@@ -114,28 +114,49 @@ const SLOTS = Array.from({ length: Math.max(FIRST_LINE.length, SECOND_LINE.lengt
 // The tags' order for sorting, the friendliest highest (the same as the Repos page's).
 const POLICY_RANK: Record<string, number> = { welcome: 5, none: 4, disclose: 3, unclear: 2, no_ai: 1 };
 const NEWCOMER_RANK: Record<string, number> = { welcomes: 5, ok: 4, few: 3, left_waiting: 2, turned_away: 1 };
-// The pop-up's issues: #, Title (the room left over), the tags (Free, Marked, Level, Lines, Kind), Opened, Updated, Checked
+// The pop-up's issues: #, Title (the room left over), the tags (Free, Marked, Merge, Lines, Kind), Opened, Updated, Checked
 // (Claude last read it), comments, then GitHub and Add.
-const ISSUE_COLUMNS = "grid grid-cols-[56px_minmax(0,1fr)_72px_160px_64px_48px_72px_150px_80px_80px_36px_120px] items-center gap-2";
-type IssueKey = "number" | "title" | "free" | "marked" | "level" | "lines" | "kind" | "opened" | "updated" | "read" | "comments";
+const ISSUE_COLUMNS = "grid grid-cols-[56px_minmax(0,1fr)_72px_160px_112px_48px_72px_150px_80px_80px_36px_120px] items-center gap-2";
+type IssueKey = "number" | "title" | "free" | "marked" | "merge" | "lines" | "kind" | "opened" | "updated" | "read" | "comments";
 const ISSUE_HEADERS: { key: IssueKey; label: string; title: string }[] = [
   { key: "number", label: "#", title: "Its number on GitHub, newest first" },
   { key: "title", label: "Title", title: "A to Z" },
   { key: "free", label: "Free", title: "Free first (a newcomer can start now), then not ready yet, then assigned" },
   { key: "marked", label: "Marked", title: "What the maintainers marked it with on GitHub: good first issue, help wanted (they want an outside PR) or confirmed; the most marked first. Hover for all its labels" },
-  { key: "level", label: "Level", title: "How hard the fix is for our agent in its VM, by fixed rules: easy (it can write it, see it and prove it there), medium or hard; out of scope when we don't take it (our agent can't do it yet, or it touches politics); the hardest first" },
+  { key: "merge", label: "Merge", title: "Whether a pull request from us would get merged, by fixed rules: Likely first, else the first thing in the way (hover for why); Out of scope when we don't take it" },
   { key: "lines", label: "Lines", title: "A rough guess of how many lines the fix adds and removes, tests included; the most first" },
   { key: "kind", label: "Kind", title: "Bug, docs, feature or question: A to Z" },
   { key: "opened", label: "Opened", title: "When it was opened on GitHub, newest first" },
   { key: "updated", label: "Updated", title: "Its last change on GitHub: a comment, a label, an edit…; the latest first" },
-  { key: "read", label: "Checked", title: "When Claude last read it and its comments and updated its tags (Free, Level, Lines, Kind); the latest first" },
+  { key: "read", label: "Checked", title: "When Claude last read it and its comments and updated its tags (Free, Merge, Lines, Kind); the latest first" },
   { key: "comments", label: "", title: "Comments, the most first" },
 ];
-// The tags' order for sorting and their colors (the same as on the Issues page): levels like LeetCode's green / amber / red.
-const FREE_RANK: Record<string, number> = { free: 3, waiting: 2, assigned: 1 };
-const LEVEL_RANK: Record<string, number> = { easy: 1, medium: 2, hard: 3, "out of scope": 4 };
-const LEVEL_COLOR: Record<string, string> = { easy: "text-ok", medium: "text-warn", hard: "text-destructive", "out of scope": "text-muted-foreground" };
-const LEVEL_LABEL: Record<string, string> = { easy: "Easy", medium: "Medium", hard: "Hard", "out of scope": "Out of scope" };
+// The tags' order for sorting and their names (the same as on the Issues page): Merge Likely first, then the nearest to it.
+const FREE_RANK: Record<string, number> = { free: 3, waiting: 2, assigned: 1, fixed: 0 };
+const MERGE_RANK: Record<string, number> = {
+  likely: 9,
+  "can't validate": 8,
+  "big change": 7,
+  "large feature": 6,
+  "no outside prs": 5,
+  waiting: 4,
+  "maintainers only": 3,
+  claimed: 2,
+  "out of scope": 1,
+  fixed: 0,
+};
+const MERGE_LABEL: Record<string, string> = {
+  likely: "Likely",
+  "can't validate": "Can't validate",
+  "big change": "Big change",
+  "large feature": "Large feature",
+  "no outside prs": "No outside PRs",
+  waiting: "Waiting",
+  "maintainers only": "Maintainers only",
+  claimed: "Claimed",
+  "out of scope": "Out of scope",
+  fixed: "Fixed",
+};
 // GitHub labels only maintainers can put on an issue, by what they say, for the Marked column (the same as on the Issues
 // page). Confirmed has word edges so "unconfirmed" and "untriaged" don't count.
 const GOOD_FIRST = /good.?first|first.?timer|beginner|starter|newcomer/i;
@@ -250,7 +271,7 @@ export default function Tracked() {
     if (key === "free") {
       return check.issues.filter((issue) => issue.assignees === 0 && issue.tags?.status === "free").length;
     }
-    return check.issues.filter((issue) => issue.assignees === 0 && issue.tags?.status === "free" && issue.tags.level === "easy").length;
+    return check.issues.filter((issue) => issue.assignees === 0 && issue.tags?.status === "free" && issue.tags.merge === "likely").length;
   }
 
   const rows = [...tracked.items];
@@ -329,8 +350,8 @@ export default function Tracked() {
       }
       return rank;
     }
-    if (key === "level") {
-      return tags !== null && tags.level !== null ? LEVEL_RANK[tags.level] : null;
+    if (key === "merge") {
+      return tags !== null && tags.merge !== undefined ? MERGE_RANK[tags.merge] : null;
     }
     if (key === "lines") {
       return tags !== null ? (tags.lines ?? null) : null;
@@ -764,7 +785,7 @@ export default function Tracked() {
               const check = repo.check;
               const signals = repo.signals;
               const free = check !== null ? check.issues.filter((issue) => issue.assignees === 0 && issue.tags?.status === "free").length : 0;
-              const easy = check !== null ? check.issues.filter((issue) => issue.assignees === 0 && issue.tags?.status === "free" && issue.tags.level === "easy").length : 0;
+              const likely = check !== null ? check.issues.filter((issue) => issue.assignees === 0 && issue.tags?.status === "free" && issue.tags.merge === "likely").length : 0;
               return (
                 <div
                   key={repo.full_name}
@@ -856,7 +877,7 @@ export default function Tracked() {
                     {COMPACT.format(check !== null && check.stars !== null ? check.stars : repo.stars)}
                   </span>
                   <span className={cn("flex h-6 items-center tabular-nums", free > 0 && "text-ok")}>{check !== null ? free : "–"}</span>
-                  <span className={cn("flex h-6 items-center tabular-nums", easy > 0 && "text-ok")}>{check !== null ? easy : "–"}</span>
+                  <span className={cn("flex h-6 items-center tabular-nums", likely > 0 && "text-ok")}>{check !== null ? likely : "–"}</span>
                   <span />
                   <span />
                   {(repo.note !== "" || repo.description !== "") && (
@@ -1044,7 +1065,7 @@ export default function Tracked() {
                             className={cn("truncate", isAssigned && "text-warn", !isAssigned && tags?.status === "free" && "text-ok")}
                             title={tags?.reason ?? (isAssigned ? "Assigned on GitHub" : "Claude hasn't tagged it yet")}
                           >
-                            {isAssigned ? "Assigned" : tags === null ? "…" : tags.status === "free" ? "Free" : "–"}
+                            {isAssigned ? "Assigned" : tags === null ? "…" : tags.status === "free" ? "Free" : tags.status === "fixed" ? "Fixed" : "–"}
                           </span>
                           <span className="truncate" title={issue.labels.length > 0 ? `Its labels: ${issue.labels.join(", ")}` : "No labels"}>
                             {!goodFirst && !helpWanted && !confirmed && "–"}
@@ -1054,8 +1075,16 @@ export default function Tracked() {
                             {helpWanted && confirmed && " · "}
                             {confirmed && "Confirmed"}
                           </span>
-                          <span className={cn("truncate", tags !== null && tags.level !== null && LEVEL_COLOR[tags.level])} title={tags?.reason}>
-                            {tags !== null ? (tags.level !== null ? LEVEL_LABEL[tags.level] : "–") : isAssigned ? "–" : "…"}
+                          <span
+                            className={cn(
+                              "truncate",
+                              tags?.merge === "likely" && "text-ok",
+                              (tags?.merge === "out of scope" || tags?.merge === "fixed") && "text-muted-foreground",
+                              tags?.merge !== undefined && tags.merge !== "likely" && tags.merge !== "out of scope" && tags.merge !== "fixed" && "text-destructive",
+                            )}
+                            title={tags?.reason}
+                          >
+                            {tags?.merge !== undefined ? MERGE_LABEL[tags.merge] : isAssigned ? "Claimed" : "…"}
                           </span>
                           <span className="truncate" title={tags?.reason}>
                             {tags !== null ? (tags.lines !== undefined && tags.lines !== null ? `~${tags.lines}` : "–") : isAssigned ? "–" : "…"}
