@@ -18,7 +18,8 @@ author fixing it themselves ("Are you willing to submit a PR?"), claims in the c
 want it done. A fix posted in a comment, even with no pull request (a branch in someone's fork, a patch, "my account
 can't open PRs, a maintainer can open one from it"), counts as someone on it: we don't build on or race another
 person's fix. free: the user can take it up now. assigned: someone is on it.
-waiting: nobody is, but it isn't ready (it needs a decision, a design, more information). fixed: a merged pull request
+waiting: nobody is, but it isn't ready (it needs a decision, a design, more information; a feature request no
+maintainer has said yes to, by a comment or a label like help wanted, is waiting too). fixed: a merged pull request
 or a commit on the default branch already does what it asks, and it only needs closing (GitHub leaves an issue open
 when the PR said "Addresses #n" instead of "Fixes #n"; the commits that mention it show that, see search.py).
 
@@ -452,8 +453,14 @@ class IssueTags:
                 "Never say that no pull request came when the issue lists one.\n"
                 "- free: nobody is on it and a newcomer could start now: it is a real, accepted problem or a wanted change, the "
                 "outcome wanted is clear, and nothing waits on the maintainers.\n"
+                "  A feature request (new behavior or an improvement) is wanted only when a maintainer showed it: one of them "
+                "(OWNER, MEMBER or COLLABORATOR) opened it, said yes to it in a comment, or labeled it as invited or accepted "
+                "(help wanted, good first issue, accepted, planned and the like). A label the issue template puts on by itself "
+                "('feature request', 'enhancement') doesn't count, and neither do other users asking for it or thumbs up. A bug "
+                "that clearly happens needs no such yes.\n"
                 "- waiting: nobody is on it, but it isn't ready to pick up: it needs a maintainer's decision or a design, more "
-                "information or a reproduction, or the maintainers keep it for themselves.\n"
+                "information or a reproduction, or the maintainers keep it for themselves. A feature request no maintainer has "
+                "said yes to is waiting, however clear it is and however long it has sat.\n"
                 "- fixed: it is open, but a merged pull request or a commit on the default branch already does what it asks, "
                 "and it only needs closing. GitHub leaves an issue open when the pull request said \"Addresses #n\" or "
                 "\"Part of #n\" instead of \"Fixes #n\", so read the merged pull requests and commits listed under it and "
