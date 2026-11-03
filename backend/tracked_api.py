@@ -101,11 +101,16 @@ class TagRequest(BaseModel):
 
 @router.post("/tracked/tag")
 def tag_tracked(body: TagRequest) -> dict:
-    """Put tracked repos under one tag of the user's own ("" takes them out of theirs) as one undo step. Only grouping."""
+    """Put repos under one tag of the user's own ("" takes them out of theirs) as one undo step. Only grouping.
+
+    The same as the Repos page's Tag: the Repos list gets it too, as its tag is the one every page shows for a repo in
+    it. Names only in the Repos list (the Tag pop-up deleting a tag sends those too) only change there.
+    """
     tagged = tracked.set_tag(body.names, body.tag.strip())
-    if not tagged:
+    in_repos = repos.set_tag(body.names, body.tag.strip())
+    if not tagged and not in_repos:
         raise HTTPException(status_code=404, detail="None of them is tracked.")
-    return {"tagged": tagged}
+    return {"tagged": tagged + in_repos}
 
 
 @router.post("/tracked/from_repos")
@@ -128,6 +133,7 @@ def track_from_repos(body: NamesRequest) -> dict:
                 "note": "",
                 "added_by": "user",
                 "added_at": datetime.now(UTC).isoformat(),
+                "tag": repo.get("tag", ""),
             }
         )
     return {"added": tracked.add(items)}

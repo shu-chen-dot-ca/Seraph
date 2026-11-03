@@ -55,10 +55,12 @@ its box, and a click picks the row instead of opening it. The box at the top lef
 (checked when all are, a dash when some are); a click when all are picked unpicks them. Rows are also picked like in a mail app (components/ui/row-selection.tsx):
 Ctrl-click, Shift-click, dragging a rectangle, Ctrl+A, which turns on select mode too. A bar at the bottom then stops
 tracking them at once, as one undo step (it asks first; Enter confirms), or Tag opens the Tag pop-up (TagDialog.tsx,
-the same as on the Repos page, with this page's own tags) and ends select mode. Clearing the selection (Escape, the
+the same as on the Repos page, with the same tags) and ends select mode. Clearing the selection (Escape, the
 bar's x) ends select mode too. Deleting a repo on the Repos page stops tracking it too.
 
-Tags group repos for the user, nothing more. Every group has a header (its name and how many) over its repos in the
+Tags group repos for the user, nothing more. A repo has the same tag here as on the Repos page (the Issues page groups
+by it too): the Repos list's when the repo is in it, else the one it was given here; Tag sets it in both lists, and its
+pop-up offers every tag the Repos page has. Every group has a header (its name and how many) over its repos in the
 list's sort: the tags on top, A to Z, and No tag (the repos without one) at the bottom. A click on a header folds its
 repos away or opens them again, remembered in this browser. Shift-click and Select all skip a folded tag's repos.
 */
@@ -85,7 +87,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { NewcomersTag, PolicyTag } from "@/components/ui/repo-tags";
 import { RowSelection, SelectBox } from "@/components/ui/row-selection";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api, useLive, useLoaded, type TrackedIssue, type TrackedRepo } from "@/live";
+import { api, useLive, useLoaded, type RepoItem, type TrackedIssue, type TrackedRepo } from "@/live";
 import { cn, timeAgo } from "@/lib/utils";
 
 const COMPACT = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
@@ -158,6 +160,7 @@ try {
 export default function Tracked() {
   const tracked = useLive("tracked");
   const issues = useLive("issues");
+  const repos = useLive("repos");
   const loaded = useLoaded("tracked");
   // The repo whose issues are open in the pop-up, by name, or none.
   const [openName, setOpenName] = useState<string | null>(null);
@@ -359,20 +362,41 @@ export default function Tracked() {
     }
   }
 
+  // Each tracked repo's tag, the same as on the Repos and Issues pages: the Repos list's when the repo is in it (names
+  // compared without case), else its own ("" when it has none).
+  const repoTags: Record<string, string> = {};
+  for (const repo of repos.items) {
+    repoTags[repo.full_name.toLowerCase()] = repo.tag ?? "";
+  }
+  const tagOf: Record<string, string> = {};
+  for (const repo of tracked.items) {
+    tagOf[repo.full_name] = repoTags[repo.full_name.toLowerCase()] ?? repo.tag ?? "";
+  }
+
   // The tags in use, A to Z.
   const tagNames: string[] = [];
   for (const repo of tracked.items) {
-    if ((repo.tag ?? "") !== "" && !tagNames.includes(repo.tag!)) {
-      tagNames.push(repo.tag!);
+    if (tagOf[repo.full_name] !== "" && !tagNames.includes(tagOf[repo.full_name])) {
+      tagNames.push(tagOf[repo.full_name]);
     }
   }
   tagNames.sort((a, b) => a.localeCompare(b));
+
+  // The Tag pop-up's list: every tracked repo with its tag, then the Repos list's other repos, so it offers the same
+  // tags as the Repos page and deleting one takes it off those too.
+  const tagItems: RepoItem[] = tracked.items.map((repo) => ({ ...repo, tag: tagOf[repo.full_name] }));
+  const trackedLower = tracked.items.map((repo) => repo.full_name.toLowerCase());
+  for (const repo of repos.items) {
+    if (!trackedLower.includes(repo.full_name.toLowerCase())) {
+      tagItems.push(repo);
+    }
+  }
 
   // What the list draws: each tag's header (repo null) over its repos unless folded, the tags A to Z, then the repos
   // without a tag (tag "") last, under a No tag header.
   const lines: { tag: string; repo: TrackedRepo | null }[] = [];
   for (const tag of [...tagNames, ""]) {
-    const tagRepos = rows.filter((repo) => (repo.tag ?? "") === tag);
+    const tagRepos = rows.filter((repo) => tagOf[repo.full_name] === tag);
     if (tagRepos.length === 0) {
       continue;
     }
@@ -732,7 +756,7 @@ export default function Tracked() {
                   >
                     <ChevronRight className={cn("size-3.5 transition-transform", open && "rotate-90")} />
                     {line.tag === "" ? "No tag" : line.tag}
-                    <span className="ml-0.5 tabular-nums">{rows.filter((repo) => (repo.tag ?? "") === line.tag).length}</span>
+                    <span className="ml-0.5 tabular-nums">{rows.filter((repo) => tagOf[repo.full_name] === line.tag).length}</span>
                   </button>
                 );
               }
@@ -857,7 +881,7 @@ export default function Tracked() {
 
       {tagging && (
         <TagDialog
-          items={tracked.items}
+          items={tagItems}
           names={chosen}
           url="/api/tracked/tag"
           onClose={() => setTagging(false)}
