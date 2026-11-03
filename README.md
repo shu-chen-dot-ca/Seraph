@@ -17,7 +17,7 @@ You need Linux, Incus with KVM, Python 3.14 with uv, and Node 22. [Setup →](do
 
 ![How Explore finds repos](docs/explore.svg)
 
-[Signals and issue levels →](docs/how-it-works.md#judging-repos)
+[Signals and issue merge →](docs/how-it-works.md#judging-repos)
 
 ## The app
 
