@@ -13,15 +13,15 @@ An issue the user likes goes into the Issues list from here (add_issue), and its
 missing, both from what the last check found, so it takes no GitHub call.
 
 Add to Issues (the button on the Tracked page, add_free) does that for every free issue at once, each time it is
-pressed: no assignee, tagged free, not out of scope, in a repo whose AI policy isn't no AI. Each issue only once
-(tracked_issues.py keeps which), so one the user removes from the Issues list stays out; a later press adds the ones
-found since.
+pressed: opened in the last 14 days, no assignee, tagged free, not out of scope, in a repo whose AI policy isn't no AI.
+Each issue only once (tracked_issues.py keeps which), so one the user removes from the Issues list stays out; a later
+press adds the ones found since.
 """
 
 import asyncio
 import re
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from fastapi import APIRouter, HTTPException
@@ -174,13 +174,15 @@ def add_free() -> dict:
     """Add to Issues: every free issue of the tracked repos goes into the Issues list, and its repo into Repos.
 
     From what the last checks found and the tags, so it takes no GitHub call. One taken up before is skipped.
-    Returns the issues that went in.
+    Only issues opened in the last 14 days. Returns the issues that went in.
     """
     checks = tracked_issues.all()
     tags = issue_tags.all()
     signals = repo_signals.all()
     added_before = tracked_issues.added()
     now = datetime.now(UTC).isoformat()
+    # GitHub's own format, so it compares as text with the issues' created_at.
+    two_weeks_ago = (datetime.now(UTC) - timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%SZ")
     new_issues = []
     new_repos = {}
     for item in tracked.items():
@@ -195,6 +197,8 @@ def add_free() -> dict:
             issue_id = f"{item['full_name']}#{issue['number']}"
             issue_tags_now = tags.get(issue_id)
             if issue_id in added_before or issue_tags_now is None or issue["assignees"] > 0:
+                continue
+            if issue["created_at"] < two_weeks_ago:
                 continue
             if issue_tags_now["status"] != "free" or issue_tags_now["level"] == "out of scope":
                 continue
