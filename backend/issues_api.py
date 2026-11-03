@@ -168,11 +168,12 @@ async def assign_issue(body: AssignRequest) -> dict:
 
 @router.post("/tags/refresh")
 async def refresh_tags(body: IdsRequest) -> dict:
-    """Tag these issues again now (owner/name#n, any repos): the Tag again buttons and the pages' Refresh. Many issues
-    take a few minutes. taken: the ones that were free before and aren't now (claimed, a PR came, ...), for the page to say so.
+    """Tag these issues again now (owner/name#n, any repos): the Tag again buttons and the pages' Refresh. Forced:
+    Claude answers everything afresh, nothing kept from before. Many issues take a few minutes. taken: the ones that were
+    free before and aren't now (claimed, a PR came, ...), for the page to say so.
     """
     before = issue_tags.all()
-    tagged = await issue_tags.tag(body.ids)
+    tagged = await issue_tags.tag(body.ids, force=True)
     after = issue_tags.all()
     failed = [issue_id for issue_id in body.ids if issue_id not in tagged]
     taken = []

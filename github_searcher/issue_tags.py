@@ -59,8 +59,9 @@ looked like a claim with no pull request at all. Bodies are cut to BODY_CHARS, b
 fixing it themselves (WILLING finds it) is always kept. updated_at is the issue's last change on GitHub when it
 was tagged: when that changes, the backend tags it again, and a free one every hour anyway (backend/issues_api.py).
 The checks are kept once given: they and the kind stay from one read to the next while the issue hasn't changed on
-GitHub (Claude is told, and the old ones are kept even if it answers otherwise), so a refresh doesn't flip the merge;
-only the status is judged afresh every time. When the issue changed, Claude sees the old answers and keeps
+GitHub (Claude is told, and the old ones are kept even if it answers otherwise), so the background's reads don't flip
+the merge; only the status is judged afresh every time. A forced read (force: the pages' Refresh and Tag again) keeps
+nothing: Claude answers everything afresh, with no word of the old answers. When the issue changed, Claude sees the old answers and keeps
 them unless what is new shows otherwise. lines is Claude's rough guess of the fix's size: the lines its pull request
 adds and removes together, tests included (0 when there is nothing to change); it is kept like the checks, and is
 None when the issue is assigned on GitHub. Tags from before merge (with a level: easy, medium or hard) are read again
@@ -228,8 +229,9 @@ class IssueTags:
         with self.lock:
             return copy.deepcopy(self.tags)
 
-    async def tag(self, ids: list[str]) -> list[str]:
-        """Tag these issues ("owner/name#n", any repos) and keep the tags. Returns the ids tagged.
+    async def tag(self, ids: list[str], force: bool = False) -> list[str]:
+        """Tag these issues ("owner/name#n", any repos) and keep the tags. Returns the ids tagged. With force nothing
+        from before is kept: every answer is Claude's new one.
 
         By repo, BATCH at a time, AT_ONCE batches at the same time; each batch is kept as soon as it is done.
         An issue is left out of the result when its batch failed (GitHub or Claude), it is gone, or Claude skipped it.
@@ -249,13 +251,13 @@ class IssueTags:
         tagged = []
         for start in range(0, len(batches), AT_ONCE):
             group = batches[start:start + AT_ONCE]
-            results = await asyncio.gather(*[self.tag_batch(name, numbers) for name, numbers in group], return_exceptions=True)
+            results = await asyncio.gather(*[self.tag_batch(name, numbers, force) for name, numbers in group], return_exceptions=True)
             for result in results:
                 if not isinstance(result, Exception):
                     tagged.extend(result)
         return tagged
 
-    async def tag_batch(self, full_name: str, numbers: list[int]) -> list[str]:
+    async def tag_batch(self, full_name: str, numbers: list[int], force: bool = False) -> list[str]:
         """Tag some issues of one repo ("owner/name", at most BATCH numbers) and keep the tags. Returns the ids tagged.
 
         Raises httpx.HTTPError or ValueError when GitHub fails, JudgeError when Claude gives no usable answer
@@ -387,10 +389,10 @@ class IssueTags:
                 text += f"\n--- {commenter} ({comment['authorAssociation']}), {comment['createdAt'][:10]}:\n{comment['body'][:limit]}"
 
             # Read before by the rules: its checks and kind stay while nothing changed on GitHub, so the merge doesn't
-            # flip between reads. Only the checks still in CHECKS: the ones from before merge are gone.
+            # flip between reads. Only the checks still in CHECKS: the ones from before merge are gone. Not when forced.
             with self.lock:
                 before = self.tags.get(issue_id)
-            if before is not None and before.get("checks"):
+            if before is not None and before.get("checks") and not force:
                 old = {}
                 for key, question in CHECKS:
                     if key in before["checks"]:

@@ -8,7 +8,7 @@ Repos page's link), then a chip with the repo's name and an X to show them all a
 
 Each row shows what helps decide whether an issue is worth fixing, from its facts (github_searcher/issue_facts.py,
 kept fresh by the backend; Refresh on top fetches them all now, then has Claude read every open issue and its comments
-again, to see if it is still free or anything changed; it spins until both are done, minutes for many, then says
+afresh, nothing kept from before (Tag again too), to see if it is still free or anything changed; it spins until both are done, minutes for many, then says
 which ones were free and aren't anymore):
 when it was opened, who opened it (Author: their login and their role in the repo, Owner, Maintainer for a member or
 collaborator, Contributor for someone who had a change merged there before, None for anyone else, Bot for a bot;
