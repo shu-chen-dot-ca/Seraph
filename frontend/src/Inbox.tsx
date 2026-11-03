@@ -121,11 +121,15 @@ export default function Inbox(props: { selected: string | null }) {
   const [replies, setReplies] = useState<Record<string, string>>({});
   // Diff files folded open or shut by hand, by "draft id:path"; others follow BIG_FILE_LINES.
   const [fileOpen, setFileOpen] = useState<Record<string, boolean>>({});
-  const [busy, setBusy] = useState("");
-  // While a send goes, where it is ("replaying commit 3 of 6"), asked every second (backend/github_account_api.py).
+  // What is being done to each item (approve, send, reply, ...), by its id: only that item's pop-up shows it and waits
+  // for it, so another item can be opened and decided meanwhile.
+  const [busyIds, setBusyIds] = useState<Record<string, string>>({});
+  // The item being sent to GitHub, and where its send is ("replaying commit 3 of 6"), asked every second
+  // (backend/github_account_api.py). Only that item's pop-up shows it.
+  const sendingId = Object.keys(busyIds).find((id) => busyIds[id] === "send") ?? "";
   const [sendStep, setSendStep] = useState("");
   useEffect(() => {
-    if (busy !== "send") {
+    if (sendingId === "") {
       setSendStep("");
       return;
     }
@@ -135,7 +139,7 @@ export default function Inbox(props: { selected: string | null }) {
         .catch(() => {});
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [busy]);
+  }, [sendingId]);
   // Your GitHub account (Account on the GitHub tab): who Approve sends PRs and comments as (null until known).
   const [account, setAccount] = useState<GithubAccountStatus | null>(null);
   // The "are you sure?" before sending: for Approve, or for Send to GitHub on an approved item.
@@ -152,6 +156,8 @@ export default function Inbox(props: { selected: string | null }) {
 
   const draft = inbox.find((each) => each.id === props.selected);
   const draftId = draft === undefined ? "" : draft.id;
+  // What is being done to the open item, "" when nothing.
+  const busy = busyIds[draftId] ?? "";
 
   useEffect(() => {
     setPRTab("overview");
@@ -400,7 +406,8 @@ export default function Inbox(props: { selected: string | null }) {
     const after = rows.slice(index + 1).filter((each) => each.status === "pending");
     const before = rows.slice(0, Math.max(index, 0)).filter((each) => each.status === "pending");
     const next = after[0] ?? before[before.length - 1];
-    setBusy(send ? "send" : action);
+    const id = draft.id;
+    setBusyIds((current) => ({ ...current, [id]: send ? "send" : action }));
     try {
       const result = await api<Draft>(`/api/inbox/${draft.id}/${action}`, { method: "POST", body: { text: text, send: send } });
       setReplies((current) => ({ ...current, [draft.id]: "" }));
@@ -417,13 +424,14 @@ export default function Inbox(props: { selected: string | null }) {
           action: { label: "Open", onClick: () => window.open(sent.url, "_blank", "noopener,noreferrer") },
         });
       }
-      if (next !== undefined) {
+      // Only while it is still the open item: a send takes a while, and you may have opened another meanwhile.
+      if (next !== undefined && window.location.hash === `#/inbox/${id}`) {
         window.location.hash = `#/inbox/${next.id}`;
       }
     } catch (err) {
       toast.error(`Could not ${send ? "send it" : action}: ${err instanceof Error ? err.message : err}`);
     }
-    setBusy("");
+    setBusyIds((current) => ({ ...current, [id]: "" }));
   }
 
   // A message to the item's agent, in its chat, saying which item it is about: Discuss on a pending one (it keeps
@@ -441,7 +449,8 @@ export default function Inbox(props: { selected: string | null }) {
     if (draft.status === "pending") {
       about = `About ${draft.id} (${draft.title}) in the Inbox, still waiting for your decision:`;
     }
-    setBusy("message");
+    const id = draft.id;
+    setBusyIds((current) => ({ ...current, [id]: "message" }));
     try {
       await api(`/api/agents/${agentId}/message`, { method: "POST", body: { text: `${about}\n${text}` } });
       setReplies((current) => ({ ...current, [draft.id]: "" }));
@@ -456,7 +465,7 @@ export default function Inbox(props: { selected: string | null }) {
     } catch (err) {
       toast.error(`Could not send it: ${err instanceof Error ? err.message : err}`);
     }
-    setBusy("");
+    setBusyIds((current) => ({ ...current, [id]: "" }));
   }
 
   // Merge on a project's PR that Approve opened: squash-merged into main, as you.
@@ -464,14 +473,15 @@ export default function Inbox(props: { selected: string | null }) {
     if (draft === undefined || draft.sent === null) {
       return;
     }
-    setBusy("merge");
+    const id = draft.id;
+    setBusyIds((current) => ({ ...current, [id]: "merge" }));
     try {
       await api(`/api/projects/merge/${draft.id}`, { method: "POST" });
       toast.success(`Merged ${draft.sent.repo}#${draft.sent.number}`);
     } catch (err) {
       toast.error(`Could not merge it: ${err instanceof Error ? err.message : err}`);
     }
-    setBusy("");
+    setBusyIds((current) => ({ ...current, [id]: "" }));
   }
 
   // An approved PR or comment that isn't on GitHub yet (approved before your account was connected).
@@ -479,7 +489,8 @@ export default function Inbox(props: { selected: string | null }) {
     if (draft === undefined) {
       return;
     }
-    setBusy("send");
+    const id = draft.id;
+    setBusyIds((current) => ({ ...current, [id]: "send" }));
     try {
       const result = await api<Draft>(`/api/inbox/${draft.id}/send`, { method: "POST" });
       const sent = result.sent;
@@ -498,7 +509,7 @@ export default function Inbox(props: { selected: string | null }) {
     } catch (err) {
       toast.error(`Could not send it: ${err instanceof Error ? err.message : err}`);
     }
-    setBusy("");
+    setBusyIds((current) => ({ ...current, [id]: "" }));
   }
 
   // Edit's Save: your title and text replace the agent's; the agent is told you edited it when you decide.
@@ -506,7 +517,8 @@ export default function Inbox(props: { selected: string | null }) {
     if (draft === undefined || editing === null || editing.id !== draft.id) {
       return;
     }
-    setBusy("edit");
+    const id = draft.id;
+    setBusyIds((current) => ({ ...current, [id]: "edit" }));
     try {
       await api<Draft>(`/api/inbox/${draft.id}/edit`, { method: "POST", body: { title: editing.title, body: editing.body } });
       setEditing(null);
@@ -514,7 +526,7 @@ export default function Inbox(props: { selected: string | null }) {
     } catch (err) {
       toast.error(`Could not save it: ${err instanceof Error ? err.message : err}`);
     }
-    setBusy("");
+    setBusyIds((current) => ({ ...current, [id]: "" }));
   }
 
   // A picture to the clipboard, as PNG (what browsers can copy), to paste over its line in GitHub's PR box.
