@@ -3,7 +3,7 @@ Live data from the backend, and the one fetch helper.
 
 One websocket to /api/live. On connect the server sends every topic, then only the topics that changed:
 {"topic": "repos" | "issues" | "tracked" | "explore" | "github" | "jobs" | "inbox" | "issue_drafts" | "prs" | "your_repos" | "notifications" | "agents"
-| "vms" | "images" | "resource" | "updates" | "projects" | "crashes",
+| "vms" | "images" | "resource" | "updates" | "projects" | "crashes" | "workflow",
 "data": ...}.
 Each message replaces that topic in the store, and components read it with useLive(topic), so the page never
 polls and never re-fetches lists. When the socket drops it reconnects after a second, and the server sends
@@ -673,6 +673,8 @@ export type AgentSummary = {
   live: LiveSetUp | null; // and how far its set-up is
   project: string | null; // a project's worker or reviewer: the project's repo
   role: "worker" | "reviewer" | null;
+  workflow: string | null; // one of the Workflow tab's agents: its repository
+  workflow_role: "chat" | "worker" | "reviewer" | null;
 };
 
 // How far a repository's agent's set-up is (github_searcher/agents.py, prepare_live): its VM coming up and the code
@@ -1059,6 +1061,97 @@ export type Crash = {
   note: string;
 };
 
+// The Workflow tab (github_searcher/workflow.py): your own repositories that agents develop one confined issue at a
+// time, each as a pull request the review agent checks before it is merged or rejected.
+export type WorkflowIssue = {
+  number: number;
+  title: string;
+  goal: string; // one sentence
+  requirements: string[]; // empty: not written down yet (its worker does that first)
+  validation: string; // how to check it is done
+  state: "open" | "closed";
+  reason: "merged" | "duplicate" | "not_valid" | "cannot_reproduce" | "too_big" | "by_you" | "on_github" | null;
+  why: string;
+  by: string; // "you", "github" (opened there by hand) or the agent's id
+  found_in: number | null; // the issue or pull request it was found while working on
+  url: string | null; // on GitHub
+  agent: string | null; // its worker
+  job: string | null;
+  pr: number | null; // its newest pull request
+  stopped: boolean; // its job was cancelled: Try again gives it out again
+  created_at: string;
+  closed_at: string | null;
+  at: string;
+};
+
+export type WorkflowReview = {
+  agent: string;
+  job: string | null;
+  advice: "merge" | "dont_merge" | null; // null: still reviewing
+  summary: string; // what changes, in a plain line
+  important: string[];
+  checked: string; // what it ran and saw
+  evidence: EvidenceItem[];
+  at: string;
+};
+
+export type WorkflowPR = {
+  number: number;
+  id: string;
+  title: string;
+  by: string; // the worker's id, or "you" (opened on GitHub by hand)
+  author: string | null; // that one's GitHub login
+  issue: number | null;
+  job: string | null;
+  agent: string | null;
+  state: "review" | "waiting" | "merged" | "rejected" | "closed";
+  url: string | null; // on GitHub
+  github: number | null; // its number on GitHub
+  head: string | null;
+  area: string; // its title's scope
+  files: { path: string; added: number; removed: number }[];
+  added: number;
+  removed: number;
+  review: WorkflowReview | null;
+  decision: { by: "you" | "agent"; action: "merge" | "reject"; reason: string; at: string } | null;
+  checks: "passed" | "failed" | "running" | "none" | null;
+  mergeable: boolean | null;
+  error: string; // why the last merge failed
+  created_at: string;
+  at: string;
+};
+
+export type WorkflowRepo = {
+  repo: string;
+  on: boolean; // workers take new issues
+  prs_on: "seraph" | "github";
+  decides: "you" | "agent";
+  agents: number; // workers
+  vm: string | null;
+  chat: string | null;
+  workers: string[];
+  reviewer: string | null;
+  next_number: number;
+  issues: Record<string, WorkflowIssue>;
+  prs: Record<string, WorkflowPR>;
+  error: string; // why the last round failed
+  created_at: string;
+};
+
+// What a pull request is made of (GET /api/workflow/{repo}/pulls/{n}): a worker's has all of it, one opened on GitHub
+// by hand only its body and diff.
+export type WorkflowPRParts = {
+  body: string;
+  diff: string;
+  overview?: DraftOverview;
+  commits?: DraftCommit[];
+  base?: string;
+  base_sha?: string;
+  branch?: string;
+  evidence?: EvidenceItem[];
+  tests?: { before: TestRun | null; after: TestRun | null };
+};
+
 // ---- The live store ----
 
 export type Topics = {
@@ -1080,6 +1173,7 @@ export type Topics = {
   updates: UpdatesData;
   projects: Project[];
   crashes: Crash[]; // the newest first
+  workflow: WorkflowRepo[];
 };
 
 // Empty until the first message, so components never deal with "not loaded yet".
@@ -1118,6 +1212,7 @@ const store = {
     },
     projects: [],
     crashes: [],
+    workflow: [],
   } as Topics,
   loaded: {} as Partial<Record<keyof Topics, boolean>>,
   connected: false,
