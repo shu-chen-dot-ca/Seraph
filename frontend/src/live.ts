@@ -165,21 +165,35 @@ export type IssueItem = {
 
 // The tags the app puts on an issue, the same on the Tracked and Issues pages (github_searcher/issue_tags.py), in
 // place of GitHub's labels. status: free (a newcomer can start now), assigned (someone is on it) or waiting (nobody
-// is, but it isn't ready). level is like LeetCode's, or out of scope (we don't take it: our agent can't do it yet, as
-// it can't be a pull request to that repo, made and run in a Linux VM, or it touches politics; it can't be assigned).
-// lines is a rough guess of the lines the fix adds and removes, tests included. level, kind and lines are null when it
-// is assigned on GitHub (not asked); lines is missing on tags from before it.
+// is, but it isn't ready). merge is whether a pull request from us would get merged: likely, or the first thing in the
+// way; out of scope (we don't take it: not a pull request to that repo for its own users, made and run in a Linux VM,
+// or it touches politics) can't be assigned. lines is a rough guess of the lines the fix adds and removes, tests
+// included. checks, kind and lines are null when it is assigned on GitHub (not asked); merge is missing on tags from
+// before it (they had a level), until they are read again.
 export type IssueTags = {
-  status: "free" | "assigned" | "waiting";
-  level: "easy" | "medium" | "hard" | "out of scope" | null;
-  // The yes / no answers the level follows from by fixed rules; missing on tags from before the rules.
-  checks?: Record<"in_scope" | "apolitical" | "clear" | "runs_in_vm" | "visible" | "checkable" | "general" | "contained", boolean> | null;
+  // fixed: open on GitHub, but a merged pull request or commit already does what it asks; it only needs closing.
+  status: "free" | "assigned" | "waiting" | "fixed";
+  merge?: Merge;
+  // The yes / no answers merge follows from by fixed rules, with the status and the repo's numbers.
+  checks?: Record<string, boolean> | null;
   kind: "bug" | "feature" | "docs" | "question" | null;
   lines?: number | null;
   reason: string;
   updated_at: string;
   judged_at: string;
 };
+
+export type Merge =
+  | "likely"
+  | "fixed"
+  | "out of scope"
+  | "claimed"
+  | "maintainers only"
+  | "waiting"
+  | "no outside prs"
+  | "large feature"
+  | "big change"
+  | "can't validate";
 
 // What GitHub says about an issue right now (github_searcher/issue_facts.py).
 // Roles are GitHub's author association (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, ...) or BOT.

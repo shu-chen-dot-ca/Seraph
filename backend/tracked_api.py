@@ -200,7 +200,7 @@ def add_free() -> dict:
                 continue
             if issue["created_at"] < two_weeks_ago:
                 continue
-            if issue_tags_now["status"] != "free" or issue_tags_now["level"] == "out of scope":
+            if issue_tags_now["status"] != "free" or issue_tags_now.get("merge") == "out of scope":
                 continue
             new_issues.append(
                 {

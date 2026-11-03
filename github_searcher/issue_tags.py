@@ -1,14 +1,14 @@
-"""The tags the app puts on issues, the same on the Tracked and Issues pages: free or assigned, how hard (or out of
-scope), what kind, about how many lines the fix changes.
+"""The tags the app puts on issues, the same on the Tracked and Issues pages: free or assigned, whether a pull
+request from us would get merged (or out of scope), what kind, about how many lines the fix changes.
 
 GitHub's own labels are spelled differently in every repo ("good first issue", "good-first-issue", "help wanted",
 "effort/small", "kind/bug", ...) and are mostly noise to the user, so the pages don't show them. Claude reads
 each issue instead and gives it tags we define. One JSON file, DATA_DIR/issue_tags.json, by issue id:
 
-    {"owner/name#n": {"status": "free" | "assigned" | "waiting",
-                      "level": "easy" | "medium" | "hard" | "out of scope" | None,
-                      "checks": {"in_scope", "apolitical", "clear", "runs_in_vm", "visible", "checkable", "general",
-                                 "contained": bool} | None,
+    {"owner/name#n": {"status": "free" | "assigned" | "waiting" | "fixed",
+                      "merge": "likely" | "fixed" | "out of scope" | "claimed" | "maintainers only" | "waiting" |
+                               "no outside prs" | "large feature" | "big change" | "can't validate",
+                      "checks": {"belongs", "linux", "apolitical", "open", "modest", "validatable": bool} | None,
                       "kind": "bug" | "feature" | "docs" | "question" | None, "lines": int | None,
                       "reason", "updated_at", "judged_at"}, ...}
 
@@ -18,20 +18,36 @@ author fixing it themselves ("Are you willing to submit a PR?"), claims in the c
 want it done. A fix posted in a comment, even with no pull request (a branch in someone's fork, a patch, "my account
 can't open PRs, a maintainer can open one from it"), counts as someone on it: we don't build on or race another
 person's fix. free: the user can take it up now. assigned: someone is on it.
-waiting: nobody is, but it isn't ready (it needs a decision, a design, more information).
+waiting: nobody is, but it isn't ready (it needs a decision, a design, more information). fixed: a merged pull request
+or a commit on the default branch already does what it asks, and it only needs closing (GitHub leaves an issue open
+when the PR said "Addresses #n" instead of "Fixes #n"; the commits that mention it show that, see search.py).
 
-level is how hard the fix is for us: our agent writing it in its sandbox VM, then seeing and proving it works there.
-It is decided by fixed rules, not by Claude's feel: Claude answers the yes / no questions in CHECKS (checks), and the
-level follows from them. out of scope: we don't take it, whatever the rest says. Either our agent can't do it at all
-yet: the work can't end as a pull request to this repo (the project wants it as a new, separate repository, like a
-plugin or driver it keeps outside its main code), or it only shows on macOS, Windows, a phone or hardware other than
-one NVIDIA GPU. Or it touches politics, in the issue or in what the repo is for: we only do non-political work,
-nothing politically sensitive or activist, and nothing that goes against another country's laws, such as China's. The
-Issues page doesn't let the user assign one, and the agents don't pick them. easy: every answer is yes, so the agent
-can vibe code it, see the effect and prove it in the VM. hard: it can't be run in our VM, the fix touches code where a
-change ripples, or two or more answers are no. medium: one answer is no. reason is Claude's plain sentence on the
-status, then a line on the level that says which checks failed. An issue with an assignee on GitHub is assigned
-without asking Claude; its level, checks and kind stay None.
+merge is whether a pull request from us would get merged: not how hard the code is (our agent writes hard code), but
+what stood in the way of the ones that went badly. It is decided by fixed rules, not by Claude's feel: from Claude's
+yes / no answers to CHECKS (checks), the status, the repo's numbers (repo_signals.py) and how many of the user's pull
+requests the repo merged. The first that holds:
+    fixed             status fixed: already done, it only needs closing
+    out of scope      it touches politics (in the issue or in what the repo is for: we only do non-political work,
+                      nothing politically sensitive or activist, nothing against another country's laws, such as
+                      China's), it isn't a pull request to this repo for its own users (a plugin or add-on for a
+                      third-party product's users, a separate repository the project wants), or it can't be seen on
+                      Linux (it is about how something looks or behaves on Windows, macOS, a phone or other hardware,
+                      even when its files can be edited on Linux: we have no way to validate it)
+    claimed           someone is on it (status assigned)
+    maintainers only  the maintainers keep it for themselves
+    waiting           it isn't ready to pick up (status waiting)
+    no outside prs    the repo doesn't merge outsiders' pull requests: its AI policy says no AI, most newcomers' first
+                      PRs are closed or left waiting, or of MIN_SAMPLE or more outside PRs that ended in 90 days none
+                      was merged
+    large feature     a new subsystem, integration, driver or the like the maintainers would have to keep up
+    big change        over BIG_LINES lines while the user has no merged pull request in the repo yet
+    can't validate    our agent can't prove the fix works in its VM (long builds and tests are fine)
+    likely            none of these
+Agents only pick likely ones. Nobody can assign one that is fixed, out of scope or can't validate, nor one with no
+merge yet (backend/issues_api.py): a job we can't prove ends with nothing to show. merge is worked out again every time an issue is read, so a claim, a change in the
+repo's numbers or the user's first merged PR there shows at the next read. reason is Claude's plain sentence on the
+status, then "Merge: <label>, <why>." An issue with an assignee on GitHub is claimed without asking Claude; its checks
+and kind stay None.
 
 Issues go in batches, not one Claude run each: up to BATCH issues of one repo take one GitHub call, and as many
 of them as fit in CHARS_PER_RUN take one Claude run, the repo said once; AT_ONCE batches run at the same time.
@@ -42,14 +58,14 @@ comment (often why it was closed). Without those, a claim followed by a pull req
 looked like a claim with no pull request at all. Bodies are cut to BODY_CHARS, but the template's part about the author
 fixing it themselves (WILLING finds it) is always kept. updated_at is the issue's last change on GitHub when it
 was tagged: when that changes, the backend tags it again, and a free one every hour anyway (backend/issues_api.py).
-The level is kept once given: the checks and kind stay from one read to the next while the issue hasn't changed on
-GitHub (Claude is told, and the old ones are kept even if it answers otherwise), so a refresh doesn't flip easy and
-medium; only the status is judged afresh every time. When the issue changed, Claude sees the old answers and keeps
+The checks are kept once given: they and the kind stay from one read to the next while the issue hasn't changed on
+GitHub (Claude is told, and the old ones are kept even if it answers otherwise), so a refresh doesn't flip the merge;
+only the status is judged afresh every time. When the issue changed, Claude sees the old answers and keeps
 them unless what is new shows otherwise. lines is Claude's rough guess of the fix's size: the lines its pull request
 adds and removes together, tests included (0 when there is nothing to change); it is kept like the checks, and is
-None when the issue is assigned on GitHub. Tags from before the rules (no checks) are judged afresh once, by the
-backend on its own, and so are tags from before a check was added (like in_scope or apolitical): their other answers
-are kept like any others, the new check takes Claude's new answer. Tags from before lines are read again once too.
+None when the issue is assigned on GitHub. Tags from before merge (with a level: easy, medium or hard) are read again
+once, by the backend on its own, and so are tags from before a check was added: their answers to checks still in
+CHECKS are kept like any others, a new check takes Claude's new answer.
 Cost isn't a concern here: Claude reads at high effort, CHARS_PER_RUN of issues a run. judged_at is when it was last
 read.
 
@@ -69,6 +85,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from github_searcher.claude_judge import judge
+from github_searcher.repo_signals import MIN_SAMPLE
 from github_searcher.search import get_issues_for_tags
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -83,61 +100,62 @@ SANDBOX = (
     "one is handed in. It clones the repo, reproduces the problem, writes the fix, runs the project's tests before and "
     "after, and takes screenshots or command output as proof."
 )
-# The yes / no questions the level is decided from: (key, question, what it means when the answer is no).
+# The yes / no questions merge is decided from (with the status, the repo's numbers and the user's merged pull
+# requests there): (key, question).
 CHECKS = [
     (
-        "in_scope",
-        "Can our agent do it at all: the work ends as a pull request to this repo, and the problem and the fix can be run "
-        "on Linux? No when the project wants it as a new, separate repository (a plugin, extension, driver or port it "
-        "keeps outside its main code), or it only shows on macOS, Windows or a phone, or on hardware other than one "
-        "NVIDIA GPU.",
-        "it can't be a pull request to this repo, made and run in our Linux VM",
+        "belongs",
+        "Does the work belong in this repo as a pull request, for the project's own users? No when it is a plugin, "
+        "extension, integration, theme or add-on meant for the users of a third-party product, or when the project wants "
+        "it as a new, separate repository (a plugin, driver or port it keeps outside its main code).",
+    ),
+    (
+        "linux",
+        "Can the problem and the fix be seen on Linux, in our VM? No when it is about how something looks or behaves on "
+        "Windows, macOS, a phone or hardware other than one NVIDIA GPU (a Windows taskbar or installer icon, a macOS menu, "
+        "a phone layout, a Windows-only path or setting), even when the files it changes can be edited or looked at on "
+        "Linux: seeing the file isn't seeing the effect.",
     ),
     (
         "apolitical",
         "Is it free of politics, in the issue and in what the repo is for? We only do non-political work: nothing "
         "political, politically sensitive or activist, and nothing that goes against another country's laws, such as "
         "China's.",
-        "it touches politics, which we stay out of",
     ),
     (
-        "clear",
-        "Is it clear what done looks like: the wanted behavior or change is stated or obvious, with no design choice left "
-        "for the maintainers?",
-        "what done looks like isn't settled",
+        "open",
+        "Is it open to an outside contributor: no sign the maintainers keep it for themselves? No when a maintainer said "
+        "they or the core team will do it, it is a roadmap item one of them owns, it is labeled for maintainers or "
+        "internal work, or the maintainers said they don't want outside pull requests for it.",
     ),
     (
-        "runs_in_vm",
-        "Can the project be built and the problem be reproduced in our VM? No when it needs macOS, Windows or a phone, "
-        "hardware other than one NVIDIA GPU, a paid service, an account or an API key, several machines, or a build that "
-        "takes hours.",
-        "can't be run in our VM",
+        "modest",
+        "Is it a fix or a modest change, not a large new feature? No when it adds a new subsystem, integration, driver, "
+        "backend, file format or major screen that the maintainers would have to keep up after it lands.",
     ),
     (
-        "visible",
-        "Can the problem, and later the fix, be seen plainly in the VM: a failing test, an error or wrong output from a "
-        "command, or a wrong screen in an app or a page?",
-        "its effect is hard to see",
-    ),
-    (
-        "checkable",
-        "Would a short test or one plain look at the result prove it is fixed, with the project's own tests runnable in "
-        "the VM?",
-        "hard to prove it is fixed",
-    ),
-    (
-        "general",
-        "Is general programming knowledge enough: no deep knowledge of this project's internals or of its field (a "
-        "protocol, a file format, math, compilers, ...) beyond reading the code around it?",
-        "needs knowledge of the project or its field",
-    ),
-    (
-        "contained",
-        "Does the fix stay local, away from central or shared code where a change can ripple: public API, data formats, "
-        "concurrency, security, performance, numerical accuracy, platform differences?",
-        "touches code where a change can ripple",
+        "validatable",
+        "Can our agent prove the fix works in its VM: build the project, see the problem (a failing test, an error or "
+        "wrong output, a wrong screen) or the missing behavior, then show it fixed with a test or a plain look? Long builds "
+        "and long test suites are fine. No when it needs a paid service, an account or an API key, or several machines, "
+        "or when nothing it can run or look at would show that it works.",
     ),
 ]
+# Lines over which a change is big for someone with no merged pull request in the repo yet.
+BIG_LINES = 200
+# How each merge value reads, in the reason (the pages have the same labels).
+MERGE_LABEL = {
+    "likely": "Likely",
+    "fixed": "Fixed",
+    "out of scope": "Out of scope",
+    "claimed": "Claimed",
+    "maintainers only": "Maintainers only",
+    "waiting": "Waiting",
+    "no outside prs": "No outside PRs",
+    "large feature": "Large feature",
+    "big change": "Big change",
+    "can't validate": "Can't validate",
+}
 # Issues of one repo per GitHub call; the text of as many as fit in CHARS_PER_RUN goes in one Claude run.
 BATCH = 20
 CHARS_PER_RUN = 50_000
@@ -166,23 +184,18 @@ SCHEMA = {
                 "type": "object",
                 "properties": {
                     "number": {"type": "integer"},
-                    "status": {"type": "string", "enum": ["free", "assigned", "waiting"]},
+                    "status": {"type": "string", "enum": ["free", "assigned", "waiting", "fixed"]},
                     "kind": {"type": "string", "enum": ["bug", "feature", "docs", "question"]},
                     "lines": {"type": "integer"},
                     "reason": {"type": "string"},
-                    "in_scope": {"type": "boolean"},
+                    "belongs": {"type": "boolean"},
+                    "linux": {"type": "boolean"},
                     "apolitical": {"type": "boolean"},
-                    "clear": {"type": "boolean"},
-                    "runs_in_vm": {"type": "boolean"},
-                    "visible": {"type": "boolean"},
-                    "checkable": {"type": "boolean"},
-                    "general": {"type": "boolean"},
-                    "contained": {"type": "boolean"},
+                    "open": {"type": "boolean"},
+                    "modest": {"type": "boolean"},
+                    "validatable": {"type": "boolean"},
                 },
-                "required": [
-                    "number", "status", "kind", "lines", "reason", "in_scope", "apolitical", "clear", "runs_in_vm", "visible",
-                    "checkable", "general", "contained",
-                ],
+                "required": ["number", "status", "kind", "lines", "reason", "belongs", "linux", "apolitical", "open", "modest", "validatable"],
             },
         }
     },
@@ -191,7 +204,10 @@ SCHEMA = {
 
 
 class IssueTags:
-    def __init__(self):
+    def __init__(self, repo_signals, github_account):
+        # merge reads the repo's numbers, and how many pull requests of the user's (by their login) the repo merged.
+        self.repo_signals = repo_signals
+        self.github_account = github_account
         self.path = DATA_DIR / "issue_tags.json"
         self.lock = threading.Lock()
         self.version = 0
@@ -247,12 +263,25 @@ class IssueTags:
         """
         owner = full_name.split("/")[0]
         repo = full_name.split("/")[1]
-        data = await asyncio.to_thread(get_issues_for_tags, owner, repo, numbers)
+        login = self.github_account.status().get("login")
+        data = await asyncio.to_thread(get_issues_for_tags, owner, repo, numbers, login)
         now = datetime.now(UTC).isoformat()
+        # The user's merged pull requests here: none known without a GitHub account.
+        merged = data["yourMerged"] or 0
+        # Why the repo doesn't merge outsiders' pull requests, "" when it does or its numbers aren't in yet.
+        closed = ""
+        signals = self.repo_signals.get(full_name)
+        if signals is not None:
+            if signals["ai_policy"]["tag"] == "no_ai":
+                closed = "the project doesn't accept AI-made contributions"
+            elif signals["newcomers"]["tag"] in ("turned_away", "left_waiting"):
+                closed = "most newcomers' first pull requests are closed or left waiting"
+            elif signals["outside_merged_90d"] == 0 and signals["outside_closed_90d"] >= MIN_SAMPLE:
+                closed = "none of the outside pull requests that ended in the last 90 days was merged"
         found = {}
         texts = []
         updated = {}
-        # {number: (checks, kind, lines)}: read before and unchanged since, so those stay (and so the level).
+        # {number: (checks, kind, lines)}: read before and unchanged since, so those stay.
         kept = {}
         for number in numbers:
             issue = data.get(f"i{number}")
@@ -263,7 +292,7 @@ class IssueTags:
             assignees = [user["login"] for user in issue["assignees"]["nodes"]]
             if assignees:
                 reason = f"Assigned on GitHub to {', '.join(assignees)}."
-                found[issue_id] = {"status": "assigned", "level": None, "checks": None, "kind": None, "lines": None, "reason": reason, "updated_at": issue["updatedAt"], "judged_at": now}
+                found[issue_id] = {"status": "assigned", "merge": "claimed", "checks": None, "kind": None, "lines": None, "reason": reason, "updated_at": issue["updatedAt"], "judged_at": now}
                 continue
             updated[number] = issue["updatedAt"]
 
@@ -275,22 +304,39 @@ class IssueTags:
             if issue["state"] != "OPEN":
                 text += "It is closed.\n"
 
-            # Every pull request tied to it, once each: the ones that say they close it, then the ones that mention it
-            # or were linked to it by hand. By repo and number: a PR in another repo can mention it too.
+            # Every pull request tied to it, once each: the ones that say they close it, then the ones that mention it,
+            # were linked to it by hand, or have a commit that mentions it (a squash merge's "(#822)"). By repo and
+            # number: a PR in another repo can mention it too. A commit with no pull request (pushed straight to a
+            # branch) is listed on its own.
             pulls = {}
+            commits = []
             for pull in issue["closedByPullRequestsReferences"]["nodes"]:
                 pulls[(pull["repository"]["nameWithOwner"], pull["number"])] = (pull, "says it closes it")
             for event in issue["timelineItems"]["nodes"]:
-                pull = event.get("source") or event.get("subject")
-                if pull is None or pull["__typename"] != "PullRequest":
-                    continue
-                how = "mentions it"
-                if event["__typename"] == "ConnectedEvent":
-                    how = "was linked to it"
+                if event["__typename"] == "ReferencedEvent":
+                    if event["commit"] is None:
+                        continue
+                    if not event["commit"]["associatedPullRequests"]["nodes"]:
+                        commits.append(event)
+                        continue
+                    pull = event["commit"]["associatedPullRequests"]["nodes"][0]
+                    how = f"has a commit that mentions it (\"{event['commit']['messageHeadline']}\")"
+                else:
+                    pull = event.get("source") or event.get("subject")
+                    if pull is None or pull["__typename"] != "PullRequest":
+                        continue
+                    how = "mentions it"
+                    if event["__typename"] == "ConnectedEvent":
+                        how = "was linked to it"
                 if (pull["repository"]["nameWithOwner"], pull["number"]) not in pulls:
                     pulls[(pull["repository"]["nameWithOwner"], pull["number"])] = (pull, how)
-            if not pulls:
-                text += "No pull request is tied to it.\n"
+            if not pulls and not commits:
+                text += "No pull request or commit is tied to it.\n"
+            for event in commits:
+                where = ""
+                if event["commitRepository"]["nameWithOwner"] != full_name:
+                    where = f" in {event['commitRepository']['nameWithOwner']}"
+                text += f"Commit {event['commit']['abbreviatedOid']}{where} mentions it, {event['createdAt'][:10]}: \"{event['commit']['messageHeadline']}\"\n"
             for (pull_repo, pull_number), (pull, how) in pulls.items():
                 where = f"#{pull_number}"
                 if pull_repo != full_name:
@@ -340,17 +386,21 @@ class IssueTags:
                         limit = BOT_CHARS
                 text += f"\n--- {commenter} ({comment['authorAssociation']}), {comment['createdAt'][:10]}:\n{comment['body'][:limit]}"
 
-            # Read before by the rules: its checks and kind stay while nothing changed on GitHub, so the level doesn't flip
-            # between reads. Tags from before the rules (no checks) are judged afresh.
+            # Read before by the rules: its checks and kind stay while nothing changed on GitHub, so the merge doesn't
+            # flip between reads. Only the checks still in CHECKS: the ones from before merge are gone.
             with self.lock:
                 before = self.tags.get(issue_id)
             if before is not None and before.get("checks"):
-                answers = ", ".join(f"{key} {'yes' if value else 'no'}" for key, value in before["checks"].items())
+                old = {}
+                for key, question in CHECKS:
+                    if key in before["checks"]:
+                        old[key] = before["checks"][key]
+                answers = ", ".join(f"{key} {'yes' if value else 'no'}" for key, value in old.items())
                 answers += f"; kind {before['kind']}"
                 if before.get("lines") is not None:
                     answers += f"; lines {before['lines']}"
                 if before["updated_at"] == issue["updatedAt"]:
-                    kept[number] = (before["checks"], before["kind"], before.get("lines"))
+                    kept[number] = (old, before["kind"], before.get("lines"))
                     text += f"\n\nRead before: {answers}. Nothing changed since: give the same answers."
                 else:
                     text += f"\n\nRead before: {answers}. It changed since: keep those answers unless what is new shows otherwise."
@@ -397,15 +447,18 @@ class IssueTags:
                 "claim, unless a maintainer turned that fix down.\n"
                 "  A pull request closed without merging ends its author's claim: read its last comment for why (for example "
                 "closed under the project's AI policy, or the approach was turned down) and say so in the reason when it matters. "
-                "A merged one usually means it is fixed and only needs closing: then waiting. Never say that no pull request "
-                "came when the issue lists one.\n"
+                "Never say that no pull request came when the issue lists one.\n"
                 "- free: nobody is on it and a newcomer could start now: it is a real, accepted problem or a wanted change, the "
                 "outcome wanted is clear, and nothing waits on the maintainers.\n"
                 "- waiting: nobody is on it, but it isn't ready to pick up: it needs a maintainer's decision or a design, more "
-                "information or a reproduction, or the maintainers keep it for themselves.\n\n"
-                f"The checks, for how hard it is for us to fix. {SANDBOX} Answer each one yes (true) or no (false) on its own, "
-                "from what the issue and its comments say; when it is unclear, answer no.\n"
-                + "".join(f"- {key}: {question}\n" for key, question, failed in CHECKS)
+                "information or a reproduction, or the maintainers keep it for themselves.\n"
+                "- fixed: it is open, but a merged pull request or a commit on the default branch already does what it asks, "
+                "and it only needs closing. GitHub leaves an issue open when the pull request said \"Addresses #n\" or "
+                "\"Part of #n\" instead of \"Fixes #n\", so read the merged pull requests and commits listed under it and "
+                "judge by what they did: when one did only part of what it asks, it isn't fixed.\n\n"
+                f"The checks, for whether a pull request from us would get merged. {SANDBOX} Answer each one yes (true) or no "
+                "(false) on its own, from what the issue and its comments say; when it is unclear, answer no.\n"
+                + "".join(f"- {key}: {question}\n" for key, question in CHECKS)
                 + "\n"
                 "kind: bug, feature (new behavior or an improvement), docs, or question (a support question, nothing to fix).\n\n"
                 "lines: a rough guess of how many lines the fix's pull request changes: the lines added and removed together, "
@@ -424,7 +477,7 @@ class IssueTags:
                 if len(reason) > REASON_CHARS:
                     reason = reason[:REASON_CHARS - 1].rstrip() + "…"
                 checks = {}
-                for key, question, failed in CHECKS:
+                for key, question in CHECKS:
                     checks[key] = item[key]
                 kind = item["kind"]
                 lines = max(item["lines"], 0)
@@ -435,27 +488,46 @@ class IssueTags:
                     kind = kept[item["number"]][1]
                     if kept[item["number"]][2] is not None:
                         lines = kept[item["number"]][2]
-                # The level by the rules: political or out of our reach is out of scope, whatever the rest says; every
-                # check yes is easy; not runnable in our VM, a rippling change, or two or more checks no is hard; one is
-                # medium.
-                failures = [failed for key, question, failed in CHECKS if not checks.get(key)]
-                level = "medium"
-                why = "; ".join(failures)
-                if not checks.get("apolitical"):
-                    level = "out of scope"
+                # The merge by the rules (see the top of this file): the first that holds.
+                merge = "likely"
+                why = "nothing stands in the way"
+                if item["status"] == "fixed":
+                    merge = "fixed"
+                    why = "a merged pull request or commit already does what it asks; it only needs closing"
+                elif not checks["apolitical"]:
+                    merge = "out of scope"
                     why = "it touches politics, which we stay out of"
-                elif not checks.get("in_scope"):
-                    level = "out of scope"
-                    why = "it can't be a pull request to this repo, made and run in our Linux VM"
-                elif not failures:
-                    level = "easy"
-                    why = "our agent can write it, see it and prove it in the VM"
-                elif not checks.get("runs_in_vm") or not checks.get("contained") or len(failures) >= 2:
-                    level = "hard"
-                reason += f" {level.capitalize()}: {why}."
+                elif not checks["belongs"]:
+                    merge = "out of scope"
+                    why = "it isn't a pull request to this repo for its own users"
+                elif not checks["linux"]:
+                    merge = "out of scope"
+                    why = "it can only be seen on Windows, macOS, a phone or other hardware, so we can't validate it in our Linux VM"
+                elif item["status"] == "assigned":
+                    merge = "claimed"
+                    why = "someone else is on it"
+                elif not checks["open"]:
+                    merge = "maintainers only"
+                    why = "the maintainers keep it for themselves"
+                elif item["status"] == "waiting":
+                    merge = "waiting"
+                    why = "it isn't ready to pick up"
+                elif closed != "":
+                    merge = "no outside prs"
+                    why = closed
+                elif not checks["modest"]:
+                    merge = "large feature"
+                    why = "a large new feature the maintainers would have to keep up"
+                elif lines > BIG_LINES and merged == 0:
+                    merge = "big change"
+                    why = f"about {lines} lines, and you have no merged pull request in this repo yet"
+                elif not checks["validatable"]:
+                    merge = "can't validate"
+                    why = "our agent can't prove the fix works in its VM"
+                reason += f" Merge: {MERGE_LABEL[merge]}, {why}."
                 answered[f"{full_name}#{item['number']}"] = {
                     "status": item["status"],
-                    "level": level,
+                    "merge": merge,
                     "checks": checks,
                     "kind": kind,
                     "lines": lines,

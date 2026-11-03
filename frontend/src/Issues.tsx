@@ -35,18 +35,22 @@ GitHub's labels aren't shown otherwise: each issue carries the app's own tags in
 (github_searcher/issue_tags.py, made by Claude in the background), each in its own column and sorted like the others:
 Free (a newcomer can start now) or Assigned (someone is on it: an assignee, a claim, the author doing it), or
 Self-assigned (blue: you are on it, your GitHub account from the GitHub tab's Account page is an assignee or has an
-open PR for it; not counted as Assigned), or Closed (muted, whatever its tags say, when the issue is closed on GitHub;
-it sorts last), its Kind, its Lines (a rough guess of how many lines the fix adds and removes, tests included, shown
-as ~40), and a Level: how hard the fix is for our agent in its sandbox VM, decided by fixed rules from eight yes / no checks Claude
-answers (we can do it at all, it is free of politics, the goal is clear, it runs in our VM, its effect is easy to see,
-easy to prove fixed, general programming knowledge is enough, the change stays local). Out of scope (grey): we don't
-take it, whatever the rest says. Either our agent can't do it yet: it can't end as a pull request to this repo (the
-project wants a new, separate repository, like a plugin or driver), or it only shows on macOS, Windows, a phone or
-special hardware. Or it touches politics, in the issue or in what the repo is for: the app only does non-political
-work, nothing politically sensitive or activist, and nothing that goes against another country's laws, such as
-China's. Its Assign is greyed out.
-easy: all yes, so the agent can vibe code it, see it and prove it in the VM; hard: it can't run in our VM, the change
-ripples, or two or more are no; medium: one is no. The reason on hover ends with which checks failed. A level is kept once given: it changes only when the issue changes on GitHub. Tag again (in the issue's pop-up) has Claude read it again now.
+open PR for it; not counted as Assigned), or Fixed (muted: still open on GitHub, but a merged PR or a commit already
+does what it asks, so it only needs closing), or Closed (muted, whatever its tags say, when the issue is closed on
+GitHub; it sorts last), its Kind, its Lines (a rough guess of how many lines the fix adds and removes, tests included, shown
+as ~40), and Merge: whether a pull request from us would get merged, not how hard the code is. By fixed rules
+(github_searcher/issue_tags.py) from six yes / no checks Claude answers, the status, the repo's numbers and your merged
+PRs there: Likely (green), Fixed (muted, see Free), or the first thing in the way (red): Claimed, Maintainers only, Waiting, No outside PRs (the
+repo doesn't merge outsiders' PRs), Large feature (one the maintainers would have to keep up), Big change (over 200
+lines while you have no merged PR in that repo yet), Can't validate (our agent can't prove the fix in its VM). Out of
+scope (grey): we don't take it, whatever the rest says. Either it isn't a pull request to this repo for its own users
+(a plugin or add-on for a third-party product's users, a separate repository the project wants), it can only be seen
+on Windows, macOS, a phone or special hardware (even when its files can be edited on Linux: we can't validate it), or
+it touches politics, in the issue or in what the repo is for: the app only
+does non-political work, nothing politically sensitive or activist, and nothing that goes against another country's
+laws, such as China's. Assign is greyed out until an issue has a Merge, and for Fixed, Out of scope and Can't validate
+(the backend refuses them too): a job we can't prove ends with nothing to show. Sorted, Likely comes first. The reason on hover ends with why. Tag
+again (in the issue's pop-up) has Claude read it again now.
 
 A click on a row opens that issue in a pop-up (#/issues?open=<issue id>, keeping repo= when one repo's issues are
 shown; the links from the Sidebar, Tracked and Jobs pages and Active open it the same way, also one the rows don't
@@ -73,8 +77,8 @@ Active (first in the bar on top) drops down every issue an agent is on now (its 
 on you), whatever the repo: waiting on you first, then working, then queued. Each shows its title, the agent's
 headline under it, the agent, and the same progress bar as the Status column; a click opens that issue in its pop-up
 (like a link from the Jobs page). The sidebar lists the same issues under Issues.
-Remove closed and assigned (in the bar on top) takes out every issue that is closed on GitHub or that someone else is
-on (assigned on GitHub, or tagged Assigned; Self-assigned ones stay) in one go, whatever the repo, except ones an agent
+Remove closed and assigned (in the bar on top) takes out every issue that is closed on GitHub or Fixed, or that someone
+else is on (assigned on GitHub, or tagged Assigned; Self-assigned ones stay) in one go, whatever the repo, except ones an agent
 here has a job for (its latest not cancelled); it asks first too, and is one undo step.
 Nothing removes an issue an agent is working on (a job on it queued, working or waiting on you): its X is greyed
 out, Remove and Remove closed and assigned leave it out (Remove's question says how many stay), and
@@ -126,7 +130,7 @@ const ROLE: Record<string, string> = {
 };
 const MAINTAINERS = ["OWNER", "MEMBER", "COLLABORATOR"];
 
-type SortKey = "number" | "title" | "repo" | "free" | "marked" | "level" | "lines" | "kind" | "stars" | "opened" | "active" | "read" | "comments" | "status" | "agent";
+type SortKey = "number" | "title" | "repo" | "free" | "marked" | "merge" | "lines" | "kind" | "stars" | "opened" | "active" | "read" | "comments" | "status" | "agent";
 
 // The table's columns: # and Title (which takes the room left over), then the rest. All but Title are measured by the
 // sizer. better says which way the first click on a header sorts: higher first, or A to Z.
@@ -137,13 +141,13 @@ const ISSUE_COLUMNS: IssueColumn[] = [
   { key: "repo", label: "Repo", title: "The repo it is in", better: "text" },
   { key: "free", label: "Free", title: "Free first (a newcomer can start now), then self-assigned (you are on it), then not ready yet, then assigned, then closed", better: "higher" },
   { key: "marked", label: "Marked", title: "What the maintainers marked it with on GitHub: good first issue, help wanted (they want an outside PR) or confirmed. Hover for all its labels", better: "higher" },
-  { key: "level", label: "Level", title: "How hard the fix is for our agent in its VM, by fixed rules: easy (it can write it, see it and prove it there), medium or hard; out of scope when we don't take it (our agent can't do it yet, or it touches politics)", better: "higher" },
+  { key: "merge", label: "Merge", title: "Whether a pull request from us would get merged, by fixed rules: Likely first, else the first thing in the way (hover for why); Out of scope when we don't take it", better: "higher" },
   { key: "lines", label: "Lines", title: "A rough guess of how many lines the fix adds and removes, tests included; the most first", better: "higher" },
   { key: "kind", label: "Kind", title: "Bug, docs, feature or question: A to Z", better: "text" },
   { key: "stars", label: "Stars", title: "The repo's stars", better: "higher" },
   { key: "opened", label: "Opened", title: "When the issue was opened on GitHub", better: "higher" },
   { key: "active", label: "Updated", title: "Its last change on GitHub: a comment, a label, an edit…", better: "higher" },
-  { key: "read", label: "Checked", title: "When Claude last read it and its comments and updated its tags (Free, Level, Lines, Kind)", better: "higher" },
+  { key: "read", label: "Checked", title: "When Claude last read it and its comments and updated its tags (Free, Merge, Lines, Kind)", better: "higher" },
   { key: "comments", label: "Comments", title: "Comments", better: "higher" },
   { key: "status", label: "Status", title: "What is being done about it (its latest job): in progress first", better: "higher" },
   { key: "agent", label: "Agent", title: "The agent on its latest job", better: "text" },
@@ -163,19 +167,40 @@ const HELP_WANTED = /help.?wanted|contributions?.?welcome|prs?.?welcome|pull.?re
 const CONFIRMED = /\b(accepted|confirmed|approved|triaged)\b/i;
 
 // Free first when sorted (the same as on the Tracked page).
-const FREE_RANK: Record<string, number> = { free: 4, selfAssigned: 3, waiting: 2, assigned: 1, closed: 0 };
-// Difficulty levels: their order for sorting, their color (a soft Badge variant, like LeetCode's green / amber / red;
-// grey when out of scope) and their name.
-const LEVEL_RANK: Record<string, number> = { easy: 1, medium: 2, hard: 3, "out of scope": 4 };
-const LEVEL_COLOR: Record<string, string> = { easy: "text-ok", medium: "text-warn", hard: "text-destructive", "out of scope": "text-muted-foreground" };
-const LEVEL_VARIANT: Record<string, "ok" | "warn" | "bad" | "secondary"> = {
-  easy: "ok",
-  medium: "warn",
-  hard: "bad",
-  "out of scope": "secondary",
+const FREE_RANK: Record<string, number> = { free: 4, selfAssigned: 3, waiting: 2, assigned: 1, fixed: 0, closed: 0 };
+// Merge: its order for sorting (Likely first, then the nearest to it), its color (green when likely, red when something
+// is in the way, grey when out of scope), its Badge variant in the pop-up and its name.
+const MERGE_RANK: Record<string, number> = {
+  likely: 9,
+  "can't validate": 8,
+  "big change": 7,
+  "large feature": 6,
+  "no outside prs": 5,
+  waiting: 4,
+  "maintainers only": 3,
+  claimed: 2,
+  "out of scope": 1,
+  fixed: 0,
 };
-const LEVEL_LABEL: Record<string, string> = { easy: "Easy", medium: "Medium", hard: "Hard", "out of scope": "Out of scope" };
-const OUT_OF_SCOPE = "Out of scope, so it can't be assigned (its Level says why)";
+const MERGE_LABEL: Record<string, string> = {
+  likely: "Likely",
+  "can't validate": "Can't validate",
+  "big change": "Big change",
+  "large feature": "Large feature",
+  "no outside prs": "No outside PRs",
+  waiting: "Waiting",
+  "maintainers only": "Maintainers only",
+  claimed: "Claimed",
+  "out of scope": "Out of scope",
+  fixed: "Fixed",
+};
+// Why Assign is greyed out: no Merge yet, or one we can't do anything with (backend/issues_api.py refuses them too).
+const BEING_TAGGED = "Being tagged: it can be assigned once its Merge is in";
+const CANT_ASSIGN: Record<string, string> = {
+  fixed: "Already fixed by a merged pull request or commit, so it can't be assigned (its Merge says which)",
+  "out of scope": "Out of scope, so it can't be assigned (its Merge says why)",
+  "can't validate": "Our agent can't prove a fix works in its VM, so it can't be assigned (its Merge says why)",
+};
 const FOLDED_STORAGE = "issues-folded-tags";
 
 // The tags this browser folded last. Storage can be blocked: then every tag starts open.
@@ -309,7 +334,7 @@ export default function Issues(props: { repo: string | null; open: string | null
   const closedAndAssignedIds = issues.items
     .filter((issue) => {
       const job = latestJob[issue.id];
-      const isClosed = (issue.facts?.state ?? issue.state) === "CLOSED";
+      const isClosed = (issue.facts?.state ?? issue.state) === "CLOSED" || issue.tags?.status === "fixed";
       const isAssigned = (issue.facts?.assignees.length ?? 0) > 0 || issue.tags?.status === "assigned";
       const isOthers = isAssigned && !selfAssignedIds.includes(issue.id);
       return (isClosed || isOthers) && (job === undefined || job.status === "cancelled") && !workingIds.includes(issue.id);
@@ -374,8 +399,8 @@ export default function Issues(props: { repo: string | null; open: string | null
       }
       return rank;
     }
-    if (key === "level") {
-      return issue.tags?.level ? (LEVEL_RANK[issue.tags.level] ?? null) : null;
+    if (key === "merge") {
+      return issue.tags?.merge ? (MERGE_RANK[issue.tags.merge] ?? null) : null;
     }
     if (key === "lines") {
       return issue.tags?.lines ?? null;
@@ -513,6 +538,13 @@ export default function Issues(props: { repo: string | null; open: string | null
       if (!issue.tags) {
         return <span title="Being tagged">…</span>;
       }
+      if (issue.tags.status === "fixed") {
+        return (
+          <span className="text-muted-foreground" title={issue.tags.reason}>
+            Fixed
+          </span>
+        );
+      }
       if (issue.tags.status === "free") {
         return (
           <span className="text-ok" title={issue.tags.reason}>
@@ -551,13 +583,18 @@ export default function Issues(props: { repo: string | null; open: string | null
         </span>
       );
     }
-    if (key === "level") {
-      if (!issue.tags?.level) {
-        return <span title={issue.tags ? issue.tags.reason : "Being tagged"}>{issue.tags ? "–" : "…"}</span>;
+    if (key === "merge") {
+      // Missing until Claude read it (again, for tags from before Merge).
+      if (!issue.tags?.merge) {
+        return <span title="Being tagged">…</span>;
       }
+      const merge = issue.tags.merge;
       return (
-        <span className={LEVEL_COLOR[issue.tags.level]} title={issue.tags.reason}>
-          {LEVEL_LABEL[issue.tags.level]}
+        <span
+          className={merge === "likely" ? "text-ok" : merge === "out of scope" || merge === "fixed" ? "text-muted-foreground" : "text-destructive"}
+          title={issue.tags.reason}
+        >
+          {MERGE_LABEL[merge]}
         </span>
       );
     }
@@ -882,7 +919,7 @@ export default function Issues(props: { repo: string | null; open: string | null
               <UserX /> Remove closed and assigned
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Remove every issue that is closed on GitHub or someone else is on: assigned on GitHub, or a claim Claude found in the comments. Self-assigned ones and ones your agents have a job for stay.</TooltipContent>
+          <TooltipContent>Remove every issue that is closed on GitHub or already fixed (a merged PR or commit does what it asks), or someone else is on: assigned on GitHub, or a claim Claude found in the comments. Self-assigned ones and ones your agents have a job for stay.</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -1012,8 +1049,8 @@ export default function Issues(props: { repo: string | null; open: string | null
                     <Button
                       variant="ghost"
                       size="xs"
-                      title={issue.tags?.level === "out of scope" ? OUT_OF_SCOPE : "Give this issue to an agent"}
-                      disabled={issue.tags?.level === "out of scope"}
+                      title={!issue.tags?.merge ? BEING_TAGGED : (CANT_ASSIGN[issue.tags.merge] ?? "Give this issue to an agent")}
+                      disabled={!issue.tags?.merge || CANT_ASSIGN[issue.tags.merge] !== undefined}
                       onClick={(event) => {
                         event.stopPropagation();
                         setAssigning(issue);
@@ -1105,7 +1142,7 @@ export default function Issues(props: { repo: string | null; open: string | null
               Remove {closedAndAssignedIds.length} closed and assigned {closedAndAssignedIds.length === 1 ? "issue" : "issues"}?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              They are closed on GitHub, or someone else is on them: assigned on GitHub, or a claim Claude found in the comments. Self-assigned ones and ones your agents have a job for stay. Undo brings them back.
+              They are closed on GitHub or already fixed, or someone else is on them: assigned on GitHub, or a claim Claude found in the comments. Self-assigned ones and ones your agents have a job for stay. Undo brings them back.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1146,8 +1183,8 @@ export default function Issues(props: { repo: string | null; open: string | null
                     <Button
                       variant="ghost"
                       size="xs"
-                      title={shownTags?.level === "out of scope" ? OUT_OF_SCOPE : "Give this issue to an agent"}
-                      disabled={shownTags?.level === "out of scope"}
+                      title={!shownTags?.merge ? BEING_TAGGED : (CANT_ASSIGN[shownTags.merge] ?? "Give this issue to an agent")}
+                      disabled={!shownTags?.merge || CANT_ASSIGN[shownTags.merge] !== undefined}
                       onClick={() => setAssigning(shown)}
                     >
                       <UserPlus /> Assign
@@ -1185,8 +1222,10 @@ export default function Issues(props: { repo: string | null; open: string | null
                     {shownSelfAssigned && <Badge>self-assigned</Badge>}
                     {shownAssigned && <Badge variant="warn">assigned</Badge>}
                     {!shownAssigned && !shownSelfAssigned && shownState !== "CLOSED" && shownTags.status === "free" && <Badge variant="ok">free</Badge>}
-                    {shownTags.level !== null && (
-                      <Badge variant={LEVEL_VARIANT[shownTags.level] ?? "secondary"}>{LEVEL_LABEL[shownTags.level]}</Badge>
+                    {shownTags.merge !== undefined && (
+                      <Badge variant={shownTags.merge === "likely" ? "ok" : shownTags.merge === "out of scope" || shownTags.merge === "fixed" ? "secondary" : "bad"}>
+                        {MERGE_LABEL[shownTags.merge]}
+                      </Badge>
                     )}
                     {shownTags.lines !== undefined && shownTags.lines !== null && <Badge variant="secondary">~{shownTags.lines} lines</Badge>}
                     {shownTags.kind !== null && <Badge variant="secondary">{shownTags.kind}</Badge>}

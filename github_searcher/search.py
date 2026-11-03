@@ -207,7 +207,9 @@ def get_issue_facts(owner: str, repo: str, number: int) -> dict:
 # its own alias (i123: issue(number: 123)). The comments: the last 30 (claims like "can I take this?" and the answers
 # to them), and the first 5 too (a maintainer's first answer), which matter when there are more than 30. Every pull
 # request tied to it, open, closed or merged: the ones that say they close it, and the ones that only mention it
-# ("#123" in the PR, a cross reference) or were linked by hand, each with its last comment (why it was closed).
+# ("#123" in the PR, a cross reference) or were linked by hand, each with its last comment (why it was closed). And
+# the commits that mention it ("(#822)" in a squash merge's message), with the pull request each came from: GitHub
+# leaves an issue open when the PR said "Addresses #123" instead of "Fixes", and doesn't always list the PR itself.
 TAG_ISSUE_FRAGMENT = """
 fragment TagIssue on Issue {
   number title body state createdAt updatedAt authorAssociation author { login }
@@ -216,11 +218,15 @@ fragment TagIssue on Issue {
   earliest: comments(first: 5) { nodes { ...TagComment } }
   latest: comments(last: 30) { totalCount nodes { ...TagComment } }
   closedByPullRequestsReferences(first: 5, includeClosedPrs: true) { nodes { ...TagPull } }
-  timelineItems(itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT], last: 10) {
+  timelineItems(itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT, REFERENCED_EVENT], last: 10) {
     nodes {
       __typename
       ... on CrossReferencedEvent { source { __typename ... on PullRequest { ...TagPull } } }
       ... on ConnectedEvent { subject { __typename ... on PullRequest { ...TagPull } } }
+      ... on ReferencedEvent {
+        createdAt commitRepository { nameWithOwner }
+        commit { abbreviatedOid messageHeadline associatedPullRequests(first: 1) { nodes { ...TagPull } } }
+      }
     }
   }
 }
@@ -232,20 +238,28 @@ fragment TagPull on PullRequest {
 """
 
 
-def get_issues_for_tags(owner: str, repo: str, numbers: list[int]) -> dict:
+def get_issues_for_tags(owner: str, repo: str, numbers: list[int], login: str | None) -> dict:
     # Never cached: an issue is tagged again because it changed. Returns the repository node: its description,
-    # stars and language, and each issue as i<number>, None when it is gone or a pull request.
+    # stars and language, each issue as i<number>, None when it is gone or a pull request, and yourMerged: how many
+    # pull requests by login the repo merged (None without a login).
     aliases = ""
     for number in numbers:
         aliases += f" i{number}: issue(number: {number}) {{ ...TagIssue }}"
+    params = "$owner: String!, $name: String!"
+    merged = ""
+    variables = {"owner": owner, "name": repo}
+    if login is not None:
+        params += ", $merged: String!"
+        merged = " yourMerged: search(query: $merged, type: ISSUE, first: 1) { issueCount }"
+        variables["merged"] = f"repo:{owner}/{repo} is:pr is:merged author:{login}"
     query = (
-        "query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { "
-        "nameWithOwner description stargazerCount primaryLanguage { name }" + aliases + " } }" + TAG_ISSUE_FRAGMENT
+        "query(" + params + ") { repository(owner: $owner, name: $name) { "
+        "nameWithOwner description stargazerCount primaryLanguage { name }" + aliases + " }" + merged + " }" + TAG_ISSUE_FRAGMENT
     )
     response = BALANCER.request(
         "POST",
         "https://api.github.com/graphql",
-        json={"query": query, "variables": {"owner": owner, "name": repo}},
+        json={"query": query, "variables": variables},
         timeout=60,
     )
     response.raise_for_status()
@@ -255,7 +269,11 @@ def get_issues_for_tags(owner: str, repo: str, numbers: list[int]) -> dict:
         if data.get("errors"):
             raise ValueError(data["errors"][0]["message"])
         raise ValueError(f"GitHub sent nothing for {owner}/{repo}")
-    return data["data"]["repository"]
+    repository = data["data"]["repository"]
+    repository["yourMerged"] = None
+    if login is not None:
+        repository["yourMerged"] = data["data"]["yourMerged"]["issueCount"]
+    return repository
 
 
 # What repo_signals.py works its numbers out from, in two calls that run at the same time (one would take
