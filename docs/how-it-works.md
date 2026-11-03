@@ -39,7 +39,7 @@ How hard the code is doesn't decide much: the agent writes hard code. What matte
 | **Out of scope** | It is a plugin or add-on for a third-party product's users, the project wants it as a separate repo, it can only be seen on macOS, Windows, a phone or special hardware (even when its files can be edited on Linux), or it is political. |
 | **Claimed** | Someone else is on it |
 | **Maintainers only** | The maintainers keep it for themselves |
-| **Waiting** | It isn't ready to pick up: it needs a decision, a design or more information |
+| **Waiting** | It isn't ready to pick up: it needs a decision, a design or more information, or it's a feature request no maintainer has said yes to |
 | **No outside PRs** | The repo doesn't merge outsiders' PRs: its AI policy says no AI, most newcomers' first PRs are closed or left waiting, or none of its recent outside PRs was merged |
 | **Large feature** | A new subsystem, integration or driver the maintainers would have to keep up |
 | **Big change** | Over 200 lines while you have no merged PR in that repo yet |
