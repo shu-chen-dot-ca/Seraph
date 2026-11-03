@@ -7,7 +7,8 @@ Repos, Issues and Tracked lists with their tags, facts and signals, jobs, the In
 only the fields it asks for, so a long list stays small. Each message comes with the page the user is on and the time.
 What it does: call uses the app's own API on this computer, exactly what the buttons use: every endpoint, listed in its
 prompt with what it does (from backend/app.py's routes), except DENIED: nothing that goes to GitHub as the user
-(Approve, Send, comments, PR and repo actions, creating issues, marking notifications, projects), the GitHub sign-in,
+(Approve, Send, comments, PR and repo actions, creating issues, marking notifications, projects, the Workflow tab's
+changes: they make VMs, merge and act on GitHub), the GitHub sign-in,
 remote access, updates and the environment variables (secrets). The user approves everything that leaves for GitHub
 in the Inbox, never Sherpa. Lists it changes keep their undo, like the user's own clicks. Claude Code's own tools
 (files, shell, web) are off.
@@ -54,6 +55,9 @@ DENIED = [
     ("POST", r"/api/notifications/.+"),
     ("POST", r"/api/projects/.*"),
     ("PUT", r"/api/projects/.*"),
+    ("POST", r"/api/workflow.*"),
+    ("PUT", r"/api/workflow.*"),
+    ("DELETE", r"/api/workflow.*"),
     ("*", r"/api/github_account.*"),
     ("*", r"/api/remote_access.*"),
     ("*", r"/api/updates.*"),
