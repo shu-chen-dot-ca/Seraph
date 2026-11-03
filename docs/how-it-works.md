@@ -29,18 +29,26 @@ There is no overall score, only the raw numbers. Bots and AI reviewers never cou
 | Review tone | *warm*, *neutral*, *strict* or *curt*, and what reviewers ask for |
 | AI policy | *welcome*, *disclose*, *no AI*, *unclear* or *none* |
 
-## Issue levels
+## Issue merge
 
-The agent answers yes or no to a fixed set of checks: in scope, clear, runs in a VM, visible, checkable, general, contained. A fixed rule turns the answers into a level:
+How hard the code is doesn't decide much: the agent writes hard code. What matters is whether the PR gets merged. The agent answers yes or no to six checks about each issue: it belongs in this repo, it can be seen on Linux, it is free of politics, it is open to outside contributors, it is a modest change, and the fix can be proven in a VM. A fixed rule turns those answers, the issue's status, the repo's numbers and your merged PRs there into **Merge**: the first row that holds.
 
-| Level | Rule |
+| Merge | Rule |
 |---|---|
-| **easy** | Every check passes |
-| **medium** | One check fails |
-| **hard** | It doesn't run in a VM, or isn't contained, or two or more checks fail |
-| **out of scope** | The project wants it as a separate repo, it only shows up on macOS, Windows, a phone or special hardware, or it is political. It can't be assigned. |
+| **Fixed** | Still open on GitHub, but a merged PR or a commit already does what it asks (the PR said "Addresses #n" instead of "Fixes #n"). It only needs closing. |
+| **Out of scope** | It is a plugin or add-on for a third-party product's users, the project wants it as a separate repo, it can only be seen on macOS, Windows, a phone or special hardware (even when its files can be edited on Linux), or it is political. |
+| **Claimed** | Someone else is on it |
+| **Maintainers only** | The maintainers keep it for themselves |
+| **Waiting** | It isn't ready to pick up: it needs a decision, a design or more information |
+| **No outside PRs** | The repo doesn't merge outsiders' PRs: its AI policy says no AI, most newcomers' first PRs are closed or left waiting, or none of its recent outside PRs was merged |
+| **Large feature** | A new subsystem, integration or driver the maintainers would have to keep up |
+| **Big change** | Over 200 lines while you have no merged PR in that repo yet |
+| **Can't validate** | The agent can't prove the fix works in its VM. Long builds and tests are fine. |
+| **Likely** | None of the above |
 
-Every issue is also tagged **free**, **assigned** or **waiting**. An issue with a fix already posted in a comment counts as taken. If an issue gets taken while an agent works on it, the Inbox asks you whether to keep working or stop the agent.
+Agents only pick issues whose Merge is Likely. You can assign the others, except Fixed, Out of scope and Can't validate: a job that can't be proven ends with nothing to show. An agent that finds out mid-job that it can't validate a fix cancels the job itself, without asking.
+
+Every issue is also tagged **free**, **assigned**, **waiting** or **fixed**. An issue with a fix already posted in a comment counts as taken. If an issue gets taken while an agent works on it, the Inbox asks you whether to keep working or stop the agent.
 
 ## The Inbox
 
