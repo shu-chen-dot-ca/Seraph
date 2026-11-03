@@ -1,8 +1,9 @@
 /*
 The Tracked list: repos the user wants to keep an eye on for new issues. The user tracks them from the Repos page (its
 Track column); agents can add and remove them too (their tracked_* tools), and undo / redo (Ctrl+Z / Ctrl+Y) works on
-both, like Repos. The bar on top has Refresh all (Check now for every repo, then Claude reads every issue tagged Free
-again and the page says which ones aren't free anymore: claimed in the comments, a PR came, ...; minutes for many),
+both, like Repos. The bar on top has Refresh all (Check now for every repo, then Claude reads every unassigned issue
+afresh, nothing kept from before, and the page says which free ones aren't free anymore: claimed in the comments, a PR
+came, ...; minutes for many),
 Add to Issues and Mark all as read (every issue new now isn't anymore; only ones found later are new). Add to Issues
 puts every free issue of the tracked repos into the Issues list (its repo into Repos too), each time it is pressed:
 opened in the last 14 days, no assignee, tagged Free, not Out of scope, in a repo whose AI policy isn't No AI. Each issue only once: one removed
@@ -473,26 +474,26 @@ export default function Tracked() {
   }
 
   // Refresh all: Check now for every tracked repo, all at once (each row's own button spins meanwhile), then Claude reads
-  // every issue tagged Free again (each row's Tag again spins meanwhile), so one taken since stops showing as Free.
+  // every unassigned issue afresh (each row's Tag again spins meanwhile), so one taken since stops showing as Free.
   async function checkAll() {
-    const free: string[] = [];
+    const ids: string[] = [];
     for (const repo of tracked.items) {
       if (repo.check === null) {
         continue;
       }
       for (const issue of repo.check.issues) {
-        if (issue.assignees === 0 && issue.tags?.status === "free") {
-          free.push(`${repo.full_name}#${issue.number}`);
+        if (issue.assignees === 0) {
+          ids.push(`${repo.full_name}#${issue.number}`);
         }
       }
     }
-    const freeRepos = names.filter((name) => free.some((id) => id.startsWith(`${name}#`)));
+    const idRepos = names.filter((name) => ids.some((id) => id.startsWith(`${name}#`)));
     setRefreshing(true);
     await Promise.all(names.map((name) => checkNow(name)));
-    if (free.length > 0) {
-      setRetagging((current) => [...current, ...freeRepos]);
+    if (ids.length > 0) {
+      setRetagging((current) => [...current, ...idRepos]);
       try {
-        const result = await api<{ tagged: number; failed: string[]; taken: string[] }>("/api/tags/refresh", { method: "POST", body: { ids: free } });
+        const result = await api<{ tagged: number; failed: string[]; taken: string[] }>("/api/tags/refresh", { method: "POST", body: { ids } });
         if (result.failed.length > 0) {
           toast.error(`Could not read ${result.failed.length} of them again; the backend tries again later.`);
         }
@@ -500,12 +501,12 @@ export default function Tracked() {
         if (result.taken.length > 0) {
           toast.warning(`No longer free: ${result.taken.join(", ")}`);
         } else {
-          toast.success(`Read ${result.tagged} free issues again; all still free.`);
+          toast.success(`Read ${result.tagged} issues again; none that was free got taken.`);
         }
       } catch (err) {
-        toast.error(`Could not read the free issues again: ${err instanceof Error ? err.message : err}`);
+        toast.error(`Could not read the issues again: ${err instanceof Error ? err.message : err}`);
       }
-      setRetagging((current) => current.filter((name) => !freeRepos.includes(name)));
+      setRetagging((current) => current.filter((name) => !idRepos.includes(name)));
     }
     setRefreshing(false);
   }
