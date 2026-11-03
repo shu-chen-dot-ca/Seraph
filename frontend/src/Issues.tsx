@@ -66,8 +66,9 @@ turns on select mode, like Select (on the right of the bar on top) does: Select 
 mode), every row shows its box, and a click picks the row instead of opening it. The box at the top left of the table's
 header picks every row shown (checked when all are, a dash when some are); a click when all are picked unpicks them. Rows are also picked like in a mail app
 (components/ui/row-selection.tsx): Ctrl-click, Shift-click, dragging a rectangle, Ctrl+A, which turns on select mode
-too. A bar at the bottom then removes them at once, as one undo step (it asks first; Enter confirms). Clearing the
-selection (Escape, the bar's x) ends select mode too.
+too. In select mode Remove shows in the bar on top and removes the picked ones at once, as one undo step (it asks
+first; Enter confirms). A bar at the bottom says how many are picked; clearing the selection (Escape, its x) ends select
+mode too.
 Active (first in the bar on top) drops down every issue an agent is on now (its latest job queued, working or waiting
 on you), whatever the repo: waiting on you first, then working, then queued. Each shows its title, the agent's
 headline under it, the agent, and the same progress bar as the Status column; a click opens that issue in its pop-up
@@ -76,7 +77,7 @@ Remove closed and assigned (in the bar on top) takes out every issue that is clo
 on (assigned on GitHub, or tagged Assigned; Self-assigned ones stay) in one go, whatever the repo, except ones an agent
 here has a job for (its latest not cancelled); it asks first too, and is one undo step.
 Nothing removes an issue an agent is working on (a job on it queued, working or waiting on you): its X is greyed
-out, the bar at the bottom and Remove closed and assigned leave it out (the bottom bar's question says how many stay), and
+out, Remove and Remove closed and assigned leave it out (Remove's question says how many stay), and
 undo / redo keep it too (the backend checks, for agents as well). Cancel its job first to remove it.
 */
 
@@ -722,7 +723,7 @@ export default function Issues(props: { repo: string | null; open: string | null
   }
   const listedIds = issues.items.map((issue) => issue.id);
   const chosen = selected.filter((id) => listedIds.includes(id));
-  // The picked ones the bottom bar may remove: not the ones an agent is working on.
+  // The picked ones Remove may take out: not the ones an agent is working on.
   const removable = chosen.filter((id) => !workingIds.includes(id));
 
   // A ctrl-click picks or unpicks one row; a shift-click does the same to every row shown from the last one clicked.
@@ -845,6 +846,17 @@ export default function Issues(props: { repo: string | null; open: string | null
               <X />
             </Button>
           </span>
+        )}
+        {selectMode && (
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={removable.length === 0}
+            title={chosen.length > 0 && removable.length === 0 ? "Agents are working on all of them: cancel their jobs first to remove them" : "Remove the picked issues"}
+            onClick={() => setConfirmRemove(true)}
+          >
+            <X /> Remove
+          </Button>
         )}
         <span className="ml-auto flex items-center gap-1">
           <Button
@@ -1061,17 +1073,7 @@ export default function Issues(props: { repo: string | null; open: string | null
         ))}
       </div>
 
-      <RowSelection listRef={scrollRef} ids={rowIds} selected={chosen} onSelect={onSelect}>
-        <Button
-          size="xs"
-          variant="ghost"
-          disabled={removable.length === 0}
-          title={removable.length === 0 ? "Agents are working on all of them: cancel their jobs first to remove them" : undefined}
-          onClick={() => setConfirmRemove(true)}
-        >
-          <X /> Remove
-        </Button>
-      </RowSelection>
+      <RowSelection listRef={scrollRef} ids={rowIds} selected={chosen} onSelect={onSelect} />
 
       {assigning !== null && <AssignDialog key={assigning.id} issue={assigning} onClose={() => setAssigning(null)} />}
 
