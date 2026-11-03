@@ -47,6 +47,10 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   rules are the repo's own files, so draft_pr and run_tests don't wait for contributing_guide or pr_examples; a PR's
   title must be a Conventional Commit. A fix_issue job with a thread there makes that PR again on the new main: its
   draft replaces it.
+- The Workflow tab (github_searcher/workflow.py): its own worker's draft_pr is a pull request of that repository, not an
+  Inbox draft. The same checks hold (the rules are the repo's own files, its title a Conventional Commit); then
+  Workflow.add_pr keeps it (and opens it on GitHub when the repository's pull requests are there), and its review agent
+  gets it (backend/workflow_api.py).
 - Evidence: what the user looks at to decide on a draft. Real screenshots of the project running on
   the VM's desktop (its window, or a terminal running it), screen recordings (GIF) and command runs
   (a test failing, then passing), each "before" or "after" the agent's change, under a topic that
@@ -2229,6 +2233,14 @@ class WorkTools:
         rebase = args.get("rebase") is True
         if rebase and pr is None:
             return {"content": [{"type": "text", "text": "rebase is only for a new version of the user's open PR: give pr too."}], "is_error": True}
+        # One of the Workflow tab's repositories (github_searcher/workflow.py), from its own worker: the pull request goes
+        # there, to its review agent, not to the Inbox. Every change there is a new pull request.
+        workflow = None
+        if self.record.get("workflow") is not None and repo is not None and self.record["workflow"].lower() == repo.lower():
+            workflow = self.agents.workflow.get(repo)
+        if workflow is not None and pr is not None:
+            text = "On the Workflow tab every change is a new pull request: leave pr and rebase out."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
         # The user reads the overview first: it must be there, and short.
         overview = {
             "project": (args.get("project") or "").strip(),
@@ -2297,7 +2309,7 @@ class WorkTools:
         # One of the user's projects (github_searcher/projects.py): its rules are its own files (CLAUDE.md, README, docs),
         # read in the VM, and its PR titles are Conventional Commits (its release notes and next version come from them).
         project = self.agents.projects.get(repo)
-        if project is not None and (TITLE.fullmatch(args["title"].strip()) is None or len(args["title"].strip()) > TITLE_CHARS):
+        if (project is not None or workflow is not None) and (TITLE.fullmatch(args["title"].strip()) is None or len(args["title"].strip()) > TITLE_CHARS):
             text = (
                 f"{repo}'s PR titles are Conventional Commits: type(scope): summary, e.g. 'fix(search): keep the filter after a "
                 f"reload'. type is feat, fix, refactor, docs, style, test, chore or perf; one scope, the area changed; the summary "
@@ -2306,10 +2318,10 @@ class WorkTools:
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         # Written from the project's rules and the way its own people write their PRs: the agent has to have read both.
         # A new version of an open PR keeps that PR's description, so only the rules (its commits follow them too).
-        if project is None and repo is not None and repo.lower() not in self.guides_read:
+        if project is None and workflow is None and repo is not None and repo.lower() not in self.guides_read:
             text = f"First read {repo}'s rules for contributors (contributing_guide), then write the PR the way they say."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
-        if project is None and pr is None and repo is not None and repo.lower() not in self.pr_examples_read:
+        if project is None and workflow is None and pr is None and repo is not None and repo.lower() not in self.pr_examples_read:
             text = f"First read how {repo}'s own people write their PRs (pr_examples), then write yours the same way."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         # The job's pictures go in the body, as ![what](evidence:ev_...): the Inbox shows them there, and sending
@@ -2616,6 +2628,66 @@ class WorkTools:
             text = f"{job['id']} is {job['status']} now (the user may have cancelled it): no draft was made. Move on."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
 
+        # The Workflow tab: a pull request of the repository, for its review agent (backend/workflow_api.py hands it over).
+        # Opened on GitHub at once when the repository's pull requests are there.
+        if workflow is not None:
+            issue_number = None
+            for issue in workflow["issues"].values():
+                if issue["job"] == job["id"]:
+                    issue_number = issue["number"]
+            files = []
+            for chunk in ("\n" + diff).split("\ndiff --git ")[1:]:
+                lines = chunk.split("\n")
+                added = len([line for line in lines[1:] if line.startswith("+") and not line.startswith("+++")])
+                removed = len([line for line in lines[1:] if line.startswith("-") and not line.startswith("---")])
+                files.append({"path": lines[0].split(" b/")[-1], "added": added, "removed": removed})
+            area = ""
+            match = re.match(r"[a-z]+\(([^)]+)\)", args["title"].strip())
+            if match is not None:
+                area = match.group(1)
+            fields = {
+                "title": args["title"].strip(),
+                "by": self.agent_id,
+                "issue": issue_number,
+                "job": job["id"],
+                "agent": self.agent_id,
+                "area": area,
+                "files": files,
+                "added": sum(item["added"] for item in files),
+                "removed": sum(item["removed"] for item in files),
+            }
+            parts = {
+                "body": args["body"],
+                "overview": overview,
+                "diff": diff,
+                "commits": commits,
+                "base": args["base"].strip(),
+                "base_sha": base_sha,
+                "branch": branch,
+                "path": path,
+                "vm": vm_name,
+                "evidence": job["evidence"],
+                "tests": job["tests"],
+            }
+            try:
+                made = await asyncio.to_thread(self.agents.workflow.add_pr, repo, fields, parts)
+            except (ValueError, KeyError, httpx.HTTPError) as error:
+                return {"content": [{"type": "text", "text": f"Could not make the pull request: {error}"}], "is_error": True}
+            fields = {"status": "waiting_on_user"}
+            if "draft" in job["steps"]:
+                fields["step"] = "draft"
+            self.agents.jobs.update(job["id"], **fields)
+            self.agents.workflow.wake()
+            where = f"#{made['number']}"
+            if made["url"] is not None:
+                where = f"#{made['number']} on GitHub ({made['url']})"
+            text = (
+                f"Pull request {where} is made: {len(files)} files, +{made['added']} -{made['removed']}. The review agent reviews "
+                "it next; then it waits for the decision, and you hear it: merged (your job is done) or rejected, with why (make it "
+                f"again). {job['id']} waits meanwhile; move on to your next job (release_vm if none is left for {vm_name})."
+            )
+            return {"content": [{"type": "text", "text": text}]}
+
         target = job["issue"]
         if pr is not None:
             target = pr
@@ -2883,7 +2955,7 @@ class WorkTools:
             text = f"{job['id']} is {job['status']} (the user may have cancelled it); no more test runs for it. Move on."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         # What to run comes from the project's rules: the agent has to have read them.
-        if job["repo"] is not None and job["repo"].lower() not in self.guides_read and self.agents.projects.get(job["repo"]) is None:
+        if job["repo"] is not None and job["repo"].lower() not in self.guides_read and self.agents.projects.get(job["repo"]) is None and self.agents.workflow.get(job["repo"]) is None:
             text = f"First read {job['repo']}'s rules for contributors (contributing_guide): they say which checks to run before a PR, and how."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         before = job["tests"]["before"]

@@ -168,6 +168,8 @@ class Agents:
         # that fails with an exception is one.
         self.projects = projects
         self.crashes = crashes
+        # The Workflow tab's repositories (workflow.py): backend/shared.py puts it here once both are made.
+        self.workflow = None
         # The user's repositories, read with their sign-in: a repository's agent reads its repo and gets its code through it.
         self.your_repositories = your_repositories
         # The issues repository agents drafted for the user (issue_drafts.py).
@@ -233,6 +235,9 @@ class Agents:
             # And from before projects.
             record.setdefault("project", None)
             record.setdefault("role", None)
+            # And from before the Workflow tab.
+            record.setdefault("workflow", None)
+            record.setdefault("workflow_role", None)
             if record.get("awake") and self.pending[agent.id] and record["archived_at"] is None:
                 self.wake[agent.id].set()
             self.nudges[agent.id] = {"count": 0, "state": None}
@@ -512,6 +517,9 @@ class Agents:
                     # A project's worker or reviewer: its project, and which of the two it is.
                     "project": agent.record["project"],
                     "role": agent.record["role"],
+                    # One of the Workflow tab's agents (workflow.py): its repository, and what it is there.
+                    "workflow": agent.record["workflow"],
+                    "workflow_role": agent.record["workflow_role"],
                 }
             )
         return summaries
@@ -548,6 +556,8 @@ class Agents:
             "live": None,
             "project": None,
             "role": None,
+            "workflow": None,
+            "workflow_role": None,
         }
         computer_tools = ComputerTools(self.vms, self.queue, agent_id, functools.partial(record.get, "target_vm"), record["history"])
         agent = Agent(record, computer_tools, WorkTools(self, record), self.changed)

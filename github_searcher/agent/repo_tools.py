@@ -17,7 +17,9 @@ emoji. When the repo is a project in Auto mode (github_searcher/projects.py), th
 without them: draft_issue opens it on GitHub at once, as them, and the card says it was created. The chat's line for
 each call is in WorkTools.describe().
 
-A project's workers and reviewer get these too, for their project (their record's "project").
+A project's workers and reviewer get these too, for their project (their record's "project"). So do the Workflow tab's
+agents (their record's "workflow"), only the ones that read the code and threads: their issues and pull requests may be
+kept in the app, and they create issues with their own tools (workflow_tools.py).
 
     tools = RepoTools(agents, record).list()
 """
@@ -52,11 +54,11 @@ class RepoTools:
         # reviewer (github_searcher/projects.py), its "project".
         self.record = record
         self.agent_id = record["id"]
-        self.repo = record.get("repo") or record.get("project")
+        self.repo = record.get("repo") or record.get("project") or record.get("workflow")
 
     def list(self) -> list:
         repo = self.repo
-        return [
+        tools = [
             tool(
                 "repo_files",
                 f"List the files of your repository ({repo}) on its default branch, with sizes. path limits it to one folder, "
@@ -121,6 +123,10 @@ class RepoTools:
                 },
             )(self.draft_issue),
         ]
+        # The Workflow tab's agents: its issues and pull requests are in workflow_status, and issue_create makes issues.
+        if self.record.get("workflow") is not None:
+            tools = [item for item in tools if item.name in ["repo_files", "repo_read", "repo_search_code", "repo_thread"]]
+        return tools
 
     async def repo_files(self, args: dict) -> dict:
         repo = self.repo

@@ -9,7 +9,9 @@ in-process MCP server ("agent"):
 - only an agent that belongs to one of the user's repositories (the Workspace tab's Live: its record's "repo"): the
   repository tools (repo_tools.py) read that repo with the user's sign-in and draft issues for it;
 - a project's agents (github_searcher/projects.py): its chat agent (the repository's agent), its workers and its
-  reviewer (their record's "project" and "role") get the repository tools for it, and their own (project_tools.py).
+  reviewer (their record's "project" and "role") get the repository tools for it, and their own (project_tools.py);
+- the Workflow tab's agents (github_searcher/workflow.py, their record's "workflow" and "workflow_role") get the
+  repository tools that read the code, and their own (workflow_tools.py).
 Of Claude Code's own tools it only gets TodoWrite, which touches nothing. No shell, files or web
 on this machine, so the host's secrets stay out of reach.
 
@@ -41,6 +43,7 @@ from github_searcher.agent.github_tools import GithubTools
 from github_searcher.agent.project_tools import ProjectTools
 from github_searcher.agent.repo_tools import RepoTools
 from github_searcher.agent.work_tools import WorkTools
+from github_searcher.agent.workflow_tools import WorkflowTools
 from sandbox.agent.tools import ComputerTools
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -88,6 +91,8 @@ class Agent:
         self.connection_cost = 0.0
         # A project's agents' own tools (none for other agents).
         self.project_tools = ProjectTools(work_tools.agents, record)
+        # The Workflow tab's agents' own tools (none for other agents).
+        self.workflow_tools = WorkflowTools(work_tools.agents, record)
         # The VM tools' lines in the chat come from their own describe(), the project tools' from theirs; all others' from
         # WorkTools.describe().
         self.computer_names = [item.name for item in computer_tools.list()]
@@ -97,9 +102,10 @@ class Agent:
         tools = self.computer_tools.list() + self.work_tools.list() + GithubTools([], self.work_tools.agents.repo_signals).list()
         # A repository's agent (Live) also reads its repo with the user's sign-in, and drafts issues for it; so do a
         # project's workers and reviewer, for their project. Each of them has its project tools too.
-        if self.record.get("repo") is not None or self.record.get("project") is not None:
+        if self.record.get("repo") is not None or self.record.get("project") is not None or self.record.get("workflow") is not None:
             tools += RepoTools(self.work_tools.agents, self.record).list()
         tools += self.project_tools.list()
+        tools += self.workflow_tools.list()
         allowed_tools = ["TodoWrite"]
         for item in tools:
             allowed_tools.append(f"mcp__{TOOL_SERVER}__{item.name}")
@@ -224,7 +230,9 @@ class Agent:
                     self.history.append({"type": "thinking", "text": block.thinking})
                 if isinstance(block, ToolUseBlock):
                     name = block.name.removeprefix(f"mcp__{TOOL_SERVER}__")
-                    summary = self.project_tools.describe(name, block.input)
+                    summary = self.workflow_tools.describe(name, block.input)
+                    if summary is None:
+                        summary = self.project_tools.describe(name, block.input)
                     if summary is None:
                         summary = self.work_tools.describe(name, block.input)
                     if name in self.computer_names:

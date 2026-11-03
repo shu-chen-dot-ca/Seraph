@@ -35,7 +35,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.shared import agents, github_account, inbox, pr_tracking, your_repositories
+from backend.shared import agents, github_account, inbox, pr_tracking, workflow, your_repositories
 from github_searcher.github_account import SendError
 from github_searcher.pr_tracking import AGENT_MODES, ROLLUP
 from github_searcher.search import get_action_runs, get_check_runs, get_commit_statuses, get_full_thread, get_issue_comment, get_pr_files
@@ -471,6 +471,9 @@ async def keep_prs() -> None:
                 if pr["agent"] is not None and pr["agent"] in agents.agents:
                     continue
                 if settings.get(pr["id"], {}).get("mode") == "off":
+                    continue
+                # The Workflow tab's pull requests have their own agents (workflow.py).
+                if workflow.get(pr["repo"]) is not None:
                     continue
                 owner = None
                 for job in agents.jobs.list():
