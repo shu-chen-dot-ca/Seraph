@@ -10,7 +10,8 @@ One JSON file, DATA_DIR/repos.json:
     RepoItem = {"full_name", "description", "stars", "default_branch", "html_url",
                 "note", "added_by": "user" | "<agent id>", "added_at", "tag"?}
 
-"tag" is the user's own group for a repo on the Repos or Tracked page; missing or "" when it has none.
+"tag" is the user's own group for a repo; missing or "" when it has none. A repo has one tag on every page: the Repos
+list's when it is in it, which both lists' Tag set (backend repos_api.py, tracked_api.py).
 
 Items are kept in the order they were added. Undo/redo is snapshot based, so it undoes an
 agent's change the same way as the user's: every change pushes a copy of the whole list onto
@@ -124,9 +125,11 @@ class RepoList:
             self.save()
 
     def set_tag(self, full_names: list[str], tag: str) -> list[str]:
-        """Put repos under a tag as one undo step ("" takes them out of theirs). Returns the names that were in the list."""
+        """Put repos under a tag as one undo step ("" takes them out of theirs). Names are compared without case, as the
+        other list may spell one its own way (GitHub's). Returns the names that were in the list, spelled as it has them."""
         with self.lock:
-            matches = [item for item in self.data["items"] if item["full_name"] in full_names]
+            lowered = [name.lower() for name in full_names]
+            matches = [item for item in self.data["items"] if item["full_name"].lower() in lowered]
             if not matches:
                 return []
 

@@ -1,7 +1,7 @@
 /*
 The Tag pop-up, for the picked repos on the Repos and Tracked pages. Tags group repos for the user, nothing more: a
 repo has one at most, and each page shows each tag's repos on top under a header that folds them, No tag at the bottom.
-Each page has its own tags (url: its own list).
+The tags are the same on both pages (and Issues groups by them): each url sets the tag in both lists.
 
 It lists the tags in use, A to Z, then No tag, always last; a click picks one. It opens with the picked repos' tag
 picked when they all have the same one. The New tag box's Create adds a tag to the list and picks it. Apply puts the

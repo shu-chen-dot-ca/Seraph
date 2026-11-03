@@ -128,6 +128,8 @@ def tag_repos(body: TagRequest) -> dict:
     tagged = repos.set_tag(body.names, body.tag.strip())
     if not tagged:
         raise HTTPException(status_code=404, detail="None of them is in the list.")
+    # The same repos on the Tracked list get it too, so a repo has one tag on every page.
+    tracked.set_tag(tagged, body.tag.strip())
     return {"tagged": tagged}
 
 
