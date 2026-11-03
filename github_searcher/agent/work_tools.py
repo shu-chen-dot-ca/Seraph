@@ -191,6 +191,15 @@ CONTEXT_CHARS = 500
 # flags, and the joiners and selectors that make emoji. Plain arrows and math signs are fine.
 EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u231A\u231B\u23E9-\u23FA\u203C\u2049\u2139\u3030\u303D\u3297\u3299\uFE0F\u200D\u20E3]")
 NO_EMOJI = "No emoji anywhere, also where the project's template has them: write its words without them. Found: "
+# A PR saying AI helped write it: an "AI assistance" heading, "AI-assisted", "prepared with the help of an AI", "Generated
+# with Claude". Only a repo whose AI policy is disclose asks for that (repo_signals.py); elsewhere it stays out. Not a
+# plain mention of AI, which a PR about an AI feature has.
+AI_NOTE = re.compile(
+    r"^#+\s*AI (assistance|usage|use|disclosure|tools?)\b|\bAI[- ](assisted|assistance|generated|disclosure)\b"
+    r"|with the help of (an? )?(AI|LLM)\b"
+    r"|\b(prepared|written|made|generated|created|developed|drafted|authored) (with|by|using) (the help of )?(an? )?(AI|LLM|Claude|Copilot|ChatGPT)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
 # pr_examples: the main contributors (most PRs merged lately) and how many of each one's newest merged PRs it shows,
 # how many merged PRs of outside contributors, and how much of each description.
 PR_EXAMPLES_MAIN = 3
@@ -2306,6 +2315,16 @@ class WorkTools:
         found = EMOJI.findall(" ".join(everything))
         if found:
             return {"content": [{"type": "text", "text": NO_EMOJI + " ".join(sorted(set(found)))}], "is_error": True}
+        # No word on AI helping unless the repo's AI policy asks for it (disclose).
+        signals = self.agents.repo_signals.get(repo) if repo is not None else None
+        policy = signals["ai_policy"]["tag"] if signals is not None else "none"
+        note = AI_NOTE.search(args["title"] + "\n" + args["body"])
+        if note is not None and policy != "disclose":
+            text = (
+                f"{repo}'s AI policy is {policy}, not disclose: its PRs say nothing about AI helping (no AI section, no line "
+                f"that an AI or agent prepared it). Take out \"{note.group(0)}\" and what goes with it, then draft again."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
         # One of the user's projects (github_searcher/projects.py): its rules are its own files (CLAUDE.md, README, docs),
         # read in the VM, and its PR titles are Conventional Commits (its release notes and next version come from them).
         project = self.agents.projects.get(repo)
