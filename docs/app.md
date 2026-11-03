@@ -8,8 +8,8 @@
 |---|---|
 | **Explore** | Set how many repos to find and how many workers to run, then **Start**. You **Approve** each find into Repos, or **Remove** it. **Profile** says what you're after. |
 | **Repos** | Every signal is a sortable column. **Set up** has an agent clone a repo into a VM and leave it running for you to try. |
-| **Tracked** | New issues from repos you watch. **Add to Issues** adds the free ones. |
-| **Issues** | **Assign** gives an issue to an agent. Issues being worked on show their progress in the sidebar. |
+| **Tracked** | New issues from repos you watch. **Add to Issues** adds the free ones opened in the last 14 days. |
+| **Issues** | **Assign** gives an issue to an agent. Issues being worked on show their progress in the sidebar. Grouped under their repo's tag, like Repos; a click on a tag folds it. |
 | **Jobs** | Open, queued, working, waiting, done or cancelled, each with its steps, notes and drafts |
 | **Agents** | Each agent has a chat, a live view of its desktop, its jobs, and its **Artifacts** (files it keeps) |
 | **VMs** | Each VM's desktops, line of agents, notes and usage. **Images** and **Defaults** are tabs here. |
