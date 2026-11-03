@@ -180,7 +180,7 @@ class Agents:
         self.tracked = tracked
         self.tracked_issues = tracked_issues
         # Each repo's signals (check_activity works them out the same way) and each issue's tags: free or assigned,
-        # level, kind.
+        # merge, kind.
         self.repo_signals = repo_signals
         self.issue_tags = issue_tags
         # Explore, for its profile's types of repo: the tags agents give the repos they add.
@@ -1350,8 +1350,8 @@ class Agents:
         """The issue went from free to assigned: someone else is on it now. Every open job on it gets an item in the
         Inbox, so the user decides whether its agent keeps working or stops. One pending item per job at most."""
         asked = [draft["job"] for draft in self.inbox.list() if draft["kind"] == "taken" and draft["status"] == "pending"]
-        # reason is the tags' sentence on who has it, then one on how hard it is ("Easy: ..."); only the first part matters here.
-        why = re.split(r"\s(?:Easy|Medium|Hard|Out of scope): ", reason)[0]
+        # reason is the tags' sentence on who has it, then one on its merge ("Merge: ..."); only the first part matters here.
+        why = re.split(r"\sMerge: ", reason)[0]
         for job in self.jobs.list():
             if job["issue"] != issue_id or job["status"] in ["done", "cancelled"] or job["id"] in asked:
                 continue

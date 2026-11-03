@@ -278,7 +278,8 @@ class WorkTools:
                 "issues_list",
                 "See the Issues list the user sees: each issue with its title, labels, state, your note, its job status "
                 "(new when nobody was assigned yet) and the app's tags: free / assigned / waiting (whether someone new can take it), "
-                "level (easy, medium, hard, or out of scope: we can't do it yet), kind and the reason, made shortly after an issue is added. repo limits it to one "
+                "merge (likely, or what stands in the way of a merge: out of scope, claimed, maintainers only, waiting, no outside prs, "
+                "large feature, big change, can't validate), kind and the reason, made shortly after an issue is added. repo limits it to one "
                 "repo (owner/name).",
                 {"type": "object", "properties": {"repo": {"type": "string"}}},
             )(self.issues_list),
@@ -286,7 +287,7 @@ class WorkTools:
                 "issues_add",
                 "Add issues to the Issues list, each as owner/name#number. Only issues, not pull requests. note is one short line on "
                 "why it is a good pick (shown under each issue). Their repos are added to the Repos list too if missing. "
-                "Issues already in the list are skipped.",
+                "Issues already in the list are skipped, and so are ones the app already rates anything but merge likely.",
                 {"type": "object", "properties": {"issues": names, "note": {"type": "string"}}, "required": ["issues", "note"]},
             )(self.issues_add),
             tool(
@@ -321,7 +322,7 @@ class WorkTools:
             tool(
                 "tracked_issues",
                 "See the open issues the last check found in tracked repos, newest first, each with its labels, comments, "
-                "assignees, the app's tags (free / assigned / waiting, level easy / medium / hard / out of scope, kind, and the reason; None "
+                "assignees, the app's tags (free / assigned / waiting, merge: likely or what stands in the way, kind, and the reason; None "
                 "while not made yet), whether it is new (opened in the last 3 days) and whether it is in the Issues list "
                 "already. name limits it to one repo (owner/name). which: free (a newcomer can take it now; the default), "
                 "assigned (someone is on it), or all (the 100 newest open issues plus every good first or help wanted one).",
@@ -1089,6 +1090,7 @@ class WorkTools:
 
     async def issues_add(self, args: dict) -> dict:
         in_list = [item["id"].lower() for item in await asyncio.to_thread(self.agents.issues.items)]
+        tags = await asyncio.to_thread(self.agents.issue_tags.all)
         report = {}
         items = []
         # Repo info by the issue's repo, for the Repos list.
@@ -1101,6 +1103,11 @@ class WorkTools:
                 continue
             if issue_id.lower() in in_list:
                 report[issue_id] = "already in Issues"
+                continue
+            # Agents only pick issues a pull request from us would likely get merged for; the user may add any.
+            tag = tags.get(issue_id)
+            if tag is not None and tag.get("merge") is not None and tag["merge"] != "likely":
+                report[issue_id] = f"skipped: the app rates its merge {tag['merge']} ({tag['reason']})"
                 continue
             try:
                 info = await asyncio.to_thread(get_repository, name.split("/")[0], name.split("/")[1])
