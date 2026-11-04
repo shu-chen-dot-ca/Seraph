@@ -21,11 +21,11 @@ A project is a repository you work on: **Private** (yours, which agents develop 
 | **An issue's page** | Its whole story on one timeline: who did what and when, with the proof, from the issue to merged. What it waits on you for is at the top; **Message** opens its agent's chat, **Stop** cancels the work. |
 | **Agents**, **Settings** | Every agent that worked on the project; a private project's switches (take new issues, workers, where pull requests live, who merges), or whether an open-source one is watched for new issues. |
 
-## Team and machines
+## Agents and machines
 
 | Page | |
 |---|---|
-| **Team** | Each agent, what it works on and where. Opening one shows its chat, its job, its place in a VM's line and its **Artifacts** (files it keeps). |
+| **Agents** | Each agent, what it works on and where. Opening one shows its chat, its job, its place in a VM's line and its **Artifacts** (files it keeps). |
 | **Machines** | Each VM's desktops, line of agents, notes and usage. **Images** and **Defaults** are tabs here. A VM's page lets you take over a desktop. |
 
 ## Settings and phone
