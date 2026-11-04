@@ -1,15 +1,15 @@
 """Your GitHub account: the one you sign in with, whose token sends what you approve in the Inbox, as you, and
 that the GitHub tab uses to manage what you sent and to post your own comments.
 
-Sign in works like "Sign in with GitHub" on any website. The GitHub tab's Account page (#/github/account, in its left
-list) asks sign_in_url() for GitHub's own page, which asks you whether Seraph may act as you. Once you click Authorize
+Sign in works like "Sign in with GitHub" on any website. The Settings page (#/settings) asks sign_in_url() for
+GitHub's own page, which asks you whether Seraph may act as you. Once you click Authorize
 there, GitHub sends the browser back to the callback (backend/github_account_api.py), and finish_sign_in() trades the
 code it brings for your token, with the app's client secret. SCOPES is what it asks for: about all you can do on
 github.com yourself (your repos, public and private, workflow files, the organizations you are in, gists,
 notifications, your profile). Signing in again later skips GitHub's question; it shows who to sign in as when you
 have more than one account on github.com.
 
-For that the app is registered on GitHub as an OAuth App, once, by you (the Account page walks you through it).
+For that the app is registered on GitHub as an OAuth App, once, by you (the Settings page walks you through it).
 save_app() keeps its client ID and secret in DATA_DIR/github_app.json, not .env. An OAuth App, not a GitHub App:
 signing in with a GitHub App only works on the repos it is installed on, so it couldn't open PRs on other people's
 projects (fine-grained tokens can't either). An organization may block OAuth Apps it hasn't approved; for those,
