@@ -1,3 +1,4 @@
+import { Loader2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
@@ -12,7 +13,7 @@ import { Markdown } from "@/components/ui/markdown";
 import { Textarea } from "@/components/ui/textarea";
 import { api, useLive, type Draft, type Job } from "@/live";
 import { cn } from "@/lib/utils";
-import { useGithubAccount } from "@/model/account";
+import { useGithubAccount, useSending } from "@/model/account";
 import { askOf, kindOf } from "@/model/inbox";
 import { isQuestion } from "@/model/work";
 import { questionWhen } from "@/pages/InboxPage";
@@ -34,7 +35,9 @@ if any, shows below. A PR whose claim (the comment the project's rules ask for f
 and its Approve waits until the claim is decided. Approve asks first and sends it to GitHub as you (it needs your GitHub sign-in, in Settings). Reject asks
 for a note: the agent tries again with it, or drops it.
 
-Once answered or decided, you land on the issue's page, where the timeline shows what happened.
+Once answered or rejected, you land on the issue's page, where the timeline shows what happened. After Approve you
+stay here: sending takes a while, and the page shows it is sending (also after you close the dialog or come back
+later), then that it was sent, with a link to the issue's page.
 */
 
 // "owner/name#12" → that issue's page, else the Inbox.
@@ -140,15 +143,20 @@ function Approval(props: { draft: Draft; job: Job | null }) {
   const draft = props.draft;
   const overview = draft.overview;
   const account = useGithubAccount();
+  const sending = useSending();
   const agents = useLive("agents");
   const drafts = useLive("inbox");
   // The claim the project's rules ask for goes out before the PR (its job's one comment): decide it first.
   const claim = draft.kind === "pr" && draft.update_of === null ? drafts.find((other) => other.job === draft.job && other.kind === "comment" && other.status === "pending") : undefined;
   const [dialog, setDialog] = useState<"approve" | "reject" | null>(null);
+  // Sending takes a while (the fork, the branch, the pull request). It shows here even after its dialog is closed,
+  // and when you come back to this page: the backend says which draft it is sending.
+  const [started, setStarted] = useState(false);
   const [note, setNote] = useState("");
   const [drop, setDrop] = useState(false);
   const target = workHref(draft.update_of ?? draft.target);
   const signedIn = account !== null && account.connected;
+  const isSending = started || sending.draft === draft.id;
   const reviewer = agents.find((agent) => agent.id === draft.review?.agent)?.name ?? draft.review?.agent ?? "";
   const shots = draft.evidence.filter((evidence) => evidence.file !== null);
   const tests = props.job?.tests ?? { before: null, after: null };
@@ -168,10 +176,17 @@ function Approval(props: { draft: Draft; job: Job | null }) {
     sends = `Approve adds the new version to ${draft.update_of} as you.`;
   }
 
+  // You stay on this page: once sent, it says so, with a link to the issue's page.
   async function approve() {
-    await api(`/api/inbox/${draft.id}/approve`, { method: "POST", body: { send: true } });
-    toast.success("Sent to GitHub as you.");
-    window.location.hash = target;
+    setStarted(true);
+    try {
+      await api(`/api/inbox/${draft.id}/approve`, { method: "POST", body: { send: true } });
+      toast.success("Sent to GitHub as you.");
+    } catch (err) {
+      setStarted(false);
+      toast.error(`Could not send it: ${err instanceof Error ? err.message : err}`);
+      throw err;
+    }
   }
 
   async function reject() {
@@ -283,7 +298,13 @@ function Approval(props: { draft: Draft; job: Job | null }) {
 
       <div className="sticky bottom-0 flex flex-wrap items-center gap-2 border-t bg-background px-4 py-2.5">
         <span className="min-w-48 flex-1 text-xs text-muted-foreground">
-          {signedIn && claim !== undefined && (
+          {isSending && (
+            <span className="flex items-center gap-1.5 text-foreground">
+              <Loader2 className="size-3.5 animate-spin" />
+              Sending to GitHub{sending.draft === draft.id && sending.step !== "" ? `: ${sending.step}` : "…"}
+            </span>
+          )}
+          {!isSending && signedIn && claim !== undefined && (
             <>
               Approve or reject the claim first:{" "}
               <a href={href.inboxItem(claim.id)} className="text-primary hover:underline">
@@ -291,7 +312,7 @@ function Approval(props: { draft: Draft; job: Job | null }) {
               </a>
             </>
           )}
-          {signedIn && claim === undefined && `Not sent yet. ${sends}`}
+          {!isSending && signedIn && claim === undefined && `Not sent yet. ${sends}`}
           {account !== null && !signedIn && (
             <>
               Sign in to GitHub to send it:{" "}
@@ -301,17 +322,19 @@ function Approval(props: { draft: Draft; job: Job | null }) {
             </>
           )}
         </span>
-        <Button size="sm" variant="outline" onClick={() => setDialog("reject")}>
+        <Button size="sm" variant="outline" disabled={isSending} onClick={() => setDialog("reject")}>
           Reject
         </Button>
-        <Button size="sm" disabled={!signedIn || claim !== undefined} onClick={() => setDialog("approve")}>
-          Approve
+        <Button size="sm" disabled={!signedIn || isSending || claim !== undefined} onClick={() => setDialog("approve")}>
+          {isSending && <Loader2 className="animate-spin" />}
+          {isSending ? "Sending" : "Approve"}
         </Button>
       </div>
 
       {dialog === "approve" && (
         <ConfirmDialog title={askOf(draft)} confirm="Approve and send" onClose={() => setDialog(null)} onConfirm={approve}>
           <p>{sends} People may see it right away.</p>
+          <p className="text-muted-foreground">Sending can take a minute. You can close this; it keeps going, and this page shows it.</p>
         </ConfirmDialog>
       )}
       {dialog === "reject" && (

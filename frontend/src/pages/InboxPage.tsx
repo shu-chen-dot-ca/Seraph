@@ -9,6 +9,7 @@ import { useNow } from "@/components/ui/job-progress";
 import { Textarea } from "@/components/ui/textarea";
 import { api, useLive, type Draft } from "@/live";
 import { cn } from "@/lib/utils";
+import { useSending } from "@/model/account";
 import { useInbox, type Approval } from "@/model/inbox";
 import { keyOf } from "@/model/work";
 import { href } from "@/routes";
@@ -64,6 +65,7 @@ export default function InboxPage(props: { tab: "questions" | "approvals" | null
   const { questions, approvals } = useInbox();
   const agents = useLive("agents");
   const now = useNow();
+  const sending = useSending();
   const [approving, setApproving] = useState<Approval[]>([]);
   const [rejecting, setRejecting] = useState<Approval[]>([]);
   const [reason, setReason] = useState("");
@@ -159,7 +161,12 @@ export default function InboxPage(props: { tab: "questions" | "approvals" | null
           ]}
           columns={[
             { key: "ask", label: "Approval", main: true, sortValue: (approval) => approval.ask, cell: (approval) => approval.ask },
-            { key: "kind", label: "Kind", sortValue: (approval) => approval.kind, cell: (approval) => <Badge>{approval.kind}</Badge> },
+            {
+              key: "kind",
+              label: "Kind",
+              sortValue: (approval) => approval.kind,
+              cell: (approval) => <Badge variant={sending.draft === approval.id ? "warn" : "default"}>{sending.draft === approval.id ? "Sending" : approval.kind}</Badge>,
+            },
             {
               key: "project",
               label: "Project",
