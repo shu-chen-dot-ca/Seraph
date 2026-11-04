@@ -102,10 +102,13 @@ maintainers will, every point asked and the edge cases of its kind, on the autho
 was missed one review round at a time.
 
 When an issue an agent has a job for goes from free to assigned (someone else is on it now: the
-tags say so, backend/issues_api.py), issue_taken() asks the user in the Inbox ("taken", one pending
-per job): Keep working tells the agent to go on; Stop the agent cancels the job, and when the agent
-is busy with it right now, stops its turn and what it runs in the VM. The agent itself never stops
-for it on its own.
+tags say so, backend/issues_api.py), issue_taken() tells the agent who has it (the assignees' logins, or else the
+tags' reason), once per job, and puts that on the job's timeline. The user isn't asked: the agent finds out who that is
+(read_thread shows each person's role, search_issues their merged PRs there) and stops, cancelling its job with a note
+on who took it, for a maintainer, a member or someone who often gets PRs merged there; for a new, unknown or bot-like
+account it goes on. The Inbox's "taken" items from before that still decide as they did: Keep working tells the agent
+to go on; Stop the agent cancels the job, and when the agent is busy with it right now, stops its turn and what it runs
+in the VM.
 
 Everything here runs in the backend's event loop. notify() and the queue callbacks may be called
 from request threads, so they hand their work to the loop. version goes up on every change the
@@ -159,6 +162,16 @@ OPEN_STATUSES = ["queued", "working"]
 # A repository's new VM is waited for this long (it takes about a minute), and looked at this often meanwhile.
 LIVE_WAIT_SECONDS = 15 * 60
 LIVE_CHECK_SECONDS = 5
+# What an agent does when its job's issue was assigned to someone else (issue_taken): it decides itself,
+# the user isn't asked.
+TAKEN_ADVICE = (
+    " Decide yourself whether to go on; the user isn't asked. Find out who that is: read_thread shows the assignees and "
+    "each person's role (OWNER, MEMBER and COLLABORATOR are the project's own people; CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR, "
+    "NONE and BOT are not), and search_issues how often their PRs get merged there (`repo:{repo} is:pr is:merged "
+    "author:LOGIN`). A maintainer, a member, or someone who often gets PRs merged there: stop. Cancel {job} with "
+    "job_update (status cancelled) and a note in plain words on who took it and why you stopped, then go on with your "
+    "other jobs. A new, unknown or bot-like account: keep going, and say why with job_progress."
+)
 
 
 class Agents:
@@ -1356,25 +1369,38 @@ class Agents:
         self.save(agent)
         self.version += 1
 
-    def issue_taken(self, issue_id: str, reason: str) -> None:
-        """The issue went from free to assigned: someone else is on it now. Every open job on it gets an item in the
-        Inbox, so the user decides whether its agent keeps working or stops. One pending item per job at most."""
+    def issue_taken(self, issue_id: str, reason: str, assignees: list[str]) -> None:
+        """The issue went from free to assigned: someone else is on it now. The agent of every open job on it is told
+        who, and decides itself whether to stop (TAKEN_ADVICE): the user isn't asked. assignees are their GitHub logins
+        (issue_facts.py); without any, the tags' reason says who seems to be on it. Once per job at most: a job told
+        before has the notice on its timeline (the only notice the app puts there)."""
+        # Inbox items from before agents decided this themselves: a job with one still pending isn't told as well.
         asked = [draft["job"] for draft in self.inbox.list() if draft["kind"] == "taken" and draft["status"] == "pending"]
+        # Assigned to the user is never someone else taking it.
+        account = self.your_repositories.github_account.status()
+        login = None
+        if account["connected"]:
+            login = account["login"]
+        you = login is not None and login.lower() in [name.lower() for name in assignees]
         # reason is the tags' sentence on who has it, then one on its merge ("Merge: ..."); only the first part matters here.
         why = re.split(r"\sMerge: ", reason)[0]
+        who = ", ".join(f"@{login}" for login in assignees)
         for job in self.jobs.list():
             if job["issue"] != issue_id or job["status"] in ["done", "cancelled"] or job["id"] in asked:
                 continue
-            agent = self.agents.get(job["agent"])
-            if agent is None:
+            if you:
                 continue
-            body = (
-                f"Your agent {agent.name} has this issue as {job['id']} ({job['title']}). It was free, but someone else "
-                f"seems to be on it now: {why}\n\n"
-                "- **Keep working**: the agent carries on; you still decide on its PR.\n"
-                "- **Stop the agent**: the job is cancelled, and the agent stops working on it right away."
-            )
-            self.inbox.create("taken", job["agent"], f"{issue_id} isn't free anymore", body, job=job["id"], repo=job["repo"], target=issue_id, vm=job["vm"])
+            told = [entry for entry in job["timeline"] if entry["kind"] == "notice"]
+            if told or job["agent"] not in self.agents:
+                continue
+            text = f"{issue_id} isn't free anymore on GitHub: someone else seems to be on it. {why}"
+            notice = "Someone else seems to be on the issue on GitHub; told the agent"
+            if who:
+                text = f"{issue_id} isn't free anymore on GitHub: it is assigned to {who}."
+                notice = f"Issue was assigned to {who} on GitHub; told the agent"
+            text += f" You have {job['id']} ({job['title']}) on it." + TAKEN_ADVICE.format(job=job["id"], repo=job["repo"])
+            self.jobs.add_timeline(job["id"], "notice", notice)
+            self.notify(job["agent"], text)
 
     def follow_up(self, entry: dict) -> dict | None:
         """Someone else wrote on a PR or issue an agent follows for the user (agent mode Drafts on the GitHub tab), the
@@ -1520,8 +1546,9 @@ class Agents:
         if draft["job"] is not None:
             job = self.jobs.get(draft["job"])
 
-        # The app asked whether the agent keeps working on an issue someone else took (issue_taken). approved: keep
-        # working, rejected: stop. A job that ended in the meantime has nothing left to decide.
+        # An Inbox item from before agents decided this themselves (issue_taken): whether the agent keeps working on an
+        # issue someone else took. approved: keep working, rejected: stop. A job that ended in the meantime has nothing
+        # left to decide.
         if draft["kind"] == "taken":
             if job is None or job["status"] in ["done", "cancelled"]:
                 return draft

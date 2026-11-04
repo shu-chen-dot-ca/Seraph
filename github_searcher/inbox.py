@@ -7,7 +7,7 @@ Approving tells the agent. With the user's GitHub account connected (the GitHub 
 Approve on a PR or comment also sends it to GitHub as them, first; "sent" then says what went out
 (mark_sent). Each draft is one JSON file, DATA_DIR/inbox/<id>.json:
 
-    {"id": "draft_a1b2c3", "kind": "pr" | "comment" | "question" | "taken" | "report" | "edit", "agent": "<agent id>",
+    {"id": "draft_a1b2c3", "kind": "pr" | "comment" | "question" | "report" | "edit" | "taken" (old) | ..., "agent": "<agent id>",
      "job": "job_..." | null, "repo": "owner/name" | null, "target": "owner/name#n" | null,
      "title", "body": "markdown",
      "diff": "unified diff (pr only)", "branch": "branch in the VM (pr only)", "base": "origin/main (pr only)",
@@ -75,9 +75,9 @@ they are still "previous" (github_account.py).
 A question can come with "options": the answers the agent offers. The Inbox shows each as a button, and picking one is
 a reply with that answer (with the user's note, if any), so the agent always knows which one was meant.
 
-"taken" is the one kind the app makes, not the agent (Agents.issue_taken): an issue an agent has a job
-for went from free to assigned. Its body says who seems to be on it; approved means keep working,
-rejected means stop the agent (its job is cancelled). It takes no reply.
+"taken" was the one kind the app made, not the agent: an issue an agent has a job for went from free to assigned.
+Now the agent is told and decides itself (Agents.issue_taken), so none are made anymore; the ones from before still
+decide: approved means keep working, rejected means stop the agent (its job is cancelled). It takes no reply.
 
 A draft is decided once. A decided draft can be deleted (the Inbox's Delete); a pending one can't, its agent waits
 for the answer. Its job keeps the id (jobs.py "drafts"), and whoever reads one skips it once it is gone.

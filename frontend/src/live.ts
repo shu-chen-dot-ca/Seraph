@@ -436,7 +436,7 @@ export type DraftStatus = "pending" | "approved" | "rejected" | "replied";
 
 export type Draft = {
   id: string;
-  kind: "pr" | "comment" | "question" | "taken" | "report" | "edit"; // taken: made by the app, an issue an agent works on isn't free anymore; report: on a paper; edit: a new title and description for your own PR or issue
+  kind: "pr" | "comment" | "question" | "taken" | "report" | "edit"; // taken: old, made by the app when an issue an agent worked on was taken (agents decide that themselves now); report: on a paper; edit: a new title and description for your own PR or issue
   agent: string;
   job: string | null;
   repo: string | null;

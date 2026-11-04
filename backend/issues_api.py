@@ -30,8 +30,8 @@ again buttons and the pages' Refresh (Issues: every open issue in the list, afte
 its facts; Tracked: every free issue, after the checks) do it at once
 (refresh_tags), and say which ones that were free aren't anymore.
 
-When an issue goes from free to assigned either way, Agents.issue_taken asks the
-user in the Inbox whether the agent with a job on it keeps working or stops.
+When an issue goes from free to assigned either way, Agents.issue_taken tells the agent with a job on it who has it
+(the assignees from its facts, or the tags' reason), and the agent decides itself whether to keep working or stop.
 """
 
 import asyncio
@@ -180,9 +180,11 @@ async def refresh_tags(body: IdsRequest) -> dict:
     for issue_id in tagged:
         if issue_id in before and before[issue_id]["status"] == "free" and after[issue_id]["status"] != "free":
             taken.append(issue_id)
-        # Someone else is on it now: the user decides whether an agent working on it goes on.
+        # Someone else is on it now: an agent working on it decides whether to go on.
         if issue_id in before and before[issue_id]["status"] == "free" and after[issue_id]["status"] == "assigned":
-            agents.issue_taken(issue_id, after[issue_id]["reason"])
+            facts = issue_facts.all().get(issue_id)
+            assignees = facts["assignees"] if facts else []
+            agents.issue_taken(issue_id, after[issue_id]["reason"], assignees)
     return {"tagged": len(tagged), "failed": failed, "taken": taken}
 
 
@@ -292,11 +294,13 @@ async def keep_tags() -> None:
 
         if todo:
             tagged = await issue_tags.tag(todo)
-            # Someone else is on it now: the user decides whether an agent working on it goes on.
+            # Someone else is on it now: an agent working on it decides whether to go on.
             after = issue_tags.all()
             for issue_id in tagged:
                 if issue_id in known and known[issue_id]["status"] == "free" and after[issue_id]["status"] == "assigned":
-                    agents.issue_taken(issue_id, after[issue_id]["reason"])
+                    facts = issue_facts.all().get(issue_id)
+                    assignees = facts["assignees"] if facts else []
+                    agents.issue_taken(issue_id, after[issue_id]["reason"], assignees)
             # What didn't get tagged (GitHub or Claude failed, Claude left it out, it is gone) waits for TAGS_RETRY_SECONDS.
             for issue_id in todo:
                 if issue_id not in tagged:
