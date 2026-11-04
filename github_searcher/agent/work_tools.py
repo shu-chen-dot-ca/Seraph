@@ -15,7 +15,8 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   answers with draft_comment (target: the thread), draft_pr with pr (a new version of the user's own PR), or by
   marking the job done when nothing needs an answer. A question it drafts for the job is about the thread.
 - Drafts: nothing goes to GitHub from here. A PR, an issue comment or a question becomes a draft
-  in the user's Inbox and its job waits on the user. A fix_issue job takes one comment only: the claim on its issue,
+  in the user's Inbox and its job waits on the user. A comment with reply_to answers inside one of a PR's
+  conversations on lines of code instead of below it. A fix_issue job takes one comment only: the claim on its issue,
   when the repo's rules ask contributors to claim an issue or be assigned before they start ("Claim owner/name#n" in
   the Inbox). The claim holds nothing up: the job goes on to its PR while the claim waits for the user, and nobody waits
   for the maintainers to assign the user (we assume nobody answers). The user approves the claim, then the PR. A PR draft's diff is read from the repo
@@ -434,13 +435,16 @@ class WorkTools:
                 "(to assign, review, run checks, decide, answer): assume nobody replies. Nothing is posted: the user decides, "
                 "and you get a message with their decision. A reply's job waits on the user meanwhile; a claim's doesn't: go "
                 "straight on with the fix, without waiting for the user or the maintainers. "
-                "body is the comment as it would be posted. project, problem and why are only for the user, in the Inbox's overview. " + PLAIN,
+                "body is the comment as it would be posted. reply_to: on a PR, the id of a comment in one of its conversations "
+                "on lines of code (read_thread), to answer in that conversation instead of below the PR. project, problem and "
+                "why are only for the user, in the Inbox's overview. " + PLAIN,
                 {
                     "type": "object",
                     "properties": {
                         "job_id": {"type": "string"},
                         "target": {"type": "string"},
                         "body": {"type": "string"},
+                        "reply_to": {"type": "integer"},
                         "project": {"type": "string", "description": "One line: what the project is, e.g. 'matplotlib: a Python library that draws charts'."},
                         "problem": {"type": "string", "description": "What the issue is about: what goes wrong, for whom, when. Specific, 1 to 2 sentences."},
                         "why": {"type": "string", "description": "Why post this comment now, in 1 to 2 sentences. For a claim, the rule that asks for it."},
@@ -1451,6 +1455,10 @@ class WorkTools:
         if job["status"] in CLOSED_STATUSES:
             text = f"{job['id']} is {job['status']} (the user may have cancelled it): no drafts for it anymore. Move on."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
+        reply_to = args.get("reply_to")
+        if reply_to is not None and job["kind"] == "fix_issue":
+            text = "A claim goes below the issue: leave reply_to out."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
         # We don't comment and wait for other people: a fix goes straight to a PR. The one comment on a fix_issue job is
         # the claim a repo's rules ask for before contributors start (Agents.decide parks the job until the user is assigned).
         title = f"Comment on {target}"
@@ -1468,8 +1476,27 @@ class WorkTools:
                     return {"content": [{"type": "text", "text": text}], "is_error": True}
             title = f"Claim {target}"
 
+        # An answer in a conversation on lines of code goes to its first comment: GitHub takes no replies to replies.
+        if reply_to is not None:
+            try:
+                thread = await asyncio.to_thread(get_thread, name.split("/")[0], name.split("/")[1], int(target.split("#")[1]))
+            except (httpx.HTTPError, ValueError) as error:
+                return {"content": [{"type": "text", "text": f"Could not read {target}: {error}"}], "is_error": True}
+            first = None
+            if thread is not None and thread["__typename"] == "PullRequest":
+                for conversation in thread["reviewThreads"]["nodes"]:
+                    ids = [line["databaseId"] for line in conversation["comments"]["nodes"]]
+                    if reply_to in ids:
+                        first = ids[0]
+            if first is None:
+                text = f"{reply_to} isn't a comment in a conversation on lines of code of {target}: use a comment's id from read_thread's conversations."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+            reply_to = first
+            title = f"Reply in a conversation on {target}"
+
         draft = self.agents.inbox.create(
-            "comment", self.agent_id, title, args["body"], job=job["id"], repo=name, target=target, evidence=job["evidence"], overview=overview
+            "comment", self.agent_id, title, args["body"], job=job["id"], repo=name, target=target, evidence=job["evidence"], overview=overview,
+            reply_to=reply_to,
         )
         # A claim holds nothing up: the rules ask for it, so the user approves it, and nobody waits for the maintainers'
         # answer. The job goes on to its PR, which the user can only send once the claim is decided (github_account.py).

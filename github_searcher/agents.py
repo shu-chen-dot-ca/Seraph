@@ -1475,6 +1475,8 @@ class Agents:
                 "with when: after and base the commit your branch now starts from (e.g. origin/main). Then draft_pr with pr "
                 f"{thread}, that base and rebase: true; Approve force-pushes it. Its body is the comment posted with the push "
                 "(what it is rebased onto, and how each conflict was settled)."
+                "\n- A reviewer's comment on a line of code: answer it in its conversation, draft_comment with reply_to (the "
+                "comment's id from read_thread's conversations), not below the PR."
             )
         if own:
             text += (

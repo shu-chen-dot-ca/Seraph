@@ -25,6 +25,7 @@ Approve on a PR or comment also sends it to GitHub as them, first; "sent" then s
      "review": null | {"state": "waiting" | "passed" | "changes", "agent", "job", "notes", "at"} (pr only, see below),
      "replaces": "owner/name#n" | null (pr only: the project PR this one is made again of, see below),
      "previous": {"title", "body"} | null (edit only, see below),
+     "reply_to": GitHub's id of a review comment | null (comment only, see below),
      "options": ["what the user can pick", ...] (question only: [] when they answer in their own words),
      "recommended": "one of options" | null, "answer_by": ISO time | null, "must_wait": "money" | "sensitive" |
      "github" | "delete" | "open" | null, "answered_by": "user" | "timer" | null (question only, see below)}
@@ -69,6 +70,9 @@ it, or the text no longer matches the PR; work_tools.py draft_edit): "target" is
 "previous" the text as it was when drafted, "diff" the change between them (one part for the title, one for the
 description), and "overview" {"project", "problem", "why"} like a comment's. Approve changes them on GitHub, only while
 they are still "previous" (github_account.py).
+
+A comment with "reply_to" is an answer inside one of a PR's conversations on lines of code, below that conversation's
+first comment (GitHub takes no replies to replies), instead of below the PR.
 
 A question can come with "options": the answers the agent offers. The Inbox shows each as a button, and picking one is
 a reply with that answer (with the user's note, if any), so the agent always knows which one was meant.
@@ -152,6 +156,8 @@ class Inbox:
             draft.setdefault("answer_by", None)
             draft.setdefault("must_wait", None)
             draft.setdefault("answered_by", None)
+            # And from before review replies.
+            draft.setdefault("reply_to", None)
             self.drafts[draft["id"]] = draft
 
     def save(self, draft: dict) -> None:
@@ -191,7 +197,7 @@ class Inbox:
                overview: dict | None = None, template: str | None = None, update_of: str | None = None, review: dict | None = None,
                replaces: str | None = None, rebase_of: str | None = None, previous: dict | None = None,
                options: list | None = None, recommended: str | None = None, answer_by: str | None = None,
-               must_wait: str | None = None) -> dict:
+               must_wait: str | None = None, reply_to: int | None = None) -> dict:
         with self.lock:
             draft_id = "draft_" + secrets.token_hex(3)
             while draft_id in self.drafts:
@@ -231,6 +237,7 @@ class Inbox:
                 "answer_by": answer_by,
                 "must_wait": must_wait,
                 "answered_by": None,
+                "reply_to": reply_to,
             }
             self.drafts[draft_id] = draft
             self.save(draft)

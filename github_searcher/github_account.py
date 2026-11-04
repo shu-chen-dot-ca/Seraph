@@ -42,7 +42,8 @@ send(draft_id) sends a PR, comment or edit draft once, as it was shown in the In
    the project's default branch), with the draft's title and body. If GitHub refuses it, the new
    branch is deleted again, so trying again starts clean.
 A PR waits for the claim of its job (a comment the project's rules ask for before a PR) to be decided first.
-A comment is posted on its issue or PR (its pictures go to your fork the same way).
+A comment is posted on its issue or PR (its pictures go to your fork the same way); one with reply_to goes inside that
+conversation on lines of code of the PR instead.
 An edit (a new title and description for your own PR or issue) changes them on GitHub, only when it is yours and still
 has the text the agent saw ("previous"), else it refuses (the agent redrafts on the text as it is now).
 
@@ -768,7 +769,10 @@ class GithubAccount:
             fork = self.fork(client, account, repo)
             body = self.pictures(client, account, fork, draft)
         self.step = "posting the comment"
-        response = client.post(f"/repos/{repo}/issues/{number}/comments", json={"body": body})
+        if draft["reply_to"] is not None:
+            response = client.post(f"/repos/{repo}/pulls/{number}/comments/{draft['reply_to']}/replies", json={"body": body})
+        else:
+            response = client.post(f"/repos/{repo}/issues/{number}/comments", json={"body": body})
         response.raise_for_status()
         comment = response.json()
         return {

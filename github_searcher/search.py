@@ -66,6 +66,8 @@ def get_readme(owner: str, repo: str) -> str:
     return CACHE[key]
 
 
+# One issue or PR for an agent's read_thread (agent/github_tools.py). A PR also has its review conversations: their
+# comments' ids are what draft_comment's reply_to takes (agent/work_tools.py).
 THREAD_QUERY = """
 query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
@@ -92,6 +94,13 @@ query($owner: String!, $name: String!, $number: Int!) {
           nodes {
             body state createdAt authorAssociation author { login __typename }
             comments(first: 10) { nodes { body path createdAt author { login __typename } } }
+          }
+        }
+        reviewThreads(first: 50) {
+          totalCount
+          nodes {
+            id isResolved isOutdated path line
+            comments(first: 20) { nodes { databaseId body createdAt authorAssociation author { login __typename } } }
           }
         }
       }
