@@ -8,8 +8,9 @@ only the fields it asks for, so a long list stays small. Each message comes with
 What it does: call uses the app's own API on this computer, exactly what the buttons use: every endpoint, listed in its
 prompt with what it does (from backend/app.py's routes), except DENIED: nothing that goes to GitHub as the user
 (Approve, Send, comments, PR and repo actions, creating issues, marking notifications, projects, the Workflow tab's
-changes: they make VMs, merge and act on GitHub), the GitHub sign-in,
-remote access, updates and the environment variables (secrets). The user approves everything that leaves for GitHub
+changes: they make VMs, merge and act on GitHub), the GitHub sign-in, changing which questions must wait for the user
+(Settings, /api/ask_settings: that would let the app answer for them), remote access, updates and the environment
+variables (secrets). The user approves everything that leaves for GitHub
 in the Inbox, never Sherpa. Lists it changes keep their undo, like the user's own clicks. Claude Code's own tools
 (files, shell, web) are off.
 
@@ -59,6 +60,7 @@ DENIED = [
     ("PUT", r"/api/workflow.*"),
     ("DELETE", r"/api/workflow.*"),
     ("*", r"/api/github_account.*"),
+    ("PUT", r"/api/ask_settings"),
     ("*", r"/api/remote_access.*"),
     ("*", r"/api/updates.*"),
     ("*", r".*env.*"),
@@ -93,8 +95,8 @@ Rules:
 - Before something that can't be undone (deleting a VM, an image, an agent or its files, cancelling jobs, rejecting
   drafts), say exactly what you will do and wait for the user's yes in the chat. Lists with undo don't need that.
 - You can't send anything to GitHub as the user: Approve, Send, comments, PR actions and the like are refused, and so
-  are sign-in, remote access, updates and the environment variables. When the user asks for one, say it is theirs to do
-  and where (e.g. the Inbox's Approve).
+  are sign-in, changing how the agents' questions wait (Settings), remote access, updates and the environment
+  variables. When the user asks for one, say it is theirs to do and where (e.g. the Inbox's Approve).
 - Point the user to a page with its address as a link, like [Issues](#/issues).
 - No emoji. Keep it short and plain: the user reads you in a small panel.
 
