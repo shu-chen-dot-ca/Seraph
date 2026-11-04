@@ -796,7 +796,7 @@ class Agents:
 
         title = f"Fix {issue_id}: {issue['title']}"
         vm_name = agent.record["target_vm"]
-        job = self.jobs.create("fix_issue", title, agent_id, "user", issue=issue_id, repo=issue["repo"], vm=vm_name, instructions=instructions)
+        job = self.jobs.create("fix_issue", title, agent_id, "user", issue=issue_id, repo=issue["repo"], vm=vm_name, instructions=instructions, agent_name=agent.name)
         text = f"New job {job['id']}: {title}"
         if instructions:
             text += f"\nInstructions from the user: {instructions}"
@@ -830,7 +830,7 @@ class Agents:
         self.unarchive(agent_id)
 
         vm_name = agent.record["target_vm"]
-        job = self.jobs.create("task", title, agent_id, "user", vm=vm_name, instructions=instructions)
+        job = self.jobs.create("task", title, agent_id, "user", vm=vm_name, instructions=instructions, agent_name=agent.name)
         text = f"New job {job['id']}: {title}"
         if instructions:
             text += f"\nInstructions from the user: {instructions}"
@@ -862,7 +862,7 @@ class Agents:
 
         title = f"Set up {repo}"
         vm_name = agent.record["target_vm"]
-        job = self.jobs.create("set_up_repo", title, agent_id, "user", repo=repo, vm=vm_name, instructions=instructions)
+        job = self.jobs.create("set_up_repo", title, agent_id, "user", repo=repo, vm=vm_name, instructions=instructions, agent_name=agent.name)
         text = f"New job {job['id']}: {title}"
         text += (
             "\nRead its README and docs first. If it has a clear frontend, set it up the way they say and leave it running on "
@@ -1040,7 +1040,7 @@ class Agents:
         agent.record["live"] = {"state": "ready", "error": None}
         agent.history.append({"type": "system", "text": f"The code is in {vm_name}, in ~/{folder} on desktop 1", "time": now})
         title = f"Set up {repo}"
-        job = self.jobs.create("set_up_repo", title, agent_id, "user", repo=repo, vm=vm_name)
+        job = self.jobs.create("set_up_repo", title, agent_id, "user", repo=repo, vm=vm_name, agent_name=agent.name)
         text = (
             f"You are the agent of {repo}, one of the user's own repositories (see Your repository). Its VM is {vm_name}: "
             "the user tries the repo out on its desktop 1, next to this chat, on the Workspace tab's Live.\n"
@@ -1153,7 +1153,7 @@ class Agents:
         issue_id = f"{repo}#{issue['number']}"
         title = f"Fix {issue_id}: {issue['title']}"
         vm_name = agent.record["target_vm"]
-        job = self.jobs.create("fix_issue", title, agent_id, "user", issue=issue_id, vm=vm_name)
+        job = self.jobs.create("fix_issue", title, agent_id, "user", issue=issue_id, vm=vm_name, agent_name=agent.name)
         text = (
             f"New job {job['id']}: {title}\n"
             f"{repo} is a project the user has agents develop all the time, and this is its next open issue: work on it as in "
@@ -1220,7 +1220,7 @@ class Agents:
             author = self.agents[author].name
         vm_name = self.agents[reviewer].record["target_vm"]
         title = f"Review {draft['id']}: {draft['title']}"
-        job = self.jobs.create("review", title, reviewer, "user", issue=draft["target"], repo=draft["repo"], vm=vm_name)
+        job = self.jobs.create("review", title, reviewer, "user", issue=draft["target"], repo=draft["repo"], vm=vm_name, agent_name=self.agents[reviewer].name)
         self.inbox.set_review(draft["id"], {"state": "waiting", "agent": reviewer, "job": job["id"], "notes": "", "at": now})
         if project is not None:
             text = (
@@ -1302,7 +1302,7 @@ class Agents:
             pass
         title = f"Redo #{pr['number']} on the new main: {pr['title']}"
         vm_name = agent.record["target_vm"]
-        job = self.jobs.create("fix_issue", title, agent.id, "user", issue=issue_id, repo=repo, vm=vm_name, thread=thread)
+        job = self.jobs.create("fix_issue", title, agent.id, "user", issue=issue_id, repo=repo, vm=vm_name, thread=thread, agent_name=agent.name)
         text = (
             f"New job {job['id']}: {title}\n"
             f"Your PR {thread} ({pr['url']}) conflicts with {repo}'s main now: other work was merged first. Make it again on the "
@@ -1430,7 +1430,7 @@ class Agents:
 
         title = f"Follow up on {thread}"
         vm_name = agent.record["target_vm"]
-        job = self.jobs.create("follow_up", title, agent.id, "user", repo=repo, vm=vm_name, thread=thread)
+        job = self.jobs.create("follow_up", title, agent.id, "user", repo=repo, vm=vm_name, thread=thread, agent_name=agent.name)
         text = f"New job {job['id']}: {title}\n{entry['reason']} on the {what} {thread} ({entry['title']}): {entry['url']}"
         # Merged or closed: only its end to take in.
         if ended:
@@ -1532,6 +1532,7 @@ class Agents:
                 self.notify(draft["agent"], f"{draft['target']} isn't free anymore on GitHub, but the user wants you to keep working on {job['id']}.{note}")
                 return draft
             was_working = job["status"] == "working"
+            self.jobs.add_timeline(job["id"], "status", "Stopped by you")
             self.jobs.update(job["id"], status="cancelled")
             self.notify(draft["agent"], f"{draft['target']} isn't free anymore on GitHub, so the user cancelled {job['id']}. Stop working on it and go on with your other jobs.{note}")
             # Busy with that job right now: its turn stops, and so does what it still runs in the VM.

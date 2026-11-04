@@ -1,6 +1,7 @@
 """The Agents and Jobs pages: create, rename, archive, unarchive and delete agents, chat with one, point it at a VM, and
-create and cancel jobs. An agent that made PRs can't be deleted (409), only archived. The Workspace tab's Papers page
-adds a paper here too (/jobs/paper): a reproduce_paper job.
+create and cancel jobs. An agent that made PRs can't be deleted (409), only archived. A cancel goes on the job's
+timeline as "Stopped by you" (github_searcher/jobs.py). The Workspace tab's Papers page adds a paper here too
+(/jobs/paper): a reproduce_paper job.
 
 Every endpoint is `async def`: Agents lives on the backend's event loop (each
 agent is a Claude conversation driven by an asyncio task). The list of agents
@@ -236,6 +237,7 @@ async def cancel_job(job_id: str) -> dict:
         raise HTTPException(status_code=404, detail=f"No job {job_id}")
     if job["status"] in ("done", "cancelled"):
         raise HTTPException(status_code=409, detail=f"{job_id} is already {job['status']}.")
+    jobs.add_timeline(job_id, "status", "Stopped by you")
     job = jobs.update(job_id, status="cancelled")
     agents.notify(job["agent"], f"The user cancelled {job_id} ({job['title']}). Stop working on it and go on with your other jobs.")
     return job

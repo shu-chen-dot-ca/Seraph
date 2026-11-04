@@ -18,7 +18,7 @@ Each job is one JSON file, DATA_DIR/jobs/<id>.json:
      "status": "queued" | "working" | "waiting_on_user" | "done" | "cancelled",
      "instructions": "extra text from the user", "notes": "the agent's progress notes",
      "drafts": ["draft_..."], "evidence": [Evidence, ...], "created_by": "user" | "<agent id>",
-     "created_at", "updated_at"}
+     "timeline": [Entry, ...], "created_at", "updated_at"}
 
 "kind" is open-ended: a kind not in STEPS gets the "task" steps, so new kinds need no change.
 Jobs are never deleted: when an agent is deleted, its open jobs become "cancelled".
@@ -34,6 +34,17 @@ Progress, which the agent sets with job_progress so the user can follow along wi
     "detail"                       the same, technical (files, tests), for a closer look
 
 Waiting on the user, done and cancelled are not steps: the job's status says them.
+
+The timeline is the job's history, oldest first, since job_progress overwrites step and headline. add_timeline()
+appends one entry, each a plain sentence for the user:
+
+    Entry: {"at", "kind": "created" | "step" | "status" | "tests" | "notice", "text", "step": "test" (kind step only)}
+
+created: who has the job ("Assigned to agent-1"), from create(). step: the agent's job_progress, its headline as it
+wrote it. status: the agent's job_update (done or cancelled, with its note) and the user's cancel ("Stopped by you").
+tests: a test run that ended and counts (work_tools.py finish_tests). notice: news the app told the agent about, like
+the issue being assigned to someone else on GitHub (Agents.issue_taken). Drafts, PRs and evidence aren't in it: they
+have their own times.
 
 The project's tests, run by the agent with run_tests: first on the unchanged code (they must pass
 before the agent changes anything), then on the finished change (they must pass again, with the
@@ -133,6 +144,8 @@ class Jobs:
             job.setdefault("thread", None)
             # And from before papers.
             job.setdefault("paper", None)
+            # And from before the timeline.
+            job.setdefault("timeline", [])
             self.jobs[job["id"]] = job
 
     def save(self, job: dict) -> None:
@@ -165,7 +178,8 @@ class Jobs:
 
     def create(self, kind: str, title: str, agent: str, created_by: str, issue: str | None = None,
                repo: str | None = None, vm: str | None = None, instructions: str = "", thread: str | None = None,
-               paper: str | None = None) -> dict:
+               paper: str | None = None, agent_name: str = "") -> dict:
+        """A new job, queued. agent_name is the agent's name, for the first entry of its timeline."""
         # An issue id is "owner/name#n", so it already says the repo. So does a thread's.
         if issue and not repo:
             repo = issue.split("#")[0]
@@ -173,6 +187,12 @@ class Jobs:
             repo = thread.split("#")[0]
 
         now = datetime.now(UTC).isoformat()
+        # The user's (or the app's) job is assigned to its agent; an agent's own job_create makes one for itself.
+        if agent_name == "":
+            agent_name = "an agent"
+        created = f"Assigned to {agent_name}"
+        if created_by != "user":
+            created = f"Created by {agent_name}"
         with self.lock:
             job_id = "job_" + secrets.token_hex(3)
             while job_id in self.jobs:
@@ -203,6 +223,7 @@ class Jobs:
                 "headline": "",
                 "detail": "",
                 "tests": {"before": None, "after": None},
+                "timeline": [{"at": now, "kind": "created", "text": created}],
             }
             self.jobs[job_id] = job
             self.save(job)
@@ -267,6 +288,20 @@ class Jobs:
             job["updated_at"] = datetime.now(UTC).isoformat()
             self.save(job)
             return replaced
+
+    def add_timeline(self, job_id: str, kind: str, text: str, step: str | None = None) -> None:
+        """One more entry at the end of a job's timeline (see above). Under the lock, so two at once both stay."""
+        now = datetime.now(UTC).isoformat()
+        entry = {"at": now, "kind": kind, "text": text}
+        if step is not None:
+            entry["step"] = step
+        with self.lock:
+            if job_id not in self.jobs:
+                raise KeyError(f"No job {job_id}")
+            job = self.jobs[job_id]
+            job["timeline"].append(entry)
+            job["updated_at"] = now
+            self.save(job)
 
     def remove_evidence(self, job_id: str, evidence_ids: list[str]) -> list[str]:
         """Take evidence items off a job (their files stay, for older drafts). Returns the ids removed."""

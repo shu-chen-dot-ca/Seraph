@@ -383,7 +383,12 @@ export type Job = {
   detail: string; // the same, technical
   // The project's tests: on the unchanged code (must pass before any change) and on the finished change.
   tests: { before: TestRun | null; after: TestRun | null };
+  // What happened, oldest first (github_searcher/jobs.py): made, each step the agent reached (its headline), status
+  // changes, test runs, and what the app told the agent. [] on jobs from before it was kept.
+  timeline: JobEvent[];
 };
+
+export type JobEvent = { at: string; kind: "created" | "step" | "status" | "tests" | "notice"; text: string; step?: string };
 
 export type TestRun = {
   command: string;

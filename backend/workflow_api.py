@@ -509,7 +509,7 @@ def give_issue(repo: str, issue: dict, worker: str) -> None:
     if issue["requirements"]:
         lines = [f"Goal: {issue['goal']}", "Requirements:"] + [f"- {item}" for item in issue["requirements"]] + [f"How to check: {issue['validation']}"]
     vm_name = agent.record["target_vm"]
-    job = jobs.create("fix_issue", title, worker, "user", repo=repo, vm=vm_name, instructions="\n".join(lines))
+    job = jobs.create("fix_issue", title, worker, "user", repo=repo, vm=vm_name, instructions="\n".join(lines), agent_name=agent.name)
     text = f"New job {job['id']}: {title}\n{repo} is on the Workflow tab, and this is its next open issue: work on it as in The Workflow tab.\n"
     if issue["requirements"]:
         text += "\n".join(lines) + "\nDo exactly this and nothing more: anything else you find becomes a new issue (issue_create, found_in " + str(issue["number"]) + ")."
@@ -532,7 +532,7 @@ def give_review(repo: str, pr: dict, reviewer: str, decides: str) -> None:
     agents.unarchive(reviewer)
     vm_name = agents.agents[reviewer].record["target_vm"]
     title = f"Review #{pr['number']}: {pr['title']}"
-    job = jobs.create("review", title, reviewer, "user", repo=repo, vm=vm_name)
+    job = jobs.create("review", title, reviewer, "user", repo=repo, vm=vm_name, agent_name=agents.agents[reviewer].name)
     review = {"agent": reviewer, "job": job["id"], "advice": None, "summary": "", "important": [], "checked": "", "evidence": [], "at": datetime.now(UTC).isoformat()}
     workflow.set_pr(repo, pr["number"], {"review": review})
     author = "The user (by hand, on GitHub)"

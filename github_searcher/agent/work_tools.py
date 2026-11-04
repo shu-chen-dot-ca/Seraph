@@ -8,7 +8,8 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   tracked_issues shows what it found, so the agent can pick good ones for the Issues list.
 - Jobs: the smallest unit of work (github_searcher/jobs.py). The user makes them by assigning an
   issue; the agent can make its own and keeps their status and notes up to date, and their
-  progress (job_progress: the step it is on and a headline in everyday words) for the user to follow.
+  progress (job_progress: the step it is on and a headline in everyday words) for the user to follow. A new status
+  (with its note), each new headline and each test run that counts also go on the job's timeline (jobs.py).
   The app makes follow_up jobs (agents.py, follow_up): someone else wrote on a PR or issue of the user's that
   the agent follows, or the PR's checks failed. my_jobs shows that PR or issue as the job's thread; the agent
   answers with draft_comment (target: the thread), draft_pr with pr (a new version of the user's own PR), or by
@@ -1369,7 +1370,7 @@ class WorkTools:
             return {"content": [{"type": "text", "text": "A fix_issue job needs its issue (owner/name#number)."}], "is_error": True}
 
         vm_name = self.record["target_vm"]
-        job = self.agents.jobs.create(kind, title, self.agent_id, self.agent_id, issue=issue, vm=vm_name, instructions=args.get("instructions") or "")
+        job = self.agents.jobs.create(kind, title, self.agent_id, self.agent_id, issue=issue, vm=vm_name, instructions=args.get("instructions") or "", agent_name=self.record["name"])
         text = f"Made {job['id']}: {title}. It is for {vm_name}."
         if vm_name is None:
             text = f"Made {job['id']}: {title}. You have no target VM; if it needs one, pick it with vms_list and choose_vm."
@@ -1395,6 +1396,16 @@ class WorkTools:
         if "status" in fields and fields["status"] not in AGENT_STATUSES:
             return {"content": [{"type": "text", "text": f"status must be one of: {', '.join(AGENT_STATUSES)}."}], "is_error": True}
 
+        # A new status goes on the job's timeline, with the note that came with it (often why it stopped).
+        if "status" in fields and fields["status"] != job["status"]:
+            said = "Working on it"
+            if fields["status"] == "done":
+                said = "Done"
+            if fields["status"] == "cancelled":
+                said = f"Stopped by {self.record['name']}"
+            if (fields.get("notes") or "").strip():
+                said += ": " + fields["notes"].strip()
+            self.agents.jobs.add_timeline(job["id"], "status", said)
         job = self.agents.jobs.update(job["id"], **fields)
         text = f"{job['id']} is {job['status']}."
         # Holding the VM with nothing left to do there means it should go back now.
@@ -1458,7 +1469,11 @@ class WorkTools:
             fields["detail"] = args["detail"].strip()
         if args.get("about") is not None:
             fields["about"] = args["about"].strip()
+        # On the job's timeline as the agent wrote it, unless nothing changed since the last one.
+        moved = headline != job["headline"] or (step is not None and step != job["step"])
         job = self.agents.jobs.update(job["id"], **fields)
+        if moved:
+            self.agents.jobs.add_timeline(job["id"], "step", headline, step=job["step"])
         text = f"{job['id']}: {(job['step'] or 'no step yet').replace('_', ' ')}, \"{job['headline']}\"."
         if reused is not None:
             text += (
@@ -3182,6 +3197,19 @@ class WorkTools:
         if when == "before":
             tests["after"] = None
         self.agents.jobs.update(job["id"], tests=tests)
+        # On the job's timeline in plain words, with the counts when the output ends with them ("12 passed", "2 failed":
+        # pytest, jest, cargo and the like).
+        said = caption
+        counts = []
+        found_passed = re.findall(r"\b(\d+) passed\b", output)
+        found_failed = re.findall(r"\b(\d+) failed\b", output)
+        if found_passed:
+            counts.append(f"{found_passed[-1]} passed")
+        if found_failed:
+            counts.append(f"{found_failed[-1]} failed")
+        if counts:
+            said += f" ({', '.join(counts)})"
+        self.agents.jobs.add_timeline(job["id"], "tests", said)
 
         if when == "before" and passed:
             advice = "It passes on the unchanged code: now you may change the code."
