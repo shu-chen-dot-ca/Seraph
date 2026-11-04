@@ -25,7 +25,9 @@ Approve on a PR or comment also sends it to GitHub as them, first; "sent" then s
      "review": null | {"state": "waiting" | "passed" | "changes", "agent", "job", "notes", "at"} (pr only, see below),
      "replaces": "owner/name#n" | null (pr only: the project PR this one is made again of, see below),
      "previous": {"title", "body"} | null (edit only, see below),
-     "options": ["what the user can pick", ...] (question only: [] when they answer in their own words)}
+     "options": ["what the user can pick", ...] (question only: [] when they answer in their own words),
+     "recommended": "one of options" | null, "answer_by": ISO time | null, "must_wait": "money" | "sensitive" |
+     "github" | "delete" | "open" | null, "answered_by": "user" | "timer" | null (question only, see below)}
 
 "body" is what would be sent to GitHub; "overview" is only for the user, who doesn't know the
 project: plain words on what is wrong and what the draft does about it.
@@ -75,6 +77,17 @@ they are still "previous" (github_account.py).
 A question can come with "options": the answers the agent offers. The Inbox shows each as a button, and picking one is
 a reply with that answer (with the user's note, if any), so the agent always knows which one was meant.
 
+A question with options also has "recommended", the one the agent would pick. Unless it must wait, it is timed:
+"answer_by" is when the app answers it for the user (now plus the timer when it is asked), with the reply
+"I pick: <recommended>" (Agents.answer_questions), and the agent goes on with that. "must_wait" says why one waits for
+the user however long it takes: the agent marked it money, sensitive (politics and the like), github (how or what gets
+sent there) or delete (what can't come back), or "open" for a question without options, answered in the user's own
+words. The user's Settings (ASK_SETTINGS_FILE) set the timer and which of those four must wait: a question marked with
+one that is switched off is timed. Changing them doesn't move the deadline of a question already asked.
+"answered_by" says who answered it once it is decided: "user" (any decision of the user's) or "timer".
+
+    ask_settings.json: {"timer_minutes": TIMER_MINUTES (1 to 1440), "must_wait": MUST_WAIT or some of them}
+
 "taken" was the one kind the app made, not the agent: an issue an agent has a job for went from free to assigned.
 Now the agent is told and decides itself (Agents.issue_taken), so none are made anymore; the ones from before still
 decide: approved means keep working, rejected means stop the agent (its job is cancelled). It takes no reply.
@@ -102,6 +115,12 @@ load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 DATA_DIR = PROJECT_ROOT / os.environ["DATA_DIR"]
 DECISIONS = ["approved", "rejected", "replied"]
+# Asking the user (Settings, backend/ask_settings_api.py): how long a timed question waits before the app answers it
+# with the agent's recommendation, and the kinds of question that always wait for the user (all of them until the
+# user switches some off). Read from the file each time it is needed; these are the defaults.
+ASK_SETTINGS_FILE = DATA_DIR / "ask_settings.json"
+TIMER_MINUTES = 10
+MUST_WAIT = ["money", "sensitive", "github", "delete"]
 
 
 class Inbox:
@@ -132,6 +151,11 @@ class Inbox:
             # And from before edits and question options.
             draft.setdefault("previous", None)
             draft.setdefault("options", [])
+            # And from before timed questions.
+            draft.setdefault("recommended", None)
+            draft.setdefault("answer_by", None)
+            draft.setdefault("must_wait", None)
+            draft.setdefault("answered_by", None)
             self.drafts[draft["id"]] = draft
 
     def save(self, draft: dict) -> None:
@@ -170,7 +194,8 @@ class Inbox:
                base: str = "", base_sha: str = "", commits: list | None = None, vm: str | None = None, path: str | None = None, evidence: list | None = None,
                overview: dict | None = None, template: str | None = None, update_of: str | None = None, review: dict | None = None,
                replaces: str | None = None, rebase_of: str | None = None, previous: dict | None = None,
-               options: list | None = None) -> dict:
+               options: list | None = None, recommended: str | None = None, answer_by: str | None = None,
+               must_wait: str | None = None) -> dict:
         with self.lock:
             draft_id = "draft_" + secrets.token_hex(3)
             while draft_id in self.drafts:
@@ -206,13 +231,18 @@ class Inbox:
                 "replaces": replaces,
                 "previous": copy.deepcopy(previous),
                 "options": list(options or []),
+                "recommended": recommended,
+                "answer_by": answer_by,
+                "must_wait": must_wait,
+                "answered_by": None,
             }
             self.drafts[draft_id] = draft
             self.save(draft)
             return copy.deepcopy(draft)
 
-    def decide(self, draft_id: str, status: str, reply: str = "") -> dict:
-        """Approve, reject or reply to a pending draft. Returns the draft as it is now."""
+    def decide(self, draft_id: str, status: str, reply: str = "", answered_by: str = "user") -> dict:
+        """Approve, reject or reply to a pending draft. Returns the draft as it is now. answered_by ("user" or "timer")
+        is kept on a question."""
         if status not in DECISIONS:
             raise ValueError(f"Unknown decision {status!r}, use one of: {', '.join(DECISIONS)}")
 
@@ -225,6 +255,8 @@ class Inbox:
             draft["status"] = status
             draft["reply"] = reply
             draft["decided_at"] = datetime.now(UTC).isoformat()
+            if draft["kind"] == "question":
+                draft["answered_by"] = answered_by
             self.save(draft)
             return copy.deepcopy(draft)
 

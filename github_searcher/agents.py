@@ -65,6 +65,9 @@ agent's artifacts under papers/) into a reproduce_paper job: the agent reads it,
 numbers, checks the claims and drafts a report (draft_report). decide() passes the user's decision on a draft back to its agent (with the link,
 when Approve sent it to GitHub, or pushed a new version onto the user's PR). When the user edited the draft
 before deciding, the agent also gets the final text, so it learns how they want it written.
+A timed question (inbox.py: options, a recommended one and answer_by) that the user hasn't answered by its answer_by
+is answered with the agent's recommendation: answer_questions() looks every QUESTION_CHECK_SECONDS and decides it as a
+reply ("I pick: ..."), answered_by "timer", and the agent hears that the user didn't answer in time.
 
 The GitHub tab's side: follow_up() is called when someone else wrote on a PR or issue of the user's that an
 agent follows (agent mode Drafts), or the PR's checks failed (pr_tracking.needs_reply). The agent gets a
@@ -164,6 +167,8 @@ DEMO_DIR = os.environ["SANDBOX_VM_DEMO_DIR"]
 SAVE_SECONDS = 5
 # How often the runs nobody waits for are checked.
 RUN_CHECK_SECONDS = 10
+# How often timed questions are checked for an answer_by that passed.
+QUESTION_CHECK_SECONDS = 10
 OPEN_STATUSES = ["queued", "working"]
 # A repository's new VM is waited for this long (it takes about a minute), and looked at this often meanwhile.
 LIVE_WAIT_SECONDS = 15 * 60
@@ -225,6 +230,7 @@ class Agents:
         self.loop_thread = None
         self.saver = None
         self.run_watcher = None
+        self.question_timer = None
         queue.on_grant = self.on_grant
         queue.on_kick = self.on_kick
         # Every place in a queue shows in the agent list.
@@ -288,12 +294,15 @@ class Agents:
         self.queue.to_background()
         self.saver = asyncio.create_task(self.autosave())
         self.run_watcher = asyncio.create_task(self.watch_runs())
+        self.question_timer = asyncio.create_task(self.answer_questions())
 
     async def stop(self) -> None:
         if self.saver is not None:
             self.saver.cancel()
         if self.run_watcher is not None:
             self.run_watcher.cancel()
+        if self.question_timer is not None:
+            self.question_timer.cancel()
         for worker in self.workers.values():
             worker.cancel()
         for agent in self.agents.values():
@@ -1549,11 +1558,12 @@ class Agents:
         self.notify(agent.id, text)
         return job
 
-    def decide(self, draft_id: str, decision: str, reply: str = "") -> dict:
-        """The user's decision on a draft (approved, rejected or replied) goes to its agent, and its job is open again."""
+    def decide(self, draft_id: str, decision: str, reply: str = "", answered_by: str = "user") -> dict:
+        """The user's decision on a draft (approved, rejected or replied) goes to its agent, and its job is open again.
+        answered_by is "timer" when the app answers a timed question with the agent's recommendation (answer_questions)."""
         if decision == "replied" and self.inbox.get(draft_id)["kind"] == "taken":
             raise ValueError("Keep working or stop the agent; this one takes no reply")
-        draft = self.inbox.decide(draft_id, decision, reply)
+        draft = self.inbox.decide(draft_id, decision, reply, answered_by)
         job = None
         if draft["job"] is not None:
             job = self.jobs.get(draft["job"])
@@ -1659,6 +1669,14 @@ class Agents:
             if reply:
                 text += f" Their note: {reply}"
             text += f" Don't draft it again as it is: change course, or cancel {job_name} with job_update if it no longer makes sense. Ask with draft_question if unsure."
+        elif answered_by == "timer":
+            # A timed question nobody answered: its deadline was set when it was asked (inbox.py answer_by).
+            timer = datetime.fromisoformat(draft["answer_by"]) - datetime.fromisoformat(draft["created_at"])
+            minutes = round(timer.total_seconds() / 60)
+            text = (
+                f"The user didn't answer {about} within {minutes} minutes, so the app picked your recommendation: "
+                f"{draft['recommended']}. Go on with that on {job_name}, and say in its progress that you did."
+            )
         else:
             text = f"The user replied to {about}:\n{reply}\nDo what they say and keep working on {job_name}; draft again when it's ready."
             # The user wants work done: an archived agent comes back for it.
@@ -1719,6 +1737,24 @@ class Agents:
         except (ValueError, VMsError):
             # The user took it, or deleted the VM, in the meantime.
             pass
+
+    async def answer_questions(self) -> None:
+        """Every QUESTION_CHECK_SECONDS: a timed question (inbox.py) still pending after its answer_by is answered with
+        the agent's recommendation, as the reply "I pick: ..." with answered_by "timer". The deadline is in the draft,
+        so a backend restart doesn't move it."""
+        while True:
+            await asyncio.sleep(QUESTION_CHECK_SECONDS)
+            now = datetime.now(UTC)
+            for draft in self.inbox.list():
+                if draft["kind"] != "question" or draft["status"] != "pending" or draft["answer_by"] is None:
+                    continue
+                if datetime.fromisoformat(draft["answer_by"]) > now:
+                    continue
+                try:
+                    self.decide(draft["id"], "replied", f"I pick: {draft['recommended']}", answered_by="timer")
+                except (KeyError, ValueError):
+                    # The user decided it, or deleted it, in the meantime.
+                    continue
 
     async def watch_runs(self) -> None:
         """Every RUN_CHECK_SECONDS: the runs no tool call waits for. One that ended goes to its agent (run_ended)."""

@@ -47,6 +47,11 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   that the agent ran), so the user sees the gaps before approving, and maintainers don't find them one round at a time.
   Every PR draft goes to a reviewer agent first (Agents.give_review) and reaches the Inbox only once the review passes:
   a project's reviewer, or else the repo's own reviewer, which checks it on the author's desktop.
+- Questions: draft_question is only for what matters to the user; small choices the agent makes itself and says so in
+  its progress. A question with options names the one the agent recommends, and is timed: when the user doesn't answer
+  within the timer of their Settings, the app answers it with that recommendation (Agents.answer_questions). One about
+  money, a sensitive subject, what gets sent to GitHub or deleting what can't come back is marked must_wait and waits
+  for the user, unless they switched that kind off; so does one without options (inbox.py).
 - Projects: on one of the user's own repositories that agents develop all the time (github_searcher/projects.py), the
   rules are the repo's own files, so draft_pr and run_tests don't wait for contributing_guide or pr_examples; a PR's
   title must be a Conventional Commit. A fix_issue job with a thread there makes that PR again on the new main: its
@@ -126,6 +131,7 @@ import httpx
 from claude_agent_sdk import tool
 
 from github_searcher.artifacts import ArtifactsError
+from github_searcher.inbox import ASK_SETTINGS_FILE, MUST_WAIT, TIMER_MINUTES
 from github_searcher.jobs import EVIDENCE_DIR
 from github_searcher.projects import TITLE, TITLE_CHARS
 from github_searcher.search import get_contents, get_issue_status, get_merged_prs, get_pr_status, get_readme, get_repository, get_thread, get_tree
@@ -485,17 +491,30 @@ class WorkTools:
             )(self.draft_edit),
             tool(
                 "draft_question",
-                "Ask the user a question through their Inbox when you are blocked and need their decision or information. "
-                "job_id is the job it is about (leave it out if none). The job waits on the user until they answer. "
-                "Not for a secret to fill in (env_var_add, then say so in your message), nor to ask whether to go on. "
-                "options: when the answer is a choice, the 2 to 4 answers they can pick, each a few words (the question says what "
-                "each means); the Inbox shows each as a button, and you hear which one they picked. Put the one you recommend first.",
+                "Ask the user a question through their Inbox, only when the answer matters. Small choices are yours (how to "
+                "test, names, which of two reasonable ways): decide, say what you chose and why with job_progress, and go on; "
+                "never ask about them. Ask before a long passive run or a long hold on a machine others wait for (a timed "
+                "question: options and recommended), or about money, politics or another sensitive subject, how or what gets "
+                "sent to GitHub, or deleting what can't come back (must_wait). Not for a secret to fill in (env_var_add, then "
+                "say so in your message), nor to ask whether to go on. job_id is the job it is about (leave it out if none); "
+                "it waits on the user until the question is answered. question: for someone with no technical context: one "
+                "plain sentence on what you need, then what each choice means, with no file, test or function names. options: "
+                "the 2 to 4 answers they can pick, each a few words that say what happens; the Inbox shows each as a button, "
+                "and you hear which one was picked. Leave them out only when the user must answer in their own words: then it "
+                "always waits. recommended: the option you would pick, written exactly as in options (needed with options). "
+                "With options and no must_wait the question is timed: when the user doesn't answer within the timer they set "
+                f"({TIMER_MINUTES} minutes unless they changed it), the app answers it with recommended, and you go on with "
+                "that. must_wait: money (it costs the user money), sensitive (politics or another sensitive subject), github "
+                "(how or what gets sent to GitHub, beyond your usual drafts), delete (deleting something that can't come "
+                "back): the user answers it themselves however long it takes, unless they switched that kind off.",
                 {
                     "type": "object",
                     "properties": {
                         "job_id": {"type": "string"},
                         "question": {"type": "string"},
                         "options": {"type": "array", "items": {"type": "string"}},
+                        "recommended": {"type": "string", "description": "The option you would pick, exactly as written in options."},
+                        "must_wait": {"type": "string", "enum": MUST_WAIT},
                     },
                     "required": ["question"],
                 },
@@ -1657,6 +1676,17 @@ class WorkTools:
             if len(option) > QUESTION_OPTION_CHARS:
                 text = f"An option is {len(option)} characters; keep each under {QUESTION_OPTION_CHARS}: it is a button. The question says what each means."
                 return {"content": [{"type": "text", "text": text}], "is_error": True}
+        recommended = (args.get("recommended") or "").strip() or None
+        must_wait = (args.get("must_wait") or "").strip() or None
+        if options and recommended not in options:
+            text = (
+                "Give recommended: the option you would pick, written exactly as in options. Unless the question must wait, "
+                "the app picks it for the user when they don't answer in time."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if must_wait is not None and must_wait not in MUST_WAIT:
+            text = f"must_wait is one of: {', '.join(MUST_WAIT)}. Leave it out for anything else."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
         found = EMOJI.findall(" ".join([question] + options))
         if found:
             return {"content": [{"type": "text", "text": NO_EMOJI + " ".join(sorted(set(found)))}], "is_error": True}
@@ -1672,18 +1702,40 @@ class WorkTools:
                 text = f"{job['id']} is {job['status']} (the user may have cancelled it): no questions about it anymore. Move on."
                 return {"content": [{"type": "text", "text": text}], "is_error": True}
 
+        # Timed, unless it must wait (inbox.py): one without options always does ("open"), and so does one marked with a
+        # kind the user's Settings keep waiting. A kind they switched off is timed like any other.
+        settings = {"timer_minutes": TIMER_MINUTES, "must_wait": list(MUST_WAIT)}
+        if ASK_SETTINGS_FILE.is_file():
+            settings.update(json.loads(ASK_SETTINGS_FILE.read_text()))
+        answer_by = None
+        if not options:
+            recommended = None
+            must_wait = "open"
+        elif must_wait not in settings["must_wait"]:
+            must_wait = None
+            answer_by = (datetime.now(UTC) + timedelta(minutes=settings["timer_minutes"])).isoformat()
+        answer = "You'll get a message with their answer."
+        if answer_by is not None:
+            answer = (
+                f"If they don't answer within {settings['timer_minutes']} minutes, the app picks your recommendation "
+                f"({recommended}), and you get a message saying so."
+            )
+
         # The subject line is the question's first line.
         title = question.split("\n")[0][:120]
         if job is None:
-            self.agents.inbox.create("question", self.agent_id, title, question, options=options)
-            text = "Your question is in the user's Inbox. You'll get a message with their answer."
+            self.agents.inbox.create("question", self.agent_id, title, question, options=options, recommended=recommended, answer_by=answer_by, must_wait=must_wait)
+            text = "Your question is in the user's Inbox. " + answer
             return {"content": [{"type": "text", "text": text}]}
 
         # A follow-up's question is about its PR or issue.
         target = job["thread"] or job["issue"]
-        draft = self.agents.inbox.create("question", self.agent_id, title, question, job=job["id"], repo=job["repo"], target=target, evidence=job["evidence"], options=options)
+        draft = self.agents.inbox.create(
+            "question", self.agent_id, title, question, job=job["id"], repo=job["repo"], target=target, evidence=job["evidence"], options=options,
+            recommended=recommended, answer_by=answer_by, must_wait=must_wait
+        )
         self.agents.jobs.update(job["id"], status="waiting_on_user", drafts=job["drafts"] + [draft["id"]])
-        text = f"Your question is in the user's Inbox. {job['id']} waits on the user now; move on to your next job. You'll get a message with their answer."
+        text = f"Your question is in the user's Inbox. {job['id']} waits on the user now; move on to your next job. " + answer
         return {"content": [{"type": "text", "text": text}]}
 
     async def paper_read(self, args: dict) -> dict:

@@ -465,6 +465,12 @@ export type Draft = {
   replaces: string | null; // a project's PR made again on the new main: the PR "owner/name#n" it replaces
   previous: { title: string; body: string } | null; // edit: the title and description as they were when drafted
   options: string[]; // question: the answers to pick from, one button each ([]: answer in your own words)
+  // A question either has a timer or waits for you. Timed: answer_by is when the app answers with recommended (one of
+  // options) if you haven't. Waits: must_wait says why (money, sensitive, github, delete; open: no options to pick).
+  recommended: string | null;
+  answer_by: string | null;
+  must_wait: "money" | "sensitive" | "github" | "delete" | "open" | null;
+  answered_by: "user" | "timer" | null; // who answered it, once it is answered
 };
 
 // A project's PR draft is reviewed by the project's reviewer before it reaches the Inbox (github_searcher/inbox.py).
