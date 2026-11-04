@@ -1,0 +1,187 @@
+{
+  "structure": {
+    "choice": "C",
+    "note": "",
+    "at": "2026-11-04T00:43:06.963Z"
+  },
+  "uc-decide": {
+    "choice": "Change",
+    "note": "Change apporve question etc to seperate places, so approve is all apporve, blocking question is addressed first ",
+    "at": "2026-11-04T00:44:05.015Z"
+  },
+  "uc-find": {
+    "choice": "Change",
+    "note": "project is repo, open srouce or private, issues, assign",
+    "at": "2026-11-04T00:49:45.587Z"
+  },
+  "uc-fix": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T00:49:45.671Z"
+  },
+  "uc-build": {
+    "choice": "Change",
+    "note": "a page for incharge that in 1 place just like from open to merged for issue",
+    "at": "2026-11-04T00:50:37.917Z"
+  },
+  "uc-team": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T00:50:37.995Z"
+  },
+  "uc-ask": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T00:50:50.244Z"
+  },
+  "uc-machines": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T00:50:56.029Z"
+  },
+  "uc-github": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T00:50:57.453Z"
+  },
+  "uc-missing": {
+    "choice": "",
+    "note": "",
+    "at": "2026-11-04T00:51:02.553Z"
+  },
+  "rule-1": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T00:51:13.283Z"
+  },
+  "rule-2": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T00:51:16.970Z"
+  },
+  "rule-3": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T00:51:22.049Z"
+  },
+  "rule-4": {
+    "choice": "Keep",
+    "note": "I dont need technicle detail, so things that need me to read should be direct about what agent need, generic. because i can not know the context",
+    "at": "2026-11-04T00:52:18.098Z"
+  },
+  "rule-5": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T00:51:44.574Z"
+  },
+  "rule-6": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T00:51:40.541Z"
+  },
+  "rows": {
+    "choice": "",
+    "note": "",
+    "at": "2026-11-04T00:56:33.389Z"
+  },
+  "r2-structure": {
+    "choice": "Change",
+    "note": "No papers, rm this feat",
+    "at": "2026-11-04T01:18:31.848Z"
+  },
+  "r2-split": {
+    "choice": "Keep",
+    "note": "questions shall either have a time or not.\nif someone has taken the pr or issue, do not ask question, go check and determine by agent if keep going is ok, like verify the validity of the person coming up with it, like if its proj's maintainer taking it then close it for sure, but if a scamy bot then no. then stop ono agent's own. \nfor questino set a timer if i didnt respond before that then continue for things like running a long test. but for important things must wait for me. anything about money, politics, sensitive stuff, etc, anything lite do not bother.",
+    "at": "2026-11-04T01:20:55.760Z"
+  },
+  "r2-in-charge": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T01:21:09.641Z"
+  },
+  "r2-plain": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T01:21:14.260Z"
+  },
+  "r2-find": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T01:21:43.438Z"
+  },
+  "r2-questions-place": {
+    "choice": "Inbox tabs",
+    "note": "",
+    "at": "2026-11-04T01:22:25.784Z"
+  },
+  "r2-project-view": {
+    "choice": "Board",
+    "note": "",
+    "at": "2026-11-04T01:22:50.950Z"
+  },
+  "r2-rows": {
+    "choice": "Mail rows",
+    "note": "",
+    "at": "2026-11-04T01:23:05.869Z"
+  },
+  "r3-answer": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T01:40:11.372Z"
+  },
+  "r3-approve": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T01:40:22.066Z"
+  },
+  "r3-bulk": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T01:41:09.995Z"
+  },
+  "r3-reject": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T01:40:55.408Z"
+  },
+  "r3-assign": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T01:40:56.508Z"
+  },
+  "r3-new": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T01:41:11.226Z"
+  },
+  "r3-add": {
+    "choice": "Change",
+    "note": "for find we need a better way than randomly suggest. rn i have few that im confortable doing, mainly those that respond fast, welcome new comer, predictable responds with fast merge rate, not ghosting you. ",
+    "at": "2026-11-04T01:42:41.867Z"
+  },
+  "r3-follow": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T01:42:46.612Z"
+  },
+  "r3-decided": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T01:42:48.307Z"
+  },
+  "r3-desktop": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T01:42:48.707Z"
+  },
+  "r3-settings": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T01:42:49.635Z"
+  },
+  "r3-notifications": {
+    "choice": "Keep",
+    "note": "",
+    "at": "2026-11-04T01:42:50.330Z"
+  }
+}

@@ -1,0 +1,426 @@
+/* Tailwind v4 + shadcn, with OpenClaw's colors and feel (its Control UI's "claw" theme): a blue-black dark mode,
+   a warm paper light mode, soft borders, rounded corners and quick eased motion. Still dense: 13px text, 28-32px rows.
+   Dark is the default: <html class="dark"> (set in index.html, changed in the sidebar's Settings).
+   Text is 13px Instrument Sans (OpenClaw's font); code, diffs and terminal text use JetBrains Mono.
+   One accent (--primary), blue unless another is picked in Settings (the data-accent rules below; Coral is OpenClaw's own).
+   Status colors: --ok green, --fine a second green (good, but a step below ok), --warn amber, --idle gray,
+   --destructive red.
+
+   Motion (the base layer below): anything clickable eases its colors out over 150ms, but turns on at once on hover,
+   so a click shows right away; a page fades up 4px as it opens (not when the OS asks for reduced motion);
+   pop-ups and menus fade and grow in.
+
+   Where color goes:
+   - The accent marks what you can act on and where you are: the main button, links, the selected row, the focus ring,
+     an active filter or sort, the step a job is on. Never data or decoration (tags, meters, folder icons, quote bars).
+   - Status colors carry meaning only: good (ok; fine for second best), needs a look (warn), bad (destructive). Everything normal stays gray.
+     Tags use them as soft fills (Badge variants ok / fine / warn / bad; secondary for the rest), not bright outlines.
+   - Meters (rate limits, context used) are gray while fine, and turn amber or red only near the limit.
+   - Text reads at 4.5:1 or more on its background, also on the soft tag fills and on a selected row: that is why light
+     mode's --muted-foreground, --ok, --warn and --destructive are darker than shadcn's. Status dots reach 3:1. */
+
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/instrument-sans";
+@import "@fontsource-variable/jetbrains-mono";
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Light: OpenClaw's warm paper. Dark (.dark below): its blue-black. The values are OpenClaw's own tokens
+   (--bg, --card, --bg-elevated, --bg-hover, --border, --muted, ...), mapped onto shadcn's names.
+   The sidebar's text is a step quieter than the page's, like OpenClaw's nav; the open page's row is full strength. */
+:root {
+  color-scheme: light;
+  --radius: 0.5rem;
+  --background: #faf9f7;
+  --foreground: #211e1a;
+  --card: #ffffff;
+  --card-foreground: #211e1a;
+  --popover: #ffffff;
+  --popover-foreground: #211e1a;
+  --primary: oklch(0.546 0.245 262.881);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: #f4f1ec;
+  --secondary-foreground: #403c35;
+  --muted: #f4f1ec;
+  --muted-foreground: #6e6960;
+  --accent: #efebe4;
+  --accent-foreground: #211e1a;
+  --destructive: #b91c1c;
+  --border: #e8e4dc;
+  --input: #d6d0c5;
+  --ring: oklch(0.546 0.245 262.881);
+  --sidebar: #f4f1ec;
+  --sidebar-foreground: #56524a;
+  --sidebar-accent: #e9e4dc;
+  --sidebar-border: #e8e4dc;
+  --ok: #166534;
+  --fine: #3f6212;
+  --warn: #92400e;
+  --idle: #8a857c;
+  --selected: oklch(0.546 0.245 262.881 / 12%);
+  /* Menus, pop-ups and toasts float on this (OpenClaw's --overlay-shadow). */
+  --overlay-shadow: 0 1px 2px #3c2a1809, 0 8px 24px #3c2a1817;
+}
+
+.dark {
+  color-scheme: dark;
+  --background: #0e1015;
+  --foreground: #e6e6ea;
+  --card: #161920;
+  --card-foreground: #f0f0f2;
+  --popover: #191c24;
+  --popover-foreground: #f0f0f2;
+  --primary: oklch(0.623 0.214 259.815);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: #1f2330;
+  --secondary-foreground: #f0f0f2;
+  --muted: #191c24;
+  --muted-foreground: #8b8b94;
+  --accent: #1f2330;
+  --accent-foreground: #f0f0f2;
+  --destructive: #f87171;
+  --border: #20232c;
+  --input: #2e3040;
+  --ring: oklch(0.623 0.214 259.815);
+  --sidebar: #111319;
+  --sidebar-foreground: #a4a4ac;
+  --sidebar-accent: #1c1f29;
+  --sidebar-border: #20232c;
+  --ok: #22c55e;
+  --fine: #a3e635;
+  --warn: #f59e0b;
+  --idle: #6e6e78;
+  --selected: oklch(0.623 0.214 259.815 / 13%);
+  --overlay-shadow: 0 1px 2px #0000002e, 0 8px 24px #00000052;
+}
+
+/* Accent colors, picked in Settings: <html data-accent="violet"> (set in index.html, changed by SettingsDialog).
+   Only the primary color changes; status colors stay. Each accent has the same weight as the default blue:
+   light mode around L 0.55 so white text on a button reads (4.5:1+), dark mode a step lighter and a bit less
+   saturated so it doesn't glow on the dark background. Orange, green and teal are light in dark mode, so their
+   button text turns dark there.
+   A swatch can carry data-accent too (the ".dark [data-accent]" rules), so it shows that accent in the current mode. */
+[data-accent="blue"] {
+  --primary: oklch(0.546 0.245 262.881);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.546 0.245 262.881);
+  --selected: oklch(0.546 0.245 262.881 / 12%);
+}
+
+.dark[data-accent="blue"],
+.dark [data-accent="blue"] {
+  --primary: oklch(0.623 0.214 259.815);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.623 0.214 259.815);
+  --selected: oklch(0.623 0.214 259.815 / 13%);
+}
+
+[data-accent="indigo"] {
+  --primary: oklch(0.52 0.2 277);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.52 0.2 277);
+  --selected: oklch(0.52 0.2 277 / 12%);
+}
+
+.dark[data-accent="indigo"],
+.dark [data-accent="indigo"] {
+  --primary: oklch(0.62 0.17 277);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.62 0.17 277);
+  --selected: oklch(0.62 0.17 277 / 13%);
+}
+
+[data-accent="violet"] {
+  --primary: oklch(0.54 0.2 295);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.54 0.2 295);
+  --selected: oklch(0.54 0.2 295 / 12%);
+}
+
+.dark[data-accent="violet"],
+.dark [data-accent="violet"] {
+  --primary: oklch(0.64 0.18 295);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.64 0.18 295);
+  --selected: oklch(0.64 0.18 295 / 13%);
+}
+
+[data-accent="pink"] {
+  --primary: oklch(0.56 0.19 354);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.56 0.19 354);
+  --selected: oklch(0.56 0.19 354 / 12%);
+}
+
+.dark[data-accent="pink"],
+.dark [data-accent="pink"] {
+  --primary: oklch(0.66 0.18 354);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.66 0.18 354);
+  --selected: oklch(0.66 0.18 354 / 13%);
+}
+
+[data-accent="orange"] {
+  --primary: oklch(0.58 0.16 45);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.58 0.16 45);
+  --selected: oklch(0.58 0.16 45 / 12%);
+}
+
+.dark[data-accent="orange"],
+.dark [data-accent="orange"] {
+  --primary: oklch(0.72 0.16 52);
+  --primary-foreground: oklch(0.141 0.005 285.823);
+  --ring: oklch(0.72 0.16 52);
+  --selected: oklch(0.72 0.16 52 / 12%);
+}
+
+[data-accent="green"] {
+  --primary: oklch(0.54 0.13 152);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.54 0.13 152);
+  --selected: oklch(0.54 0.13 152 / 12%);
+}
+
+.dark[data-accent="green"],
+.dark [data-accent="green"] {
+  --primary: oklch(0.7 0.15 152);
+  --primary-foreground: oklch(0.141 0.005 285.823);
+  --ring: oklch(0.7 0.15 152);
+  --selected: oklch(0.7 0.15 152 / 12%);
+}
+
+[data-accent="teal"] {
+  --primary: oklch(0.54 0.09 186);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.54 0.09 186);
+  --selected: oklch(0.54 0.09 186 / 12%);
+}
+
+.dark[data-accent="teal"],
+.dark [data-accent="teal"] {
+  --primary: oklch(0.72 0.11 186);
+  --primary-foreground: oklch(0.141 0.005 285.823);
+  --ring: oklch(0.72 0.11 186);
+  --selected: oklch(0.72 0.11 186 / 12%);
+}
+
+/* Coral: OpenClaw's own accent (its light #bd4531, and between its dark #ff5c5c and #d13c3c buttons). */
+[data-accent="coral"] {
+  --primary: oklch(0.556 0.163 35);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.556 0.163 35);
+  --selected: oklch(0.556 0.163 35 / 12%);
+}
+
+.dark[data-accent="coral"],
+.dark [data-accent="coral"] {
+  --primary: oklch(0.65 0.19 25);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.65 0.19 25);
+  --selected: oklch(0.65 0.19 25 / 12%);
+}
+
+/* Graphite: no color at all, like shadcn's neutral. Buttons are near-black in light mode, near-white in dark. */
+[data-accent="graphite"] {
+  --primary: oklch(0.21 0.006 285.885);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.705 0.015 286.067);
+  --selected: oklch(0.21 0.006 285.885 / 8%);
+}
+
+.dark[data-accent="graphite"],
+.dark [data-accent="graphite"] {
+  --primary: oklch(0.92 0.004 286.32);
+  --primary-foreground: oklch(0.21 0.006 285.885);
+  --ring: oklch(0.552 0.016 285.938);
+  --selected: oklch(1 0 0 / 10%);
+}
+
+@theme inline {
+  --font-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 6px);
+  /* OpenClaw's --ease-out: fast at first, then settles. Every transition and ease-out uses it. */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --default-transition-duration: 150ms;
+  --default-transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  --shadow-overlay: var(--overlay-shadow);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-ok: var(--ok);
+  --color-fine: var(--fine);
+  --color-warn: var(--warn);
+  --color-idle: var(--idle);
+  --color-selected: var(--selected);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background font-sans text-foreground antialiased;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  code,
+  kbd,
+  pre,
+  samp {
+    @apply font-mono;
+  }
+
+  /* Thin scrollbars, so dense panels don't lose 15px to each one: a soft thumb on no track, like OpenClaw's. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--muted-foreground) 35%, transparent) transparent;
+  }
+
+  /* Selected text takes a light wash of the accent, like the selected row. */
+  ::selection {
+    background-color: color-mix(in oklab, var(--primary) 30%, transparent);
+  }
+
+  /* Smooth hover. Anything clickable (links, buttons, menu items, tabs, rows with cursor-pointer) eases its colors
+     back out over 150ms when the pointer leaves, so moving down a list leaves a short fading trail. Hovering in is
+     instant, so a click, and the page or row it picks, shows at once. A transition-* class still wins. */
+  :where(a, button, summary, [role="button"], [role="tab"], [role="menuitem"], [role="option"], .cursor-pointer) {
+    transition-property: color, background-color, border-color, box-shadow, opacity;
+    transition-duration: 150ms;
+    transition-timing-function: var(--ease-out);
+  }
+
+  :where(a, button, summary, [role="button"], [role="tab"], [role="menuitem"], [role="option"], .cursor-pointer):hover {
+    transition-duration: 0ms;
+  }
+}
+
+/* A page fades up into place as it opens, like OpenClaw's cards rising in (shorter, so it never feels slow).
+   Each page is a direct child of App's <main>; a kept VM page plays it again when it is shown. */
+@media (prefers-reduced-motion: no-preference) {
+  main > * {
+    animation: page-in 180ms var(--ease-out);
+  }
+}
+
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+
+/* Rendered markdown (README, issue bodies, drafts, agent replies) at the same 13px as the rest of the UI.
+   Used as: <div className="prose prose-sm dark:prose-invert markdown"> (see components/ui/markdown.tsx). */
+.markdown {
+  font-size: 13px;
+  line-height: 1.55;
+  max-width: none;
+}
+
+.markdown :where(pre) {
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.markdown :where(code):not(:where(pre code)) {
+  font-size: 12px;
+  padding: 0.1em 0.3em;
+  border-radius: 4px;
+  background: var(--muted);
+}
+
+.markdown :where(code):not(:where(pre code))::before,
+.markdown :where(code):not(:where(pre code))::after {
+  content: none;
+}
+
+.markdown :where(img) {
+  display: inline-block;
+  margin: 0;
+}
+
+.markdown :where(a) {
+  color: var(--primary);
+}
+
+/* prose-sm's headings are sized for articles; keep them closer to the dense UI. */
+.markdown :where(h1) {
+  font-size: 1.6em;
+}
+
+.markdown :where(h2) {
+  font-size: 1.3em;
+}
+
+/* Touch screens (a phone) have no hover, so what shows on hover shows always there: the sidebar's + and ⋯ (in place
+   of the count or status they fade out over), a row's select box, Notifications' Done, a note's Remove. Outside any
+   layer, so these win over the utilities. */
+@media (hover: none) {
+  .group-hover\:opacity-100 {
+    opacity: 1;
+  }
+
+  .group-hover\:opacity-0 {
+    opacity: 0;
+  }
+
+  .group-hover\:visible {
+    visibility: visible;
+  }
+
+  .group-hover\:inline-flex {
+    display: inline-flex;
+  }
+
+  .group-hover\:hidden {
+    display: none;
+  }
+}
+
+/* Phone mode (App.tsx): fields at 16px, as an iPhone zooms the whole page in when you tap a smaller one. */
+@media (max-width: 767px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
