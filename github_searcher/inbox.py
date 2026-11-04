@@ -7,7 +7,7 @@ Approving tells the agent. With the user's GitHub account connected (the GitHub 
 Approve on a PR or comment also sends it to GitHub as them, first; "sent" then says what went out
 (mark_sent). Each draft is one JSON file, DATA_DIR/inbox/<id>.json:
 
-    {"id": "draft_a1b2c3", "kind": "pr" | "comment" | "question" | "report" | "edit" | "taken" (old) | ..., "agent": "<agent id>",
+    {"id": "draft_a1b2c3", "kind": "pr" | "comment" | "question" | "edit" | "taken" (old) | ..., "agent": "<agent id>",
      "job": "job_..." | null, "repo": "owner/name" | null, "target": "owner/name#n" | null,
      "title", "body": "markdown",
      "diff": "unified diff (pr only)", "branch": "branch in the VM (pr only)", "base": "origin/main (pr only)",
@@ -54,11 +54,7 @@ so it learns how the user wants it written.
 "template" is the repo's PR template when a PR's body keeps all its headings (None: the repo has none, or the body
 is written another way, as the project's merged PRs or the user's instructions have it).
 
-"report" is an agent's report on a paper it reproduced (a reproduce_paper job, work_tools.py draft_report): "body" is the
-full technical report, "diff" the agent's code (every file new), "path" its folder in the VM, and "overview" holds the
-rest for the user: {"paper", "claims", "verdict", "results": [{"what", "paper", "ours", "authors", "note"}, ...],
-"problems": [{"title", "what", "why", "evidence": "ev_..."}, ...], "unchecked": ["what couldn't be checked, and why"]}.
-Approving it ends the job; nothing is sent anywhere.
+"kind" is open-ended: drafts of kinds that are gone (a paper's "report") still load and show as they were.
 
 Every PR draft is reviewed by a reviewer agent before you see it: a project's (github_searcher/projects.py: one of your
 repositories agents develop all the time) by the project's reviewer, any other by that repo's own reviewer. "review" is

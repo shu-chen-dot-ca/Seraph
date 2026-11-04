@@ -357,12 +357,11 @@ export type JobStatus = "queued" | "working" | "waiting_on_user" | "waiting_on_m
 
 export type Job = {
   id: string;
-  kind: string; // "fix_issue" | "task" | "reproduce_paper" | future kinds
+  kind: string; // "fix_issue" | "task" | "follow_up" | "review" | "set_up_repo" | future kinds
   title: string;
   agent: string;
   issue: string | null;
   thread: string | null; // follow_up: the PR or issue on GitHub it answers ("owner/name#n")
-  paper: string | null; // reproduce_paper: the PDF in the agent's artifacts ("papers/name.pdf")
   repo: string | null;
   vm: string | null;
   status: JobStatus;
@@ -403,8 +402,7 @@ export type TestRun = {
 };
 
 // What a draft is about, in plain words for the user (github_searcher/inbox.py). PRs have problem, cause, fix, risks,
-// checklist and also_tested; comments have problem and why. A report on a paper (draft_report) has paper, claims,
-// verdict, results, problems and unchecked.
+// checklist and also_tested; comments have problem and why.
 export type DraftOverview = {
   project?: string;
   problem?: string;
@@ -414,29 +412,17 @@ export type DraftOverview = {
   checklist?: ChecklistPoint[]; // every point that was asked, done or not (PRs from before it have none)
   also_tested?: string[]; // the cases of the same kind the agent ran beyond the asked example
   why?: string;
-  paper?: string;
-  claims?: string;
-  verdict?: string;
-  results?: ReportResult[];
-  problems?: ReportProblem[];
-  unchecked?: string[];
 };
 
 // One point a PR draft was asked for (the issue's requirement, or a reviewer's point): whether it does it, and what shows
 // it or why not.
 export type ChecklistPoint = { item: string; done: boolean; how: string };
 
-// One number of a paper next to the agent's (and what the authors' own code gives, "" when not run).
-export type ReportResult = { what: string; paper: string; ours: string; authors: string; note: string };
-
-// A problem the agent found in a paper; evidence is the command run on the job that shows it.
-export type ReportProblem = { title: string; what: string; why: string; evidence: string };
-
 export type DraftStatus = "pending" | "approved" | "rejected" | "replied";
 
 export type Draft = {
   id: string;
-  kind: "pr" | "comment" | "question" | "taken" | "report" | "edit"; // taken: old, made by the app when an issue an agent worked on was taken (agents decide that themselves now); report: on a paper; edit: a new title and description for your own PR or issue
+  kind: "pr" | "comment" | "question" | "taken" | "edit"; // taken: old, made by the app when an issue an agent worked on was taken (agents decide that themselves now); edit: a new title and description for your own PR or issue
   agent: string;
   job: string | null;
   repo: string | null;

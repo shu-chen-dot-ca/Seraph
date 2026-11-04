@@ -336,11 +336,6 @@ export default function Jobs(props: { selected: string | null }) {
                       </a>
                     </span>
                   )}
-                  {job.paper !== null && (
-                    <a href={`/api/agents/${job.agent}/artifacts/file?path=${encodeURIComponent(job.paper)}&download=1`} className="text-primary hover:underline">
-                      {job.paper.split("/").pop()}
-                    </a>
-                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <DialogTitle className="min-w-0 flex-1 leading-normal">{job.title}</DialogTitle>
