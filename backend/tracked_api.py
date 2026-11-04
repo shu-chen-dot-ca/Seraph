@@ -13,7 +13,8 @@ An issue the user likes goes into the Issues list from here (add_issue), and its
 missing, both from what the last check found, so it takes no GitHub call.
 
 Add to Issues (the button on the Tracked page, add_free) does that for every free issue at once, each time it is
-pressed: opened in the last 14 days, no assignee, tagged free, not out of scope, in a repo whose AI policy isn't no AI.
+pressed: opened in the last 14 days, no assignee, tagged free, merge not out of scope, waiting, can't validate or fixed,
+in a repo whose AI policy isn't no AI.
 Each issue only once (tracked_issues.py keeps which), so one the user removes from the Issues list stays out; a later
 press adds the ones found since.
 """
@@ -200,7 +201,7 @@ def add_free() -> dict:
                 continue
             if issue["created_at"] < two_weeks_ago:
                 continue
-            if issue_tags_now["status"] != "free" or issue_tags_now.get("merge") == "out of scope":
+            if issue_tags_now["status"] != "free" or issue_tags_now.get("merge") in ("out of scope", "waiting", "can't validate", "fixed"):
                 continue
             new_issues.append(
                 {

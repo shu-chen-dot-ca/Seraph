@@ -6,7 +6,7 @@ afresh, nothing kept from before, and the page says which free ones aren't free 
 came, ...; minutes for many),
 Add to Issues and Mark all as read (every issue new now isn't anymore; only ones found later are new). Add to Issues
 puts every free issue of the tracked repos into the Issues list (its repo into Repos too), each time it is pressed:
-opened in the last 14 days, no assignee, tagged Free, not Out of scope, in a repo whose AI policy isn't No AI. Each issue only once: one removed
+opened in the last 14 days, no assignee, tagged Free, Merge not Out of scope, Waiting, Can't validate or Fixed, in a repo whose AI policy isn't No AI. Each issue only once: one removed
 from the Issues list stays out, and a later press adds the ones found since (backend/tracked_api.py).
 
 The backend checks each repo's open issues every few minutes (github_searcher/tracked_issues.py): the newest
@@ -680,7 +680,7 @@ export default function Tracked() {
               variant="ghost"
               size="xs"
               disabled={addingFree}
-              title="Put every free issue of these repos into the Issues list: opened in the last 14 days, no assignee, tagged Free, not Out of scope, not from a repo that says no AI. Each one once: one you removed from Issues stays out"
+              title="Put every free issue of these repos into the Issues list: opened in the last 14 days, no assignee, tagged Free, Merge not Out of scope, Waiting, Can't validate or Fixed, not from a repo that says no AI. Each one once: one you removed from Issues stays out"
               onClick={() => addFree()}
             >
               {addingFree ? <Loader2 className="animate-spin" /> : <Plus />} Add to Issues
