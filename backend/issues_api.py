@@ -224,7 +224,7 @@ async def keep_facts() -> None:
             if time.monotonic() - last_active > ACTIVE_REFRESH_SECONDS:
                 last_active = time.monotonic()
                 for job in jobs.list():
-                    if job["status"] not in ("queued", "working", "waiting_on_user"):
+                    if job["status"] not in ("queued", "working", "waiting_on_user", "waiting_on_maintainers"):
                         continue
                     if job["issue"] in ids and job["issue"] not in todo:
                         todo.append(job["issue"])
@@ -271,7 +271,7 @@ async def keep_tags() -> None:
         # One an agent is on (a job queued, working or waiting on the user) after ACTIVE_TAGS_SECONDS.
         free_before = datetime.now(UTC) - timedelta(seconds=TAGS_FREE_SECONDS)
         active_before = datetime.now(UTC) - timedelta(seconds=ACTIVE_TAGS_SECONDS)
-        active = [job["issue"] for job in jobs.list() if job["status"] in ("queued", "working", "waiting_on_user")]
+        active = [job["issue"] for job in jobs.list() if job["status"] in ("queued", "working", "waiting_on_user", "waiting_on_maintainers")]
         todo = []
         for issue_id, updated_at in candidates:
             tags = known.get(issue_id)

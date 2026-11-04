@@ -15,12 +15,14 @@ Each job is one JSON file, DATA_DIR/jobs/<id>.json:
     {"id": "job_a1b2c3", "kind": "fix_issue" | "set_up_repo" | "task" | "follow_up" | "reproduce_paper" | ..., "title",
      "agent": "<agent id>", "issue": "owner/name#n" | null, "thread": "owner/name#n" (follow_up) | null,
      "paper": "papers/name.pdf" (reproduce_paper) | null, "repo": "owner/name" | null, "vm": "vm1" | null,
-     "status": "queued" | "working" | "waiting_on_user" | "done" | "cancelled",
+     "status": "queued" | "working" | "waiting_on_user" | "waiting_on_maintainers" | "done" | "cancelled",
      "instructions": "extra text from the user", "notes": "the agent's progress notes",
      "drafts": ["draft_..."], "evidence": [Evidence, ...], "created_by": "user" | "<agent id>",
      "timeline": [Entry, ...], "created_at", "updated_at"}
 
 "kind" is open-ended: a kind not in STEPS gets the "task" steps, so new kinds need no change.
+waiting_on_maintainers: not set anymore. It was a fix_issue job held up after its claim comment until GitHub showed the
+user assigned; now a claim holds nothing up (agents.py), as nobody's answer is waited for.
 Jobs are never deleted: when an agent is deleted, its open jobs become "cancelled".
 
 Progress, which the agent sets with job_progress so the user can follow along without knowing the code:
@@ -95,7 +97,7 @@ load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 DATA_DIR = PROJECT_ROOT / os.environ["DATA_DIR"]
 EVIDENCE_DIR = DATA_DIR / "evidence"
-STATUSES = ["queued", "working", "waiting_on_user", "done", "cancelled"]
+STATUSES = ["queued", "working", "waiting_on_user", "waiting_on_maintainers", "done", "cancelled"]
 # The fields update() may change. The others are set once, by create().
 UPDATABLE = ["status", "notes", "vm", "drafts", "title", "instructions", "step", "about", "headline", "detail", "tests"]
 # The steps each kind of job goes through, in order. Kinds not listed use "task".

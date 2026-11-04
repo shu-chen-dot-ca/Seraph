@@ -41,6 +41,7 @@ send(draft_id) sends a PR, comment or edit draft once, as it was shown in the In
 5. The PR, from that branch into the branch the agent started from (base "origin/main" is main; else
    the project's default branch), with the draft's title and body. If GitHub refuses it, the new
    branch is deleted again, so trying again starts clean.
+A PR waits for the claim of its job (a comment the project's rules ask for before a PR) to be decided first.
 A comment is posted on its issue or PR (its pictures go to your fork the same way).
 An edit (a new title and description for your own PR or issue) changes them on GitHub, only when it is yours and still
 has the text the agent saw ("previous"), else it refuses (the agent redrafts on the text as it is now).
@@ -266,6 +267,11 @@ class GithubAccount:
                 raise SendError(f"It is on GitHub already: {draft['sent']['url']}")
             if draft["kind"] not in ["pr", "comment", "edit"]:
                 raise SendError("Only PRs, comments and new titles and descriptions go to GitHub.")
+            # The claim a repo's rules ask for goes out before the PR (agents.py): on a fix_issue job, its one comment.
+            if draft["kind"] == "pr" and draft["update_of"] is None and draft["job"] is not None:
+                for other in self.inbox.list():
+                    if other["job"] == draft["job"] and other["kind"] == "comment" and other["status"] == "pending":
+                        raise SendError(f"Approve or reject {other['title']} first: the project's rules ask for it before the PR.")
             self.step = "starting"
             self.sending_draft = draft_id
             # What this send already knows from GitHub (tree()): each tree's file list by its sha, and each file's

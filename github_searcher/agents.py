@@ -110,6 +110,12 @@ account it goes on. The Inbox's "taken" items from before that still decide as t
 to go on; Stop the agent cancels the job, and when the agent is busy with it right now, stops its turn and what it runs
 in the VM.
 
+Some repos ask contributors to claim an issue before they start: be assigned to it, often with a "/claim" comment.
+There a fix_issue job's agent drafts that claim first (its one comment, WorkTools.draft_comment) and goes straight on
+with the fix: neither the user's approval nor the maintainers' answer holds the job up (we assume nobody answers), so
+the user finds the claim and the PR in the Inbox, to approve in that order. issue_taken() leaves the job alone when the
+issue is assigned to the user (their claim went through); someone else assigned is taken, as for any job.
+
 Everything here runs in the backend's event loop. notify() and the queue callbacks may be called
 from request threads, so they hand their work to the loop. version goes up on every change the
 agent list shows (status, history, context, queue), for the live feed.
@@ -1376,7 +1382,9 @@ class Agents:
         before has the notice on its timeline (the only notice the app puts there)."""
         # Inbox items from before agents decided this themselves: a job with one still pending isn't told as well.
         asked = [draft["job"] for draft in self.inbox.list() if draft["kind"] == "taken" and draft["status"] == "pending"]
-        # Assigned to the user is never someone else taking it.
+        # Assigned to the user is never someone else taking it (often their claim going through). Without the user's
+        # sign-in the app can't tell who they are: for a job whose claim the user approved, any assignee counts as them.
+        claimed = [draft["job"] for draft in self.inbox.list() if draft["kind"] == "comment" and draft["status"] == "approved"]
         account = self.your_repositories.github_account.status()
         login = None
         if account["connected"]:
@@ -1389,6 +1397,8 @@ class Agents:
             if job["issue"] != issue_id or job["status"] in ["done", "cancelled"] or job["id"] in asked:
                 continue
             if you:
+                continue
+            if job["kind"] == "fix_issue" and job["id"] in claimed and (login is None or not assignees):
                 continue
             told = [entry for entry in job["timeline"] if entry["kind"] == "notice"]
             if told or job["agent"] not in self.agents:
@@ -1488,7 +1498,9 @@ class Agents:
             "every requirement of the issue again (draft_pr's checklist). Then do one of these (see Following up on PRs and "
             "issues):\n"
             f"- A reply, when someone asked something or waits for an answer: draft_comment with target {thread}. Short, "
-            "friendly, in the project's tone, the way the user would write it."
+            "friendly, in the project's tone, the way the user would write it. Never ask them or anyone else for anything, "
+            "and never wait for an answer: assume nobody replies. When their point leaves a choice, make it and say what "
+            "you did."
         )
         if own_pr:
             text += (
@@ -1555,6 +1567,12 @@ class Agents:
             note = ""
             if reply:
                 note = f" Their note: {reply}"
+            # Waiting on the maintainers, from when an approved claim held its job up: it goes on without the assignment.
+            waited = job["status"] == "waiting_on_maintainers"
+            if decision == "approved" and waited:
+                self.jobs.update(job["id"], status="queued")
+                self.notify(draft["agent"], f"{draft['target']} was assigned to someone else, but the user wants you to go on with {job['id']} without being assigned. It is queued again.{note}")
+                return draft
             if decision == "approved":
                 self.notify(draft["agent"], f"{draft['target']} isn't free anymore on GitHub, but the user wants you to keep working on {job['id']}.{note}")
                 return draft
@@ -1571,7 +1589,10 @@ class Agents:
                     self.loop.create_task(asyncio.to_thread(agent.computer_tools.cancel, vm_name))
             return draft
 
-        if job is not None and job["status"] == "waiting_on_user":
+        # A fix_issue job's one comment is its claim (WorkTools.draft_comment). It never held the job up, so deciding it
+        # leaves the job as it is (it may wait on the user for its PR by now).
+        claim = draft["kind"] == "comment" and job is not None and job["kind"] == "fix_issue"
+        if job is not None and job["status"] == "waiting_on_user" and not claim:
             job = self.jobs.update(job["id"], status="queued")
 
         kinds = {"pr": "PR", "comment": "comment", "question": "question", "report": "report", "edit": "title and description"}
@@ -1610,6 +1631,16 @@ class Agents:
             text = f"The user approved {about}, and {sent['repo']}#{sent['number']} has the new text on GitHub now: {sent['url']}. Carry on with {job_name}."
         elif decision == "approved" and draft["kind"] == "edit":
             text = f"The user approved {about}. They change it on GitHub themselves. Carry on with {job_name}."
+        elif decision == "approved" and claim and sent is not None:
+            text = (
+                f"The user approved {about}, and it is posted: {sent['url']}. Nothing else to do for it: nobody waits for the "
+                f"maintainers to assign the user, so {job_name} goes on as it is."
+            )
+        elif decision == "approved" and claim:
+            text = (
+                f"The user approved {about}. They post it themselves. Nothing else to do for it: nobody waits for the "
+                f"maintainers to assign the user, so {job_name} goes on as it is."
+            )
         elif decision == "approved" and draft["kind"] == "comment" and sent is not None:
             text = f"The user approved {about}, and it is posted: {sent['url']}. Carry on with {job_name}."
         elif decision == "approved" and draft["kind"] == "comment":
@@ -1618,6 +1649,11 @@ class Agents:
             text = f"The user approved {about}. It finishes {job_name}: mark the job done with job_update."
         elif decision == "approved":
             text = f"The user approved {about}. Carry on with {job_name}."
+        elif decision == "rejected" and claim:
+            text = f"The user rejected {about}: no claim."
+            if reply:
+                text += f" Their note: {reply}"
+            text += f" Go on with {job_name} without one, unless their note says otherwise."
         elif decision == "rejected":
             text = f"The user rejected {about}."
             if reply:

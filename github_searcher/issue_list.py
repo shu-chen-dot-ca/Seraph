@@ -12,7 +12,7 @@ in the order they were added. Undo/redo is snapshot based, so it undoes an agent
 same way as the user's: every change pushes a copy of the whole list onto "undo" (the last
 UNDO_LIMIT are kept) and clears "redo".
 
-An issue an agent is working on (a job on it queued, working or waiting on the user: WORKING) is never taken
+An issue an agent is working on (a job on it queued, working, waiting on the user or on the maintainers: WORKING) is never taken
 out, by the user, an agent or Remove closed and assigned: remove skips it and says so, and an undo or redo that
 would drop it keeps it. Cancel its job first.
 
@@ -39,7 +39,7 @@ UNDO_LIMIT = 100
 # Only the last few undo/redo steps go into the file: with a long list, all UNDO_LIMIT copies
 # make it tens of MB, written on every change. The others last until the backend restarts.
 SAVED_STEPS = 10
-WORKING = ["queued", "working", "waiting_on_user"]
+WORKING = ["queued", "working", "waiting_on_user", "waiting_on_maintainers"]
 
 
 class IssueList:

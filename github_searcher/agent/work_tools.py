@@ -15,7 +15,10 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   answers with draft_comment (target: the thread), draft_pr with pr (a new version of the user's own PR), or by
   marking the job done when nothing needs an answer. A question it drafts for the job is about the thread.
 - Drafts: nothing goes to GitHub from here. A PR, an issue comment or a question becomes a draft
-  in the user's Inbox and its job waits on the user. A PR draft's diff is read from the repo
+  in the user's Inbox and its job waits on the user. A fix_issue job takes one comment only: the claim on its issue,
+  when the repo's rules ask contributors to claim an issue or be assigned before they start ("Claim owner/name#n" in
+  the Inbox). The claim holds nothing up: the job goes on to its PR while the claim waits for the user, and nobody waits
+  for the maintainers to assign the user (we assume nobody answers). The user approves the claim, then the PR. A PR draft's diff is read from the repo
   folder in the VM, so only the agent holding the VM can make one, with the commit it starts from
   (base_sha: Approve sends exactly that diff on that commit, github_account.py) and the branch's commits since
   (commits: replayed when it is sent, all with the user's name). Every commit must be the agent's own:
@@ -436,9 +439,13 @@ class WorkTools:
             )(self.run_tests),
             tool(
                 "draft_comment",
-                "Draft a follow_up job's reply on an issue or PR (target: its thread, owner/name#number) for the user's Inbox. "
-                "Not on a fix_issue job: we never claim an issue, ask to be assigned or ask maintainers and wait. "
-                "Nothing is posted: the user decides, and you get a message with their decision. The job waits on the user meanwhile. "
+                "Draft a follow_up job's reply on an issue or PR (target: its thread, owner/name#number) for the user's Inbox, or a "
+                "claim. On a fix_issue job only the claim: one short comment on the job's issue, and only when the issue or the "
+                "repo's rules ask contributors to claim an issue or be assigned before they start or open a PR; never a "
+                "question. On a follow_up job a claim goes on the issue the PR closes. Never ask anyone on GitHub for anything "
+                "(to assign, review, run checks, decide, answer): assume nobody replies. Nothing is posted: the user decides, "
+                "and you get a message with their decision. A reply's job waits on the user meanwhile; a claim's doesn't: go "
+                "straight on with the fix, without waiting for the user or the maintainers. "
                 "body is the comment as it would be posted. project, problem and why are only for the user, in the Inbox's overview. " + PLAIN,
                 {
                     "type": "object",
@@ -448,7 +455,7 @@ class WorkTools:
                         "body": {"type": "string"},
                         "project": {"type": "string", "description": "One line: what the project is, e.g. 'matplotlib: a Python library that draws charts'."},
                         "problem": {"type": "string", "description": "What the issue is about: what goes wrong, for whom, when. Specific, 1 to 2 sentences."},
-                        "why": {"type": "string", "description": "Why post this comment now, in 1 to 2 sentences."},
+                        "why": {"type": "string", "description": "Why post this comment now, in 1 to 2 sentences. For a claim, the rule that asks for it."},
                     },
                     "required": ["job_id", "target", "body", "project", "problem", "why"],
                 },
@@ -1513,18 +1520,36 @@ class WorkTools:
         if job["status"] in CLOSED_STATUSES:
             text = f"{job['id']} is {job['status']} (the user may have cancelled it): no drafts for it anymore. Move on."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
-        # We don't comment and wait for other people: a fix goes straight to a PR.
+        # We don't comment and wait for other people: a fix goes straight to a PR. The one comment on a fix_issue job is
+        # the claim a repo's rules ask for before contributors start (Agents.decide parks the job until the user is assigned).
+        title = f"Comment on {target}"
         if job["kind"] == "fix_issue":
-            text = (
-                "No comments on a fix_issue job: we never claim an issue, ask to be assigned or ask the maintainers and wait, "
-                "even when CONTRIBUTING asks contributors to ask first. Fix it and draft the PR; decide anything open yourself "
-                "and say in the PR what you chose and why."
-            )
-            return {"content": [{"type": "text", "text": text}], "is_error": True}
+            if target != job["issue"]:
+                text = f"On a fix_issue job the only comment is the claim, on its issue {job['issue']}."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+            for draft_id in job["drafts"]:
+                try:
+                    draft = self.agents.inbox.get(draft_id)
+                except KeyError:
+                    continue
+                if draft["kind"] == "comment" and draft["status"] != "rejected":
+                    text = f"{job['id']} already has its claim, {draft_id} ({draft['status']}). One claim per job: don't comment again."
+                    return {"content": [{"type": "text", "text": text}], "is_error": True}
+            title = f"Claim {target}"
 
         draft = self.agents.inbox.create(
-            "comment", self.agent_id, f"Comment on {target}", args["body"], job=job["id"], repo=name, target=target, evidence=job["evidence"], overview=overview
+            "comment", self.agent_id, title, args["body"], job=job["id"], repo=name, target=target, evidence=job["evidence"], overview=overview
         )
+        # A claim holds nothing up: the rules ask for it, so the user approves it, and nobody waits for the maintainers'
+        # answer. The job goes on to its PR, which the user can only send once the claim is decided (github_account.py).
+        if job["kind"] == "fix_issue":
+            self.agents.jobs.update(job["id"], drafts=job["drafts"] + [draft["id"]])
+            text = (
+                f"{draft['id']} is in the user's Inbox. Nothing was posted yet. Don't wait for it: go straight on with "
+                f"{job['id']}, the fix and its PR. The user approves the claim, then the PR. Nobody waits for the maintainers "
+                "to assign the user either."
+            )
+            return {"content": [{"type": "text", "text": text}]}
         self.agents.jobs.update(job["id"], status="waiting_on_user", drafts=job["drafts"] + [draft["id"]])
         text = (
             f"{draft['id']} is in the user's Inbox. Nothing was posted: the user decides, and you'll get a message with their "
