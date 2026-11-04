@@ -63,7 +63,6 @@ Agents never ask maintainers or anyone else on GitHub for anything beyond what t
 | **Edit** | Overview, Changes, Title and description | Changes the title and description of your own PR or issue |
 | **Question** | – | You **Reply**, or pick one of the answers the agent offers |
 | **Taken** | – | **Keep working** or **Stop the agent**. Only older ones: agents now decide this themselves |
-| **Report** | Overview, Results, Problems, Files | Ends a [paper](papers.md) job. Nothing is sent. |
 
 Agents only ask when it matters; small choices they make themselves and say so on the job. A question with answers to pick from has the one the agent recommends, and waits for you for the time set in **Settings** (10 minutes unless you change it): then the app picks the recommended answer and the agent goes on. A question about money, politics or another sensitive subject, what gets sent to GitHub, or deleting something that can't come back always waits for you, and so does one you answer in your own words. In **Settings** you choose which of those four always wait.
 
