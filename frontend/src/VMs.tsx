@@ -34,7 +34,7 @@ import { api, useLive, useLoaded } from "@/live";
 import { cn } from "@/lib/utils";
 
 const SAMPLES = 60;
-const OPEN_JOB = ["queued", "working", "waiting_on_user"];
+const OPEN_JOB = ["queued", "working", "waiting_on_user", "waiting_on_maintainers"];
 const JOBS_SHOWN = 3;
 const NOTES_SHOWN = 3;
 // The internet chart never scales below this, so an idle VM's few packets don't look like a busy line.

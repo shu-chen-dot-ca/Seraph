@@ -85,7 +85,7 @@ import { cn } from "@/lib/utils";
 // The backend keeps one sample per second for the last minute.
 const SAMPLES = 60;
 
-const OPEN_JOB = ["queued", "working", "waiting_on_user"];
+const OPEN_JOB = ["queued", "working", "waiting_on_user", "waiting_on_maintainers"];
 
 const STATUS_TEXT: Record<string, string> = {
   creating: "Creating",

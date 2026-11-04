@@ -35,6 +35,7 @@ const JOB_TONE: Record<string, Tone> = {
   queued: "amber",
   working: "green",
   waiting_on_user: "amber",
+  waiting_on_maintainers: "amber",
   done: "gray",
   cancelled: "gray",
 }
@@ -43,6 +44,7 @@ const JOB_LABEL: Record<string, string> = {
   queued: "Queued",
   working: "Working",
   waiting_on_user: "Waiting on you",
+  waiting_on_maintainers: "Waiting on maintainers",
   done: "Done",
   cancelled: "Cancelled",
 }

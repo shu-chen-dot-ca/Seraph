@@ -58,7 +58,7 @@ type Task = {
 };
 
 const STEPS = ["Issue", "Agent", "Draft", "PR", "Merged"];
-const ACTIVE = ["queued", "working", "waiting_on_user"];
+const ACTIVE = ["queued", "working", "waiting_on_user", "waiting_on_maintainers"];
 const DRAFT_LABEL: Record<string, string> = { pending: "Waiting for you", approved: "Approved", rejected: "Rejected", replied: "Redrafting" };
 const KIND_LABEL: Record<string, string> = { pr: "PR", comment: "Comment", question: "Question", taken: "Taken" };
 const CHECKS_TEXT: Record<string, string> = {
@@ -185,6 +185,8 @@ export default function Tasks(props: { state: string; view: string; task: string
       task.color = "text-primary";
     } else if (task.jobs.some((job) => job.status === "queued")) {
       task.status = "The agent waits for a VM";
+    } else if (task.jobs.some((job) => job.status === "waiting_on_maintainers")) {
+      task.status = "Claimed, waiting for the maintainers to assign you";
     } else if (task.pr !== null && task.pr.state === "merged") {
       task.status = task.pr.merged_by !== null ? `Merged by ${task.pr.merged_by}` : "Merged";
       task.color = "text-violet-500";

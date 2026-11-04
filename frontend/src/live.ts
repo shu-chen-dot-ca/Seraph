@@ -353,7 +353,7 @@ export type EvidenceItem = {
   created_at: string;
 };
 
-export type JobStatus = "queued" | "working" | "waiting_on_user" | "done" | "cancelled";
+export type JobStatus = "queued" | "working" | "waiting_on_user" | "waiting_on_maintainers" | "done" | "cancelled";
 
 export type Job = {
   id: string;

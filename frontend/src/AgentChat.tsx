@@ -125,7 +125,7 @@ const PAGE = 200;
 // The context bar's full width: the backend compacts at AGENT_CONTEXT_CAP (500k) tokens, or earlier
 // when the model's window is smaller.
 const CONTEXT_CAP = 500_000;
-const OPEN_STATUSES = ["queued", "working", "waiting_on_user"];
+const OPEN_STATUSES = ["queued", "working", "waiting_on_user", "waiting_on_maintainers"];
 // The messages that may wait for their turn at once (MAX_QUEUED in agents.py).
 const MAX_QUEUED = 10;
 const NO_VM = "__none__";

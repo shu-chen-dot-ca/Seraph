@@ -171,7 +171,7 @@ const TITLE_MIN = 200;
 const ACTIONS_WIDTH = 130;
 
 // The order of a latest job's status, in progress first being the highest. No job (or a cancelled one) is New.
-const STATUS_RANK: Record<string, number> = { waiting_on_user: 5, working: 4, queued: 3, new: 2, done: 1 };
+const STATUS_RANK: Record<string, number> = { waiting_on_user: 6, working: 5, queued: 4, waiting_on_maintainers: 3, new: 2, done: 1 };
 
 // GitHub labels only maintainers can put on an issue, by what they say, for the Marked column. Every repo spells them
 // its own way ("good first issue", "good-first-issue", "Good First Issue 👋", "help wanted", "status: accepted").
@@ -320,7 +320,7 @@ export default function Issues(props: { repo: string | null; open: string | null
   // backend keeps them anyway).
   const workingIds: string[] = [];
   for (const job of jobs) {
-    if (job.issue !== null && (job.status === "queued" || job.status === "working" || job.status === "waiting_on_user")) {
+    if (job.issue !== null && (job.status === "queued" || job.status === "working" || job.status === "waiting_on_user" || job.status === "waiting_on_maintainers")) {
       workingIds.push(job.issue);
     }
   }
@@ -355,7 +355,7 @@ export default function Issues(props: { repo: string | null; open: string | null
   // change first within each.
   const active = issues.items.filter((issue) => {
     const job = latestJob[issue.id];
-    return job !== undefined && (job.status === "queued" || job.status === "working" || job.status === "waiting_on_user");
+    return job !== undefined && (job.status === "queued" || job.status === "working" || job.status === "waiting_on_user" || job.status === "waiting_on_maintainers");
   });
   active.sort((a, b) => {
     const first = latestJob[a.id];
@@ -624,7 +624,7 @@ export default function Issues(props: { repo: string | null; open: string | null
       return facts !== null ? facts.comments : thread !== undefined ? thread.comments.length : issue.comments;
     }
     if (key === "status") {
-      if (job !== undefined && (job.status === "queued" || job.status === "working" || job.status === "waiting_on_user")) {
+      if (job !== undefined && (job.status === "queued" || job.status === "working" || job.status === "waiting_on_user" || job.status === "waiting_on_maintainers")) {
         return <JobProgressBar job={job} />;
       }
       return (
@@ -1370,13 +1370,13 @@ export default function Issues(props: { repo: string | null; open: string | null
                           </a>
                         ))}
                         <span className="ml-auto shrink-0 text-xs text-muted-foreground">{new Date(each.created_at).toLocaleString()}</span>
-                        {(each.status === "queued" || each.status === "working" || each.status === "waiting_on_user") && (
+                        {(each.status === "queued" || each.status === "working" || each.status === "waiting_on_user" || each.status === "waiting_on_maintainers") && (
                           <Button variant="ghost" size="xs" onClick={() => cancelJob(each)}>
                             Cancel
                           </Button>
                         )}
                       </div>
-                      {(each.status === "working" || each.status === "waiting_on_user" || each.step !== null) && (
+                      {(each.status === "working" || each.status === "waiting_on_user" || each.status === "waiting_on_maintainers" || each.step !== null) && (
                         <div className="space-y-1 py-1 pl-[124px]">
                           <JobSteps job={each} />
                           {each.headline !== "" && <div>{each.headline}</div>}

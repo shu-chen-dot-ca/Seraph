@@ -89,7 +89,7 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
       trackedNew += check.issues.filter((issue) => new Date(issue.created_at).getTime() > newSince && !read.includes(issue.number)).length;
     }
   }
-  const openJobs = jobs.filter((job) => job.status === "queued" || job.status === "working" || job.status === "waiting_on_user").length;
+  const openJobs = jobs.filter((job) => job.status === "queued" || job.status === "working" || job.status === "waiting_on_user" || job.status === "waiting_on_maintainers").length;
 
   // The issues an agent is on now, under Issues: those whose latest job is waiting on you, then working, then queued.
   const latestJob: Record<string, Job> = {};
@@ -103,7 +103,7 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
     }
   }
   const activeIssues: { issue: IssueItem; job: Job }[] = [];
-  for (const status of ["waiting_on_user", "working", "queued"]) {
+  for (const status of ["waiting_on_user", "working", "queued", "waiting_on_maintainers"]) {
     for (const issue of issues.items) {
       const job = latestJob[issue.id];
       if (job !== undefined && job.status === status) {

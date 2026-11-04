@@ -37,13 +37,13 @@ import { cn } from "@/lib/utils";
 // Phone mode (App.tsx) keeps Status, Job and Cancel; the job's page has the rest.
 const COLUMNS = "grid grid-cols-[120px_165px_minmax(0,1fr)_110px_70px_190px_120px_64px] items-center gap-2 max-md:grid-cols-[110px_minmax(0,1fr)_56px]";
 
-const OPEN = ["queued", "working", "waiting_on_user"];
+const OPEN = ["queued", "working", "waiting_on_user", "waiting_on_maintainers"];
 
 const TABS = [
   { value: "open", label: "Open", statuses: OPEN },
   { value: "queued", label: "Queued", statuses: ["queued"] },
   { value: "working", label: "Working", statuses: ["working"] },
-  { value: "waiting", label: "Waiting", statuses: ["waiting_on_user"] },
+  { value: "waiting", label: "Waiting", statuses: ["waiting_on_user", "waiting_on_maintainers"] },
   { value: "done", label: "Done", statuses: ["done"] },
   { value: "cancelled", label: "Cancelled", statuses: ["cancelled"] },
   { value: "all", label: "All", statuses: [] as string[] },

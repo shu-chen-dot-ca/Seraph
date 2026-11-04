@@ -81,6 +81,9 @@ function position(job: Job): { index: number; label: string } {
   if (job.status === "waiting_on_user") {
     return { index, label: "Waiting on you" }
   }
+  if (job.status === "waiting_on_maintainers") {
+    return { index, label: "Waiting on maintainers" }
+  }
   if (job.status === "done") {
     return { index: job.steps.length, label: "Done" }
   }
@@ -109,6 +112,7 @@ function JobProgressBar(props: { job: Job; className?: string }) {
               stepIndex === index && job.status === "working" && "animate-pulse bg-primary",
               stepIndex === index && job.status === "queued" && "bg-primary/60",
               stepIndex === index && job.status === "waiting_on_user" && "bg-warn",
+              stepIndex === index && job.status === "waiting_on_maintainers" && "bg-warn/60",
               stepIndex === index && job.status === "cancelled" && "bg-idle"
             )}
           />
@@ -135,6 +139,9 @@ function JobSteps(props: { job: Job; className?: string }) {
   if (job.status === "waiting_on_user") {
     end = "Waiting on you"
   }
+  if (job.status === "waiting_on_maintainers") {
+    end = "Waiting on maintainers"
+  }
   if (job.status === "done") {
     end = "Done"
   }
@@ -154,6 +161,7 @@ function JobSteps(props: { job: Job; className?: string }) {
               stepIndex === index && job.status === "working" && "bg-primary font-medium text-primary-foreground",
               stepIndex === index && job.status === "queued" && "bg-primary/15 font-medium",
               stepIndex === index && job.status === "waiting_on_user" && "bg-warn/20 font-medium",
+              stepIndex === index && job.status === "waiting_on_maintainers" && "bg-warn/10 font-medium",
               stepIndex === index && job.status === "cancelled" && "bg-muted font-medium"
             )}
           >
@@ -169,6 +177,7 @@ function JobSteps(props: { job: Job; className?: string }) {
             className={cn(
               "flex h-5 items-center rounded-sm px-1.5 font-medium",
               job.status === "waiting_on_user" && "bg-warn/20",
+              job.status === "waiting_on_maintainers" && "bg-warn/10",
               job.status === "done" && "bg-ok/20",
               job.status === "cancelled" && "bg-muted text-muted-foreground"
             )}
