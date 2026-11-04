@@ -30,7 +30,8 @@ about in plain words, what was checked (the issue's points, before and after scr
 the reviewer's verdict) and what could go wrong. The diff, the exact words that will be posted and the commits are
 folded under Details. A comment or a new title and description shows its text unfolded, since that text is what you
 approve. An action (request a review, ready for review, close, ...) is said in its question; the comment posted with it,
-if any, shows below. Approve asks first and sends it to GitHub as you (it needs your GitHub sign-in, in Settings). Reject asks
+if any, shows below. A PR whose claim (the comment the project's rules ask for first) is still in the Inbox links to it,
+and its Approve waits until the claim is decided. Approve asks first and sends it to GitHub as you (it needs your GitHub sign-in, in Settings). Reject asks
 for a note: the agent tries again with it, or drops it.
 
 Once answered or decided, you land on the issue's page, where the timeline shows what happened.
@@ -140,6 +141,9 @@ function Approval(props: { draft: Draft; job: Job | null }) {
   const overview = draft.overview;
   const account = useGithubAccount();
   const agents = useLive("agents");
+  const drafts = useLive("inbox");
+  // The claim the project's rules ask for goes out before the PR (its job's one comment): decide it first.
+  const claim = draft.kind === "pr" && draft.update_of === null ? drafts.find((other) => other.job === draft.job && other.kind === "comment" && other.status === "pending") : undefined;
   const [dialog, setDialog] = useState<"approve" | "reject" | null>(null);
   const [note, setNote] = useState("");
   const [drop, setDrop] = useState(false);
@@ -279,7 +283,15 @@ function Approval(props: { draft: Draft; job: Job | null }) {
 
       <div className="sticky bottom-0 flex flex-wrap items-center gap-2 border-t bg-background px-4 py-2.5">
         <span className="min-w-48 flex-1 text-xs text-muted-foreground">
-          {signedIn && `Not sent yet. ${sends}`}
+          {signedIn && claim !== undefined && (
+            <>
+              Approve or reject the claim first:{" "}
+              <a href={href.inboxItem(claim.id)} className="text-primary hover:underline">
+                {claim.title}
+              </a>
+            </>
+          )}
+          {signedIn && claim === undefined && `Not sent yet. ${sends}`}
           {account !== null && !signedIn && (
             <>
               Sign in to GitHub to send it:{" "}
@@ -292,7 +304,7 @@ function Approval(props: { draft: Draft; job: Job | null }) {
         <Button size="sm" variant="outline" onClick={() => setDialog("reject")}>
           Reject
         </Button>
-        <Button size="sm" disabled={!signedIn} onClick={() => setDialog("approve")}>
+        <Button size="sm" disabled={!signedIn || claim !== undefined} onClick={() => setDialog("approve")}>
           Approve
         </Button>
       </div>
