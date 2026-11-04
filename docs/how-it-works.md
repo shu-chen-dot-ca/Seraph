@@ -48,7 +48,7 @@ How hard the code is doesn't decide much: the agent writes hard code. What matte
 
 Agents only pick issues whose Merge is Likely. You can assign the others, except Fixed, Out of scope and Can't validate: a job that can't be proven ends with nothing to show. An agent that finds out mid-job that it can't validate a fix cancels the job itself, without asking.
 
-Every issue is also tagged **free**, **assigned**, **waiting** or **fixed**. An issue with a fix already posted in a comment counts as taken. If an issue gets taken while an agent works on it, the Inbox asks you whether to keep working or stop the agent.
+Every issue is also tagged **free**, **assigned**, **waiting** or **fixed**. An issue with a fix already posted in a comment counts as taken. If an issue gets taken while an agent works on it, the agent is told who took it and decides itself: it stops (and says who and why on the job) for a maintainer, a member of the project or someone who often gets PRs merged there, and keeps going for a new or unknown account.
 
 ## The Inbox
 
@@ -58,7 +58,7 @@ Every issue is also tagged **free**, **assigned**, **waiting** or **fixed**. An 
 | **Comment** | Overview, Comment | Posts it as you |
 | **Edit** | Overview, Changes, Title and description | Changes the title and description of your own PR or issue |
 | **Question** | – | You **Reply**, or pick one of the answers the agent offers |
-| **Taken** | – | **Keep working** or **Stop the agent** |
+| **Taken** | – | **Keep working** or **Stop the agent**. Only older ones: agents now decide this themselves |
 | **Report** | Overview, Results, Problems, Files | Ends a [paper](papers.md) job. Nothing is sent. |
 
 Before you decide, you can edit the text, **Redraft** with a note, or **Discuss** it with the agent. If you approve before signing in, **Send to GitHub** sends it later. **Download .patch** gives you the change as a file instead.
