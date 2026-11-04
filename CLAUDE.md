@@ -23,3 +23,4 @@
   - The last new commit must have exactly the same files as the old HEAD. Check that before moving main, and that git status is the same after.
   - Save the old main as a backup branch first (backup/main-before-<date>).
   - Local only, never push. I push myself.
+Do not use claude artifact
