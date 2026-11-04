@@ -9,14 +9,14 @@ import NewIssueDialog from "@/dialogs/NewIssueDialog";
 import { api, useConnected, useLive, type GithubAccountStatus } from "@/live";
 import { askOf } from "@/model/inbox";
 import { useProjects } from "@/model/projects";
-import { useWorkItems } from "@/model/work";
+import { isQuestion, useWorkItems } from "@/model/work";
 import NewJobDialog from "@/NewJobDialog";
 import { href } from "@/routes";
 import UpdateDialog from "@/UpdateDialog";
 
 /*
 The 36px bar at the top of every page.
-- Go to: type a name or a number to jump to an issue, a project, an agent, a VM, or something in the Inbox; Enter
+- Go to: type a name or a number to jump to an issue, a project, an agent, a VM, or a question or approval; Enter
   opens the first.
 - New: start anything from one place: Fix an issue (pick an open one, then assign it), New issue (in one of your
   private projects), New task (anything else, for any agent), Ask an agent.
@@ -66,7 +66,7 @@ export default function Header(props: { account: GithubAccountStatus | null }) {
     }
     for (const draft of drafts) {
       if (draft.status === "pending" && askOf(draft).toLowerCase().includes(q)) {
-        results.push({ label: "Inbox", text: askOf(draft), link: href.inboxItem(draft.id) });
+        results.push({ label: isQuestion(draft) ? "Question" : "Approval", text: askOf(draft), link: href.inboxItem(draft.id) });
       }
     }
   }
@@ -93,7 +93,7 @@ export default function Header(props: { account: GithubAccountStatus | null }) {
 
   return (
     <header className="relative flex h-9 shrink-0 items-center gap-2 border-b bg-sidebar px-3">
-      <a href={href.inbox()} className="mr-2 font-semibold max-md:hidden">
+      <a href={href.dashboard()} className="mr-2 font-semibold max-md:hidden">
         Seraph
       </a>
       <div className="relative mx-auto w-full max-w-sm">

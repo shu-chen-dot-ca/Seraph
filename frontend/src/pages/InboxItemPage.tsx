@@ -14,9 +14,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { api, useLive, type Draft, type Job } from "@/live";
 import { cn } from "@/lib/utils";
 import { useGithubAccount, useSending } from "@/model/account";
-import { askOf, kindOf } from "@/model/inbox";
+import { askOf, kindOf, questionWhen } from "@/model/inbox";
 import { isQuestion } from "@/model/work";
-import { questionWhen } from "@/pages/InboxPage";
 import { href } from "@/routes";
 
 /*
@@ -40,10 +39,10 @@ stay here: sending takes a while, and the page shows it is sending (also after y
 later), then that it was sent, with a link to the issue's page.
 */
 
-// "owner/name#12" → that issue's page, else the Inbox.
+// "owner/name#12" → that issue's page, else the Dashboard.
 function workHref(id: string | null): string {
   const match = (id ?? "").match(/^([^/#]+\/[^/#]+)#(\d+)$/);
-  return match === null ? href.inbox() : href.work(match[1], Number(match[2]));
+  return match === null ? href.dashboard() : href.work(match[1], Number(match[2]));
 }
 
 function Section(props: { title: string; children: ReactNode }) {
@@ -368,7 +367,7 @@ export default function InboxItemPage(props: { id: string }) {
   const jobs = useLive("jobs");
   const draft = drafts.find((each) => each.id === props.id);
   if (draft === undefined) {
-    return <PageHeader back title="Not in the Inbox" meta="It may have been decided, or it waits for its review." />;
+    return <PageHeader back title="Not found" meta="It may have been decided, or it waits for its review." />;
   }
   const job = jobs.find((each) => each.id === draft.job) ?? null;
   const target = draft.update_of ?? draft.target;

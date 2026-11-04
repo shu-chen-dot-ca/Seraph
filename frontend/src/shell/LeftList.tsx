@@ -11,7 +11,7 @@ import { href, type Route } from "@/routes";
 
 /*
 The left list on a computer, the row of tabs at the bottom on a phone.
-- Inbox, with how many questions (amber) and approvals wait; Notifications, with how many are unread.
+- Dashboard, with how many questions (amber) and approvals wait, and how many notifications are unread.
 - The projects: Private, then Open source, each with how many things in it wait for you; Add or find projects.
   On a phone they are one Projects tab instead.
 - Team and Machines.
@@ -75,16 +75,16 @@ export default function LeftList(props: { route: Route }) {
     };
   }
 
-  const inbox: Item = {
-    link: href.inbox(),
-    label: "Inbox",
-    current: route.page === "inbox" || route.page === "inbox-item",
+  const dashboard: Item = {
+    link: href.dashboard(),
+    label: "Dashboard",
+    current: route.page === "dashboard" || route.page === "inbox-item",
     counts: [
       { n: questions.length, tone: "warn" },
       { n: approvals.length, tone: "primary" },
+      { n: unread, tone: "muted" },
     ],
   };
-  const notificationsItem: Item = { link: href.notifications(), label: "Notifications", current: route.page === "notifications", counts: [{ n: unread, tone: "muted" }] };
   const projectsItem: Item = { link: href.projects(), label: "Projects", current: route.page === "projects" || onProject !== null, counts: [], phone: true };
   const team: Item = { link: href.team(), label: "Team", current: route.page === "team" || route.page === "agent", counts: [] };
   const machines: Item = { link: href.machines(), label: "Machines", current: route.page === "machines" || route.page === "machine" || route.page === "phone-vm", counts: [] };
@@ -93,8 +93,7 @@ export default function LeftList(props: { route: Route }) {
 
   return (
     <nav className="flex w-48 shrink-0 flex-col gap-px overflow-auto border-r bg-sidebar p-1.5 max-md:order-2 max-md:w-auto max-md:flex-row max-md:justify-around max-md:border-t max-md:border-r-0">
-      <Link item={inbox} />
-      <Link item={notificationsItem} />
+      <Link item={dashboard} />
       <Link item={projectsItem} />
       {privateProjects.length > 0 && <div className="px-2 pt-3 pb-1 text-[11px] text-muted-foreground max-md:hidden">Private</div>}
       {privateProjects.map((project) => (

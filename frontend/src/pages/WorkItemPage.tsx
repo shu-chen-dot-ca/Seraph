@@ -12,10 +12,9 @@ import { JobProgressBar, JobSteps, useNow } from "@/components/ui/job-progress";
 import { JOB_LABEL } from "@/components/ui/status-dot";
 import { Textarea } from "@/components/ui/textarea";
 import { api, useLive, type Job } from "@/live";
-import { askOf } from "@/model/inbox";
+import { askOf, questionWhen } from "@/model/inbox";
 import { buildJobTimeline, buildTimeline } from "@/model/timeline";
 import { OPEN_JOB, useWorkItems, type WorkItem } from "@/model/work";
-import { questionWhen } from "@/pages/InboxPage";
 import { href } from "@/routes";
 import ThreadDialog from "@/ThreadDialog";
 

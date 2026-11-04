@@ -59,7 +59,7 @@ export default function GitHubAccountSettings() {
       return;
     }
     if (signedIn !== null) {
-      toast.success(`Signed in as @${signedIn}. Approve in the Inbox now sends PRs and comments as this account.`);
+      toast.success(`Signed in as @${signedIn}. Approve now sends PRs and comments as this account.`);
       // Your PRs and issues from outside the app show up now too.
       api("/api/github/refresh", { method: "POST" }).catch(() => {});
     }
@@ -86,7 +86,7 @@ export default function GitHubAccountSettings() {
       setToken("");
       setUseToken(false);
       window.dispatchEvent(new Event("github-account"));
-      toast.success(`Signed in as @${data.login}. Approve in the Inbox now sends PRs and comments as this account.`);
+      toast.success(`Signed in as @${data.login}. Approve now sends PRs and comments as this account.`);
       // Your PRs and issues from outside the app show up now too.
       api("/api/github/refresh", { method: "POST" }).catch(() => {});
     } catch (err) {
@@ -300,7 +300,7 @@ export default function GitHubAccountSettings() {
           </div>
         )}
         <p className="mt-2 text-xs text-muted-foreground">
-          Approve in the Inbox sends PRs and comments as this account, after you confirm, and so does Comment on a pull request or issue. It
+          Approve sends PRs and comments as this account, after you confirm, and so does Comment on a pull request or issue. It
           stays on this computer: agents and searches never use it.
         </p>
       </section>

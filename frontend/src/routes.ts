@@ -2,10 +2,9 @@
 Every page's address. The app lives in the URL hash, so reload, back and forward work, and every thing has exactly
 one address. Links are plain <a href={href.…}>; App only reads the hash (parseRoute) and shows that page.
 
-  #/inbox                     the Inbox (its Questions tab while any question waits, else Approvals)
-  #/inbox/questions           #/inbox/approvals            one tab
+  #/dashboard                 the Dashboard (its Questions card while any question waits, else Approvals, else In progress)
+  #/dashboard/<card>          one card's list: questions, approvals, in-progress, open, merged, closed, notifications
   #/inbox/<draft id>          one question or approval
-  #/notifications             what GitHub told you
   #/projects                  every project (the phone's Projects tab; on a computer they are in the left list)
   #/p/<owner>/<name>          a project's board            ?tab=agents|settings
   #/p/<owner>/<name>/<n>      one issue of it: open, being worked on, or done (a work item)
@@ -20,10 +19,13 @@ Older addresses (from before the redesign, still written by a few pages and by b
 place by legacyAddress, so nothing links to a page that's gone.
 */
 
+export type DashboardCard = "questions" | "approvals" | "in-progress" | "open" | "merged" | "closed" | "notifications";
+
+const DASHBOARD_CARDS = ["questions", "approvals", "in-progress", "open", "merged", "closed", "notifications"];
+
 export type Route =
-  | { page: "inbox"; tab: "questions" | "approvals" | null }
+  | { page: "dashboard"; card: DashboardCard | null }
   | { page: "inbox-item"; id: string }
-  | { page: "notifications" }
   | { page: "projects" }
   | { page: "project"; repo: string; tab: string | null }
   | { page: "work"; repo: string; number: number }
@@ -37,9 +39,8 @@ export type Route =
   | { page: "settings" };
 
 export const href = {
-  inbox: (tab?: "questions" | "approvals") => (tab ? `#/inbox/${tab}` : "#/inbox"),
+  dashboard: (card?: DashboardCard) => (card ? `#/dashboard/${card}` : "#/dashboard"),
   inboxItem: (draftId: string) => `#/inbox/${draftId}`,
-  notifications: () => "#/notifications",
   projects: () => "#/projects",
   project: (repo: string, tab?: string) => `#/p/${repo}${tab ? `?tab=${tab}` : ""}`,
   work: (repo: string, number: number) => `#/p/${repo}/${number}`,
@@ -62,17 +63,14 @@ function split(hash: string): { path: string[]; query: URLSearchParams } {
 export function parseRoute(hash: string): Route {
   const { path, query } = split(hash);
   const [first, second, third, fourth] = path;
-  if (first === "inbox" && second === undefined) {
-    return { page: "inbox", tab: null };
+  if (first === "dashboard" && second !== undefined && DASHBOARD_CARDS.includes(second)) {
+    return { page: "dashboard", card: second as DashboardCard };
   }
-  if (first === "inbox" && (second === "questions" || second === "approvals")) {
-    return { page: "inbox", tab: second };
+  if (first === "dashboard") {
+    return { page: "dashboard", card: null };
   }
-  if (first === "inbox") {
+  if (first === "inbox" && second !== undefined) {
     return { page: "inbox-item", id: second };
-  }
-  if (first === "notifications") {
-    return { page: "notifications" };
   }
   if (first === "projects") {
     return { page: "projects" };
@@ -107,7 +105,7 @@ export function parseRoute(hash: string): Route {
   if (first === "settings") {
     return { page: "settings" };
   }
-  return { page: "inbox", tab: null };
+  return { page: "dashboard", card: null };
 }
 
 // "owner/name#12" → the issue's page; anything else → null.
@@ -144,14 +142,25 @@ export function legacyAddress(hash: string): string | null {
   if (first === "github" && second === "account") {
     return `${href.settings()}${rest !== "" ? `?${rest}` : ""}`;
   }
-  if (first === "github" && second === "notifications") {
-    return href.notifications();
+  if (first === "inbox" && second === undefined) {
+    return href.dashboard();
+  }
+  if (first === "inbox" && (second === "questions" || second === "approvals")) {
+    return href.dashboard(second);
+  }
+  if (first === "notifications" || (first === "github" && second === "notifications")) {
+    return href.dashboard("notifications");
   }
   if (first === "github" && second === "overview") {
-    return href.inbox();
+    return href.dashboard();
   }
   if (first === "github" && second === "repo" && repo !== null) {
     return open ?? href.project(repo);
+  }
+  // #/pulls was the Pull requests page, now the Dashboard's Open card; an old one with a pull request or repo in it
+  // goes to that.
+  if (first === "pulls" && open === null && repo === null) {
+    return href.dashboard("open");
   }
   if (first === "issues" || first === "github" || first === "workflow" || first === "home" || first === "pulls") {
     if (open !== null) {

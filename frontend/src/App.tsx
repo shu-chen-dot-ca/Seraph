@@ -4,8 +4,9 @@ a phone) and one page. The page lives in the URL hash (routes.ts), so refresh an
 pages never reloads. Older addresses are sent to their new place first (legacyAddress).
 
 What each part is for:
-- Inbox: what agents need from you: questions (answer first) and approvals (send or merge).
-- Notifications: what GitHub told you.
+- Dashboard: big cards with how many there are, each opening its list: what agents need from you (questions, answer
+  first, and approvals, send or merge), your pull requests from every project (in progress, open, merged, closed),
+  and what GitHub told you (notifications).
 - Projects: each repository you work on, private or open source, as a board from open to done; each issue on it has
   one page with its whole story (pages/WorkItemPage.tsx).
 - Team: the agents and their chats. Machines: the VMs, their desktops and images.
@@ -26,10 +27,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import Explore from "@/Explore";
 import { useLiveValue, useLoaded } from "@/live";
 import { useGithubAccount } from "@/model/account";
+import DashboardPage from "@/pages/DashboardPage";
 import InboxItemPage from "@/pages/InboxItemPage";
-import InboxPage from "@/pages/InboxPage";
 import MachinesPage from "@/pages/MachinesPage";
-import NotificationsPage from "@/pages/NotificationsPage";
 import ProjectPage from "@/pages/ProjectPage";
 import ProjectsPage from "@/pages/ProjectsPage";
 import SettingsPage from "@/pages/SettingsPage";
@@ -111,14 +111,11 @@ export default function App() {
   const mountedVMs = visitedVMs.filter((name) => name === openVM || !vmsLoaded || vmNames.includes(name));
 
   let page = null;
-  if (route.page === "inbox") {
-    page = <InboxPage tab={route.tab} />;
+  if (route.page === "dashboard") {
+    page = <DashboardPage card={route.card} />;
   }
   if (route.page === "inbox-item") {
     page = <InboxItemPage key={route.id} id={route.id} />;
-  }
-  if (route.page === "notifications") {
-    page = <NotificationsPage />;
   }
   if (route.page === "projects") {
     page = <ProjectsPage />;

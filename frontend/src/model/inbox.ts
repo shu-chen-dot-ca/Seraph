@@ -1,5 +1,6 @@
 /*
-The Inbox: what agents need from you, in two kinds, so each works one way.
+The Inbox (the Dashboard's Questions and Approvals cards): what agents need from you, in two kinds, so each works one
+way.
 
 - Questions: an agent asked you something (an Inbox draft of kind question; old "taken" items too). Some have a timer
   (answer_by: then the app answers with the agent's recommended choice); the rest wait for you however long it takes
@@ -38,6 +39,26 @@ const ACTION_KINDS: Record<string, string> = {
   close: "Close",
   reopen: "Reopen",
 };
+
+const MUST_WAIT_TEXT: Record<string, string> = {
+  money: "it costs money",
+  sensitive: "a sensitive subject",
+  github: "what gets sent to GitHub",
+  delete: "deleting something",
+  open: "an open question",
+};
+
+// When a question's agent goes ahead without you, or why it waits.
+export function questionWhen(draft: Draft, now: number): string {
+  if (draft.answer_by) {
+    const minutes = Math.max(0, Math.ceil((new Date(draft.answer_by).getTime() - now) / 60000));
+    return minutes === 0 ? "Goes ahead now" : `Goes ahead in ${minutes} min`;
+  }
+  if (draft.must_wait) {
+    return `Waits for you · ${MUST_WAIT_TEXT[draft.must_wait] ?? draft.must_wait}`;
+  }
+  return "Waits for you";
+}
 
 // The repo's short name: "owner/name" → "name".
 function shortName(repo: string | null): string {
