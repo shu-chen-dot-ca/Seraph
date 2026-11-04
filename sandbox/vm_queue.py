@@ -10,9 +10,9 @@ one VM's lines (holding, in priority or waiting) at a time.
 
 Runs (sandbox/agent/long_runs.py) are long commands agents left going in the VM: a test suite, a big build. They
 are kept here with the VM, from add_run until finish_run, each with its desktop. An agent that holds a desktop while
-only its run goes steps aside after its turn (step_aside, agents.py), and the user can make the holder step aside
-too (Skip): the next one gets the desktop, and the agent goes to the end of that desktop's priority line. So it
-gets its own desktop back, where its run and its folders are.
+only its run goes keeps it (agents.py wakes it to check on the run). Only the user makes the holder step aside
+(Skip, step_aside): the next one gets the desktop, and the agent goes to the end of that desktop's priority line. So
+it gets its own desktop back, where its run and its folders are.
 
 Who is next on a desktop (next_holder): its priority line comes first. Its first agent is checked: if no run of its
 own still goes in the VM, it is its turn and the desktop is its; otherwise it goes to the end of the priority line
@@ -131,7 +131,7 @@ class VMQueue:
             self.on_grant(vm_name, granted)
 
     def step_aside(self, vm_name: str, agent_id: str, by_user: bool = False) -> None:
-        """The holder waits on its run (or the user skipped it): the next one gets its desktop, and the agent goes to
+        """The user skipped the holder (Skip): the next one gets its desktop, and the agent goes to
         the end of that desktop's priority line, so it gets it back before anyone in the waiting line once its run is over.
 
         by_user (Skip): refused when nobody else could take the desktop, and the agent is told (on_kick).
@@ -361,7 +361,7 @@ class VMQueue:
 
     def finish_run(self, vm_name: str, run_id: str) -> None:
         """The run ended and its agent has the result: it is gone from the VM. On a desktop nobody holds, the next one
-        gets it, so an agent that stepped aside for this run gets its desktop back at once."""
+        gets it, so an agent skipped while this run went gets its desktop back at once."""
         granted = None
         with self.lock:
             self.ending.discard(run_id)

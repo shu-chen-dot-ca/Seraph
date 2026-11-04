@@ -150,8 +150,8 @@ class ComputerTools:
                 "builds, test runs); its output then comes back as one, stdout and stderr together. A visible command still "
                 f"running after {long_runs.FOREGROUND_SECONDS // 60} minutes goes on in the background, and you get its result in a message when it "
                 "ends. background: true starts it that way at once (shown in the window too), for anything you expect to take "
-                "more than about 5 minutes (a big install, a build): then do what else you have in this VM, or end your turn, "
-                "and the VM goes to whoever waits for it meanwhile; you get it back first once the run is over. "
+                "more than about 5 minutes (a big install, a build): then do what else you have in this VM, or end your turn; "
+                "you keep the VM, and you are woken when it ends, or every 30 minutes to check on it. "
                 "To start a program or a terminal window on the desktop, prefix it with on_desktop and put it "
                 "in the background with its output in a file, e.g. `on_desktop nohup python app.py > ~/app.log 2>&1 &` or "
                 "`on_desktop gnome-terminal -- bash -c 'cd ~/proj && python demo.py; exec bash'` (konsole -e on a KDE desktop).",
@@ -499,8 +499,8 @@ class ComputerTools:
         self.queue.add_run(record.name, run)
         later = (
             f"you get its result in a message when it ends (all its output is in {run['log']} in the VM). If you have more "
-            f"to do in {record.name} that doesn't touch what it works on, do it; otherwise end your turn: whoever waits gets "
-            f"{record.name} meanwhile, and you get it back first once the run is over."
+            f"to do in {record.name} that doesn't touch what it works on, do it; otherwise end your turn: you keep "
+            f"{record.name}, and you are woken when it ends, or every 30 minutes to check on it."
         )
         if args.get("background"):
             return {"content": [{"type": "text", "text": f"Started in the background as {run['id']}: " + later}]}
