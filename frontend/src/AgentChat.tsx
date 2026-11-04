@@ -1371,7 +1371,7 @@ export default function AgentChat(props: { agentId: string; compact?: boolean })
                   {deskVM !== null && (
                     <a href={`#/vms/${deskVM}`} className="font-normal text-primary hover:underline">
                       {deskVM}
-                      {deskInfo !== undefined && deskInfo.holders.length > 1 && `, desktop ${deskNumber}`}
+                      {deskInfo !== undefined && Object.keys(deskInfo.holders).length > 1 && `, desktop ${deskNumber}`}
                     </a>
                   )}
                 </div>
