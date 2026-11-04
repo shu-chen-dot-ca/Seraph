@@ -50,6 +50,10 @@ Agents only pick issues whose Merge is Likely. You can assign the others, except
 
 Every issue is also tagged **free**, **assigned**, **waiting** or **fixed**. An issue with a fix already posted in a comment counts as taken. If an issue gets taken while an agent works on it, the agent is told who took it and decides itself: it stops (and says who and why on the job) for a maintainer, a member of the project or someone who often gets PRs merged there, and keeps going for a new or unknown account.
 
+Some repos or issues want you to claim an issue before you start, often with a `/claim` comment. There the agent drafts that claim first, as **Claim owner/name#n** in your Inbox, and goes straight on with the fix without waiting for you or the maintainers. When you come back you find the claim and the PR, to approve in that order: the PR can't be sent before the claim is decided. If the maintainers assign someone else, the agent decides the same way as when an issue gets taken.
+
+Agents never ask maintainers or anyone else on GitHub for anything beyond what the issue or the project's rules ask for, and they assume nobody answers: open choices they decide themselves and explain in the PR.
+
 ## The Inbox
 
 | Kind | Tabs | Approve |
