@@ -66,8 +66,8 @@ def get_readme(owner: str, repo: str) -> str:
     return CACHE[key]
 
 
-# One issue or PR for an agent's read_thread (agent/github_tools.py). A PR also has its review conversations: their
-# comments' ids are what draft_comment's reply_to takes (agent/work_tools.py).
+# One issue or PR for an agent's read_thread (agent/github_tools.py). A PR also has who is asked to review it now and its
+# review conversations: their ids are what draft_comment's reply_to and draft_action's resolve take (agent/work_tools.py).
 THREAD_QUERY = """
 query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
@@ -83,7 +83,7 @@ query($owner: String!, $name: String!, $number: Int!) {
         }
       }
       ... on PullRequest {
-        title body state merged createdAt mergedAt authorAssociation author { login __typename }
+        title body state merged isDraft maintainerCanModify createdAt mergedAt authorAssociation author { login __typename }
         labels(first: 10) { nodes { name } }
         comments(first: 40) {
           totalCount
@@ -96,6 +96,7 @@ query($owner: String!, $name: String!, $number: Int!) {
             comments(first: 10) { nodes { body path createdAt author { login __typename } } }
           }
         }
+        reviewRequests(first: 10) { nodes { requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } }
         reviewThreads(first: 50) {
           totalCount
           nodes {
@@ -646,13 +647,14 @@ def get_tracked_issues(owner: str, repo: str) -> dict:
 # One PR as it stands, for the GitHub tab (pr_tracking.py): its state, its branch (headRef is null once the branch is
 # deleted), the branch it goes into and whether it conflicts with it (mergeable: MERGEABLE, CONFLICTING, or UNKNOWN
 # while GitHub works it out), labels, reviews, the latest 10 comments (oldest first: the newest is the last), the issues
-# it says it fixes, and its newest commit's checks. The agents' draft_pr reads its state and newest commit too, and
-# draft_edit its title and description (body) as they are now (agent/work_tools.py).
+# it says it fixes, and its newest commit's checks. The agents' draft_pr reads its state and newest commit too,
+# draft_edit its title and description (body) as they are now, and draft_action whether it is a draft and whether
+# maintainers may push to its branch (agent/work_tools.py).
 PR_STATUS_QUERY = """
 query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
-      number title body url state isDraft createdAt updatedAt closedAt mergedAt reviewDecision mergeable baseRefName
+      number title body url state isDraft maintainerCanModify createdAt updatedAt closedAt mergedAt reviewDecision mergeable baseRefName
       author { login }
       mergedBy { login }
       headRefName headRefOid headRepository { nameWithOwner } headRef { name }

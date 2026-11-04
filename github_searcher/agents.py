@@ -1477,11 +1477,22 @@ class Agents:
                 "(what it is rebased onto, and how each conflict was settled)."
                 "\n- A reviewer's comment on a line of code: answer it in its conversation, draft_comment with reply_to (the "
                 "comment's id from read_thread's conversations), not below the PR."
+                f"\n- What the user would click on GitHub, with draft_action on {thread}: request_review to ask the reviewers "
+                "to look again once a new version with their points is on the PR (not before), ready_for_review when it is a "
+                "draft and ready, convert_to_draft when it isn't ready after all, allow_maintainer_edits when a maintainer asks "
+                "to push to it, update_branch when it is behind and the project wants it up to date (no conflicts), resolve for "
+                "conversations whose change is pushed (only where the project's people let the author resolve), close when a "
+                "maintainer asks or it is no longer needed (say why in its body)."
             )
         if own:
             text += (
                 f"\n- A new title or description, when someone asks for one on the user's own {what}, or its text no longer "
                 f"matches what it does: draft_edit with target {thread}. Approve changes them on GitHub as the user."
+            )
+        if own and entry["kind"] == "issue":
+            text += (
+                f"\n- Closing the user's own issue when it is fixed or no longer needed (or reopening it): draft_action on "
+                f"{thread} with close (close_reason completed or not_planned) or reopen, and why in its body."
             )
         text += (
             f"\n- Nothing, when nothing needs an answer (a thank-you, a bot's note with no findings, checks that passed, a "
@@ -1552,7 +1563,7 @@ class Agents:
         if job is not None and job["status"] == "waiting_on_user" and not claim:
             job = self.jobs.update(job["id"], status="queued")
 
-        kinds = {"pr": "PR", "comment": "comment", "question": "question", "edit": "title and description"}
+        kinds = {"pr": "PR", "comment": "comment", "question": "question", "edit": "title and description", "action": "action"}
         about = f"your {kinds.get(draft['kind'], draft['kind'])} draft {draft_id} ({draft['title']})"
         job_name = job["id"] if job is not None else "your work"
         # Approve sends a PR or comment first when the user's GitHub account is connected (inbox_api.py): then it is on GitHub.
@@ -1588,6 +1599,15 @@ class Agents:
             text = f"The user approved {about}, and {sent['repo']}#{sent['number']} has the new text on GitHub now: {sent['url']}. Carry on with {job_name}."
         elif decision == "approved" and draft["kind"] == "edit":
             text = f"The user approved {about}. They change it on GitHub themselves. Carry on with {job_name}."
+        elif decision == "approved" and draft["kind"] == "action" and sent is not None:
+            text = f"The user approved {about}, and it is done on GitHub: {sent['url']}."
+            if sent["comment_url"]:
+                text += f" Your text is posted there as their comment: {sent['comment_url']}."
+            if sent["comment_error"]:
+                text += f" The comment couldn't be posted ({sent['comment_error']}); tell the user in one line."
+            text += f" If it finishes {job_name}, mark the job done with job_update."
+        elif decision == "approved" and draft["kind"] == "action":
+            text = f"The user approved {about}. They do it on GitHub themselves. If it finishes {job_name}, mark the job done with job_update."
         elif decision == "approved" and claim and sent is not None:
             text = (
                 f"The user approved {about}, and it is posted: {sent['url']}. Nothing else to do for it: nobody waits for the "

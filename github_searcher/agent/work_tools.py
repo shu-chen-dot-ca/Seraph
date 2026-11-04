@@ -15,8 +15,10 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   answers with draft_comment (target: the thread), draft_pr with pr (a new version of the user's own PR), or by
   marking the job done when nothing needs an answer. A question it drafts for the job is about the thread.
 - Drafts: nothing goes to GitHub from here. A PR, an issue comment or a question becomes a draft
-  in the user's Inbox and its job waits on the user. A comment with reply_to answers inside one of a PR's
-  conversations on lines of code instead of below it. A fix_issue job takes one comment only: the claim on its issue,
+  in the user's Inbox and its job waits on the user. So does draft_action, one change on the user's own PR or issue,
+  the buttons they would click on GitHub: request a review, ready for review or back to draft, allow edits by
+  maintainers, update the branch, resolve conversations on lines of code, close, reopen. A comment with reply_to
+  answers inside one of a PR's conversations on lines of code instead of below it. A fix_issue job takes one comment only: the claim on its issue,
   when the repo's rules ask contributors to claim an issue or be assigned before they start ("Claim owner/name#n" in
   the Inbox). The claim holds nothing up: the job goes on to its PR while the claim waits for the user, and nobody waits
   for the maintainers to assign the user (we assume nobody answers). The user approves the claim, then the PR. A PR draft's diff is read from the repo
@@ -186,6 +188,11 @@ CHECKLIST_ITEM_CHARS = 200
 CHECKLIST_HOW_CHARS = 300
 ALSO_TESTED_MAX = 15
 ALSO_TESTED_CHARS = 250
+# What draft_action can do on the user's own PR or issue, by GitHub's own names for them, and the ones only a PR has.
+ACTIONS = ["request_review", "ready_for_review", "convert_to_draft", "allow_maintainer_edits", "update_branch", "resolve", "close", "reopen"]
+PR_ACTIONS = ["request_review", "ready_for_review", "convert_to_draft", "allow_maintainer_edits", "update_branch", "resolve"]
+# Why an issue is closed, as GitHub says it.
+CLOSE_REASONS = ["completed", "not_planned"]
 # A question's options are buttons in the Inbox: a few, each a few words.
 QUESTION_OPTIONS_MAX = 4
 QUESTION_OPTION_CHARS = 80
@@ -475,6 +482,37 @@ class WorkTools:
                     "required": ["job_id", "target", "project", "problem", "why"],
                 },
             )(self.draft_edit),
+            tool(
+                "draft_action",
+                "Draft one change on one of the user's own PRs or issues (target: owner/name#number; a follow_up job's thread) "
+                "for the user's Inbox, the buttons the user would click on GitHub: request_review asks reviewers to look again "
+                "(reviewers: their logins; after a new version answers their points), ready_for_review marks a draft PR ready, "
+                "convert_to_draft makes it a draft again (it isn't ready after all), allow_maintainer_edits lets the project's "
+                "maintainers push to its branch (when one asks), update_branch merges the newest base branch into it on GitHub "
+                "(it is behind and the project wants it up to date, with no conflicts: a conflict needs a rebase, draft_pr with "
+                "rebase), resolve marks conversations on lines of code resolved (conversations: their ids from read_thread; only "
+                "once the change they asked for is on GitHub, and only where the project's people let the author resolve), close "
+                "(close_reason for an issue: completed or not_planned) and reopen. body: an optional comment posted with it, as "
+                "the user would write it (why it is closed, what changed for the reviewers); leave it out when a draft_pr or "
+                "draft_comment says it already. Nothing is done yet: the user decides, approving does it on GitHub as them, and "
+                "you get a message with their decision. project, problem and why are only for the user. " + PLAIN,
+                {
+                    "type": "object",
+                    "properties": {
+                        "job_id": {"type": "string"},
+                        "target": {"type": "string"},
+                        "action": {"type": "string", "enum": ACTIONS},
+                        "reviewers": {"type": "array", "items": {"type": "string"}},
+                        "conversations": {"type": "array", "items": {"type": "string"}},
+                        "close_reason": {"type": "string", "enum": CLOSE_REASONS},
+                        "body": {"type": "string"},
+                        "project": {"type": "string", "description": "One line: what the project is, e.g. 'matplotlib: a Python library that draws charts'."},
+                        "problem": {"type": "string", "description": "What happened on the PR or issue that calls for it, in 1 to 2 sentences."},
+                        "why": {"type": "string", "description": "Why do this now, in 1 to 2 sentences."},
+                    },
+                    "required": ["job_id", "target", "action", "project", "problem", "why"],
+                },
+            )(self.draft_action),
             tool(
                 "draft_question",
                 "Ask the user a question through their Inbox, only when the answer matters. Small choices are yours (how to "
@@ -828,6 +866,8 @@ class WorkTools:
             return "Asking: " + (args.get("question") or "").split("\n")[0][:120]
         if name == "draft_edit":
             return f"Drafting a new title and description for {args.get('target')}"
+        if name == "draft_action":
+            return f"Drafting {str(args.get('action')).replace('_', ' ')} on {args.get('target')}"
         if name == "draft_pr" and args.get("pr") and args.get("rebase") is True:
             return f"Drafting a rebase of {args['pr']}: {args.get('title')}"
         if name == "draft_pr" and args.get("pr"):
@@ -1599,6 +1639,145 @@ class WorkTools:
         self.agents.jobs.update(job["id"], status="waiting_on_user", drafts=job["drafts"] + [draft["id"]])
         text = (
             f"{draft['id']} is in the user's Inbox. Nothing was changed on GitHub: the user decides, and you'll get a message "
+            f"with their decision. {job['id']} waits on the user now; move on to your next job."
+        )
+        return {"content": [{"type": "text", "text": text}]}
+
+    async def draft_action(self, args: dict) -> dict:
+        try:
+            job = self.agents.jobs.get(args["job_id"])
+        except KeyError:
+            return {"content": [{"type": "text", "text": f"No job {args['job_id']}."}], "is_error": True}
+        if job["agent"] != self.agent_id:
+            return {"content": [{"type": "text", "text": f"{job['id']} is not your job."}], "is_error": True}
+        if job["status"] in CLOSED_STATUSES:
+            text = f"{job['id']} is {job['status']} (the user may have cancelled it): no drafts for it anymore. Move on."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        target = (args.get("target") or "").strip()
+        repo = target.split("#")[0]
+        if "#" not in target or repo.count("/") != 1 or not target.split("#")[-1].isdigit():
+            return {"content": [{"type": "text", "text": "target must be owner/name#number: the user's own PR or issue."}], "is_error": True}
+        action = args.get("action")
+        if action not in ACTIONS:
+            return {"content": [{"type": "text", "text": f"action is one of: {', '.join(ACTIONS)}."}], "is_error": True}
+        overview = {
+            "project": (args.get("project") or "").strip(),
+            "problem": (args.get("problem") or "").strip(),
+            "why": (args.get("why") or "").strip(),
+        }
+        for part, text in overview.items():
+            limit = OVERVIEW_PROJECT_CHARS if part == "project" else OVERVIEW_PART_CHARS
+            if not text:
+                return {"content": [{"type": "text", "text": f"Give {part}: the user reads it to decide."}], "is_error": True}
+            if len(text) > limit:
+                text = f"{part} is {len(text)} characters; keep it under {limit}. Short and plain: the user reads it at a glance."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+        body = (args.get("body") or "").strip()
+        found = EMOJI.findall(" ".join([body] + list(overview.values())))
+        if found:
+            return {"content": [{"type": "text", "text": NO_EMOJI + " ".join(sorted(set(found)))}], "is_error": True}
+
+        # As it is now, never cached: what the user approves still fits it (sending checks it again).
+        owner = repo.split("/")[0]
+        name = repo.split("/")[1]
+        number = int(target.split("#")[1])
+        pull = None
+        try:
+            pull = await asyncio.to_thread(get_pr_status, owner, name, number)
+        except (httpx.HTTPError, ValueError):
+            # GraphQL says "Could not resolve" for a number that is an issue when asked for a PR.
+            pull = None
+        thread = pull
+        if pull is None:
+            try:
+                thread = await asyncio.to_thread(get_issue_status, owner, name, number)
+            except (httpx.HTTPError, ValueError) as error:
+                return {"content": [{"type": "text", "text": f"Could not read {target}: {error}"}], "is_error": True}
+        if thread is None:
+            return {"content": [{"type": "text", "text": f"{target} is not a PR or issue on GitHub."}], "is_error": True}
+        if pull is None and action in PR_ACTIONS:
+            return {"content": [{"type": "text", "text": f"{target} is an issue: {action} is only for a PR."}], "is_error": True}
+        # Only the user's own: with their sign-in the app knows who they are (sending checks it again).
+        account = self.agents.your_repositories.github_account.status()
+        author = ""
+        if thread["author"] is not None:
+            author = thread["author"]["login"]
+        if account["connected"] and author.lower() != account["login"].lower():
+            text = f"{target} was opened by {author}, not the user: draft_action is only for the user's own PR or issue."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        # Only what changes something on GitHub.
+        state = thread["state"].lower()
+        if action == "reopen" and state != "closed":
+            return {"content": [{"type": "text", "text": f"{target} is {state}: only a closed one can be reopened."}], "is_error": True}
+        if action != "reopen" and state != "open":
+            return {"content": [{"type": "text", "text": f"{target} is {state}: {action} is only for an open one."}], "is_error": True}
+        if action == "ready_for_review" and not pull["isDraft"]:
+            return {"content": [{"type": "text", "text": f"{target} isn't a draft: it is ready for review already."}], "is_error": True}
+        if action == "convert_to_draft" and pull["isDraft"]:
+            return {"content": [{"type": "text", "text": f"{target} is a draft already."}], "is_error": True}
+        if action == "allow_maintainer_edits" and pull["maintainerCanModify"]:
+            return {"content": [{"type": "text", "text": f"{target} lets maintainers edit it already."}], "is_error": True}
+        if action == "update_branch" and pull["mergeable"] == "CONFLICTING":
+            text = f"{target} conflicts with {pull['baseRefName']}: GitHub can't update it. Rebase it in the VM and draft_pr with rebase: true."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        reviewers = []
+        for login in args.get("reviewers") or []:
+            login = login.strip().lstrip("@")
+            if login != "" and login not in reviewers:
+                reviewers.append(login)
+        if action == "request_review" and not reviewers:
+            return {"content": [{"type": "text", "text": "Give reviewers: the GitHub logins of the people to ask."}], "is_error": True}
+        if author.lower() in [login.lower() for login in reviewers]:
+            return {"content": [{"type": "text", "text": "The user can't review their own PR: leave them out of reviewers."}], "is_error": True}
+
+        conversations = []
+        for conversation_id in args.get("conversations") or []:
+            if conversation_id.strip() != "" and conversation_id.strip() not in conversations:
+                conversations.append(conversation_id.strip())
+        if action == "resolve":
+            if not conversations:
+                return {"content": [{"type": "text", "text": "Give conversations: the ids of the ones to resolve, from read_thread."}], "is_error": True}
+            try:
+                data = await asyncio.to_thread(get_thread, owner, name, number)
+            except (httpx.HTTPError, ValueError) as error:
+                return {"content": [{"type": "text", "text": f"Could not read {target}: {error}"}], "is_error": True}
+            open_ids = [conversation["id"] for conversation in data["reviewThreads"]["nodes"] if not conversation["isResolved"]]
+            unknown = [conversation_id for conversation_id in conversations if conversation_id not in open_ids]
+            if unknown:
+                text = f"{', '.join(unknown)}: not open conversations on {target}. Use the ids of unresolved ones from read_thread."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        close_reason = None
+        if action == "close" and pull is None:
+            close_reason = args.get("close_reason") or "completed"
+
+        head_sha = ""
+        if pull is not None:
+            head_sha = pull["headRefOid"]
+
+        who = ", ".join(f"@{login}" for login in reviewers)
+        titles = {
+            "request_review": f"Request a review from {who} on {target}",
+            "ready_for_review": f"Mark {target} ready for review",
+            "convert_to_draft": f"Convert {target} to draft",
+            "allow_maintainer_edits": f"Allow edits by maintainers on {target}",
+            "update_branch": f"Update the branch of {target}",
+            "resolve": f"Resolve {len(conversations)} conversations on {target}",
+            "close": f"Close {target}",
+            "reopen": f"Reopen {target}",
+        }
+        if action == "resolve" and len(conversations) == 1:
+            titles["resolve"] = f"Resolve a conversation on {target}"
+        record = {"name": action, "reviewers": reviewers, "conversations": conversations, "close_reason": close_reason, "head_sha": head_sha}
+        draft = self.agents.inbox.create(
+            "action", self.agent_id, titles[action], body, job=job["id"], repo=repo, target=target, evidence=job["evidence"],
+            overview=overview, action=record,
+        )
+        self.agents.jobs.update(job["id"], status="waiting_on_user", drafts=job["drafts"] + [draft["id"]])
+        text = (
+            f"{draft['id']} is in the user's Inbox. Nothing was done on GitHub: the user decides, and you'll get a message "
             f"with their decision. {job['id']} waits on the user now; move on to your next job."
         )
         return {"content": [{"type": "text", "text": text}]}

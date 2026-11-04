@@ -62,8 +62,9 @@ needs_reply() lists the open threads in drafts mode with an agent where someone 
 answered_at, or (your PR) the checks failed on a newest commit no agent was given yet, or anything else changed on
 your PR since told: merged, closed or reopened, made a draft or ready for review, a new title, a new commit nobody
 drafted here (you or a maintainer pushed), its checks passed or wait for a maintainer, it conflicts with its base
-branch now (or no longer), labels added or removed, a bot wrote. backend/github_api.py gives each to its agent as a
-follow_up job, then calls mark_answered(). A closed or merged thread only has its end to hear about, once.
+branch now (or no longer), labels added or removed, a bot wrote. What its agent did there itself with an approved
+action (closed, reopened, made a draft or ready, Update branch's merge) isn't news. backend/github_api.py gives each to
+its agent as a follow_up job, then calls mark_answered(). A closed or merged thread only has its end to hear about, once.
 
 refresh() reads them all again, one GraphQL query each (and one Actions call per PR); a merged or closed one whose
 updated_at in the search didn't change isn't read again. The backend calls it every few minutes, soon after something
@@ -185,9 +186,11 @@ class PRTracking:
                 threads.append(("issue", copy.deepcopy(issue)))
             settings = copy.deepcopy(self.data["agent_settings"])
 
-        # What the app itself sent to each PR: a commit of its own there, or a title its agent changed, is no news to it.
+        # What the app itself sent to each PR: a commit of its own there, a title its agent changed, or what its agent
+        # did there (closed, reopened, made a draft or ready, the merge of Update branch) is no news to it.
         sent_commits = []
         sent_titles = {}
+        sent_actions = {}
         for draft in self.inbox.list():
             sent = draft["sent"]
             if sent is None:
@@ -196,6 +199,10 @@ class PRTracking:
                 sent_commits.append(sent["commit"])
             if sent["kind"] == "edit":
                 sent_titles.setdefault(f"{sent['repo']}#{sent['number']}", []).append(sent["title"])
+            if sent["kind"] == "action":
+                sent_actions.setdefault(f"{sent['repo']}#{sent['number']}", []).append(sent["action"])
+                if sent["commit"] is not None:
+                    sent_commits.append(sent["commit"])
 
         entries = []
         for kind, record in threads:
@@ -209,13 +216,14 @@ class PRTracking:
             if kind == "pr" and record["relation"] == "author" and told is not None and signals is not None:
                 if signals["state"] != told["state"] and signals["state"] == "merged":
                     changes.append(f"it was merged by @{record['merged_by']}")
-                if signals["state"] != told["state"] and signals["state"] == "closed":
+                done = sent_actions.get(record["id"], [])
+                if signals["state"] != told["state"] and signals["state"] == "closed" and "close" not in done:
                     changes.append("it was closed without being merged")
-                if signals["state"] != told["state"] and signals["state"] == "open":
+                if signals["state"] != told["state"] and signals["state"] == "open" and "reopen" not in done:
                     changes.append("it was reopened")
-                if signals["draft"] != told["draft"] and signals["draft"]:
+                if signals["draft"] != told["draft"] and signals["draft"] and "convert_to_draft" not in done:
                     changes.append("it was turned into a draft")
-                if signals["draft"] != told["draft"] and not signals["draft"]:
+                if signals["draft"] != told["draft"] and not signals["draft"] and "ready_for_review" not in done:
                     changes.append("it was marked ready for review")
                 if signals["title"] != told["title"] and signals["title"] not in sent_titles.get(record["id"], []):
                     changes.append(f"its title was changed to \"{signals['title']}\"")

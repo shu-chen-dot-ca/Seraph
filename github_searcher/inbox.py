@@ -7,7 +7,7 @@ Approving tells the agent. With the user's GitHub account connected (the GitHub 
 Approve on a PR or comment also sends it to GitHub as them, first; "sent" then says what went out
 (mark_sent). Each draft is one JSON file, DATA_DIR/inbox/<id>.json:
 
-    {"id": "draft_a1b2c3", "kind": "pr" | "comment" | "question" | "edit" | "taken" (old) | ..., "agent": "<agent id>",
+    {"id": "draft_a1b2c3", "kind": "pr" | "comment" | "question" | "edit" | "action" | "taken" (old) | ..., "agent": "<agent id>",
      "job": "job_..." | null, "repo": "owner/name" | null, "target": "owner/name#n" | null,
      "title", "body": "markdown",
      "diff": "unified diff (pr only)", "branch": "branch in the VM (pr only)", "base": "origin/main (pr only)",
@@ -26,6 +26,7 @@ Approve on a PR or comment also sends it to GitHub as them, first; "sent" then s
      "replaces": "owner/name#n" | null (pr only: the project PR this one is made again of, see below),
      "previous": {"title", "body"} | null (edit only, see below),
      "reply_to": GitHub's id of a review comment | null (comment only, see below),
+     "action": {"name", "reviewers", "conversations", "close_reason", "head_sha"} | null (action only, see below),
      "options": ["what the user can pick", ...] (question only: [] when they answer in their own words),
      "recommended": "one of options" | null, "answer_by": ISO time | null, "must_wait": "money" | "sensitive" |
      "github" | "delete" | "open" | null, "answered_by": "user" | "timer" | null (question only, see below)}
@@ -73,6 +74,13 @@ they are still "previous" (github_account.py).
 
 A comment with "reply_to" is an answer inside one of a PR's conversations on lines of code, below that conversation's
 first comment (GitHub takes no replies to replies), instead of below the PR.
+
+"action" is one change on one of the user's own PRs or issues ("target"), the buttons they would click on GitHub
+(work_tools.py draft_action). "action" says which: "name" is request_review ("reviewers": their logins),
+ready_for_review, convert_to_draft, allow_maintainer_edits, update_branch ("head_sha": the PR's newest commit when
+drafted: GitHub refuses once it moved), resolve ("conversations": the review threads' ids), close ("close_reason" for an
+issue: completed or not_planned) or reopen. "title" says it in words, "body" is a comment posted with it ("" for none),
+and "overview" is {"project", "problem", "why"} like a comment's. Approve does it on GitHub (github_account.py).
 
 A question can come with "options": the answers the agent offers. The Inbox shows each as a button, and picking one is
 a reply with that answer (with the user's note, if any), so the agent always knows which one was meant.
@@ -156,8 +164,9 @@ class Inbox:
             draft.setdefault("answer_by", None)
             draft.setdefault("must_wait", None)
             draft.setdefault("answered_by", None)
-            # And from before review replies.
+            # And from before review replies and actions.
             draft.setdefault("reply_to", None)
+            draft.setdefault("action", None)
             self.drafts[draft["id"]] = draft
 
     def save(self, draft: dict) -> None:
@@ -197,7 +206,7 @@ class Inbox:
                overview: dict | None = None, template: str | None = None, update_of: str | None = None, review: dict | None = None,
                replaces: str | None = None, rebase_of: str | None = None, previous: dict | None = None,
                options: list | None = None, recommended: str | None = None, answer_by: str | None = None,
-               must_wait: str | None = None, reply_to: int | None = None) -> dict:
+               must_wait: str | None = None, reply_to: int | None = None, action: dict | None = None) -> dict:
         with self.lock:
             draft_id = "draft_" + secrets.token_hex(3)
             while draft_id in self.drafts:
@@ -238,6 +247,7 @@ class Inbox:
                 "must_wait": must_wait,
                 "answered_by": None,
                 "reply_to": reply_to,
+                "action": copy.deepcopy(action),
             }
             self.drafts[draft_id] = draft
             self.save(draft)
