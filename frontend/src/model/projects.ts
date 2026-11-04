@@ -8,12 +8,13 @@ several lists of repos; a project is any repo in one of them:
   in the Issues list, a job, a pull request), minus the private ones.
 
 Each project's board shows its work items by stage (model/work.ts). Names are matched in lower case; the spelling
-shown is the first one found.
+shown is the first one found. The Repositories page shows them Private first, then Open source, each in your own
+groups (groupProjects).
 */
 
 import { useMemo } from "react";
 
-import { useLive, type ListedRepo, type Project as DevProject, type TrackedRepo, type WorkflowRepo } from "@/live";
+import { useLive, type ListedRepo, type Project as DevProject, type RepoGroups, type TrackedRepo, type WorkflowRepo } from "@/live";
 import { DONE_STAGES, type Stage, type WorkItem } from "@/model/work";
 
 export type ProjectKind = "private" | "open source";
@@ -100,4 +101,43 @@ export function useProjects(items: Map<string, WorkItem>): Project[] {
 // A project's work items, newest change first.
 export function projectItems(project: Project, items: Map<string, WorkItem>): WorkItem[] {
   return [...items.values()].filter((item) => item.repo.toLowerCase() === project.key).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+// One group of the Repositories page; name null is Ungrouped.
+export type ProjectGroup = { name: string | null; projects: Project[] };
+
+// Private or Open source on the Repositories page, with your groups in it.
+export type KindSection = { kind: ProjectKind; title: string; groups: ProjectGroup[] };
+
+// Private first, then Open source; a kind with no projects is left out. In each: your groups, in their order, then
+// Ungrouped. A group shows under a kind when it has projects of that kind; an empty group shows under each, so
+// something can be put in it. Ungrouped only when something is in it. Projects keep their order (by name).
+export function groupProjects(projects: Project[], layout: RepoGroups): KindSection[] {
+  const kinds: { kind: ProjectKind; title: string }[] = [
+    { kind: "private", title: "Private" },
+    { kind: "open source", title: "Open source" },
+  ];
+  const sections: KindSection[] = [];
+  for (const each of kinds) {
+    const ofKind = projects.filter((project) => project.kind === each.kind);
+    if (ofKind.length === 0) {
+      continue;
+    }
+    const groups: ProjectGroup[] = [];
+    const grouped: string[] = [];
+    for (const group of layout.groups) {
+      const inGroup = ofKind.filter((project) => group.repos.includes(project.key));
+      const empty = !projects.some((project) => group.repos.includes(project.key));
+      if (inGroup.length > 0 || empty) {
+        groups.push({ name: group.name, projects: inGroup });
+      }
+      grouped.push(...group.repos);
+    }
+    const ungrouped = ofKind.filter((project) => !grouped.includes(project.key));
+    if (ungrouped.length > 0) {
+      groups.push({ name: null, projects: ungrouped });
+    }
+    sections.push({ kind: each.kind, title: each.title, groups: groups });
+  }
+  return sections;
 }

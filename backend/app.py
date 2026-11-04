@@ -56,8 +56,8 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
-from backend import agents_api, artifacts_api, ask_settings_api, explore_api, github_account_api, images_api, inbox_api, issues_api, github_api, notifications_api, projects_api, pull_requests_api, remote_access_api, repo_live_api, repos_api, sherpa_api, tracked_api, updates_api, vms_api, workflow_api, your_repositories_api
-from backend.shared import agents, crashes, explore, images, inbox, issue_drafts, issue_facts, issue_tags, issues, jobs, notifications, pr_tracking, projects, remote_access, repo_signals, repos, resource_usage, sherpa, tracked, tracked_issues, updates, vms, workflow, your_repositories
+from backend import agents_api, artifacts_api, ask_settings_api, explore_api, github_account_api, images_api, inbox_api, issues_api, github_api, notifications_api, projects_api, pull_requests_api, remote_access_api, repo_groups_api, repo_live_api, repos_api, sherpa_api, tracked_api, updates_api, vms_api, workflow_api, your_repositories_api
+from backend.shared import agents, crashes, explore, images, inbox, issue_drafts, issue_facts, issue_tags, issues, jobs, notifications, pr_tracking, projects, remote_access, repo_groups, repo_signals, repos, resource_usage, sherpa, tracked, tracked_issues, updates, vms, workflow, your_repositories
 from github_searcher.projects import SELF_REPO
 from github_searcher.remote_access import COOKIE, DOMAIN as REMOTE_DOMAIN
 from github_searcher.token_balancer import BALANCER
@@ -131,7 +131,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 # Every page's router; Sherpa gets their endpoints too (below).
-ROUTERS = [inbox_api.router, ask_settings_api.router, github_api.router, github_account_api.router, your_repositories_api.router, notifications_api.router, pull_requests_api.router, issues_api.router, repos_api.router, explore_api.router, tracked_api.router, agents_api.router, vms_api.router, images_api.router, artifacts_api.router, remote_access_api.router, repo_live_api.router, updates_api.router, projects_api.router, workflow_api.router, sherpa_api.router]
+ROUTERS = [inbox_api.router, ask_settings_api.router, github_api.router, github_account_api.router, your_repositories_api.router, notifications_api.router, pull_requests_api.router, issues_api.router, repos_api.router, explore_api.router, tracked_api.router, agents_api.router, vms_api.router, images_api.router, artifacts_api.router, remote_access_api.router, repo_live_api.router, updates_api.router, projects_api.router, repo_groups_api.router, workflow_api.router, sherpa_api.router]
 for router in ROUTERS:
     app.include_router(router)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
@@ -192,7 +192,7 @@ async def live(websocket: WebSocket) -> None:
 
 
 # The live feed's topics, by name: what the pages show, the same for Sherpa's look (github_searcher/sherpa.py).
-TOPICS = ["repos", "issues", "tracked", "explore", "github", "jobs", "inbox", "issue_drafts", "prs", "your_repos", "notifications", "agents", "vms", "images", "resource", "updates", "projects", "crashes", "workflow"]
+TOPICS = ["repos", "issues", "tracked", "explore", "github", "jobs", "inbox", "issue_drafts", "prs", "your_repos", "notifications", "agents", "vms", "images", "resource", "updates", "projects", "crashes", "workflow", "repo_groups"]
 
 
 def topic_data(topic: str):
@@ -273,6 +273,9 @@ def topic_data(topic: str):
     # The Workflow tab's repositories (workflow.py), their issues and pull requests.
     if topic == "workflow":
         return workflow.list()
+    # Your groups of repositories and the ones pinned to the left list (repo_groups.py).
+    if topic == "repo_groups":
+        return repo_groups.get()
     raise ValueError(f"No topic {topic}: one of {', '.join(TOPICS)}")
 
 
@@ -284,7 +287,7 @@ sherpa.topic_data = topic_data
 async def feed(websocket: WebSocket, watch: dict) -> None:
     """The live feed of one browser, until it goes away."""
     # The version of each topic this browser has; None until it is sent.
-    sent = {"repos": None, "issues": None, "tracked": None, "explore": None, "github": None, "jobs": None, "inbox": None, "issue_drafts": None, "prs": None, "your_repos": None, "notifications": None, "agents": None, "vms": None, "images": None, "resource": None, "updates": None, "projects": None, "crashes": None, "workflow": None}
+    sent = {"repos": None, "issues": None, "tracked": None, "explore": None, "github": None, "jobs": None, "inbox": None, "issue_drafts": None, "prs": None, "your_repos": None, "notifications": None, "agents": None, "vms": None, "images": None, "resource": None, "updates": None, "projects": None, "crashes": None, "workflow": None, "repo_groups": None}
     outside = remote_access.from_outside(websocket.headers)
     cookie = websocket.cookies.get(COOKIE)
     while True:
@@ -356,6 +359,9 @@ async def feed(websocket: WebSocket, watch: dict) -> None:
         if sent["workflow"] != workflow.version:
             sent["workflow"] = workflow.version
             messages.append({"topic": "workflow", "data": topic_data("workflow")})
+        if sent["repo_groups"] != repo_groups.version:
+            sent["repo_groups"] = repo_groups.version
+            messages.append({"topic": "repo_groups", "data": topic_data("repo_groups")})
 
         try:
             for message in messages:

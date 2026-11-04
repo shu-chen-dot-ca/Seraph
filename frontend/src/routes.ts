@@ -5,7 +5,7 @@ one address. Links are plain <a href={href.…}>; App only reads the hash (parse
   #/dashboard                 the Dashboard (its Questions card while any question waits, else Approvals, else In progress)
   #/dashboard/<card>          one card's list: questions, approvals, in-progress, open, merged, closed, notifications
   #/inbox/<draft id>          one question or approval
-  #/projects                  every project (the phone's Projects tab; on a computer they are in the left list)
+  #/projects                  Repositories: every project, in your groups (the pinned ones are in the left list too)
   #/p/<owner>/<name>          a project's board            ?tab=agents|settings
   #/p/<owner>/<name>/<n>      one issue of it: open, being worked on, or done (a work item)
   #/jobs/<job id>             one job; a job on an issue opens that issue's page instead

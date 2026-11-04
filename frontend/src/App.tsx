@@ -7,8 +7,9 @@ What each part is for:
 - Dashboard: big cards with how many there are, each opening its list: what agents need from you (questions, answer
   first, and approvals, send or merge), your pull requests from every project (in progress, open, merged, closed),
   and what GitHub told you (notifications).
-- Projects: each repository you work on, private or open source, as a board from open to done; each issue on it has
-  one page with its whole story (pages/WorkItemPage.tsx).
+- Repositories: every repository you work on, private or open source, in your own groups; pin one to have it in the
+  left list. Each is a board from open to done; each issue on it has one page with its whole story
+  (pages/WorkItemPage.tsx).
 - Agents: the agents and their chats. Machines: the VMs, their desktops and images.
 - Settings (your picture, top right): GitHub account, when agents ask you, theme, env vars, remote access, updates.
 

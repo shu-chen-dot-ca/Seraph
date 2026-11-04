@@ -1161,6 +1161,13 @@ export type WorkflowPRParts = {
   tests?: { before: TestRun | null; after: TestRun | null };
 };
 
+// Your groups of repositories, in their order, and the ones pinned to the left list (github_searcher/repo_groups.py).
+// Repos are "owner/name" in lower case, each in one group at most.
+export type RepoGroups = {
+  groups: { name: string; repos: string[] }[];
+  pinned: string[];
+};
+
 // ---- The live store ----
 
 export type Topics = {
@@ -1183,6 +1190,7 @@ export type Topics = {
   projects: Project[];
   crashes: Crash[]; // the newest first
   workflow: WorkflowRepo[];
+  repo_groups: RepoGroups;
 };
 
 // Empty until the first message, so components never deal with "not loaded yet".
@@ -1222,6 +1230,7 @@ const store = {
     projects: [],
     crashes: [],
     workflow: [],
+    repo_groups: { groups: [], pinned: [] },
   } as Topics,
   loaded: {} as Partial<Record<keyof Topics, boolean>>,
   connected: false,
