@@ -38,8 +38,8 @@ with them after the restart; one cut off in the middle of a turn gets one more s
 After each turn the worker enforces the VM rule: an agent never holds a VM it has nothing to do in.
 - Holding a VM with no queued or working job for it: the VM is released for it.
 - Holding one while only its run goes there (a test suite or build it left going, sandbox/agent/long_runs.py): it
-  steps aside (VMQueue.step_aside). The next one gets the VM, and the agent waits in the VM's priority line, which
-  comes before its waiting line: it gets the VM back as soon as its run is over and the VM is free.
+  keeps the VM and sleeps. It is woken when the run ends, or after CHECK_IN_SECONDS to look how the run does
+  (watch_runs). It never steps aside by itself; only the user's Skip does that (VMQueue.step_aside).
 - Holding one with open jobs there: it is reminded to go on with them now, not to wait for an answer in chat. After
   MAX_NUDGES reminders in a row with no change to its jobs, the VM is released for it.
 - In no queue but with queued jobs for a VM: it is reminded to queue_for_vm (MAX_NUDGES times at most).
@@ -53,7 +53,8 @@ VM is killed, except its runs).
 Runs nobody waits for anymore (the agent's turn ended, or the backend restarted) are checked every
 RUN_CHECK_SECONDS (watch_runs). When one ends, its agent gets the result (bash: ComputerTools.bash_result; tests:
 WorkTools.finish_tests, which keeps it on the job). An agent in that VM's priority line gets it together with the
-message that the VM is its again; any other agent right away. Archiving or deleting an agent stops its runs.
+message that the VM is its again; any other agent right away. An agent holding the VM while its run goes, with nothing
+else to do, is woken every CHECK_IN_SECONDS to check on the run. Archiving or deleting an agent stops its runs.
 
 The user's side: assign() turns an issue into a job for an agent, set_up_repo() a repo from the
 Repos list (its Set up button) into a set_up_repo job: the agent reads the README and docs, sets an
@@ -165,6 +166,8 @@ DEMO_DIR = os.environ["SANDBOX_VM_DEMO_DIR"]
 SAVE_SECONDS = 5
 # How often the runs nobody waits for are checked.
 RUN_CHECK_SECONDS = 10
+# An agent that holds its VM while its run goes sleeps this long at most, then is woken to check on the run.
+CHECK_IN_SECONDS = 30 * 60
 # How often timed questions are checked for an answer_by that passed.
 QUESTION_CHECK_SECONDS = 10
 OPEN_STATUSES = ["queued", "working"]
@@ -425,17 +428,14 @@ class Agents:
             if agent.stopped or self.wake[agent.id].is_set():
                 continue
 
-            # Only its run goes in the VM now: it steps aside, so whoever waits gets the VM meanwhile.
+            # Only its run goes in the VM now: it keeps the VM and sleeps. It is woken when the run ends, or after
+            # CHECK_IN_SECONDS to check on it (watch_runs).
             runs = []
             for vm_record in self.vms.list():
                 if place == 0 and vm_record.name == vm_name:
                     runs = [run for run in vm_record.runs if run["agent"] == agent.id]
             if runs:
-                try:
-                    self.queue.step_aside(vm_name, agent.id)
-                except (ValueError, VMsError):
-                    continue
-                text = f"Stepped aside from {vm_name} while its run goes; it gets the VM back first once the run is over"
+                text = f"Sleeping while its run goes in {vm_name}; it keeps the VM and checks on the run every {CHECK_IN_SECONDS // 60} minutes"
                 agent.history.append({"type": "system", "text": text, "time": datetime.now(UTC).isoformat()})
                 self.save(agent)
                 self.version += 1
@@ -480,7 +480,7 @@ class Agents:
                 status = "working"
             if place is not None and place > 0:
                 status = "in_queue"
-            # In a VM's priority line: it stepped aside while its run goes, and gets the VM back first.
+            # In a VM's priority line: the user skipped it while its run goes, and it gets the VM back first.
             desktop = None
             for vm_record in self.vms.list():
                 if vm_record.name == vm_name:
@@ -1725,8 +1725,34 @@ class Agents:
                     # The VM was deleted meanwhile.
                     pass
 
+            # An agent holding its VM while its runs go sleeps CHECK_IN_SECONDS at most after its last turn, then it is
+            # woken to check on them. Not one the user stopped, or one with messages waiting already.
+            now = datetime.now(UTC)
+            for vm_record in self.vms.list():
+                for agent_id in {run["agent"] for run in vm_record.runs if run["background"]}:
+                    agent = self.agents.get(agent_id)
+                    if agent is None or agent.busy or agent.stopped or self.pending[agent_id]:
+                        continue
+                    if agent.record["archived_at"] is not None or vm_record.holding(agent_id) is None:
+                        continue
+                    times = [entry["time"] for entry in agent.history[-20:] if entry.get("time")]
+                    if times and (now - datetime.fromisoformat(times[-1])).total_seconds() < CHECK_IN_SECONDS:
+                        continue
+                    lines = []
+                    for run in [run for run in vm_record.runs if run["agent"] == agent_id]:
+                        minutes = round((now - datetime.fromisoformat(run["started_at"])).total_seconds() / 60)
+                        lines.append(f"- {run['id']}, going {minutes} minutes, its output in {run['log']}: `{run['label'][:200]}`")
+                    text = (
+                        f"You slept {CHECK_IN_SECONDS // 60} minutes while your runs go in {vm_record.name}:\n" + "\n".join(lines) + "\n"
+                        "Check on them now: read the end of each log and see whether it still makes progress. If one hangs, or "
+                        "waits for something that won't come, stop it (`pkill -f ' sandbox-<run id>$'`) and fix the cause. "
+                        f"Otherwise end your turn again: you keep {vm_record.name}, and you hear when a run ends, or in "
+                        f"{CHECK_IN_SECONDS // 60} minutes."
+                    )
+                    self.notify(agent_id, text)
+
     async def run_ended(self, vm_record, run: dict, ended: dict) -> None:
-        """A run in the background ended: its agent gets the result. One that stepped aside from this VM gets it with
+        """A run in the background ended: its agent gets the result. One the user skipped on this VM gets it with
         the message that the VM is its again (finish_run, right after this, may give it the VM at once), so it starts
         one turn with both; any other agent is woken now."""
         agent = self.agents.get(run["agent"])

@@ -73,7 +73,7 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   long they take (up to TEST_TIMEOUT). It refuses until the agent read the rules (contributing_guide).
   The suite is a run (sandbox/agent/long_runs.py): run_tests waits for it up to long_runs.FOREGROUND_SECONDS, then
   it goes on in the background (background: true starts it that way). The agent can work on, or end its turn and
-  step aside, so another agent uses the VM meanwhile (sandbox/vm_queue.py). When it ends, finish_tests keeps the
+  sleep, keeping the VM (agents.py wakes it every 30 minutes to check on the run). When it ends, finish_tests keeps the
   result on the job (agents.py calls it for a run in the background); an after run counts only if the code is still
   the code it started on.
   A passing before is needed to go past set_up and an after for a PR draft; an official before of
@@ -89,7 +89,8 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
 - VMs: the agent sees every VM with what its image has (sandbox/images.py lists each image once) and
   its notes, and picks the one that suits its jobs as its target VM (the user can set it too). It can't make VMs.
   It joins its target VM's queue (sandbox/vm_queue.py) and releases the VM when its jobs there are done. While
-  only its run goes (a test suite, a build), it steps aside instead (agents.py): it is in the VM's priority line then.
+  only its run goes (a test suite, a build), it keeps the VM and sleeps (agents.py): it is woken when the run ends, or
+  every 30 minutes to check on it.
   The notes (sandbox/vms.py) say what agents and the user set up in a VM since it was made, so the next
   agent knows (e.g. that a project is already cloned and built there, and what was added on top). Only the
   agent holding the VM adds or removes them (vm_note_add, vm_note_remove), never the user's own. They come
@@ -408,8 +409,8 @@ class WorkTools:
                 f"Waits for the tests up to {long_runs.FOREGROUND_SECONDS // 60} minutes; still running then, they go on in the "
                 "background and you get the result in a message when they end. background: true starts them that way at once, "
                 "for a run you expect to take more than about 5 minutes (most full runs): then do what else you have in this VM "
-                "(not in the repo folder), or end your turn, and the VM goes to whoever waits meanwhile; you get it back first "
-                f"once the run is over. Stopped after {TEST_TIMEOUT // 3600} hours.",
+                "(not in the repo folder), or end your turn; you keep the VM, and you are woken when they end, or every 30 "
+                f"minutes to check on them. Stopped after {TEST_TIMEOUT // 3600} hours.",
                 {
                     "type": "object",
                     "properties": {
@@ -2819,7 +2820,7 @@ class WorkTools:
         vm = vm_record.desktop_vm(desktop)
 
         # The diff is read with the tag of the agent's VM tools (ComputerTools), so losing the VM stops that. The suite
-        # itself is a run (long_runs.py) with a tag of its own: it goes on when the agent steps aside or loses the VM.
+        # itself is a run (long_runs.py) with a tag of its own: it goes on when the agent is skipped or loses the VM.
         tag = f"sandbox-agent-{self.agent_id}"
         # Commands run in the user's home, so ~/click and click are the same folder.
         folder = shlex.quote(args["path"].strip().removeprefix("~/"))
@@ -2883,7 +2884,7 @@ class WorkTools:
         later = (
             f"you get the result in a message when it ends, and it is kept on {job['id']} then. Leave {args['path']} alone "
             f"until then: the tests run on what is in it. If you have more to do in {vm_name}, do it; otherwise end your turn: "
-            f"whoever waits gets {vm_name} meanwhile, and you get it back first once the run is over."
+            f"you keep {vm_name}, and you are woken when it ends, or every 30 minutes to check on it."
         )
         if args.get("background"):
             return {"content": [{"type": "text", "text": f"Started the tests in the background as {run['id']}: " + later}]}
@@ -3123,7 +3124,7 @@ class WorkTools:
 
         if place > 0 and self.agent_id not in vm_record.queue:
             text = (
-                f"You stepped aside from desktop {desktop} of {vm_name} and are number {place} in its priority line: you get it "
+                f"The user skipped you on desktop {desktop} of {vm_name}; you are number {place} in its priority line: you get it "
                 "back before the agents waiting in its queue, once your run there is over. End your turn; you'll get a message "
                 "when it's yours."
             )
@@ -3231,7 +3232,7 @@ class WorkTools:
             if desktop is not None:
                 status["you"] += f", desktop {desktop}"
             if desktop is not None and self.agent_id in vm_record.desktops[desktop]["priority"]:
-                status["you"] = f"number {place} in the priority line of desktop {desktop} of {vm_name} (you stepped aside; you get it back first)"
+                status["you"] = f"number {place} in the priority line of desktop {desktop} of {vm_name} (the user skipped you; you get it back first)"
             status["vm_status"] = vm_record.status
             status["desktops"] = [
                 {"desktop": number, "holder": line["holder"], "priority": list(line["priority"])}
