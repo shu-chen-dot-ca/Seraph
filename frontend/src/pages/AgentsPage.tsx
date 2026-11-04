@@ -11,7 +11,7 @@ import { href } from "@/routes";
 import AgentChat from "@/AgentChat";
 
 /*
-Team: every agent, what it works on and where. Opening one shows its chat (AgentChat.tsx: the conversation, its job,
+Agents: every agent, what it works on and where. Opening one shows its chat (AgentChat.tsx: the conversation, its job,
 its VM place and desktop). Archived agents are apart (Archived in the header); select some to archive or bring back.
 */
 
@@ -23,7 +23,7 @@ const STATUS_TEXT: Record<string, string> = {
   using_vm: "Working",
 };
 
-export function TeamPage() {
+export function AgentsPage() {
   const agents = useLive("agents");
   const jobs = useLive("jobs");
   const now = useNow();
@@ -48,11 +48,11 @@ export function TeamPage() {
   return (
     <div>
       <PageHeader
-        title={archived ? "Archived agents" : "Team"}
+        title={archived ? "Archived agents" : "Agents"}
         meta={archived ? "Stopped, their conversations kept" : `${rows.length} agents · ${rows.filter((agent) => agent.status !== "idle").length} working`}
         right={
           <Button size="sm" variant="outline" onClick={() => setArchived(!archived)}>
-            {archived ? "Back to the team" : `Archived (${archivedCount})`}
+            {archived ? "Back to agents" : `Archived (${archivedCount})`}
           </Button>
         }
       />

@@ -14,7 +14,7 @@ The left list on a computer, the row of tabs at the bottom on a phone.
 - Dashboard, with how many questions (amber) and approvals wait, and how many notifications are unread.
 - The projects: Private, then Open source, each with how many things in it wait for you; Add or find projects.
   On a phone they are one Projects tab instead.
-- Team and Machines.
+- Agents and Machines.
 */
 
 type Item = { link: string; label: string; current: boolean; counts: { n: number; tone: "warn" | "primary" | "muted" }[]; computer?: boolean; phone?: boolean };
@@ -86,7 +86,7 @@ export default function LeftList(props: { route: Route }) {
     ],
   };
   const projectsItem: Item = { link: href.projects(), label: "Projects", current: route.page === "projects" || onProject !== null, counts: [], phone: true };
-  const team: Item = { link: href.team(), label: "Team", current: route.page === "team" || route.page === "agent", counts: [] };
+  const agents: Item = { link: href.agents(), label: "Agents", current: route.page === "agents" || route.page === "agent", counts: [] };
   const machines: Item = { link: href.machines(), label: "Machines", current: route.page === "machines" || route.page === "machine" || route.page === "phone-vm", counts: [] };
   const privateProjects = projects.filter((project) => project.kind === "private");
   const openSource = projects.filter((project) => project.kind === "open source");
@@ -111,7 +111,7 @@ export default function LeftList(props: { route: Route }) {
         <Plus className="size-3.5" /> Add or find projects
       </button>
       <div className="my-1.5 border-t max-md:hidden" />
-      <Link item={team} />
+      <Link item={agents} />
       <Link item={machines} />
       {adding && <AddProjectDialog onClose={() => setAdding(false)} />}
     </nav>

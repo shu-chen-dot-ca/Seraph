@@ -9,7 +9,7 @@ What each part is for:
   and what GitHub told you (notifications).
 - Projects: each repository you work on, private or open source, as a board from open to done; each issue on it has
   one page with its whole story (pages/WorkItemPage.tsx).
-- Team: the agents and their chats. Machines: the VMs, their desktops and images.
+- Agents: the agents and their chats. Machines: the VMs, their desktops and images.
 - Settings (your picture, top right): GitHub account, when agents ask you, theme, env vars, remote access, updates.
 
 App owns the theme and accent (Settings changes them): it puts them on <html> (class "dark", data-accent) and keeps
@@ -33,7 +33,7 @@ import MachinesPage from "@/pages/MachinesPage";
 import ProjectPage from "@/pages/ProjectPage";
 import ProjectsPage from "@/pages/ProjectsPage";
 import SettingsPage from "@/pages/SettingsPage";
-import { AgentPage, TeamPage } from "@/pages/TeamPage";
+import { AgentPage, AgentsPage } from "@/pages/AgentsPage";
 import { JobPage, WorkItemPage } from "@/pages/WorkItemPage";
 import PhoneVM from "@/PhoneVM";
 import { legacyAddress, parseRoute } from "@/routes";
@@ -132,8 +132,8 @@ export default function App() {
   if (route.page === "find") {
     page = <Explore />;
   }
-  if (route.page === "team") {
-    page = <TeamPage />;
+  if (route.page === "agents") {
+    page = <AgentsPage />;
   }
   if (route.page === "agent") {
     page = <AgentPage id={route.id} />;

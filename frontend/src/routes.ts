@@ -10,7 +10,7 @@ one address. Links are plain <a href={href.…}>; App only reads the hash (parse
   #/p/<owner>/<name>/<n>      one issue of it: open, being worked on, or done (a work item)
   #/jobs/<job id>             one job; a job on an issue opens that issue's page instead
   #/find                      find open-source projects
-  #/team                      #/team/<agent id>
+  #/agents                    #/agents/<agent id>
   #/machines                  ?tab=images|defaults|resource          #/machines/<vm>   ?tab=notes
   #/vm                        one desktop to use yourself, for the phone
   #/settings
@@ -31,7 +31,7 @@ export type Route =
   | { page: "work"; repo: string; number: number }
   | { page: "job"; id: string }
   | { page: "find" }
-  | { page: "team" }
+  | { page: "agents" }
   | { page: "agent"; id: string }
   | { page: "machines"; tab: string | null }
   | { page: "machine"; name: string; tab: string | null }
@@ -46,8 +46,8 @@ export const href = {
   work: (repo: string, number: number) => `#/p/${repo}/${number}`,
   job: (jobId: string) => `#/jobs/${jobId}`,
   find: () => "#/find",
-  team: () => "#/team",
-  agent: (agentId: string) => `#/team/${agentId}`,
+  agents: () => "#/agents",
+  agent: (agentId: string) => `#/agents/${agentId}`,
   machines: (tab?: string) => `#/machines${tab ? `?tab=${tab}` : ""}`,
   machine: (name: string) => `#/machines/${encodeURIComponent(name)}`,
   settings: () => "#/settings",
@@ -87,11 +87,11 @@ export function parseRoute(hash: string): Route {
   if (first === "find") {
     return { page: "find" };
   }
-  if (first === "team" && second !== undefined) {
+  if (first === "agents" && second !== undefined) {
     return { page: "agent", id: second };
   }
-  if (first === "team") {
-    return { page: "team" };
+  if (first === "agents") {
+    return { page: "agents" };
   }
   if (first === "machines" && second !== undefined) {
     return { page: "machine", name: second, tab: query.get("tab") };
@@ -121,8 +121,8 @@ export function legacyAddress(hash: string): string | null {
   const repo = query.get("repo");
   const open = workAddress(query.get("open"));
   const rest = query.toString();
-  if (first === "agents") {
-    return second !== undefined ? href.agent(second) : href.team();
+  if (first === "team") {
+    return second !== undefined ? href.agent(second) : href.agents();
   }
   if (first === "vms" && second !== undefined) {
     return `${href.machine(second)}${rest !== "" ? `?${rest}` : ""}`;
@@ -137,7 +137,7 @@ export function legacyAddress(hash: string): string | null {
     return href.find();
   }
   if (first === "jobs" && second === undefined) {
-    return href.team();
+    return href.agents();
   }
   if (first === "github" && second === "account") {
     return `${href.settings()}${rest !== "" ? `?${rest}` : ""}`;
