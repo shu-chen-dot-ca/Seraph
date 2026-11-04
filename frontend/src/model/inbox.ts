@@ -18,7 +18,7 @@ import { isQuestion } from "@/model/work";
 export type Approval = {
   id: string; // the draft's id, or "workflow:owner/name#n"
   ask: string;
-  kind: string; // Fix, New version, Comment, Edit, Merge
+  kind: string; // Fix, New version, Comment, Reply, Edit, Merge
   repo: string;
   agent: string | null;
   at: string;
@@ -40,6 +40,9 @@ export function askOf(draft: Draft): string {
   if (isQuestion(draft)) {
     return draft.title;
   }
+  if (draft.kind === "comment" && draft.reply_to !== null) {
+    return `Post this reply in a review conversation on ${name}${target ? ` #${target}` : ""}?`;
+  }
   if (draft.kind === "comment") {
     return `Post this comment on ${name}${target ? ` #${target}` : ""}?`;
   }
@@ -56,6 +59,9 @@ export function askOf(draft: Draft): string {
 }
 
 export function kindOf(draft: Draft): string {
+  if (draft.kind === "comment" && draft.reply_to !== null) {
+    return "Reply";
+  }
   if (draft.kind === "comment") {
     return "Comment";
   }

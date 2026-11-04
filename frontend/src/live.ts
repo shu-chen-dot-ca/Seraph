@@ -457,6 +457,7 @@ export type Draft = {
   answer_by: string | null;
   must_wait: "money" | "sensitive" | "github" | "delete" | "open" | null;
   answered_by: "user" | "timer" | null; // who answered it, once it is answered
+  reply_to: number | null; // comment: a reply inside a PR's conversation on lines of code (the comment's id on GitHub)
 };
 
 // A project's PR draft is reviewed by the project's reviewer before it reaches the Inbox (github_searcher/inbox.py).
