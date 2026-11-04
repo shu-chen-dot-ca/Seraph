@@ -422,7 +422,7 @@ export type DraftStatus = "pending" | "approved" | "rejected" | "replied";
 
 export type Draft = {
   id: string;
-  kind: "pr" | "comment" | "question" | "taken" | "edit"; // taken: old, made by the app when an issue an agent worked on was taken (agents decide that themselves now); edit: a new title and description for your own PR or issue
+  kind: "pr" | "comment" | "question" | "taken" | "edit" | "action"; // taken: old, made by the app when an issue an agent worked on was taken (agents decide that themselves now); edit: a new title and description for your own PR or issue; action: one change on your own PR or issue (DraftAction)
   agent: string;
   job: string | null;
   repo: string | null;
@@ -458,6 +458,16 @@ export type Draft = {
   must_wait: "money" | "sensitive" | "github" | "delete" | "open" | null;
   answered_by: "user" | "timer" | null; // who answered it, once it is answered
   reply_to: number | null; // comment: a reply inside a PR's conversation on lines of code (the comment's id on GitHub)
+  action: DraftAction | null; // action: what it does (body: a comment posted with it, "" for none)
+};
+
+// An action draft: one change on your own PR or issue, the buttons you would click on GitHub (github_searcher/inbox.py).
+export type DraftAction = {
+  name: "request_review" | "ready_for_review" | "convert_to_draft" | "allow_maintainer_edits" | "update_branch" | "resolve" | "close" | "reopen";
+  reviewers: string[]; // request_review: their logins
+  conversations: string[]; // resolve: the review threads' ids
+  close_reason: "completed" | "not_planned" | null; // close, on an issue
+  head_sha: string; // a PR's newest commit when drafted
 };
 
 // A project's PR draft is reviewed by the project's reviewer before it reaches the Inbox (github_searcher/inbox.py).
@@ -482,7 +492,7 @@ export type DraftCommit = {
 
 // A PR or comment Approve sent to GitHub from your account. PRs keep what following them up will need.
 export type DraftSent = {
-  kind: "pr" | "comment" | "edit";
+  kind: "pr" | "comment" | "edit" | "action";
   url: string;
   number: number;
   repo: string;
@@ -498,8 +508,9 @@ export type DraftSent = {
   title?: string; // edit: the new title it set
   update?: boolean; // PR: a new version pushed onto a PR that was already open
   rebase_of?: string | null; // PR update: the PR's commit a rebase replaced (a force push)
-  comment_url?: string | null; // PR update: the comment posted with it (null: none was)
-  comment_error?: string | null; // PR update: why GitHub refused the comment, when it did (the push went through)
+  comment_url?: string | null; // PR update or action: the comment posted with it (null: none was)
+  comment_error?: string | null; // PR update or action: why GitHub refused the comment, when it did (the rest went through)
+  action?: DraftAction["name"]; // action: which one was done
 };
 
 // One of your PRs on GitHub and how it stands (github_searcher/pr_tracking.py): the ones Approve sent, and your

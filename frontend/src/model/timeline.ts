@@ -29,6 +29,7 @@ const DRAFT_TEXT: Record<string, string> = {
   pr: "Wrote a fix for your approval",
   comment: "Wrote a comment for your approval",
   edit: "Wrote a new title and description for your approval",
+  action: "Asked you to approve a change on GitHub",
   question: "Asked you",
   taken: "The issue was taken by someone else",
 };
@@ -80,6 +81,9 @@ function draftEvents(draft: Draft): TimelineEvent[] {
   if (draft.kind === "question") {
     text = `Asked you: ${draft.title}`;
   }
+  if (draft.kind === "action") {
+    text = `Asked you to approve: ${draft.title}`;
+  }
   events.push({ at: draft.created_at, who: draft.agent, text: text, draft: draft.id });
   if (draft.review !== null && draft.review.agent !== null && draft.review.state !== "waiting") {
     const verdict = draft.review.state === "passed" ? "Reviewed it: send" : "Reviewed it and asked for changes";
@@ -106,6 +110,9 @@ function draftEvents(draft: Draft): TimelineEvent[] {
     }
     if (draft.sent.kind === "edit") {
       sent = "Changed the title and description";
+    }
+    if (draft.sent.kind === "action") {
+      sent = `Done on GitHub: ${draft.title}`;
     }
     if (draft.sent.update) {
       sent = `Added the new version to #${draft.sent.number}`;

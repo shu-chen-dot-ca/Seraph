@@ -29,7 +29,8 @@ An approval starts with what the agent needs, as a plain question ("Send this fi
 about in plain words, what was checked (the issue's points, before and after screenshots, the project's own tests,
 the reviewer's verdict) and what could go wrong. The diff, the exact words that will be posted and the commits are
 folded under Details. A comment or a new title and description shows its text unfolded, since that text is what you
-approve. Approve asks first and sends it to GitHub as you (it needs your GitHub sign-in, in Settings). Reject asks
+approve. An action (request a review, ready for review, close, ...) is said in its question; the comment posted with it,
+if any, shows below. Approve asks first and sends it to GitHub as you (it needs your GitHub sign-in, in Settings). Reject asks
 for a note: the agent tries again with it, or drops it.
 
 Once answered or decided, you land on the issue's page, where the timeline shows what happened.
@@ -156,6 +157,9 @@ function Approval(props: { draft: Draft; job: Job | null }) {
   if (draft.kind === "comment") {
     sends = "Approve posts the comment as you.";
   }
+  if (draft.kind === "action") {
+    sends = draft.body !== "" ? "Approve does it on GitHub as you, and posts the comment." : "Approve does it on GitHub as you.";
+  }
   if (draft.update_of !== null) {
     sends = `Approve adds the new version to ${draft.update_of} as you.`;
   }
@@ -238,6 +242,13 @@ function Approval(props: { draft: Draft; job: Job | null }) {
               <div className="font-medium">{draft.title}</div>
               <Markdown text={draft.body} githubImagesOnly issueRefs />
               {draft.previous !== null && <p className="border-t pt-2 text-xs text-muted-foreground">It was: {draft.previous.title}</p>}
+            </div>
+          </Section>
+        )}
+        {draft.kind === "action" && draft.body !== "" && (
+          <Section title="Comment posted with it">
+            <div className="rounded-lg border bg-card p-3">
+              <Markdown text={draft.body} githubImagesOnly issueRefs />
             </div>
           </Section>
         )}

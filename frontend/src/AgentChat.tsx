@@ -181,6 +181,7 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   draft_pr: GitPullRequest,
   run_tests: FlaskConical,
   draft_comment: MessageSquare,
+  draft_action: GitPullRequest,
   draft_question: CircleHelp,
   draft_issue: CircleDot,
   queue_for_vm: ListOrdered,

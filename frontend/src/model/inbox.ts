@@ -5,7 +5,8 @@ The Inbox: what agents need from you, in two kinds, so each works one way.
   (answer_by: then the app answers with the agent's recommended choice); the rest wait for you however long it takes
   (must_wait says why).
 - Approvals: only things to send or merge: a pull request (new, a new version, a rebase), a comment, a new title and
-  description, and a Workflow pull request that waits for your Merge. Approve works the same on each.
+  description, an action on your own PR or issue (request a review, ready for review, close, ...), and a Workflow pull
+  request that waits for your Merge. Approve works the same on each.
 
 ask is what the agent needs, as a plain question, the first thing you read.
 */
@@ -18,12 +19,24 @@ import { isQuestion } from "@/model/work";
 export type Approval = {
   id: string; // the draft's id, or "workflow:owner/name#n"
   ask: string;
-  kind: string; // Fix, New version, Comment, Reply, Edit, Merge
+  kind: string; // Fix, New version, Comment, Reply, Edit, an action's name (Review request, Close, ...), Merge
   repo: string;
   agent: string | null;
   at: string;
   draft: Draft | null;
   workflow: { repo: WorkflowRepo; pr: WorkflowPR } | null;
+};
+
+// An action draft, as GitHub names its buttons.
+const ACTION_KINDS: Record<string, string> = {
+  request_review: "Review request",
+  ready_for_review: "Ready for review",
+  convert_to_draft: "Convert to draft",
+  allow_maintainer_edits: "Maintainer edits",
+  update_branch: "Update branch",
+  resolve: "Resolve",
+  close: "Close",
+  reopen: "Reopen",
 };
 
 // The repo's short name: "owner/name" → "name".
@@ -49,6 +62,32 @@ export function askOf(draft: Draft): string {
   if (draft.kind === "edit") {
     return `Change the title and description of ${name}${target ? ` #${target}` : ""}?`;
   }
+  if (draft.kind === "action" && draft.action !== null) {
+    const where = `${name} #${target}`;
+    const action = draft.action;
+    if (action.name === "request_review") {
+      return `Ask ${action.reviewers.map((login) => `@${login}`).join(", ")} to review ${where}?`;
+    }
+    if (action.name === "ready_for_review") {
+      return `Mark ${where} ready for review?`;
+    }
+    if (action.name === "convert_to_draft") {
+      return `Convert ${where} to a draft?`;
+    }
+    if (action.name === "allow_maintainer_edits") {
+      return `Let the maintainers edit ${where}?`;
+    }
+    if (action.name === "update_branch") {
+      return `Update the branch of ${where}?`;
+    }
+    if (action.name === "resolve") {
+      return action.conversations.length === 1 ? `Resolve a conversation on ${where}?` : `Resolve ${action.conversations.length} conversations on ${where}?`;
+    }
+    if (action.name === "close") {
+      return `Close ${where}?`;
+    }
+    return `Reopen ${where}?`;
+  }
   if (draft.rebase_of !== null) {
     return `Send the rebased version of ${name} #${target}?`;
   }
@@ -64,6 +103,9 @@ export function kindOf(draft: Draft): string {
   }
   if (draft.kind === "comment") {
     return "Comment";
+  }
+  if (draft.kind === "action") {
+    return ACTION_KINDS[draft.action?.name ?? ""] ?? "Action";
   }
   if (draft.kind === "edit") {
     return "Edit";
