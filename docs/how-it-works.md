@@ -9,7 +9,7 @@
    - The evidence is real screenshots of the project running.
 4. **Review.** A reviewer agent checks every PR draft first, the way the project's maintainers will: every point the issue or a reviewer asked for, and the edge cases of its kind. Only then it lands in the Inbox. It has an **Overview** in plain words, with a **Checklist** of every point asked (what isn't done comes first) and what was **Also tested**, the **Diff**, and the **PR message** written to the project's contributing guide.
 5. **Send.** Approve rebuilds the change on your computer, pushes it to a new branch in your fork, and opens the pull request as you.
-6. **Follow up.** Every open PR of yours has an agent that owns it, and it hears about every change there: replies, reviews, checks, pushes, conflicts with main, labels, merged or closed. It first reproduces what was reported in a VM, and tests the rest of that kind of mistake too, then drafts the answer, the next version, a rebase or a new title and description, and it comes back to the Inbox. Nothing is posted or pushed until you approve it.
+6. **Follow up.** Every open PR of yours has an agent that owns it, and it hears about every change there: replies, reviews, checks, pushes, conflicts with main, labels, merged or closed. It first reproduces what was reported in a VM, and tests the rest of that kind of mistake too, then drafts the answer (inside a reviewer's conversation on a line of code when that is where they asked), the next version, a rebase, a new title and description, or one of the buttons you would click on GitHub (request a review again, ready for review, convert to draft, allow edits by maintainers, update branch, resolve conversations, close, reopen), and it comes back to the Inbox. Nothing is posted or pushed until you approve it.
 
 ## Judging repos
 
@@ -61,6 +61,7 @@ Agents never ask maintainers or anyone else on GitHub for anything beyond what t
 | **PR** | Overview, Diff, PR message | Opens the pull request as you, pushes a new version to one you already opened, or force-pushes a rebase of it |
 | **Comment** | Overview, Comment | Posts it as you |
 | **Edit** | Overview, Changes, Title and description | Changes the title and description of your own PR or issue |
+| **Action** | Overview, the comment posted with it (if any) | Does it on your own PR or issue: requests a review, marks it ready for review or a draft, allows edits by maintainers, updates the branch, resolves conversations, closes or reopens it |
 | **Question** | – | You **Reply**, or pick one of the answers the agent offers |
 | **Taken** | – | **Keep working** or **Stop the agent**. Only older ones: agents now decide this themselves |
 
