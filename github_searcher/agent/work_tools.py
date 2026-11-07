@@ -32,9 +32,9 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   written from the project's contribution rules and its recently merged PRs: contributing_guide
   gathers the rules wherever they are (CONTRIBUTING in any folder, developer guides in the docs, the
   PR template, AGENTS.md, and the guides the README and CONTRIBUTING link to, on GitHub or on the
-  project's website), pr_examples shows its main contributors' latest merged PRs and some outside ones,
-  and draft_pr refuses until the agent read both for that repo. Which repos it read is kept in its record, so a backend
-  restart doesn't ask for them again. The job's before and
+  project's website) and shows them in parts that each fit one answer, pr_examples shows its main contributors' latest
+  merged PRs and some outside ones, and draft_pr refuses until the agent read both for that repo (the guide to its last
+  part). Which repos it read is kept in its record, so a backend restart doesn't ask for them again. The job's before and
   after pictures go in the PR body as ![before](evidence:ev_...): the Inbox shows them in place,
   and sending uploads them to the user's fork (or the user does, sending by hand).
   draft_pr with pr ("owner/name#n") is the next version of the user's own open PR instead: base must be that PR's
@@ -256,14 +256,17 @@ OUTSIDE_ROLES = ["CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE"]
 # .github/ or in docs/ (an AGENTS.md deeper down is only for its folder: those are named, not shown). Only text files,
 # never in folders of other people's code, test data or translations. Links in the README and in those files are
 # followed when their text or address has one of GUIDE_LINK_WORDS: a file in the repo, or a page on the web (https,
-# at most GUIDE_PAGES of them). Each document is cut at GUIDE_CHARS, all of them together at GUIDE_TOTAL_CHARS.
-GUIDE_FILES = ["agents.md", "ai_policy.md", "development.md", "developing.md", "hacking.md"]
+# at most GUIDE_PAGES of them). Each document is cut at GUIDE_CHARS, all of them together at GUIDE_TOTAL_CHARS, and they
+# are shown in parts of at most GUIDE_PART_CHARS (reticle's 87,000 characters were more than one tool answer may be:
+# Claude Code put it in a file the agent has no tool to open).
+GUIDE_FILES =["agents.md", "ai_policy.md", "development.md", "developing.md", "hacking.md"]
 GUIDE_TEXT_ENDINGS = (".md", ".mdx", ".rst", ".txt", ".adoc")
 GUIDE_SKIP_FOLDERS = ["node_modules/", "vendor/", "third_party/", "site-packages/", "tests/", "fixtures/", "i18n/", "locale/", "locales/", "translations/"]
 GUIDE_LINK_WORDS = ["contribut", "developer guide", "developer-guide", "development guide", "hacking", "pull request", "pull-request"]
 GUIDE_PAGES = 5
 GUIDE_CHARS = 30_000
 GUIDE_TOTAL_CHARS = 120_000
+GUIDE_PART_CHARS = 40_000
 # A picture made with matplotlib says so in its file ("Software: Matplotlib version ..."): the agent drew it.
 MATPLOTLIB_MARK = b"matplotlib"
 # paper_read shows at most this many pages at once, each as a JPEG this many pixels on its long side (still sharp
@@ -796,9 +799,10 @@ class WorkTools:
                 "developer guides in its docs, its PR template, AGENTS.md and the like, and the guides its README and those "
                 "files link to, in the repo or on the project's website. Read all of it before you set up, and follow every "
                 "rule (setup, what to run before a PR and how, commit and PR style), however long its checks take. name: "
-                "owner/name. run_tests and draft_pr refuse until you read it for the job's repo; that stays read after a "
-                "backend restart.",
-                {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
+                "owner/name. A long guide comes in parts: the answer says how many, and part (1, 2, ...) reads each one. "
+                "run_tests and draft_pr refuse until you read it, to the last part, for the job's repo; that stays read "
+                "after a backend restart.",
+                {"type": "object", "properties": {"name": {"type": "string"}, "part": {"type": "integer"}}, "required": ["name"]},
             )(self.contributing_guide),
             tool(
                 "draft_pr",
@@ -1098,6 +1102,8 @@ class WorkTools:
             return f"Copying {args.get('path')} from its artifacts into the VM"
         if name == "pr_examples":
             return f"Reading how {args.get('name')}'s people write their PRs"
+        if name == "contributing_guide" and isinstance(args.get("part"), int) and args["part"] > 1:
+            return f"Reading {args.get('name')}'s rules for contributors, part {args.get('part')}"
         if name == "contributing_guide":
             return f"Reading {args.get('name')}'s rules for contributors"
         if name == "evidence_add":
@@ -2915,18 +2921,16 @@ class WorkTools:
                 text = re.sub(r"\n\s*\n+", "\n\n", text).strip()
             documents.append((f"{url} (web page)", text))
 
-        self.guides_read.add(name.lower())
-        self.record["guides_read"] = sorted(self.guides_read)
         if not documents and not folder_rules:
+            self.guides_read.add(name.lower())
+            self.record["guides_read"] = sorted(self.guides_read)
             text = (
                 f"{name} has no rules for contributors that could be found: no CONTRIBUTING, developer guide, PR template or "
                 "AGENTS.md in the repo, and no link to one in its README. Go by its README and its CI config (.github/workflows/)."
             )
             return {"content": [{"type": "text", "text": text}]}
-        lines = [
-            f"The rules for contributors to {name}: {len(documents)} documents. Follow every rule in them, however long the "
-            "checks they ask for take."
-        ]
+        # Each document as one block, cut at GUIDE_CHARS; all of them together at GUIDE_TOTAL_CHARS.
+        blocks = []
         total = 0
         left = []
         for title, text in documents:
@@ -2937,9 +2941,39 @@ class WorkTools:
                 line = text[:GUIDE_CHARS].count("\n") + 1
                 text = text[:GUIDE_CHARS] + f"\n[cut at line {line}: read on with read_files, start_line {line}]"
             total += len(text)
+            blocks.append(f"=== {title} ===\n{text}")
+        # The blocks in parts of at most GUIDE_PART_CHARS, never splitting a document: one long answer is more than a
+        # tool's answer may be, and the agent couldn't read it at all.
+        parts = [[]]
+        size = 0
+        for block in blocks:
+            if parts[-1] and size + len(block) > GUIDE_PART_CHARS:
+                parts.append([])
+                size = 0
+            parts[-1].append(block)
+            size += len(block)
+        part = args.get("part") or 1
+        if not isinstance(part, int) or part < 1 or part > len(parts):
+            text = f"{name}'s rules for contributors come in {len(parts)} parts: part is 1 to {len(parts)}."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        lines = [
+            f"The rules for contributors to {name}: {len(documents)} documents. Follow every rule in them, however long the "
+            "checks they ask for take."
+        ]
+        if len(parts) > 1:
+            lines[0] += f" They come in {len(parts)} parts; this is part {part}."
+        for block in parts[part - 1]:
             lines.append("")
-            lines.append(f"=== {title} ===")
-            lines.append(text)
+            lines.append(block)
+        if part < len(parts):
+            lines.append("")
+            lines.append(f"End of part {part} of {len(parts)}: read on with contributing_guide, part {part + 1}. run_tests and draft_pr wait until you read the last part.")
+            return {"content": [{"type": "text", "text": "\n".join(lines)}]}
+
+        # The last part: the guide is read.
+        self.guides_read.add(name.lower())
+        self.record["guides_read"] = sorted(self.guides_read)
         if left:
             lines.append("")
             lines.append("Too much to show at once, read these with read_files too: " + ", ".join(left))
