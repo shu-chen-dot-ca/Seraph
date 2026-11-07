@@ -47,6 +47,13 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   that the agent ran), so the user sees the gaps before approving, and maintainers don't find them one round at a time.
   Every PR draft goes to a reviewer agent first (Agents.give_review) and reaches the Inbox only once the review passes:
   a project's reviewer, or else the repo's own reviewer, which checks it on the author's desktop.
+- The repo's Level of automation (set by the user on the Dashboard, inbox.py AUTOMATION_FILE) lets some drafts go
+  without the user: the app sends them or answers them (backend/repo_automation_api.py). One tool acts on GitHub
+  itself, as the user, and only where it allows it; elsewhere it refuses: open_issue (Open issues: a new issue the
+  project's rules allow, assigned to the user, which goes in the Issues list and to the end of the board's Catalog,
+  where an agent takes it when the repo's Take issues is on). open_issue refuses until the agent read the repo's
+  rules (contributing_guide). What it did is kept for the Dashboard's Actions (Inbox.add_action), like every sent
+  draft.
 - Questions: draft_question is only for what matters to the user; small choices the agent makes itself and says so in
   its progress. A question with options names the one the agent recommends, and is timed: when the user doesn't answer
   within the timer of their Settings, the app answers it with that recommendation (Agents.answer_questions). One about
@@ -130,7 +137,8 @@ import httpx
 from claude_agent_sdk import tool
 
 from github_searcher.artifacts import ArtifactsError
-from github_searcher.inbox import ASK_SETTINGS_FILE, MUST_WAIT, TIMER_MINUTES
+from github_searcher.github_account import SendError
+from github_searcher.inbox import ASK_SETTINGS_FILE, AUTOMATION_FILE, MUST_WAIT, TIMER_MINUTES
 from github_searcher.jobs import EVIDENCE_DIR
 from github_searcher.projects import TITLE, TITLE_CHARS
 from github_searcher.search import get_contents, get_issue_status, get_merged_prs, get_pr_status, get_readme, get_repository, get_thread, get_tree
@@ -488,6 +496,27 @@ class WorkTools:
                     "required": ["job_id", "target", "project", "problem", "why"],
                 },
             )(self.draft_edit),
+            tool(
+                "open_issue",
+                "Open a new issue on a repo (owner/name), as the user and assigned to the user, only where the user lets agents "
+                "do it (the repo's Level of automation: Open issues; elsewhere it refuses) and the project's rules allow it: "
+                "read them first (contributing_guide), and don't open one when they ask outside people to start a discussion "
+                "first, or don't take issues from them. Only for a real problem you saw yourself while working on the repo, "
+                "that is not your job's own issue and isn't reported already (search its issues first): never a question, "
+                "and never a request for someone else to do something. Write it the way the project's issue template and its "
+                "rules ask (title and body as on GitHub), with how to make it happen and what you saw. It is opened at once, "
+                "goes in the Issues list and to the end of the board's Catalog, where an agent takes it when the user lets agents take "
+                "the repo's issues.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "repo": {"type": "string"},
+                        "title": {"type": "string"},
+                        "body": {"type": "string"},
+                    },
+                    "required": ["repo", "title", "body"],
+                },
+            )(self.open_issue),
             tool(
                 "draft_question",
                 "Ask the user a question through their Inbox, only when the answer matters. Small choices are yours (how to "
@@ -899,6 +928,8 @@ class WorkTools:
             return "Asking: " + (args.get("question") or "").split("\n")[0][:120]
         if name == "draft_edit":
             return f"Drafting a new title and description for {args.get('target')}"
+        if name == "open_issue":
+            return f"Opening an issue on {args.get('repo')}: {args.get('title')}"
         if name == "paper_read":
             return f"Reading the paper, pages {args.get('pages')}"
         if name == "draft_report":
@@ -1661,6 +1692,71 @@ class WorkTools:
         text = (
             f"{draft['id']} is in the user's Inbox. Nothing was changed on GitHub: the user decides, and you'll get a message "
             f"with their decision. {job['id']} waits on the user now; move on to your next job."
+        )
+        return {"content": [{"type": "text", "text": text}]}
+
+    async def open_issue(self, args: dict) -> dict:
+        repo = args["repo"].strip()
+        title = args["title"].strip()
+        if repo.count("/") != 1:
+            return {"content": [{"type": "text", "text": "repo must be owner/name."}], "is_error": True}
+        if not title or not args["body"].strip():
+            return {"content": [{"type": "text", "text": "Give the issue a title and a body."}], "is_error": True}
+        found = EMOJI.findall(title + " " + args["body"])
+        if found:
+            return {"content": [{"type": "text", "text": NO_EMOJI + " ".join(sorted(set(found)))}], "is_error": True}
+        settings = {}
+        if AUTOMATION_FILE.is_file():
+            settings = json.loads(AUTOMATION_FILE.read_text())
+        allowed = [name.lower() for name, rules in settings.items() if rules.get("open_issues")]
+        if repo.lower() not in allowed:
+            text = (
+                f"The user doesn't let agents open issues on {repo} (its Level of automation: Open issues is off). Don't open "
+                "one; put what you found in your job's notes instead."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if repo.lower() not in self.guides_read:
+            text = f"First read {repo}'s rules for contributors (contributing_guide): open an issue only if they allow it, the way they say."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        try:
+            opened = await asyncio.to_thread(self.agents.your_repositories.github_account.open_issue, repo, title, args["body"])
+        except SendError as error:
+            return {"content": [{"type": "text", "text": f"It wasn't opened. {error}"}], "is_error": True}
+
+        # On the Dashboard's Actions, with the job the agent works on (none when it works on none).
+        job_id = None
+        for job in self.agents.jobs.for_agent(self.agent_id):
+            if job["status"] == "working":
+                job_id = job["id"]
+        sent = {"url": opened["url"], "repo": opened["repo"], "number": opened["number"], "at": datetime.now(UTC).isoformat()}
+        action = {"draft": None, "kind": "issue", "agent": self.agent_id, "job": job_id, "title": opened["title"], "sent": sent}
+        await asyncio.to_thread(self.agents.inbox.add_action, action)
+
+        # In the Issues list, and at the end of the board's Catalog, where an agent takes it (the repo's Take issues).
+        issue_id = f"{opened['repo']}#{opened['number']}"
+        item = {
+            "id": issue_id,
+            "repo": opened["repo"],
+            "number": opened["number"],
+            "title": opened["title"],
+            "labels": [],
+            "state": "OPEN",
+            "comments": 0,
+            "html_url": opened["url"],
+            "note": "",
+            "added_by": self.agent_id,
+            "added_at": datetime.now(UTC).isoformat(),
+        }
+        await asyncio.to_thread(self.agents.issues.add, [item])
+        board = await asyncio.to_thread(self.agents.issues.board)
+        if issue_id not in board["catalog"]:
+            await asyncio.to_thread(self.agents.issues.set_board, board["catalog"] + [issue_id], board["order"], board["held"])
+        assigned = "assigned to the user"
+        if not opened["assigned"]:
+            assigned = "not assigned: GitHub only lets the repo's own people assign there"
+        text = (
+            f"Opened {issue_id} as the user ({opened['url']}), {assigned}. It is in the Issues list, at the end of the "
+            "board's Catalog, where an agent takes it when the user lets agents take the repo's issues. Go on with your own job."
         )
         return {"content": [{"type": "text", "text": text}]}
 

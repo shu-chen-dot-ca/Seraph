@@ -3,8 +3,8 @@ the Issues board: frontend/src/AutomationDialog.tsx): what agents do there witho
 
 The settings, by repo, in SETTINGS_FILE (a repo not in it has DEFAULTS):
 
-    {"owner/name": {"add_issues", "queue_issues", "take_issues", "questions", "comments", "pull_requests": bool,
-                    "levels": ["easy", ...], "instructions": str}, ...}
+    {"owner/name": {"add_issues", "queue_issues", "take_issues", "questions", "comments", "pull_requests",
+                    "open_issues": bool, "levels": ["easy", ...], "instructions": str}, ...}
 
 and an issue's own level (the robot on its card on the Issues board: frontend/src/IssueAutomationDialog.tsx), which goes
 over its repo's for the drafts of the jobs on that issue, in ISSUE_SETTINGS_FILE:
@@ -28,6 +28,9 @@ What each does:
   reviewer passed it) or an edit (a new title and description of your PR or issue) is sent as you, as Approve with
   Send does (github_account.py), then approved, so its agent hears it the same way. One GitHub refuses (or that has to
   wait, like a PR whose claim isn't decided yet) stays in the Inbox for you, and is tried again after SEND_RETRY_SECONDS.
+- Open issues: agents may open new issues on the repo as you, assigned to you, where the project's rules allow it
+  (open_issue, work_tools.py); each goes to the end of the Issues board's Catalog, where an agent takes it when the
+  repo's Take issues is on.
 
 keep_adding() runs in the background, every ADD_CHECK_SECONDS. For each repo in Repos (not archived) with Add issues on,
 it reads all its open issues from GitHub, every ADD_REFRESH_SECONDS (at once after Add issues is turned on, or the
@@ -84,6 +87,7 @@ DEFAULTS = {
     "questions": False,
     "comments": False,
     "pull_requests": False,
+    "open_issues": False,
     "levels": ["easy"],
     "instructions": "",
 }
@@ -126,6 +130,7 @@ class AutomationRequest(BaseModel):
     questions: bool
     comments: bool
     pull_requests: bool
+    open_issues: bool = False
     levels: list[str]
     instructions: str
 
