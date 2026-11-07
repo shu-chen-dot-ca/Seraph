@@ -4,8 +4,12 @@ the Issues board: frontend/src/AutomationDialog.tsx): what agents do there witho
 The settings, by repo, in SETTINGS_FILE (a repo not in it has DEFAULTS):
 
     {"owner/name": {"add_issues", "queue_issues", "take_issues", "questions", "comments", "pull_requests",
-                    "open_issues": bool, "max_prs_first", "max_prs": int, "levels": ["easy", ...],
+                    "open_issues": bool, "max_prs_first", "max_prs": int, "levels_first", "levels": ["easy", ...],
                     "instructions": str}, ...}
+
+The Issue levels and Open PRs at once each come in two: until one of your PRs on the repo is merged (levels_first: Easy
+at first; max_prs_first: 1), and after, once you are a contributor there (levels: Easy, Medium and Hard; max_prs: 5).
+Your merged PRs are the ones pr_tracking.py follows. Settings from before levels_first have Easy for it.
 
 and an issue's own level (the robot on its card on the Issues board: frontend/src/IssueAutomationDialog.tsx), which goes
 over its repo's for the drafts of the jobs on that issue, in ISSUE_SETTINGS_FILE:
@@ -100,7 +104,9 @@ DEFAULTS = {
     # How many of your PRs may be open on the repo at once: until one of yours there is merged, and after.
     "max_prs_first": 1,
     "max_prs": 5,
-    "levels": ["easy"],
+    # Which issues may be taken, by complexity: until one of yours there is merged, and after.
+    "levels_first": ["easy"],
+    "levels": ["easy", "medium", "hard"],
     "instructions": "",
 }
 LEVELS = ["easy", "medium", "hard"]
@@ -145,6 +151,7 @@ class AutomationRequest(BaseModel):
     open_issues: bool = False
     max_prs_first: int = 1
     max_prs: int = 5
+    levels_first: list[str] = ["easy"]
     levels: list[str]
     instructions: str
 
@@ -190,7 +197,7 @@ def put_automation(body: AutomationRequest) -> dict:
     """Give these repos the same settings; returns them all."""
     if not body.repos:
         raise HTTPException(status_code=400, detail="No repository picked.")
-    if any(level not in LEVELS for level in body.levels):
+    if any(level not in LEVELS for level in body.levels + body.levels_first):
         raise HTTPException(status_code=400, detail="The levels are easy, medium and hard.")
     if body.max_prs_first < 1 or body.max_prs_first > 50 or body.max_prs < 1 or body.max_prs > 50:
         raise HTTPException(status_code=400, detail="Open PRs at once is 1 to 50.")
@@ -313,6 +320,11 @@ async def add_issues() -> None:
         added = json.loads(ADDED_FILE.read_text())["added"]
     archived = [name.lower() for name in repos.archived()]
     names = [item["full_name"] for item in repos.items() if item["full_name"].lower() not in archived]
+    # How many of your PRs each repo merged (lower case): until one is, its levels_first are the levels.
+    merged = {}
+    for pr in pr_tracking.summary()["items"]:
+        if pr["relation"] == "author" and pr["state"] == "merged":
+            merged[pr["repo"].lower()] = merged.get(pr["repo"].lower(), 0) + 1
 
     for name in names:
         rules = by_name.get(name.lower())
@@ -349,7 +361,8 @@ async def add_issues() -> None:
         for node in waiting:
             issue_id = f"{name}#{node['number']}"
             tag = tags.get(issue_id)
-            if tag is None or tag.get("merge") == "out of scope" or tag.get("complexity") not in rules["levels"]:
+            levels = rules["levels"] if merged.get(name.lower(), 0) > 0 else rules.get("levels_first", ["easy"])
+            if tag is None or tag.get("merge") == "out of scope" or tag.get("complexity") not in levels:
                 continue
             items.append(
                 {
@@ -399,6 +412,11 @@ async def pick_for_catalog() -> None:
     if AUTO_REMOVE_FILE.is_file():
         board_rules.update(json.loads(AUTO_REMOVE_FILE.read_text()))
     oldest = datetime.now(UTC) - timedelta(minutes=board_rules["refresh_open_minutes"])
+    # How many of your PRs each repo merged (lower case): until one is, its levels_first are the levels.
+    merged = {}
+    for pr in pr_tracking.summary()["items"]:
+        if pr["relation"] == "author" and pr["state"] == "merged":
+            merged[pr["repo"].lower()] = merged.get(pr["repo"].lower(), 0) + 1
 
     # What fits, by repo: (item, tag, basis).
     candidates = {}
@@ -422,9 +440,10 @@ async def pick_for_catalog() -> None:
         # Not read again since it came in: keep_new_tags (backend/issues_api.py) does that first.
         if datetime.fromisoformat(judged) < datetime.fromisoformat(item["added_at"]):
             continue
-        if tag["status"] != "free" or tag.get("merge") != "likely" or tag.get("complexity") not in rules["levels"]:
+        levels = rules["levels"] if merged.get(item["repo"].lower(), 0) > 0 else rules.get("levels_first", ["easy"])
+        if tag["status"] != "free" or tag.get("merge") != "likely" or tag.get("complexity") not in levels:
             continue
-        basis = hashlib.sha256(json.dumps([rules["instructions"], sorted(rules["levels"]), tag["updated_at"]]).encode()).hexdigest()[:16]
+        basis = hashlib.sha256(json.dumps([rules["instructions"], sorted(levels), tag["updated_at"]]).encode()).hexdigest()[:16]
         if picked.get(item["id"]) == basis:
             continue
         candidates.setdefault(item["repo"], []).append((item, tag, basis))
