@@ -12,7 +12,8 @@ A VM has one desktop or more, up to its max desktops (Settings). Each has its ow
 desktops work at the same time without getting in each other's way. Each keeps its number: removing desktop 1 leaves
 desktops 2 and 3 as they are, and the next new one is desktop 1 again (the lowest number free). With more than one,
 buttons Desktop 1, Desktop 2, ... above the desktop pick which one the desktop area, its Lock, and the queue panel (its
-holder, Priority and Runs) are about; each button's tooltip says who holds it. × removes the desktop shown (it asks
+holder, Priority and Runs) are about; each button's tooltip says who holds it, and its dot is green while the
+desktop is free, amber while someone (an agent or you) holds it. × removes the desktop shown (it asks
 first). + after them adds a desktop and shows it once it is up
 (while the VM runs it is set up right away: under a minute the first time; it is gone once the VM has its max
 desktops), and × after the last one removes that one (it asks first; its home folder stays). Both work running or
@@ -496,7 +497,15 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                 <div className="flex h-full flex-col">
                   <div className="flex h-7 shrink-0 items-center gap-1 border-b bg-muted/40 px-2 text-xs">
                     {terminalOnly && <span className="font-medium text-muted-foreground">Terminal</span>}
-                    {!terminalOnly && count === 1 && <span className="font-medium text-muted-foreground">{numbers[0] === 1 ? "Desktop" : `Desktop ${numbers[0]}`}</span>}
+                    {!terminalOnly && count === 1 && (
+                      <span
+                        className="flex items-center gap-1.5 font-medium text-muted-foreground"
+                        title={vm.desktops[0].holder === null ? "Free" : "Held"}
+                      >
+                        <span className={cn("size-2 shrink-0 rounded-full", vm.desktops[0].holder === null ? "bg-ok" : "bg-warn")} />
+                        {numbers[0] === 1 ? "Desktop" : `Desktop ${numbers[0]}`}
+                      </span>
+                    )}
                     {!terminalOnly &&
                       count > 1 &&
                       vm.desktops.map((each) => {
@@ -516,6 +525,7 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                             title={heldBy}
                             onClick={() => showDesktop(number)}
                           >
+                            <span className={cn("size-2 shrink-0 rounded-full", each.holder === null ? "bg-ok" : "bg-warn")} />
                             Desktop {number}
                           </Button>
                         );
