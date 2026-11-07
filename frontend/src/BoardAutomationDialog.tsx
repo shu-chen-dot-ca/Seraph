@@ -10,7 +10,10 @@ Right, Refresh every (minutes): how often the board's issues are read again, by 
 (15) and In progress, Review and Open PR (5). Finished ones are read again only when they change on GitHub. Under it Max agents
 at once: how many agents work on the board's issues at the same time (3 at first); while there is room, the backend
 gives Catalog's cards to new agents from the top, first come first served, the cards of repos with Take issues on
-(keep_catalog_agents in backend/issues_api.py).
+(keep_catalog_agents in backend/issues_api.py). Under it Close inactive PRs after N days (14 at first; untick to turn it
+off): an open PR of yours that an agent owns, with no update on GitHub for that long, is made again by its agent as a
+fresh PR with a clean history, and the old one is closed once the new one is on GitHub (keep_stale_prs in
+backend/issues_api.py).
 The number boxes take digits only. Save checks them, keeps it all and applies the removal at once (a toast says how many
 went); Cancel, Esc or the X drop the changes.
 */
@@ -34,6 +37,7 @@ type Rules = {
   refresh_catalog_minutes: number;
   refresh_ongoing_minutes: number;
   max_agents: number;
+  stale_pr_days?: number | null; // missing from a backend before it; null: off
 };
 
 const LEVELS: Record<string, string> = {
@@ -55,6 +59,8 @@ export default function BoardAutomationDialog(props: { onClose: () => void }) {
   const [catalogMinutes, setCatalogMinutes] = useState("15");
   const [ongoingMinutes, setOngoingMinutes] = useState("5");
   const [maxAgents, setMaxAgents] = useState("3");
+  const [stale, setStale] = useState(true);
+  const [staleDays, setStaleDays] = useState("14");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -73,6 +79,10 @@ export default function BoardAutomationDialog(props: { onClose: () => void }) {
         setCatalogMinutes(String(rules.refresh_catalog_minutes));
         setOngoingMinutes(String(rules.refresh_ongoing_minutes));
         setMaxAgents(String(rules.max_agents));
+        setStale(rules.stale_pr_days !== null);
+        if (rules.stale_pr_days !== null && rules.stale_pr_days !== undefined) {
+          setStaleDays(String(rules.stale_pr_days));
+        }
         setLoaded(true);
       })
       .catch((err) => setError(`Could not read them: ${err instanceof Error ? err.message : err}`));
@@ -101,6 +111,10 @@ export default function BoardAutomationDialog(props: { onClose: () => void }) {
       setError("Max agents must be 1 to 100.");
       return;
     }
+    if (stale && (staleDays === "" || Number(staleDays) < 1 || Number(staleDays) > 365)) {
+      setError("Close inactive PRs after 1 to 365 days.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -114,6 +128,7 @@ export default function BoardAutomationDialog(props: { onClose: () => void }) {
         refresh_catalog_minutes: Number(catalogMinutes),
         refresh_ongoing_minutes: Number(ongoingMinutes),
         max_agents: Number(maxAgents),
+        stale_pr_days: stale ? Number(staleDays) : null,
       };
       const result = await api<Rules & { removed: string[] }>("/api/issues/auto_remove", { method: "PUT", body: body });
       const count = result.removed.length;
@@ -210,6 +225,14 @@ export default function BoardAutomationDialog(props: { onClose: () => void }) {
               Max agents
               <Input className={number} inputMode="numeric" value={maxAgents} onChange={(event) => setMaxAgents(event.target.value.replace(/\D/g, ""))} />
             </label>
+            <div className="mt-2 flex items-center gap-2 px-2">
+              <button type="button" className="flex items-center gap-2" onClick={() => setStale(!stale)}>
+                <SelectBox checked={stale} />
+                Close inactive PRs after
+              </button>
+              <Input className={number} inputMode="numeric" value={staleDays} onChange={(event) => setStaleDays(event.target.value.replace(/\D/g, ""))} />
+              days
+            </div>
           </div>
         </div>
 
