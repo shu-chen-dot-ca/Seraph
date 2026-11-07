@@ -90,3 +90,5 @@ The board's robot also has **Close inactive PRs after** (14 days at first): an o
 Before an agent claims, comments on or takes an issue, it reads all of it: every comment, every place it was mentioned, every related PR with its checks and reviews, and the checks on the default branch. If the issue is already fixed, a duplicate, taken by someone else's PR, or turned down by a maintainer, the agent closes it for us: its job stops and the issue leaves the board for good. Nothing on GitHub changes.
 
 Where the repo's Comments or Pull requests setting is on, an agent can also take back what it sent itself: delete its own comment, close its own PR, or drop its newest commits from its own PR.
+
+Once a PR of yours is merged or closed, its branch in your fork is deleted by itself (the PR's page on GitHub has **Restore branch** if you want to reopen it).
