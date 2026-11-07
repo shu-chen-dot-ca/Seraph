@@ -35,7 +35,8 @@ gray. Then when it was opened (hover for the date), how many comments it has, an
 ("Refreshed 4m ago", hover for the time; it counts up by itself), and on an Open card, at the bottom
 right, Add: it moves to the end of Catalog. A click opens it in a pop-up: the short name,
 then its real name (#number and GitHub title, opens the issue on GitHub), the repository (opens it on GitHub), the
-agent (its chat; none before a job), the VM its job is on (its page) and who opened it (their GitHub profile). Not the issue's text: that is on GitHub.
+agent (its chat; none before a job), the VM its agent works on (the job's, else the one the agent holds or waits for,
+else its target VM; its page), the desktop it is on now (or its place in that VM's line, or None now) and who opened it (their GitHub profile). Not the issue's text: that is on GitHub.
 
 Open goes by repo like the Repository page (RepositoryCards.tsx): the repos where most of your pull requests were
 merged first, ties by stars, then A to Z; within a repo by when the issue was opened on GitHub, newest first. In
@@ -650,6 +651,22 @@ export default function IssueBoard() {
     }
   }
   const agentName = open !== null && open.job !== null ? (agents.find((agent) => agent.id === open.job?.agent)?.name ?? open.job.agent) : "";
+  // Where its agent works: the job's VM, else the one the agent holds or waits for, else its target VM; and which desktop.
+  const openAgent = open !== null && open.job !== null ? agents.find((agent) => agent.id === open.job?.agent) : undefined;
+  let openVM: string | null = null;
+  if (open !== null && open.job !== null) {
+    openVM = open.job.vm ?? openAgent?.vm ?? openAgent?.target_vm ?? null;
+  }
+  let openDesktop = "";
+  if (openAgent !== undefined && openAgent.status === "using_vm") {
+    openDesktop = `Desktop ${openAgent.desktop} of ${openAgent.vm}`;
+  }
+  if (openAgent !== undefined && openAgent.status === "in_queue") {
+    openDesktop = `Waiting in line for ${openAgent.vm} (#${openAgent.place})`;
+  }
+  if (openAgent !== undefined && openAgent.status === "in_priority") {
+    openDesktop = `Stepped aside on ${openAgent.vm} while its run goes (#${openAgent.place})`;
+  }
   const author = open?.issue.facts?.author ?? "";
   const link = "text-primary hover:underline";
   // The cards on the board: Finished ones aren't shown.
@@ -980,12 +997,22 @@ export default function IssueBoard() {
               </dd>
               <dt className="text-muted-foreground">VM</dt>
               <dd className="min-w-0">
-                {open.job !== null && open.job.vm !== null ? (
-                  <a href={`#/vms/${encodeURIComponent(open.job.vm)}`} className={link}>
-                    {open.job.vm}
+                {openVM !== null ? (
+                  <a href={`#/vms/${encodeURIComponent(openVM)}`} className={link}>
+                    {openVM}
                   </a>
                 ) : (
                   <span className="text-muted-foreground">None yet</span>
+                )}
+              </dd>
+              <dt className="text-muted-foreground">Desktop</dt>
+              <dd className="min-w-0">
+                {openDesktop !== "" && openAgent?.vm ? (
+                  <a href={`#/vms/${encodeURIComponent(openAgent.vm)}`} className={link}>
+                    {openDesktop}
+                  </a>
+                ) : (
+                  <span className="text-muted-foreground">None now</span>
                 )}
               </dd>
               <dt className="text-muted-foreground">Opened by</dt>

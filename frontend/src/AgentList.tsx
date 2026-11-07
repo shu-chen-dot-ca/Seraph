@@ -5,7 +5,9 @@ Open PR on the Issues board (IssueBoard.tsx): a job on the issue that waits in t
 paused, or waits on maintainers while its pull request is open (or not read yet); or an open pull request of yours the
 agent follows (also after its job is done). Closed has every other one (?state=closed): finished, cancelled, archived,
 and the ones you only chat with. A row:
-its name (with its status dot), its id, the repository, issue and pull request it is on, how many times its context was
+its name (with its status dot), its id, the repository, issue and pull request it is on, the VM it works on (its job's,
+else the one it holds or waits for, else its target VM; its page) and its desktop there now (Desktop 2, In line #3 while
+it waits for one, Stepped aside #1 while its run goes, else –), how many times its context was
 compacted over its whole life, how full its context is now, and the tokens it used over its whole life, in millions
 (every reply's: what it was given, cached or not, plus what it wrote).
 The repository, issue and pull request come from its job: the one that makes it open (a working one first), else the job
@@ -25,7 +27,7 @@ import { useLive, useLoaded, type AgentSummary, type Job } from "@/live";
 import { cn } from "@/lib/utils";
 
 const COLUMNS =
-  "grid grid-cols-[minmax(120px,180px)_96px_minmax(140px,1fr)_80px_110px_96px_150px_80px] items-center gap-3 max-md:grid-cols-[minmax(0,1fr)_150px]";
+  "grid grid-cols-[minmax(120px,180px)_96px_minmax(140px,1fr)_80px_110px_100px_120px_96px_150px_80px] items-center gap-3 max-md:grid-cols-[minmax(0,1fr)_150px]";
 
 // The context bar's full width: the backend compacts the conversation at AGENT_CONTEXT_CAP (500k) tokens, or earlier
 // when the model's window is smaller.
@@ -86,6 +88,18 @@ export default function AgentList(props: { state: "open" | "closed" }) {
     const mine = prs.items.filter((each) => each.agent === agent.id);
     const pr = mine.find((each) => each.state === "open") ?? (mine.length > 0 ? mine[0] : undefined);
     const repo = job?.repo ?? pr?.repo ?? agent.repo ?? agent.project ?? agent.workflow ?? null;
+    // Where it works: its job's VM, else the one it holds or waits for, else its target VM; and its desktop there now.
+    const vm = job?.vm ?? agent.vm ?? agent.target_vm;
+    let desktop = "";
+    if (agent.status === "using_vm") {
+      desktop = `Desktop ${agent.desktop}`;
+    }
+    if (agent.status === "in_queue") {
+      desktop = `In line #${agent.place}`;
+    }
+    if (agent.status === "in_priority") {
+      desktop = `Stepped aside #${agent.place}`;
+    }
     // The issue as "owner/name#n" and its page on GitHub.
     let issue: string | null = null;
     let issueUrl = "";
@@ -144,6 +158,15 @@ export default function AgentList(props: { state: "open" | "closed" }) {
             </a>
           )}
         </span>
+        <span className="min-w-0 truncate max-md:hidden">
+          {vm === null && <span className="text-muted-foreground">–</span>}
+          {vm !== null && (
+            <a href={`#/vms/${encodeURIComponent(vm)}`} className={link} onClick={(event) => event.stopPropagation()}>
+              {vm}
+            </a>
+          )}
+        </span>
+        <span className={cn("truncate max-md:hidden", desktop === "" && "text-muted-foreground")}>{desktop === "" ? "–" : desktop}</span>
         <span className={cn("tabular-nums max-md:hidden", agent.compactions === 0 && "text-muted-foreground")}>{agent.compactions}</span>
         <span className="flex items-center gap-2" title={`${agent.context_used.toLocaleString()} of ${cap.toLocaleString()} tokens`}>
           <span className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-muted">
@@ -186,6 +209,8 @@ export default function AgentList(props: { state: "open" | "closed" }) {
         <span className="max-md:hidden">Repository</span>
         <span className="max-md:hidden">Issue</span>
         <span className="max-md:hidden">Pull request</span>
+        <span className="max-md:hidden">VM</span>
+        <span className="max-md:hidden">Desktop</span>
         <span className="max-md:hidden">Compactions</span>
         <span>Context</span>
         <span className="max-md:hidden">Tokens</span>
