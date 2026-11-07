@@ -84,7 +84,13 @@ the user however long it takes: the agent marked it money, sensitive (politics a
 sent there) or delete (what can't come back), or "open" for a question without options, answered in the user's own
 words. The user's Settings (ASK_SETTINGS_FILE) set the timer and which of those four must wait: a question marked with
 one that is switched off is timed. Changing them doesn't move the deadline of a question already asked.
-"answered_by" says who answered it once it is decided: "user" (any decision of the user's) or "timer".
+"answered_by" says who answered it once it is decided: "user" (any decision of the user's), "timer", or "automation"
+(its repo's or issue's Level of automation answers questions: at once, with the recommendation, unless it must wait).
+
+A repo's Level of automation (AUTOMATION_FILE, set on the Dashboard: backend/repo_automation_api.py) lets drafts go
+without the user: comments are posted, PRs (once their review passed) and edits sent, questions answered, as the user
+would. Such a draft is in the Inbox only for the moments until the app acts on it (or longer when sending fails).
+ISSUE_AUTOMATION_FILE holds an issue's own level, which goes over its repo's for its jobs' drafts.
 
     ask_settings.json: {"timer_minutes": TIMER_MINUTES (1 to 1440), "must_wait": MUST_WAIT or some of them}
 
@@ -287,8 +293,8 @@ class Inbox:
             return copy.deepcopy(draft)
 
     def decide(self, draft_id: str, status: str, reply: str = "", answered_by: str = "user") -> dict:
-        """Approve, reject or reply to a pending draft. Returns the draft as it is now. answered_by ("user" or "timer")
-        is kept on a question."""
+        """Approve, reject or reply to a pending draft. Returns the draft as it is now. answered_by ("user", "timer" or
+        "automation") is kept on a question."""
         if status not in DECISIONS:
             raise ValueError(f"Unknown decision {status!r}, use one of: {', '.join(DECISIONS)}")
 

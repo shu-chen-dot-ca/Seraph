@@ -13,8 +13,8 @@ over its repo's for the drafts of the jobs on that issue, in ISSUE_SETTINGS_FILE
 
 GET /api/repos/automation gives them all with the defaults; PUT /api/repos/automation gives the picked repos the same
 ones (the dialog's Save, for one repo or many); PUT /api/issues/automation sets one issue's own, or drops it (level
-null: its repo's counts again). Questions, Comments and Pull requests are only kept so far. How many agents work at
-once is the Issues board's (max_agents in backend/issues_api.py), not a repo's.
+null: its repo's counts again). How many agents work at once is the Issues board's (max_agents in
+backend/issues_api.py), not a repo's.
 
 What each does:
 - Add issues: keep_adding() below puts the repo's open issues whose level is among its Issue levels in the Issues list.
@@ -22,6 +22,12 @@ What each does:
   before it have none: their Take issues says, as Take issues did that then.
 - Take issues: agents take the repo's issues from Catalog, from the top, while fewer than the board's max_agents work
   (keep_catalog_agents in backend/issues_api.py).
+- Questions, Comments and Pull requests: keep_drafts() below, every DRAFTS_CHECK_SECONDS, looks at the pending drafts in
+  the Inbox. A question with a recommended answer that needn't wait for you (inbox.py must_wait) is answered with it at
+  once (answered_by "automation"), as the timer would later. A comment is posted on GitHub as you, and a PR (once its
+  reviewer passed it) or an edit (a new title and description of your PR or issue) is sent as you, as Approve with
+  Send does (github_account.py), then approved, so its agent hears it the same way. One GitHub refuses (or that has to
+  wait, like a PR whose claim isn't decided yet) stays in the Inbox for you, and is tried again after SEND_RETRY_SECONDS.
 
 keep_adding() runs in the background, every ADD_CHECK_SECONDS. For each repo in Repos (not archived) with Add issues on,
 it reads all its open issues from GitHub, every ADD_REFRESH_SECONDS (at once after Add issues is turned on, or the
@@ -58,8 +64,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.issues_api import AUTO_REMOVE_FILE, AUTO_REMOVE_OFF
-from backend.shared import issue_facts, issue_tags, issues, jobs, repos
+from backend.shared import agents, github_account, inbox, issue_facts, issue_tags, issues, jobs, repos
 from github_searcher.claude_judge import judge
+from github_searcher.github_account import SendError
 from github_searcher.inbox import AUTOMATION_FILE, ISSUE_AUTOMATION_FILE
 from github_searcher.issue_tags import DATA_DIR, RULES_VERSION
 from github_searcher.search import get_open_issues
@@ -85,6 +92,9 @@ CATALOG_CHECK_SECONDS = 60
 ADD_CHECK_SECONDS = 60
 # How often Add issues reads a repo's open issues from GitHub again.
 ADD_REFRESH_SECONDS = 10 * 60
+DRAFTS_CHECK_SECONDS = 10
+# A draft GitHub refused (or that has to wait) is tried again after this long; it waits in the Inbox meanwhile.
+SEND_RETRY_SECONDS = 10 * 60
 # Issues of one repo in one Claude run.
 PER_RUN = 40
 # Always, under any repo's instructions.
@@ -171,6 +181,67 @@ def put_automation(body: AutomationRequest) -> dict:
         settings[repo]["instructions"] = body.instructions.strip()
     SETTINGS_FILE.write_text(json.dumps(settings, indent=2))
     return {"defaults": DEFAULTS, "repos": settings}
+
+
+# When each draft's send last failed, by id (only in memory: a restart tries them all again).
+failed_at = {}
+
+
+async def keep_drafts() -> None:
+    """Runs as long as the backend: answers and sends the pending drafts their repo or issue lets go without you (see the
+    top of this file)."""
+    while True:
+        try:
+            await act_on_drafts()
+        except Exception:
+            # A file failed: the next round tries again.
+            traceback.print_exc()
+        await asyncio.sleep(DRAFTS_CHECK_SECONDS)
+
+
+async def act_on_drafts() -> None:
+    settings = {}
+    if SETTINGS_FILE.is_file():
+        settings = json.loads(SETTINGS_FILE.read_text())
+    by_name = {repo.lower(): rules for repo, rules in settings.items()}
+    own = {}
+    if ISSUE_SETTINGS_FILE.is_file():
+        own = json.loads(ISSUE_SETTINGS_FILE.read_text())
+    issue_of_job = {job["id"]: job["issue"] for job in jobs.list()}
+
+    for draft in inbox.list():
+        if draft["status"] != "pending" or draft["repo"] is None:
+            continue
+        rules = by_name.get(draft["repo"].lower(), DEFAULTS)
+        level = {"questions": rules["questions"], "comments": rules["comments"], "pull_requests": rules["pull_requests"]}
+        # The issue's own level goes over its repo's.
+        issue_id = issue_of_job.get(draft["job"])
+        if issue_id in own:
+            level = own[issue_id]
+
+        if draft["kind"] == "question" and level["questions"] and draft.get("must_wait") is None and draft.get("recommended"):
+            try:
+                agents.decide(draft["id"], "replied", f"I pick: {draft['recommended']}", answered_by="automation")
+            except (KeyError, ValueError):
+                pass  # You decided it, or deleted it, in the meantime.
+            continue
+
+        send = False
+        if draft["kind"] == "comment" and level["comments"]:
+            send = True
+        if draft["kind"] in ["pr", "edit"] and level["pull_requests"]:
+            send = True
+        # A PR goes once its reviewer passed it, as it only reaches the Inbox then.
+        review = draft.get("review")
+        if draft["kind"] == "pr" and review is not None and review["state"] != "passed":
+            send = False
+        if not send or time.time() - failed_at.get(draft["id"], 0) < SEND_RETRY_SECONDS:
+            continue
+        try:
+            await asyncio.to_thread(github_account.send, draft["id"])
+            agents.decide(draft["id"], "approved")
+        except (SendError, KeyError, ValueError):
+            failed_at[draft["id"]] = time.time()
 
 
 # When Add issues last read each repo's open issues, by name (only in memory: a restart reads them all again).

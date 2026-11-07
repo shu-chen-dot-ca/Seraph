@@ -1603,7 +1603,8 @@ class Agents:
 
     def decide(self, draft_id: str, decision: str, reply: str = "", answered_by: str = "user") -> dict:
         """The user's decision on a draft (approved, rejected or replied) goes to its agent, and its job is open again.
-        answered_by is "timer" when the app answers a timed question with the agent's recommendation (answer_questions)."""
+        answered_by is "timer" when the app answers a timed question with the agent's recommendation (answer_questions),
+        "automation" when the repo's or issue's Level of automation does, at once (backend/repo_automation_api.py)."""
         if decision == "replied" and self.inbox.get(draft_id)["kind"] == "taken":
             raise ValueError("Keep working or stop the agent; this one takes no reply")
         draft = self.inbox.decide(draft_id, decision, reply, answered_by)
@@ -1712,6 +1713,12 @@ class Agents:
             if reply:
                 text += f" Their note: {reply}"
             text += f" Don't draft it again as it is: change course, or cancel {job_name} with job_update if it no longer makes sense. Ask with draft_question if unsure."
+        elif answered_by == "automation":
+            # Its repo's (or issue's) Level of automation answers questions at once (backend/repo_automation_api.py).
+            text = (
+                f"The user lets the app answer questions there for them, so it picked your recommendation for {about}: "
+                f"{draft['recommended']}. Go on with that on {job_name}, and say in its progress that you did."
+            )
         elif answered_by == "timer":
             # A timed question nobody answered: its deadline was set when it was asked (inbox.py answer_by).
             timer = datetime.fromisoformat(draft["answer_by"]) - datetime.fromisoformat(draft["created_at"])
