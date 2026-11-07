@@ -37,7 +37,7 @@ How hard the code is doesn't decide much: the agent writes hard code. What matte
 |---|---|
 | **Fixed** | Still open on GitHub, but a merged PR or a commit already does what it asks (the PR said "Addresses #n" instead of "Fixes #n"). It only needs closing. |
 | **Out of scope** | It is a plugin or add-on for a third-party product's users, the project wants it as a separate repo, it can only be seen on macOS, Windows, a phone or special hardware (even when its files can be edited on Linux), or it is political. |
-| **Claimed** | Someone else is on it |
+| **Claimed** | Someone else is on it: assigned on GitHub, or their open PR says it closes it (one untouched for 30 days counts as abandoned). Catalog never gives these to an agent |
 | **Maintainers only** | The maintainers keep it for themselves |
 | **Waiting** | It isn't ready to pick up: it needs a decision, a design or more information, or it's a feature request no maintainer has said yes to |
 | **No outside PRs** | The repo doesn't merge outsiders' PRs: its AI policy says no AI, most newcomers' first PRs are closed or left waiting, or none of its recent outside PRs was merged |
@@ -87,7 +87,7 @@ Catalog is worked from the top: while fewer agents work than the board's **Max a
 
 The board's robot also has **Close inactive PRs after** (14 days at first): an open PR an agent opened for you, with no update on GitHub for that long, is made again by its agent as a fresh PR with a clean history and every review point done. Once the new one is on GitHub, the old one is closed. An agent can do the same for a PR of its own that stalled for other reasons.
 
-Before an agent claims, comments on or takes an issue, it reads all of it: every comment, every place it was mentioned, every related PR with its checks and reviews, and the checks on the default branch. If the issue is already fixed, a duplicate, taken by someone else's PR, or turned down by a maintainer, the agent closes it for us: its job stops and the issue leaves the board for good. Nothing on GitHub changes.
+Before an agent claims, comments on or takes an issue, it reads all of it: every comment, every place it was mentioned, every related PR with its checks and reviews, and the checks on the default branch. If the issue is already fixed, a duplicate, taken by someone else's PR, or turned down by a maintainer, the agent closes it for us: its job stops and the issue leaves the board for good. Nothing on GitHub changes. Someone else's open PR that closes the issue always counts, whether or not they commented first: the agent can't claim it or start a second fix.
 
 When something goes wrong because of how the app made an agent work (a rule or tool that led it the wrong way, something a maintainer or you had to correct), the agent reports it on the Dashboard's **Problems** page, so you can fix them all at one time. **Close all** moves them to Closed once they are fixed.
 
