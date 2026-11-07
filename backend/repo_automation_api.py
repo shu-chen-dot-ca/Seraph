@@ -3,7 +3,7 @@ the Issues board: frontend/src/AutomationDialog.tsx): what agents do there witho
 
 The settings, by repo, in SETTINGS_FILE (a repo not in it has DEFAULTS):
 
-    {"owner/name": {"add_issues", "take_issues", "questions", "comments", "pull_requests": bool,
+    {"owner/name": {"add_issues", "queue_issues", "take_issues", "questions", "comments", "pull_requests": bool,
                     "levels": ["easy", ...], "instructions": str}, ...}
 
 and an issue's own level (the robot on its card on the Issues board: frontend/src/IssueAutomationDialog.tsx), which goes
@@ -18,7 +18,8 @@ once is the Issues board's (max_agents in backend/issues_api.py), not a repo's.
 
 What each does:
 - Add issues: keep_adding() below puts the repo's open issues whose level is among its Issue levels in the Issues list.
-- Take issues: keep_catalog() below puts the repo's issues that the rules allow in the Issues board's Catalog.
+- Queue issues: keep_catalog() below puts the repo's issues that fit in the Issues board's Catalog. Settings from
+  before it have none: their Take issues says, as Take issues did that then.
 
 keep_adding() runs in the background, every ADD_CHECK_SECONDS. For each repo in Repos (not archived) with Add issues on,
 it reads all its open issues from GitHub, every ADD_REFRESH_SECONDS (at once after Add issues is turned on, or the
@@ -31,9 +32,12 @@ asked here: the Issues board reads each one again from fresh as it comes in, and
 decide on it (keep_new_tags in backend/issues_api.py). One that didn't match is looked at again when it changes on
 GitHub, or the levels change.
 
-keep_catalog() runs in the background, every CATALOG_CHECK_SECONDS. For each repo with Take issues on, its issues on the
-board's Open column (not of an archived repo) that the rules allow: no job (or only cancelled ones), not in Catalog, open, tagged free with merge
-likely (issue_tags.py), and a complexity among the repo's issue levels. Claude reads them, up to PER_RUN of one repo in
+keep_catalog() runs in the background, every CATALOG_CHECK_SECONDS. For each repo with Queue issues on, its issues on
+the board's Open column (not of an archived repo) that fit: no job (or only cancelled ones), not in Catalog, open, with
+refreshed tags (read after the issue's last change on GitHub that the app knows of, within the board's Open refresh
+time, refresh_open_minutes in backend/issues_api.py, by the current rules, and since it came in), and passing the filter: tagged free
+with merge likely (issue_tags.py), and a complexity among the repo's issue levels. One whose tags are old waits for
+keep_tags to read it again. Claude reads them, up to PER_RUN of one repo in
 one run with no tools (claude_judge.py), with DEFAULT_RULES and the repo's instructions on top, and picks which to take;
 the picked ones go to the end of Catalog. Each issue is asked about once per basis (the instructions, the levels and its
 last change on GitHub), kept in PICKED_FILE: one you take out of Catalog stays out until one of those changes. A failed
@@ -45,16 +49,17 @@ import hashlib
 import json
 import time
 import traceback
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.shared import issue_tags, issues, jobs, repos
+from backend.issues_api import AUTO_REMOVE_FILE, AUTO_REMOVE_OFF
+from backend.shared import issue_facts, issue_tags, issues, jobs, repos
 from github_searcher.claude_judge import judge
 from github_searcher.inbox import AUTOMATION_FILE, ISSUE_AUTOMATION_FILE
-from github_searcher.issue_tags import DATA_DIR
+from github_searcher.issue_tags import DATA_DIR, RULES_VERSION
 from github_searcher.search import get_open_issues
 
 router = APIRouter(prefix="/api")
@@ -65,6 +70,7 @@ PICKED_FILE = DATA_DIR / "catalog_picks.json"
 ADDED_FILE = DATA_DIR / "added_issues.json"
 DEFAULTS = {
     "add_issues": False,
+    "queue_issues": False,
     "take_issues": False,
     "questions": False,
     "comments": False,
@@ -103,6 +109,7 @@ SCHEMA = {
 class AutomationRequest(BaseModel):
     repos: list[str]
     add_issues: bool = False
+    queue_issues: bool = False
     take_issues: bool
     questions: bool
     comments: bool
@@ -269,17 +276,36 @@ async def pick_for_catalog() -> None:
     if PICKED_FILE.is_file():
         picked = json.loads(PICKED_FILE.read_text())
     tags = issue_tags.all()
+    facts = issue_facts.all()
     catalog = issues.board()["catalog"]
     started = [job["issue"] for job in jobs.list() if job["issue"] is not None and job["status"] != "cancelled"]
+    # How old an Open issue's tags may be: the board's Open refresh time.
+    board_rules = dict(AUTO_REMOVE_OFF)
+    if AUTO_REMOVE_FILE.is_file():
+        board_rules.update(json.loads(AUTO_REMOVE_FILE.read_text()))
+    oldest = datetime.now(UTC) - timedelta(minutes=board_rules["refresh_open_minutes"])
 
-    # What the rules allow, by repo: (item, tag, basis).
+    # What fits, by repo: (item, tag, basis).
     candidates = {}
     for item in issues.items():
         rules = by_name.get(item["repo"].lower())
         tag = tags.get(item["id"])
-        if rules is None or not rules["take_issues"] or tag is None:
+        if rules is None or tag is None:
+            continue
+        # Settings from before Queue issues: their Take issues put issues in Catalog then.
+        if not rules.get("queue_issues", rules["take_issues"]):
             continue
         if item["id"] in catalog or item["id"] in started or item["state"] == "CLOSED":
+            continue
+        # Refreshed tags: read after its last change on GitHub, recently enough, by the current rules.
+        fact = facts.get(item["id"])
+        if fact and fact.get("updated_at") is not None and fact["updated_at"] > tag["updated_at"]:
+            continue
+        judged = tag.get("judged_at")
+        if judged is None or datetime.fromisoformat(judged) < oldest or tag.get("rules_version") != RULES_VERSION:
+            continue
+        # Not read again since it came in: keep_new_tags (backend/issues_api.py) does that first.
+        if datetime.fromisoformat(judged) < datetime.fromisoformat(item["added_at"]):
             continue
         if tag["status"] != "free" or tag.get("merge") != "likely" or tag.get("complexity") not in rules["levels"]:
             continue
