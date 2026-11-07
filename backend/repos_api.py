@@ -285,9 +285,9 @@ async def keep_signals() -> None:
         for name in names:
             if name in failed:
                 continue
-            # Signals from before activity or the 30-day average merge by contributor was counted are as good as missing:
-            # every repo is read again once for them.
-            if name not in known or "activity" not in known[name] or "merge_authors_30d" not in known[name]:
+            # Signals from before activity, the 30-day average merge by contributor or the newcomer verdict was counted
+            # are as good as missing: every repo is read again once for them.
+            if name not in known or "activity" not in known[name] or "merge_authors_30d" not in known[name] or "newcomer_verdict" not in known[name]:
                 todo.append(name)
         for start in range(0, len(todo), SIGNALS_AT_ONCE):
             batch = todo[start:start + SIGNALS_AT_ONCE]

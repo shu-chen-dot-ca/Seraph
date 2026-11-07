@@ -95,7 +95,12 @@ export type RepoSignals = {
   community?: Community;
   atmosphere?: Atmosphere | null; // null until Claude first read the reviews
   ai_policy: AIPolicy;
+  newcomer_verdict?: NewcomerVerdict | null; // null until Claude first decided (or when that failed)
 };
+
+// Whether a repo is open to newcomers, Claude's call from its stars per all-time contributor, its contributing guide
+// and how outside PRs went (github_searcher/repo_signals.py), with one sentence on what decided it.
+export type NewcomerVerdict = { verdict: "welcome" | "closed"; reason: string; judged_at: string };
 
 export type NewcomerTag = "welcomes" | "ok" | "turned_away" | "left_waiting" | "few";
 

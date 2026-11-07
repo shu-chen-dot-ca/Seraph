@@ -23,7 +23,8 @@ One JSON file, DATA_DIR/repo_signals.json, by repo (owner/name):
                "community": {"contributing", "code_of_conduct", "discussions", "channels"},
                "reviewers": {"agent", "both", "human", "tag"},
                "atmosphere": {"tone", "summary", "asks_for", "prs", "judged_at"} | None,
-               "ai_policy": {"tag", "quote", "file", "basis"}}
+               "ai_policy": {"tag", "quote", "file", "basis"},
+               "newcomer_verdict": {"verdict", "reason", "judged_at"} | None}
 
 Outside contributors are PR authors who aren't owners, members or collaborators, and not bots.
 - Of their PRs that ended in the last 90 days (among the repo's 100 most recently updated finished PRs, fewer
@@ -87,7 +88,13 @@ Claude reads them and names the stance:
 basis is those lines, hashed: Claude is only asked again when they change. A failed ask is "unclear" with an
 empty basis, so the next fetch asks again.
 
-fetch() gets the numbers from GitHub; complete() adds Claude's two judgments (policy and atmosphere). fetch() does
+newcomer_verdict: Claude decides whether the repo is open to newcomers ("welcome") or not ("closed"), from its stars
+per all-time contributor (under about 100 usually open, over about 1000 usually closed), the start of its contributing
+guide (CONTRIBUTING_CHARS), and how outside PRs and newcomers' first PRs went; reason is one sentence on what decided
+it. Asked every time the numbers are read. A failed ask keeps the one before (or None).
+
+fetch() gets the numbers from GitHub; complete() adds Claude's three judgments (policy, atmosphere and newcomer
+verdict). fetch() does
 both unless told not to: Explore checks the numbers first and only pays for the judgments of repos it keeps.
 
 Kept apart from the Repos list on purpose, like issue_facts.py: the list's undo/redo should only undo what agents
@@ -175,6 +182,8 @@ ASKS = {
     "screenshots": "screenshots or a demo of the change",
     "design": "agree on the design or approach first",
 }
+# The start of the contributing guide that the newcomer verdict reads.
+CONTRIBUTING_CHARS = 6000
 # At most this many lines about AI from all files together, each cut at LINE_CHARS.
 QUOTE_LINES = 25
 LINE_CHARS = 300
@@ -228,7 +237,7 @@ class RepoSignals:
         with self.lock:
             kept = copy.deepcopy(signals)
             # What complete() reads, in case it never ran: not worth keeping.
-            for key in ["_policy_text", "_policy_files", "_policy_basis", "_feedback_text", "_feedback_notes", "_feedback_prs"]:
+            for key in ["_policy_text", "_policy_files", "_policy_basis", "_feedback_text", "_feedback_notes", "_feedback_prs", "_contributing_text"]:
                 kept.pop(key, None)
             self.signals[name] = kept
             self.save()
@@ -658,6 +667,13 @@ class RepoSignals:
                 files.append(path)
         policy_text = "\n\n".join(excerpts)
 
+        # The start of the contributing guide, for the newcomer verdict: the first of those files there is.
+        contributing_text = ""
+        for key, path in POLICY_FILES:
+            blob = data[key]
+            if key in CONTRIBUTING_FILES and contributing_text == "" and blob is not None and blob.get("text"):
+                contributing_text = f"=== {path} (the start of it)\n{blob['text'][:CONTRIBUTING_CHARS]}"
+
         signals = {
             "fetched_at": now.isoformat(),
             "stars": data["stargazerCount"],
@@ -704,6 +720,7 @@ class RepoSignals:
             # Kept as they were until complete() reads them again.
             "atmosphere": previous.get("atmosphere") if previous is not None else None,
             "ai_policy": previous["ai_policy"] if previous is not None else None,
+            "newcomer_verdict": previous.get("newcomer_verdict") if previous is not None else None,
             # For complete(); put() drops what is left of them.
             "_policy_text": policy_text,
             "_policy_files": files,
@@ -711,15 +728,18 @@ class RepoSignals:
             "_feedback_text": "\n".join(feedback_lines)[:FEEDBACK_CHARS] if feedback_data is not None else None,
             "_feedback_notes": notes_count,
             "_feedback_prs": prs_used,
+            "_contributing_text": contributing_text,
         }
         if judged:
             signals = await self.complete(name, signals)
         return signals
 
     async def complete(self, name: str, signals: dict) -> dict:
-        """Add Claude's two judgments to what fetch() found: the AI policy and the review atmosphere, both at once.
+        """Add Claude's three judgments to what fetch() found: the AI policy, the review atmosphere and the newcomer
+        verdict, all at once.
 
-        Each is only asked when it has to be (the policy text changed; the atmosphere is a week old).
+        The policy and the atmosphere are only asked when they have to be (the policy text changed; the atmosphere is a
+        week old); the newcomer verdict every time, since it reads the numbers just read.
         """
         signals = dict(signals)
         policy_text = signals.pop("_policy_text", "")
@@ -728,6 +748,7 @@ class RepoSignals:
         feedback = signals.pop("_feedback_text", None)
         notes = signals.pop("_feedback_notes", 0)
         prs = signals.pop("_feedback_prs", 0)
+        contributing = signals.pop("_contributing_text", "")
         now = datetime.now(UTC).isoformat()
 
         asks = []
@@ -790,6 +811,45 @@ class RepoSignals:
             }
             asks.append(("atmosphere", judge(prompt, schema, "low")))
 
+        # Open to newcomers or not: the numbers and the contributing guide, Claude weighs them.
+        stars = signals["stars"]
+        total = signals.get("contributors_total")
+        newcomers = signals.get("newcomers") or {}
+        contributors_line = f"All-time contributors: {total}\nStars per contributor: {round(stars / max(total, 1))}"
+        if total is None:
+            contributors_line = "All-time contributors: unknown (GitHub wouldn't count them, usually because there are thousands)"
+        prompt = (
+            f"Is the GitHub project {name} open to newcomers: would a good first pull request from an outside contributor, "
+            "someone the maintainers don't know, get looked at and merged?\n"
+            "- welcome: yes, outside contributions are wanted and get merged.\n"
+            "- closed: not in practice: a company or a small core team writes the code, outside PRs are rarely merged or "
+            "not accepted, or the contributing guide says so.\n"
+            "Weigh these together:\n"
+            "- Stars per all-time contributor: under about 100 usually means an open community; over about 1000 usually "
+            "means a closed project with many users and few contributors. In between, the rest decides.\n"
+            "- What the contributing guide says about outside contributions (not accepted, issues only, maintainers only, "
+            "discuss first, ...).\n"
+            "- How outside PRs and newcomers' first PRs went recently.\n"
+            "reason: one plain sentence, at most 160 characters, on what decided it.\n\n"
+            f"Stars: {stars}\n"
+            f"{contributors_line}\n"
+            f"Outside PRs (by people who aren't maintainers) finished in the last 90 days: {signals['outside_merged_90d']} merged, "
+            f"{signals['outside_closed_90d']} closed without merging\n"
+            f"Newcomers' first PRs in that time: {newcomers.get('prs', 0)}, of them {newcomers.get('merged', 0)} merged and "
+            f"{newcomers.get('closed', 0)} closed without merging; median days to a maintainer's first reply: "
+            f"{newcomers.get('median_days_to_first_reply')}\n\n"
+            f"{contributing if contributing != '' else 'It has no contributing guide.'}"
+        )
+        schema = {
+            "type": "object",
+            "properties": {
+                "verdict": {"type": "string", "enum": ["welcome", "closed"]},
+                "reason": {"type": "string"},
+            },
+            "required": ["verdict", "reason"],
+        }
+        asks.append(("newcomers", judge(prompt, schema, "low")))
+
         results = await asyncio.gather(*[ask for _, ask in asks], return_exceptions=True)
         for (which, _), result in zip(asks, results):
             if which == "policy" and isinstance(result, Exception):
@@ -804,7 +864,9 @@ class RepoSignals:
                         asks_for.append(item)
                 asks_for = asks_for[:6]
                 atmosphere = {"tone": result["tone"], "summary": result["summary"][:240], "asks_for": asks_for, "prs": prs, "judged_at": now}
-            # A failed atmosphere keeps the one before (or none); the next fetch asks again.
+            elif which == "newcomers" and not isinstance(result, Exception):
+                signals["newcomer_verdict"] = {"verdict": result["verdict"], "reason": result["reason"][:240], "judged_at": now}
+            # A failed atmosphere or newcomer verdict keeps the one before (or none); the next fetch asks again.
         signals["ai_policy"] = policy
         signals["atmosphere"] = atmosphere
         return signals
