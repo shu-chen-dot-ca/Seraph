@@ -3,8 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- Seraph from The Matrix, cropped round. Files in public/ are served at the site root. -->
-    <link rel="icon" type="image/png" href="/favicon.png" />
+    <!-- Seraph's logo, copied from docs/. Files in public/ are served at the site root. The browser tab uses the
+         SVG (the .ico where SVG icons aren't supported), an iPhone's home screen the 180px PNG. -->
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>Seraph</title>
     <script>
       // Dark is the default. Apply the saved theme ("light", "dark" or "system") and accent color before the
