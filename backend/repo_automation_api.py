@@ -20,6 +20,8 @@ What each does:
 - Add issues: keep_adding() below puts the repo's open issues whose level is among its Issue levels in the Issues list.
 - Queue issues: keep_catalog() below puts the repo's issues that fit in the Issues board's Catalog. Settings from
   before it have none: their Take issues says, as Take issues did that then.
+- Take issues: agents take the repo's issues from Catalog, from the top, while fewer than the board's max_agents work
+  (keep_catalog_agents in backend/issues_api.py).
 
 keep_adding() runs in the background, every ADD_CHECK_SECONDS. For each repo in Repos (not archived) with Add issues on,
 it reads all its open issues from GitHub, every ADD_REFRESH_SECONDS (at once after Add issues is turned on, or the

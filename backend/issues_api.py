@@ -55,7 +55,8 @@ on an issue in the Issues list, or on a follow-up on a pull request. keep_catalo
 CATALOG_AGENTS_SECONDS, and while there is room it gives Catalog's cards to new agents from the top, first come first
 served (the board's order; ones not placed yet after, in the order they were added), each to its own new agent with the
 first free agent-N name and no target VM, so the agent picks the VM that suits the job itself (Agents.assign). Only
-cards that are Catalog's own: no job (or only cancelled ones), not paused, open on GitHub, and, like Assign, with its
+cards of repos whose Level of automation has Take issues on (backend/repo_automation_api.py; the others wait there for
+you), and only cards that are Catalog's own: no job (or only cancelled ones), not paused, open on GitHub, and, like Assign, with its
 Merge in and not fixed, out of scope or can't validate (the others wait there). A card taken leaves Catalog's list, so
 its job keeps it on the board, and a job cancelled later sends it back to Open, not to the next agent.
 
@@ -74,6 +75,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.shared import agents, issue_facts, issue_tags, issues, jobs, repos, tracked, tracked_issues
+from github_searcher.inbox import AUTOMATION_FILE
 from github_searcher.issue_tags import CHECKS, DATA_DIR, NAME_VERSION, RULES_VERSION
 from github_searcher.search import CACHE, get_thread
 from sandbox.vms import VMsError
@@ -664,9 +666,14 @@ def take_from_catalog() -> None:
     board = issues.board()
     facts = issue_facts.all()
     tags = issue_tags.all()
+    # The repos agents take issues of (their Level of automation: Take issues), in lower case.
+    settings = {}
+    if AUTOMATION_FILE.is_file():
+        settings = json.loads(AUTOMATION_FILE.read_text())
+    taking = [repo.lower() for repo, each in settings.items() if each.get("take_issues")]
     waiting = []
     for item in items:
-        if item["id"] not in board["catalog"] or item["id"] in board["held"]:
+        if item["id"] not in board["catalog"] or item["id"] in board["held"] or item["repo"].lower() not in taking:
             continue
         if item["id"] in latest and latest[item["id"]]["status"] != "cancelled":
             continue
