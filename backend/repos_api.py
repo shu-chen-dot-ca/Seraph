@@ -47,6 +47,7 @@ from pydantic import BaseModel
 from backend.issues_api import auto_remove_issues
 from backend.shared import agents, issue_tags, issues, repo_signals, repos, tracked
 from github_searcher.issue_tags import RULES_VERSION
+from github_searcher.repo_signals import POLICY_VERSION
 from github_searcher.search import get_contents, get_open_issues, get_readme, get_repo_totals, get_repository, get_tree
 from sandbox.vms import VMsError
 
@@ -357,6 +358,11 @@ async def keep_signals() -> None:
             # Signals from before activity, the 30-day average merge by contributor or the newcomer verdict was counted
             # are as good as missing: every repo is read again once for them.
             if name not in known or "activity" not in known[name] or "merge_authors_30d" not in known[name] or "newcomer_verdict" not in known[name]:
+                todo.append(name)
+                continue
+            # An AI policy read by older rules that may mean no_ai now (POLICY_VERSION): read again once.
+            policy = known[name].get("ai_policy") or {}
+            if policy.get("tag") in ["disclose", "unclear"] and policy.get("version") != POLICY_VERSION:
                 todo.append(name)
         for start in range(0, len(todo), SIGNALS_AT_ONCE):
             batch = todo[start:start + SIGNALS_AT_ONCE]

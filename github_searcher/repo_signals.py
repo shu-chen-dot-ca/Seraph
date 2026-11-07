@@ -23,7 +23,7 @@ One JSON file, DATA_DIR/repo_signals.json, by repo (owner/name):
                "community": {"contributing", "code_of_conduct", "discussions", "channels"},
                "reviewers": {"agent", "both", "human", "tag"},
                "atmosphere": {"tone", "summary", "asks_for", "prs", "judged_at"} | None,
-               "ai_policy": {"tag", "quote", "file", "basis"},
+               "ai_policy": {"tag", "quote", "file", "basis", "version"},
                "newcomer_verdict": {"verdict", "reason", "judged_at"} | None}
 
 Outside contributors are PR authors who aren't owners, members or collaborators, and not bots.
@@ -81,12 +81,15 @@ again at most every ATMOSPHERE_DAYS days, or sooner when asks_for is from before
 ai_policy comes from the files where projects say it (POLICY_FILES). Code finds the lines that mention AI, and
 Claude reads them and names the stance:
     welcome   AI-assisted contributions are fine
-    disclose  allowed, under conditions (say so, review it yourself, ...)
-    no_ai     AI-generated contributions are not accepted
+    disclose  allowed, under conditions an AI agent can meet (say so, the user reviews it, ...)
+    no_ai     not for us: AI-generated contributions are banned, or AI may only help a human author (it mustn't write
+              most of the code or decide the PR's shape, or PR descriptions, issues and comments must be written by a
+              human). Our agents write the code and the text, so we don't work there at all (backend/issues_api.py)
     unclear   AI is mentioned, but what's allowed isn't said
     none      nothing about AI in those files (no Claude call)
-basis is those lines, hashed: Claude is only asked again when they change. A failed ask is "unclear" with an
-empty basis, so the next fetch asks again.
+basis is those lines, hashed: Claude is only asked again when they change, or when the policy is from before
+POLICY_VERSION (backend/repos_api.py keep_signals reads a disclose or unclear one again once). A failed ask is
+"unclear" with an empty basis, so the next fetch asks again.
 
 newcomer_verdict: Claude decides whether the repo is open to newcomers ("welcome") or not ("closed"), from its stars
 per all-time contributor (under about 100 usually open, over about 1000 usually closed), the start of its contributing
@@ -166,6 +169,8 @@ POLICY_FILES = [
 ]
 CONTRIBUTING_FILES = ["contributing", "contributingRst", "githubContributing", "docsContributing"]
 POLICY_TAGS = ["welcome", "disclose", "no_ai", "unclear"]
+# Goes up when what the tags mean changes: a policy from before is asked again (2: AI only as a human's helper is no_ai).
+POLICY_VERSION = 2
 TONES = ["warm", "neutral", "strict", "curt"]
 # What reviewers ask contributors for, and what each means (for Claude; the frontend has labels for them).
 ASKS = {
@@ -754,17 +759,20 @@ class RepoSignals:
         asks = []
         policy = signals["ai_policy"]
         if policy_text == "":
-            policy = {"tag": "none", "quote": "", "file": "", "basis": ""}
-        elif policy is None or policy["basis"] != basis:
+            policy = {"tag": "none", "quote": "", "file": "", "basis": "", "version": POLICY_VERSION}
+        elif policy is None or policy["basis"] != basis or policy.get("version") != POLICY_VERSION:
             prompt = (
                 f"These are the passages about AI from the contribution files of the GitHub project {name}.\n"
                 "What is the project's stance on contributions made with AI tools (AI-generated or AI-assisted code, PRs, "
                 "issues or comments)?\n"
                 "- welcome: allowed with no special conditions, or encouraged. An AGENTS.md with instructions for AI coding "
                 "tools usually means this, unless other text limits it.\n"
-                "- disclose: allowed under conditions, e.g. contributors must say they used AI, or must review and understand "
-                "every line themselves.\n"
-                "- no_ai: AI-generated contributions are not accepted (banned, closed on sight, humans only).\n"
+                "- disclose: allowed under conditions an AI coding agent that writes the code and the PR can meet, e.g. "
+                "contributors must say they used AI, or must review and understand every line themselves.\n"
+                "- no_ai: AI-generated contributions are not accepted (banned, closed on sight, humans only), or AI may only "
+                "help a human author: AI must not write most of the code, be the main author or decide the PR's structure, "
+                "or PR descriptions, issues or comments must be written by a human. Such rules exclude an AI coding agent "
+                "even when they also allow AI as a tool with disclosure.\n"
                 "- unclear: AI is mentioned, but these passages don't say what is allowed (e.g. they are about the project's "
                 "own AI features).\n"
                 "quote: the one sentence that decides it, copied exactly, at most 200 characters; empty for unclear. "
@@ -854,9 +862,9 @@ class RepoSignals:
         for (which, _), result in zip(asks, results):
             if which == "policy" and isinstance(result, Exception):
                 # Claude is down or gave nothing usable: say unclear for now, and ask again next time.
-                policy = {"tag": "unclear", "quote": "", "file": "", "basis": ""}
+                policy = {"tag": "unclear", "quote": "", "file": "", "basis": "", "version": POLICY_VERSION}
             elif which == "policy":
-                policy = {"tag": result["tag"], "quote": result["quote"][:LINE_CHARS], "file": result["file"], "basis": basis}
+                policy = {"tag": result["tag"], "quote": result["quote"][:LINE_CHARS], "file": result["file"], "basis": basis, "version": POLICY_VERSION}
             elif which == "atmosphere" and not isinstance(result, Exception):
                 asks_for = []
                 for item in result["asks_for"]:
