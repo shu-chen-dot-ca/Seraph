@@ -32,7 +32,8 @@ What each does:
   once (answered_by "automation"), as the timer would later. A comment is posted on GitHub as you, and a PR (once its
   reviewer passed it) or an edit (a new title and description of your PR or issue) is sent as you, as Approve with
   Send does (github_account.py), then approved, so its agent hears it the same way. One GitHub refuses (or that has to
-  wait, like a PR whose claim isn't decided yet) stays in the Inbox for you, and is tried again after SEND_RETRY_SECONDS.
+  wait, like a PR whose claim isn't decided yet, or whose claimed issue isn't assigned to you yet: github_account.py)
+  stays in the Inbox for you, and is tried again after SEND_RETRY_SECONDS.
   Pull requests also lets agents update the branch of your open PRs there (update_branch, work_tools.py).
 - Open PRs at once: how many of your PRs may be open on the repo at the same time, max_prs_first until one of yours
   there is merged (1 at first), max_prs after (5). Two places hold to it. Catalog to In progress: agents take no more

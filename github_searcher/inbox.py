@@ -27,7 +27,9 @@ Approve on a PR or comment also sends it to GitHub as them, first; "sent" then s
      "previous": {"title", "body"} | null (edit only, see below),
      "options": ["what the user can pick", ...] (question only: [] when they answer in their own words),
      "recommended": "one of options" | null, "answer_by": ISO time | null, "must_wait": "money" | "sensitive" |
-     "github" | "delete" | "open" | null, "answered_by": "user" | "timer" | null (question only, see below)}
+     "github" | "delete" | "open" | null, "answered_by": "user" | "timer" | null (question only, see below),
+     "wait_for_assignment": bool | null (a fix_issue job's claim only: the repo's rules want a maintainer to assign the
+     user before a PR, so its PR waits for that, github_account.py; null on claims from before, which all were such)}
 
 "body" is what would be sent to GitHub; "overview" is only for the user, who doesn't know the
 project: plain words on what is wrong and what the draft does about it.
@@ -248,7 +250,7 @@ class Inbox:
                overview: dict | None = None, template: str | None = None, update_of: str | None = None, review: dict | None = None,
                replaces: str | None = None, rebase_of: str | None = None, previous: dict | None = None,
                options: list | None = None, recommended: str | None = None, answer_by: str | None = None,
-               must_wait: str | None = None) -> dict:
+               must_wait: str | None = None, wait_for_assignment: bool | None = None) -> dict:
         with self.lock:
             draft_id = "draft_" + secrets.token_hex(3)
             while draft_id in self.drafts:
@@ -288,6 +290,7 @@ class Inbox:
                 "answer_by": answer_by,
                 "must_wait": must_wait,
                 "answered_by": None,
+                "wait_for_assignment": wait_for_assignment,
             }
             self.drafts[draft_id] = draft
             self.save(draft)

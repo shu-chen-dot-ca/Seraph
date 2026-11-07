@@ -41,7 +41,10 @@ send(draft_id) sends a PR, comment or edit draft once, as it was shown in the In
 5. The PR, from that branch into the branch the agent started from (base "origin/main" is main; else
    the project's default branch), with the draft's title and body. If GitHub refuses it, the new
    branch is deleted again, so trying again starts clean.
-A PR waits for the claim of its job (a comment the project's rules ask for before a PR) to be decided first.
+A PR waits for the claim of its job (every fix_issue job claims its issue first) to be decided first, and when it was
+approved on a repo whose rules want a maintainer's confirmation before a PR (the claim's wait_for_assignment), until
+GitHub shows you assigned to the claimed issue (mcp-memory-service#1912 went out 16 minutes after its claim,
+unassigned, and its claim check failed).
 A comment is posted on its issue or PR (its pictures go to your fork the same way).
 An edit (a new title and description for your own PR or issue) changes them on GitHub, only when it is yours and still
 has the text the agent saw ("previous"), else it refuses (the agent redrafts on the text as it is now).
@@ -276,10 +279,31 @@ class GithubAccount:
             if draft["kind"] not in ["pr", "comment", "edit"]:
                 raise SendError("Only PRs, comments and new titles and descriptions go to GitHub.")
             # The claim a repo's rules ask for goes out before the PR (agents.py): on a fix_issue job, its one comment.
+            claims = []
             if draft["kind"] == "pr" and draft["update_of"] is None and draft["job"] is not None:
                 for other in self.inbox.list():
                     if other["job"] == draft["job"] and other["kind"] == "comment" and other["status"] == "pending":
                         raise SendError(f"Approve or reject {other['title']} first: the project's rules ask for it before the PR.")
+                    # Claims from before the flag were only made where the rules want an assignment (None).
+                    waits = other.get("wait_for_assignment") is not False
+                    if other["job"] == draft["job"] and other["kind"] == "comment" and other["status"] == "approved" and waits:
+                        claims.append(other)
+            # A claim whose project's rules want a maintainer to confirm it before a PR (they assign you,
+            # wait_for_assignment): the PR waits until GitHub shows you assigned to that issue, so it never goes out
+            # unclaimed. A rejected claim doesn't hold it.
+            for claim in claims:
+                claim_repo, _, claim_number = claim["target"].rpartition("#")
+                try:
+                    response = httpx.get(f"{API}/repos/{claim_repo}/issues/{claim_number}", headers=headers, timeout=60)
+                    response.raise_for_status()
+                    assignees = [each["login"].lower() for each in response.json()["assignees"]]
+                except httpx.HTTPError as error:
+                    raise SendError(f"Could not check whether you are assigned to {claim['target']}: {error}") from None
+                if account["login"].lower() not in assignees:
+                    raise SendError(
+                        f"Not sent yet: the project's rules ask for a maintainer to assign you to {claim['target']} before a PR, "
+                        "and GitHub doesn't show you assigned yet. It can go once they do."
+                    )
             self.step = "starting"
             self.sending_draft = draft_id
             # What this send already knows from GitHub (tree()): each tree's file list by its sha, and each file's

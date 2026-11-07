@@ -15,10 +15,12 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   answers with draft_comment (target: the thread), draft_pr with pr (a new version of the user's own PR), or by
   marking the job done when nothing needs an answer. A question it drafts for the job is about the thread.
 - Drafts: nothing goes to GitHub from here. A PR, an issue comment or a question becomes a draft
-  in the user's Inbox and its job waits on the user. A fix_issue job takes one comment only: the claim on its issue,
-  when the repo's rules ask contributors to claim an issue or be assigned before they start ("Claim owner/name#n" in
-  the Inbox). The claim holds nothing up: the job goes on to its PR while the claim waits for the user, and nobody waits
-  for the maintainers to assign the user (we assume nobody answers). The user approves the claim, then the PR. A PR draft's diff is read from the repo
+  in the user's Inbox and its job waits on the user. A fix_issue job takes one comment only: the claim on its issue, made
+  first on every one, so nobody else takes the issue meanwhile ("Claim owner/name#n" in the Inbox); wait_for_assignment
+  when the repo's rules want a maintainer to assign contributors before a PR. The claim holds nothing up: the job goes on
+  to its PR while the claim waits for the user, and nobody waits for the maintainers to assign the user (we assume nobody
+  answers). The user approves the claim, then the PR; with wait_for_assignment, the PR is only sent once GitHub shows
+  the user assigned. A PR draft's diff is read from the repo
   folder in the VM, so only the agent holding the VM can make one, with the commit it starts from
   (base_sha: Approve sends exactly that diff on that commit, github_account.py) and the branch's commits since
   (commits: replayed when it is sent, all with the user's name). Every commit must be the agent's own:
@@ -479,9 +481,11 @@ class WorkTools:
             tool(
                 "draft_comment",
                 "Draft a follow_up job's reply on an issue or PR (target: its thread, owner/name#number) for the user's Inbox, or a "
-                "claim. On a fix_issue job only the claim: one short comment on the job's issue, and only when the issue or the "
-                "repo's rules ask contributors to claim an issue or be assigned before they start or open a PR; never a "
-                "question. On a follow_up job a claim goes on the issue the PR closes. Never ask anyone on GitHub for anything "
+                "claim. On a fix_issue job only the claim, first thing on every one (unless the user is already assigned or "
+                "already said they are on it): one short comment on the job's issue saying the user is taking it on, so "
+                "nobody else does meanwhile; never a question. wait_for_assignment: true when the issue or the repo's rules "
+                "say a maintainer must assign contributors before they start or open a PR (the PR then waits until GitHub "
+                "shows the user assigned). On a follow_up job a claim goes on the issue the PR closes. Never ask anyone on GitHub for anything "
                 "(to assign, review, run checks, decide, answer): assume nobody replies. Nothing is posted: the user decides, "
                 "and you get a message with their decision. A reply's job waits on the user meanwhile; a claim's doesn't: go "
                 "straight on with the fix, without waiting for the user or the maintainers. "
@@ -494,7 +498,8 @@ class WorkTools:
                         "body": {"type": "string"},
                         "project": {"type": "string", "description": "One line: what the project is, e.g. 'matplotlib: a Python library that draws charts'."},
                         "problem": {"type": "string", "description": "What the issue is about: what goes wrong, for whom, when. Specific, 1 to 2 sentences."},
-                        "why": {"type": "string", "description": "Why post this comment now, in 1 to 2 sentences. For a claim, the rule that asks for it."},
+                        "why": {"type": "string", "description": "Why post this comment now, in 1 to 2 sentences. For a claim, that the user takes it on, and the rule that asks for it if any."},
+                        "wait_for_assignment": {"type": "boolean", "description": "A claim only: the rules want a maintainer to assign contributors before a PR."},
                     },
                     "required": ["job_id", "target", "body", "project", "problem", "why"],
                 },
@@ -1739,16 +1744,18 @@ class WorkTools:
             text = f"{self.threads_taken[target.lower()]}: someone else is on it. Don't claim it: close_issue with that link."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         draft = self.agents.inbox.create(
-            "comment", self.agent_id, title, args["body"], job=job["id"], repo=name, target=target, evidence=job["evidence"], overview=overview
+            "comment", self.agent_id, title, args["body"], job=job["id"], repo=name, target=target, evidence=job["evidence"], overview=overview,
+            wait_for_assignment=(args.get("wait_for_assignment") is True) if job["kind"] == "fix_issue" else None,
         )
-        # A claim holds nothing up: the rules ask for it, so the user approves it, and nobody waits for the maintainers'
-        # answer. The job goes on to its PR, which the user can only send once the claim is decided (github_account.py).
+        # A claim holds nothing up: the user approves it, and nobody waits for the maintainers' answer. The job goes on to its
+        # PR, which can only be sent once the claim is decided, and with wait_for_assignment once the user is assigned
+        # (github_account.py).
         if job["kind"] == "fix_issue":
             self.agents.jobs.update(job["id"], drafts=job["drafts"] + [draft["id"]])
             text = (
                 f"{draft['id']} is in the user's Inbox. Nothing was posted yet. Don't wait for it: go straight on with "
                 f"{job['id']}, the fix and its PR. The user approves the claim, then the PR. Nobody waits for the maintainers "
-                "to assign the user either."
+                "to assign the user either (with wait_for_assignment, the PR is only sent once they did)."
             )
             return {"content": [{"type": "text", "text": text}]}
         self.agents.jobs.update(job["id"], status="waiting_on_user", drafts=job["drafts"] + [draft["id"]])
