@@ -205,7 +205,7 @@ def topic_data(topic: str):
         items = repos.items()
         for item in items:
             item["signals"] = signals.get(item["full_name"])
-        return {"items": items, "can_undo": repos.can_undo(), "can_redo": repos.can_redo()}
+        return {"items": items, "can_undo": repos.can_undo(), "can_redo": repos.can_redo(), "archived": repos.archived()}
     # Issues carry their facts (issue_facts.py) and tags (issue_tags.py), so the topic changes when any does.
     if topic == "issues":
         facts = issue_facts.all()

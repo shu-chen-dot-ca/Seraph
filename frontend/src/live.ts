@@ -1175,7 +1175,7 @@ export type WorkflowPRParts = {
 // ---- The live store ----
 
 export type Topics = {
-  repos: ListData<ListedRepo>;
+  repos: ListData<ListedRepo> & { archived: string[] }; // archived: the Dashboard's Repository page (repo_list.py)
   // catalog and order: the Dashboard's Issues board (moved to Catalog; every card's place), github_searcher/issue_list.py.
   issues: ListData<IssueItem> & { catalog: string[]; order: string[]; held: string[] };
   tracked: ListData<TrackedRepo>;
@@ -1201,7 +1201,7 @@ export type Topics = {
 // `loaded` says which topics have arrived, for the few places that must tell "empty" from "not yet".
 const store = {
   topics: {
-    repos: { items: [], can_undo: false, can_redo: false },
+    repos: { items: [], can_undo: false, can_redo: false, archived: [] },
     issues: { items: [], can_undo: false, can_redo: false, catalog: [], order: [], held: [] },
     tracked: { items: [], can_undo: false, can_redo: false },
     explore: { profile: { about: "", lanes: [] }, run: null, found: [] },

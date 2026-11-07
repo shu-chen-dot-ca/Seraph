@@ -59,6 +59,11 @@ class RemoveRequest(BaseModel):
     issues: bool = False  # True: their issues leave the Issues list too
 
 
+class ArchiveRequest(BaseModel):
+    names: list[str]
+    archived: bool
+
+
 class TagRequest(BaseModel):
     names: list[str]
     tag: str  # "" takes them out of their tag
@@ -101,6 +106,16 @@ def add_repo(body: AddRequest) -> dict:
     if not added:
         raise HTTPException(status_code=409, detail=f"{info['full_name']} is already in Repos.")
     return {"added": added}
+
+
+@router.post("/repos/archive")
+def archive_repos(body: ArchiveRequest) -> dict:
+    """Delete on the Dashboard's Repository page for a repo with pull requests of yours (open, closed or merged): it moves to the page's
+    Archived section (archived true), or back (false). Repos not in the list are left out."""
+    listed = [item["full_name"] for item in repos.items()]
+    names = [name for name in body.names if name in listed]
+    repos.set_archived(names, body.archived)
+    return {"archived": repos.archived()}
 
 
 @router.post("/repos/remove")
