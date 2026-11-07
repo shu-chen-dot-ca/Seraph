@@ -120,7 +120,9 @@ query($owner: String!, $name: String!, $number: Int!) {
 # read_issue): its text, every comment, its timeline (where it was mentioned: issues, PRs and commits; the PRs and issues
 # linked to it; assignments, labels, closing, reopening, duplicates), the PRs that would close it, with each related PR's
 # state, review decision, checks and newest comments and reviews, and the checks on the repo's default branch. A PR also
-# has its reviews, its branches, whether it conflicts and its own checks. Comments and the timeline come 100 at a time.
+# has its reviews, its conversations on lines of code (their ids and their comments' ids are what draft_comment's
+# reply_to and resolve take), its branches, whether it conflicts and its own checks. Comments and the timeline come 100
+# at a time.
 READ_ISSUE_CHECKS = "statusCheckRollup { state contexts(first: 50) { nodes { ... on CheckRun { name conclusion status } ... on StatusContext { context state } } } }"
 READ_ISSUE_QUERY = """
 query($owner: String!, $name: String!, $number: Int!, $comments: String, $timeline: String) {
@@ -157,6 +159,9 @@ query($owner: String!, $name: String!, $number: Int!, $comments: String, $timeli
         }
         reviews(first: 100) {
           nodes { body state createdAt authorAssociation author { login __typename } comments(first: 50) { nodes { body path createdAt author { login } } } }
+        }
+        reviewThreads(first: 100) {
+          nodes { id isResolved isOutdated path line comments(first: 30) { nodes { databaseId body createdAt authorAssociation author { login __typename } } } }
         }
       }
     }

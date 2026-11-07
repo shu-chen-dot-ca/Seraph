@@ -29,7 +29,9 @@ Approve on a PR or comment also sends it to GitHub as them, first; "sent" then s
      "recommended": "one of options" | null, "answer_by": ISO time | null, "must_wait": "money" | "sensitive" |
      "github" | "delete" | "open" | null, "answered_by": "user" | "timer" | null (question only, see below),
      "wait_for_assignment": bool | null (a fix_issue job's claim only: the repo's rules want a maintainer to assign the
-     user before a PR, so its PR waits for that, github_account.py; null on claims from before, which all were such)}
+     user before a PR, so its PR waits for that, github_account.py; null on claims from before, which all were such),
+     "reply_to": GitHub's id of a review comment | null (comment only, see below),
+     "resolve": GitHub's id of a review conversation | null (a comment with reply_to only, see below)}
 
 "body" is what would be sent to GitHub; "overview" is only for the user, who doesn't know the
 project: plain words on what is wrong and what the draft does about it.
@@ -76,6 +78,11 @@ it, or the text no longer matches the PR; work_tools.py draft_edit): "target" is
 "previous" the text as it was when drafted, "diff" the change between them (one part for the title, one for the
 description), and "overview" {"project", "problem", "why"} like a comment's. Approve changes them on GitHub, only while
 they are still "previous" (github_account.py).
+
+A comment with "reply_to" is an answer inside one of a PR's conversations on lines of code, below that conversation's
+first comment (GitHub takes no replies to replies), instead of below the PR. With "resolve" too, Approve marks that
+conversation resolved once the answer is posted (projects like mcp-memory-service only merge when every review
+conversation is answered and resolved).
 
 A question can come with "options": the answers the agent offers. The Inbox shows each as a button, and picking one is
 a reply with that answer (with the user's note, if any), so the agent always knows which one was meant.
@@ -180,6 +187,9 @@ class Inbox:
             draft.setdefault("answer_by", None)
             draft.setdefault("must_wait", None)
             draft.setdefault("answered_by", None)
+            # And from before replies in conversations on lines of code.
+            draft.setdefault("reply_to", None)
+            draft.setdefault("resolve", None)
             self.drafts[draft["id"]] = draft
 
         # What agents put on GitHub. The first time, the drafts sent before it existed, by when they were sent.
@@ -250,7 +260,8 @@ class Inbox:
                overview: dict | None = None, template: str | None = None, update_of: str | None = None, review: dict | None = None,
                replaces: str | None = None, rebase_of: str | None = None, previous: dict | None = None,
                options: list | None = None, recommended: str | None = None, answer_by: str | None = None,
-               must_wait: str | None = None, wait_for_assignment: bool | None = None) -> dict:
+               must_wait: str | None = None, wait_for_assignment: bool | None = None, reply_to: int | None = None,
+               resolve: str | None = None) -> dict:
         with self.lock:
             draft_id = "draft_" + secrets.token_hex(3)
             while draft_id in self.drafts:
@@ -291,6 +302,8 @@ class Inbox:
                 "must_wait": must_wait,
                 "answered_by": None,
                 "wait_for_assignment": wait_for_assignment,
+                "reply_to": reply_to,
+                "resolve": resolve,
             }
             self.drafts[draft_id] = draft
             self.save(draft)

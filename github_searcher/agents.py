@@ -1624,6 +1624,13 @@ class Agents:
             "and never wait for an answer: assume nobody replies. When their point leaves a choice, make it and say what "
             "you did."
         )
+        if entry["kind"] == "pr":
+            text += (
+                "\n- A reviewer's comment on a line of code (a bot's too): answer it in its conversation, draft_comment with "
+                "reply_to (the comment's id from read_issue's conversations), not below the PR. On the user's own PR, add "
+                "resolve: true once the change it asked for is pushed there, when the project wants every conversation "
+                "resolved before a merge or lets the author resolve them."
+            )
         if own_pr:
             text += (
                 "\n- A new version of the PR, when a reviewer asked for changes or its checks failed. Its branch is "
@@ -1764,7 +1771,12 @@ class Agents:
                 f"maintainers to assign the user, so {job_name} goes on as it is."
             )
         elif decision == "approved" and draft["kind"] == "comment" and sent is not None:
-            text = f"The user approved {about}, and it is posted: {sent['url']}. Carry on with {job_name}."
+            text = f"The user approved {about}, and it is posted: {sent['url']}."
+            if sent.get("resolved"):
+                text += " Its conversation is resolved now."
+            if sent.get("resolve_error"):
+                text += f" Its conversation couldn't be resolved ({sent['resolve_error']}); tell the user in one line."
+            text += f" Carry on with {job_name}."
         elif decision == "approved" and draft["kind"] == "comment":
             text = f"The user approved {about}. They post it themselves. Carry on with {job_name}."
         elif decision == "approved" and draft["kind"] == "report":

@@ -15,7 +15,9 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   answers with draft_comment (target: the thread), draft_pr with pr (a new version of the user's own PR), or by
   marking the job done when nothing needs an answer. A question it drafts for the job is about the thread.
 - Drafts: nothing goes to GitHub from here. A PR, an issue comment or a question becomes a draft
-  in the user's Inbox and its job waits on the user. A fix_issue job takes one comment only: the claim on its issue, made
+  in the user's Inbox and its job waits on the user. A comment with reply_to answers inside one of a PR's
+  conversations on lines of code instead of below it, and with resolve Approve marks that conversation resolved
+  after it (some projects only merge once every conversation is). A fix_issue job takes one comment only: the claim on its issue, made
   first on every one, so nobody else takes the issue meanwhile ("Claim owner/name#n" in the Inbox); wait_for_assignment
   when the repo's rules want a maintainer to assign contributors before a PR. The claim holds nothing up: the job goes on
   to its PR while the claim waits for the user, and nobody waits for the maintainers to assign the user (we assume nobody
@@ -498,13 +500,20 @@ class WorkTools:
                 "(to assign, review, run checks, decide, answer): assume nobody replies. Nothing is posted: the user decides, "
                 "and you get a message with their decision. A reply's job waits on the user meanwhile; a claim's doesn't: go "
                 "straight on with the fix, without waiting for the user or the maintainers. "
-                "body is the comment as it would be posted. project, problem and why are only for the user, in the Inbox's overview. " + PLAIN,
+                "body is the comment as it would be posted. reply_to: on a PR, the id of a comment in one of its conversations "
+                "on lines of code (read_issue's conversations), to answer in that conversation instead of below the PR. "
+                "resolve: true (with reply_to, on the user's own PR) marks that conversation resolved once the answer is "
+                "posted: when the change it asked for is on the PR, and the project lets the author resolve (its rules or "
+                "its merged PRs show it, or it wants every conversation resolved before a merge). project, problem and why "
+                "are only for the user, in the Inbox's overview. " + PLAIN,
                 {
                     "type": "object",
                     "properties": {
                         "job_id": {"type": "string"},
                         "target": {"type": "string"},
                         "body": {"type": "string"},
+                        "reply_to": {"type": "integer"},
+                        "resolve": {"type": "boolean"},
                         "project": {"type": "string", "description": "One line: what the project is, e.g. 'matplotlib: a Python library that draws charts'."},
                         "problem": {"type": "string", "description": "What the issue is about: what goes wrong, for whom, when. Specific, 1 to 2 sentences."},
                         "why": {"type": "string", "description": "Why post this comment now, in 1 to 2 sentences. For a claim, that the user takes it on, and the rule that asks for it if any."},
@@ -580,7 +589,8 @@ class WorkTools:
                 "Read an issue or PR (owner/name#number) in full, as it is right now: its text, every comment, where it was "
                 "mentioned (other issues, PRs and commits), the PRs linked to it or that would close it with their state, "
                 "review, checks and newest comments, who was assigned and when, its labels, and the checks on the repo's "
-                "default branch (and a PR's own reviews and checks). Read it before you take an issue, claim it, comment on it "
+                "default branch (and a PR's own reviews, checks and conversations on lines of code, each comment with the id "
+                "draft_comment's reply_to takes). Read it before you take an issue, claim it, comment on it "
                 "or close it: draft_comment, close_issue and a fix_issue job going past understand refuse until you read it "
                 "within the hour. Read all of it, and every related PR it shows: someone may be on it, it may be fixed "
                 "already or a duplicate, or a maintainer may have said how (or whether) they want it done.",
@@ -1771,9 +1781,49 @@ class WorkTools:
         if job["kind"] == "fix_issue" and name.lower() in no_ai:
             text = f"{name} doesn't take AI-made contributions (its AI policy), and we only work as an AI agent. Don't claim anything there: abandon {job['id']} with job_update cancelled."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
+        # An answer inside a conversation on lines of code of a PR goes below its first comment: GitHub takes no replies
+        # to replies. With resolve, Approve marks that conversation resolved once the answer is in it.
+        reply_to = args.get("reply_to")
+        resolve = None
+        if args.get("resolve") is True and reply_to is None:
+            text = "resolve goes with reply_to: the id of a comment in the conversation to answer and resolve."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if reply_to is not None and job["kind"] == "fix_issue":
+            text = "A claim goes below the issue: leave reply_to and resolve out."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if reply_to is not None:
+            try:
+                thread = await asyncio.to_thread(get_issue_in_full, name.split("/")[0], name.split("/")[1], int(target.split("#")[1]))
+            except (httpx.HTTPError, ValueError) as error:
+                return {"content": [{"type": "text", "text": f"Could not read {target}: {error}"}], "is_error": True}
+            conversations = []
+            if thread is not None and thread["__typename"] == "PullRequest":
+                conversations = thread["reviewThreads"]["nodes"]
+            first = None
+            for conversation in conversations:
+                ids = [comment["databaseId"] for comment in conversation["comments"]["nodes"]]
+                if reply_to not in ids:
+                    continue
+                first = ids[0]
+                if args.get("resolve") is True and not conversation["isResolved"]:
+                    resolve = conversation["id"]
+            if first is None:
+                text = f"{reply_to} isn't a comment in a conversation on lines of code of {target}: use a comment's id from read_issue's conversations."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+            # Only the PR's author (and its maintainers) may resolve its conversations.
+            login = self.agents.your_repositories.github_account.status().get("login") or ""
+            author = thread["author"]["login"] if thread["author"] else "ghost"
+            if resolve is not None and login and author.lower() != login.lower():
+                text = f"{target} is {author}'s PR, not the user's: they can't resolve its conversations. Leave resolve out."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+            reply_to = first
+            title = f"Reply in a conversation on {target}"
+            if resolve is not None:
+                title = f"Reply and resolve a conversation on {target}"
         draft = self.agents.inbox.create(
             "comment", self.agent_id, title, args["body"], job=job["id"], repo=name, target=target, evidence=job["evidence"], overview=overview,
             wait_for_assignment=(args.get("wait_for_assignment") is True) if job["kind"] == "fix_issue" else None,
+            reply_to=reply_to, resolve=resolve,
         )
         # A claim holds nothing up: the user approves it, and nobody waits for the maintainers' answer. The job goes on to its
         # PR, which can only be sent once the claim is decided, and with wait_for_assignment once the user is assigned
@@ -2156,6 +2206,22 @@ class WorkTools:
                 role = "BOT" if review["author"] and review["author"]["__typename"] != "User" else review["authorAssociation"]
                 code = [{"path": comment["path"], "text": comment["body"]} for comment in review["comments"]["nodes"]]
                 result["pr"]["reviews"].append({"at": review["createdAt"], "author": author, "role": role, "state": review["state"], "text": review["body"], "on_code": code})
+            # The conversations on lines of code, with their replies: a comment's id is what draft_comment's reply_to
+            # answers in that conversation.
+            result["pr"]["conversations"] = []
+            for conversation in data["reviewThreads"]["nodes"]:
+                comments = []
+                for comment in conversation["comments"]["nodes"]:
+                    author = comment["author"]["login"] if comment["author"] else "ghost"
+                    role = "BOT" if comment["author"] and comment["author"]["__typename"] != "User" else comment["authorAssociation"]
+                    comments.append({"id": comment["databaseId"], "at": comment["createdAt"], "author": author, "role": role, "text": comment["body"]})
+                result["pr"]["conversations"].append({
+                    "file": conversation["path"],
+                    "line": conversation["line"],
+                    "resolved": conversation["isResolved"],
+                    "outdated": conversation["isOutdated"],
+                    "comments": comments,
+                })
 
         # Someone else's open PR that says it closes it, not abandoned (TAKEN_PR_DAYS, like the issue tags): someone is on
         # it, and its maintainers don't want a second fix. The user's own PRs (ours too, made as the user) don't count.
@@ -2225,6 +2291,9 @@ class WorkTools:
         sent = mine["sent"]
         if sent.get("deleted_at"):
             return {"content": [{"type": "text", "text": "It was deleted already."}], "is_error": True}
+        if mine["reply_to"] is not None:
+            text = "It is a reply in a conversation on lines of code: the app can't take those back. Leave it, or say what changed in a new reply."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
         settings = {}
         if AUTOMATION_FILE.is_file():
             settings = json.loads(AUTOMATION_FILE.read_text())

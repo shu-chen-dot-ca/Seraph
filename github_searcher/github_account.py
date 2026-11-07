@@ -45,7 +45,8 @@ A PR waits for the claim of its job (every fix_issue job claims its issue first)
 approved on a repo whose rules want a maintainer's confirmation before a PR (the claim's wait_for_assignment), until
 GitHub shows you assigned to the claimed issue (mcp-memory-service#1912 went out 16 minutes after its claim,
 unassigned, and its claim check failed).
-A comment is posted on its issue or PR (its pictures go to your fork the same way).
+A comment is posted on its issue or PR (its pictures go to your fork the same way); one with reply_to goes inside that
+conversation on lines of code of the PR instead, and with resolve that conversation is marked resolved after it.
 An edit (a new title and description for your own PR or issue) changes them on GitHub, only when it is yours and still
 has the text the agent saw ("previous"), else it refuses (the agent redrafts on the text as it is now).
 
@@ -71,7 +72,8 @@ What was sent is kept on the draft as "sent" (Inbox.mark_sent):
     update:  the same with "update": True ("url" is the PR's, "base_sha" the commit it went on top of),
              "rebase_of": the PR's commit it replaced (a rebase) | None,
              "comment_url": the comment posted with it | None, "comment_error": None | why it wasn't posted
-    comment: {"kind": "comment", "url", "id", "repo", "number", "as", "at", "deleted_at" once deleted from the GitHub tab}
+    comment: {"kind": "comment", "url", "id", "repo", "number", "as", "at", "deleted_at" once deleted from the GitHub tab,
+              "resolved": bool (its conversation was resolved), "resolve_error": None | why it wasn't}
     edit:    {"kind": "edit", "url", "repo", "number", "title", "as", "at"}
 
 comment(target, body) posts your own comment, as you, on a PR or issue: the comment box of the GitHub tab's
@@ -813,9 +815,26 @@ class GithubAccount:
             fork = self.fork(client, account, repo)
             body = self.pictures(client, account, fork, draft)
         self.step = "posting the comment"
-        response = client.post(f"/repos/{repo}/issues/{number}/comments", json={"body": body})
+        if draft["reply_to"] is not None:
+            response = client.post(f"/repos/{repo}/pulls/{number}/comments/{draft['reply_to']}/replies", json={"body": body})
+        else:
+            response = client.post(f"/repos/{repo}/issues/{number}/comments", json={"body": body})
         response.raise_for_status()
         comment = response.json()
+        # The conversation is resolved once the answer is in it. The answer is out either way: when GitHub refuses only
+        # this, it stays sent and "resolve_error" says why.
+        resolve_error = None
+        if draft["resolve"] is not None:
+            self.step = "resolving the conversation"
+            query = "mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { clientMutationId } }"
+            try:
+                response = client.post("/graphql", json={"query": query, "variables": {"id": draft["resolve"]}})
+            except httpx.HTTPError as error:
+                resolve_error = f"Could not reach GitHub: {error}"
+            if resolve_error is None and response.status_code >= 400:
+                resolve_error = f"GitHub answered {response.status_code}: {response.text[:200]}"
+            if resolve_error is None and response.json().get("errors"):
+                resolve_error = response.json()["errors"][0]["message"]
         return {
             "kind": "comment",
             "url": comment["html_url"],
@@ -824,6 +843,8 @@ class GithubAccount:
             "number": int(number),
             "as": account["login"],
             "at": datetime.now(UTC).isoformat(),
+            "resolved": draft["resolve"] is not None and resolve_error is None,
+            "resolve_error": resolve_error,
         }
 
     def send_edit(self, client: httpx.Client, account: dict, draft: dict) -> dict:
