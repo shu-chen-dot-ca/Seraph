@@ -1,10 +1,11 @@
 /*
-One issue's level of automation, opened by the ⋯ on its card on the Dashboard's Issues board (IssueBoard.tsx). Only the
-settings for now: nothing acts on them yet, and they are kept in this browser (localStorage "automation:issue:<id>"), like
-a repo's (AutomationDialog.tsx).
+One issue's level of automation, opened by the ⋯ on its card on the Dashboard's Issues board (IssueBoard.tsx). Kept by
+the backend (PUT /api/issues/automation, backend/repo_automation_api.py), which acts on it for the drafts of the jobs on
+this issue, like on a repo's (AutomationDialog.tsx). Settings from before, kept in this browser (localStorage
+"automation:issue:<id>"), still show on the card; Save or Use repo default moves them to the backend.
 
 The repo's Level of automation is each of its issues' default; this changes it for this issue only, nothing about the
-repo: Questions, Comments and Pull requests. Take issues is the repo's only (AutomationDialog.tsx). It opens on what the issue has now (its own, else the repo's).
+repo: Questions, Comments and Pull requests. Queue issues, Take issues and Open issues are the repo's only (AutomationDialog.tsx). It opens on what the issue has now (its own, else the repo's).
 Save keeps them for the issue; Use repo default (only once the issue has its own) drops them, so the repo's count again.
 Cancel, Esc or the X drop the changes.
 */
@@ -15,30 +16,30 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { SelectBox } from "@/components/ui/row-selection";
+import { api } from "@/live";
 
 // What agents do on an issue without asking you: the same keys as a repo's Level of automation.
 export type Level = { questions: boolean; comments: boolean; pull_requests: boolean };
 
 export default function IssueAutomationDialog(props: { id: string; name: string; level: Level; own: boolean; onClose: () => void }) {
-  const key = `automation:issue:${props.id}`;
   const [questions, setQuestions] = useState(props.level.questions);
   const [comments, setComments] = useState(props.level.comments);
   const [pullRequests, setPullRequests] = useState(props.level.pull_requests);
+  const [busy, setBusy] = useState(false);
 
-  function save() {
-    const next: Level = { questions: questions, comments: comments, pull_requests: pullRequests };
+  // level null: its repo's counts again.
+  async function save(level: Level | null) {
+    setBusy(true);
     try {
-      localStorage.setItem(key, JSON.stringify(next));
-    } catch {
-      toast.error("Could not save: this browser keeps nothing (a private window?)");
+      await api("/api/issues/automation", { method: "PUT", body: { id: props.id, level: level } });
+    } catch (err) {
+      toast.error(`Could not save: ${err instanceof Error ? err.message : err}`);
+      setBusy(false);
       return;
     }
-    props.onClose();
-  }
-
-  function useDefault() {
+    // The backend has it now: the one from before in this browser is done.
     try {
-      localStorage.removeItem(key);
+      localStorage.removeItem(`automation:issue:${props.id}`);
     } catch {
       // Storage blocked: nothing was kept.
     }
@@ -72,14 +73,16 @@ export default function IssueAutomationDialog(props: { id: string; name: string;
 
         <DialogFooter>
           {props.own && (
-            <Button variant="outline" className="sm:mr-auto" onClick={useDefault}>
+            <Button variant="outline" className="sm:mr-auto" disabled={busy} onClick={() => save(null)}>
               Use repo default
             </Button>
           )}
           <Button variant="outline" onClick={props.onClose}>
             Cancel
           </Button>
-          <Button onClick={save}>Save</Button>
+          <Button disabled={busy} onClick={() => save({ questions: questions, comments: comments, pull_requests: pullRequests })}>
+            Save
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

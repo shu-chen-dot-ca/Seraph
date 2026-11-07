@@ -50,10 +50,13 @@ backend/issues_api.py).
 
 Each card's level of automation shows under its tags, past a line: Questions, Comments and Pull requests when on, or
 No automation. Its repo's (AutomationDialog.tsx, kept by the backend: GET /api/repos/automation) is the default; the
-issue's own, from the robot at its top right (IssueAutomationDialog.tsx, kept in this browser), goes over it. Take
-issues is the repo's only, so cards don't show it: with it on, an agent puts the repo's issues in Catalog
-(backend/repo_automation_api.py). A click on the card's logo opens its repo's automation right here. Questions,
-Comments and Pull requests are only settings so far: nothing acts on them yet.
+issue's own, from the robot at its top right (IssueAutomationDialog.tsx, also kept by the backend), goes over it. Add
+issues, Queue issues, Take issues and Open issues are the repo's only, so cards don't show them: with Add issues on, the
+repo's open issues of its levels come into Open by themselves (each once), with Queue issues on, the repo's
+issues that fit go to Catalog by themselves, and with Take issues on, agents take its Catalog cards. A click on the card's logo opens its repo's automation right here. The backend acts on all of it
+(backend/repo_automation_api.py): Questions are answered, Comments posted and Pull requests sent without you. Repo and
+issue settings from before, kept in this browser, are handed to the backend when the board reads the settings (unless
+it has its own for them already), so what the backend acts on is what the cards show.
 
 Over the board, the robot button opens its Automation (BoardAutomationDialog.tsx): which issues leave the list by
 themselves (claimed, out of scope, a complexity, scope not clear, opened too long ago), how often each column's
@@ -177,19 +180,67 @@ export default function IssueBoard() {
   // The card Delete asks about. It stays set while the dialog fades out, so the title doesn't blank.
   const [deleting, setDeleting] = useState<Card | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  // Goes up when one of those closes, so the cards read the browser's settings again.
+  // Goes up when one of those closes, so the cards read the settings again.
   const [saved, setSaved] = useState(0);
-  // Every repo's automation from the backend, by repo name in lower case; read again when a dialog closes.
+  // Every repo's automation from the backend, by repo name in lower case, and every issue's own level, by issue id; read
+  // again when a dialog closes.
   const [repoSettings, setRepoSettings] = useState<Record<string, Automation>>({});
+  const [issueSettings, setIssueSettings] = useState<Record<string, Level>>({});
 
   useEffect(() => {
-    api<{ repos: Record<string, Automation> }>("/api/repos/automation")
-      .then((data) => {
+    api<{ repos: Record<string, Automation>; issues: Record<string, Level> }>("/api/repos/automation")
+      .then(async (data) => {
         const byName: Record<string, Automation> = {};
         for (const repo of Object.keys(data.repos)) {
           byName[repo.toLowerCase()] = data.repos[repo];
         }
+        // Settings from before, kept in this browser, go to the backend, which acts on them.
+        let keys: string[] = [];
+        try {
+          keys = Object.keys(localStorage).filter((key) => key.startsWith("automation:"));
+        } catch {
+          // Storage blocked: nothing was kept.
+        }
+        for (const key of keys.filter((each) => !each.startsWith("automation:issue:"))) {
+          const repo = key.slice("automation:".length);
+          try {
+            const old = JSON.parse(localStorage.getItem(key) ?? "null");
+            if (old !== null && byName[repo.toLowerCase()] === undefined) {
+              const next: Automation = {
+                queue_issues: old.take_issues === true,
+                take_issues: old.take_issues === true,
+                questions: old.questions === true,
+                comments: old.comments === true,
+                pull_requests: old.pull_requests === true,
+                open_issues: false,
+                levels: Array.isArray(old.levels) ? old.levels : ["easy"],
+                instructions: typeof old.instructions === "string" ? old.instructions : "",
+              };
+              await api("/api/repos/automation", { method: "PUT", body: { repos: [repo], ...next } });
+              byName[repo.toLowerCase()] = next;
+            }
+            localStorage.removeItem(key);
+          } catch {
+            // Kept for the next read.
+          }
+        }
         setRepoSettings(byName);
+        const issueLevels = { ...data.issues };
+        for (const key of keys.filter((each) => each.startsWith("automation:issue:"))) {
+          const id = key.slice("automation:issue:".length);
+          try {
+            const old = JSON.parse(localStorage.getItem(key) ?? "null");
+            if (old !== null && issueLevels[id] === undefined) {
+              const level: Level = { questions: old.questions === true, comments: old.comments === true, pull_requests: old.pull_requests === true };
+              await api("/api/issues/automation", { method: "PUT", body: { id: id, level: level } });
+              issueLevels[id] = level;
+            }
+            localStorage.removeItem(key);
+          } catch {
+            // Kept for the next read.
+          }
+        }
+        setIssueSettings(issueLevels);
       })
       .catch(() => {
         // The cards show No automation until it reads.
@@ -433,15 +484,9 @@ export default function IssueBoard() {
       tags.push({ label: `${changes.files} ${changes.files === 1 ? "file" : "files"}`, variant: "secondary" });
     }
 
-    // Its level of automation: the repo's (the backend's, else from before in this browser), else the issue's own over it.
+    // Its level of automation: the repo's, else the issue's own over it.
     let repoLevel: Level = { questions: false, comments: false, pull_requests: false };
-    let own: Level | null = null;
-    try {
-      repoLevel = { ...repoLevel, ...JSON.parse(localStorage.getItem(`automation:${issue.repo}`) ?? "{}") };
-      own = JSON.parse(localStorage.getItem(`automation:issue:${issue.id}`) ?? "null");
-    } catch {
-      // Storage blocked: nothing automated.
-    }
+    const own: Level | null = issueSettings[issue.id] ?? null;
     const fromBackend = repoSettings[issue.repo.toLowerCase()];
     if (fromBackend !== undefined) {
       repoLevel = fromBackend;
