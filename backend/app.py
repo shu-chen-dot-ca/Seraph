@@ -56,7 +56,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketDisconnected
 
-from backend import agents_api, artifacts_api, ask_settings_api, explore_api, github_account_api, images_api, inbox_api, issues_api, github_api, notifications_api, projects_api, pull_requests_api, remote_access_api, repo_live_api, repos_api, sherpa_api, tracked_api, updates_api, vms_api, workflow_api, your_repositories_api
+from backend import agents_api, artifacts_api, ask_settings_api, repo_automation_api, explore_api, github_account_api, images_api, inbox_api, issues_api, github_api, notifications_api, projects_api, pull_requests_api, remote_access_api, repo_live_api, repos_api, sherpa_api, tracked_api, updates_api, vms_api, workflow_api, your_repositories_api
 from backend.shared import agents, crashes, explore, images, inbox, issue_drafts, issue_facts, issue_tags, issues, jobs, notifications, pr_tracking, projects, remote_access, repo_signals, repos, resource_usage, sherpa, tracked, tracked_issues, updates, vms, workflow, your_repositories
 from github_searcher.projects import SELF_REPO
 from github_searcher.remote_access import COOKIE, DOMAIN as REMOTE_DOMAIN
@@ -114,6 +114,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(issues_api.keep_facts()),
         asyncio.create_task(issues_api.keep_tags()),
         asyncio.create_task(issues_api.keep_new_tags()),
+        asyncio.create_task(repo_automation_api.keep_catalog()),
         asyncio.create_task(issues_api.keep_catalog_agents()),
         asyncio.create_task(repos_api.keep_signals()),
         asyncio.create_task(tracked_api.keep_tracked()),
@@ -133,7 +134,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 # Every page's router; Sherpa gets their endpoints too (below).
-ROUTERS = [inbox_api.router, ask_settings_api.router, github_api.router, github_account_api.router, your_repositories_api.router, notifications_api.router, pull_requests_api.router, issues_api.router, repos_api.router, explore_api.router, tracked_api.router, agents_api.router, vms_api.router, images_api.router, artifacts_api.router, remote_access_api.router, repo_live_api.router, updates_api.router, projects_api.router, workflow_api.router, sherpa_api.router]
+ROUTERS = [inbox_api.router, ask_settings_api.router, repo_automation_api.router, github_api.router, github_account_api.router, your_repositories_api.router, notifications_api.router, pull_requests_api.router, issues_api.router, repos_api.router, explore_api.router, tracked_api.router, agents_api.router, vms_api.router, images_api.router, artifacts_api.router, remote_access_api.router, repo_live_api.router, updates_api.router, projects_api.router, workflow_api.router, sherpa_api.router]
 for router in ROUTERS:
     app.include_router(router)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
