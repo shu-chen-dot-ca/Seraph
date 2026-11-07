@@ -85,4 +85,6 @@ The robot on a repo's card (Dashboard, Repository) sets what agents do there wit
 
 Catalog is worked from the top: while fewer agents work than the board's **Max agents**, the next card of a repo with **Take issues** on goes to a new agent, which picks its VM itself. A send GitHub refuses stays in the Inbox for you.
 
+The board's robot also has **Close inactive PRs after** (14 days at first): an open PR an agent opened for you, with no update on GitHub for that long, is made again by its agent as a fresh PR with a clean history and every review point done. Once the new one is on GitHub, the old one is closed. An agent can do the same for a PR of its own that stalled for other reasons.
+
 Where the repo's Comments or Pull requests setting is on, an agent can also take back what it sent itself: delete its own comment, close its own PR, or drop its newest commits from its own PR.
