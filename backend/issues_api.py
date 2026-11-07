@@ -41,8 +41,9 @@ whose job waits in the queue (15), _ongoing_ for ones an agent works on or that 
 which takes issues out of the Issues list by rules the user picks: claimed (someone is on it, or it is already fixed), out of scope,
 complexity (easy, medium, hard), scope not clear, and opened more than older_than_days days ago (None: off). Only
 issues no agent has started (no job on them, or only cancelled ones), so work in progress never goes. Saving applies
-them at once; keep_tags applies them again after every round, so an issue that matches later goes then. Issues the
-user moved to Catalog stay too. Each time
+them at once, and again right after new tags come in (keep_new_tags, and keep_tags after a round that tagged
+anything) and every AUTO_REMOVE_SECONDS anyway (an issue gets older), so an issue that matches later goes then. They
+apply to Open and Catalog alike; an issue one of our agents opened (claimed for you) stays. Each time
 anything goes it is one undo step on the Issues page. One rule is always on, whatever the robot says: an issue of a repo
 no longer in Repos, or archived there, goes from Open and Catalog alike (not one an agent has started). Deleting or
 archiving a repo applies it at once (backend/repos_api.py).
@@ -89,7 +90,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.shared import agents, issue_facts, issue_tags, issues, jobs, pr_tracking, repo_signals, repos, tracked, tracked_issues
+from backend.shared import agents, inbox, issue_facts, issue_tags, issues, jobs, pr_tracking, repo_signals, repos, tracked, tracked_issues
 from github_searcher.inbox import AUTOMATION_FILE
 from github_searcher.issue_tags import CHECKS, DATA_DIR, NAME_VERSION, RULES_VERSION
 from github_searcher.search import CACHE, get_thread
@@ -128,6 +129,8 @@ AUTO_REMOVE_OFF = {
 CATALOG_AGENTS_SECONDS = 30
 # How often keep_stale_prs looks for PRs with no update for stale_pr_days.
 STALE_CHECK_SECONDS = 10 * 60
+# Remove automatically's rules apply right after new tags come in, and this often anyway (issues get older).
+AUTO_REMOVE_SECONDS = 15 * 60
 LEVELS = ["easy", "medium", "hard"]
 
 
@@ -175,9 +178,9 @@ class AutoRemoveRequest(BaseModel):
 
 
 def auto_remove_issues() -> list[str]:
-    """Take out of the Issues list what Remove automatically's rules pick, as one undo step; returns the ids taken out.
-    Only issues no agent has started: no job on them, or only cancelled ones. Those of a repo no longer in Repos (or
-    archived there) always go, Catalog's too, whatever the rules."""
+    """Take out of the Issues list what Remove automatically's rules pick, from Open and Catalog alike, as one undo step;
+    returns the ids taken out. Only issues no agent has started: no job on them, or only cancelled ones. Those of a repo
+    no longer in Repos (or archived there) always go, whatever the rules. One our agents opened (claimed for you) stays."""
     # Until saved once the rules are all off: only the repo rule takes anything.
     rules = dict(AUTO_REMOVE_OFF)
     if AUTO_REMOVE_FILE.is_file():
@@ -185,7 +188,11 @@ def auto_remove_issues() -> list[str]:
     tags = issue_tags.all()
     facts = issue_facts.all()
     started = [job["issue"] for job in jobs.list() if job["issue"] is not None and job["status"] != "cancelled"]
-    catalog = issues.board()["catalog"]
+    # The issues our agents opened as you (lower case): claimed for you on GitHub, so an agent fixes them.
+    opened = []
+    for action in inbox.actions():
+        if action["kind"] == "issue":
+            opened.append(f"{action['sent']['repo']}#{action['sent']['number']}".lower())
     # By repo name in lower case: an issue's repo may be spelled its own way.
     archived = [name.lower() for name in repos.archived()]
     in_repos = [item["full_name"].lower() for item in repos.items() if item["full_name"].lower() not in archived]
@@ -199,8 +206,7 @@ def auto_remove_issues() -> list[str]:
         if item["repo"].lower() not in in_repos:
             picked.append(item["id"])
             continue
-        # The user's picks in Catalog stay.
-        if item["id"] in catalog:
+        if item["id"].lower() in opened:
             continue
         # The rules decide on tags read since it was added; keep_new_tags reads it again first.
         tag = tags.get(item["id"])
@@ -562,6 +568,7 @@ async def keep_tags() -> None:
     """
     failed = []
     failed_since = time.monotonic()
+    removed_at = 0.0
     while True:
         if time.monotonic() - failed_since > TAGS_RETRY_SECONDS:
             failed = []
@@ -657,11 +664,14 @@ async def keep_tags() -> None:
             for issue_id in todo:
                 if issue_id not in tagged:
                     failed.append(issue_id)
-        # New tags and facts may match Remove automatically's rules now. A failure there mustn't stop the tagging.
-        try:
-            auto_remove_issues()
-        except Exception:
-            pass
+        # New tags may match Remove automatically's rules now, and an issue may have got older than older_than_days: after
+        # a round that tagged anything, and every AUTO_REMOVE_SECONDS. A failure there mustn't stop the tagging.
+        if todo or time.monotonic() - removed_at > AUTO_REMOVE_SECONDS:
+            removed_at = time.monotonic()
+            try:
+                auto_remove_issues()
+            except Exception:
+                pass
         await asyncio.sleep(TAGS_CHECK_SECONDS)
 
 
