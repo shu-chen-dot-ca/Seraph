@@ -52,7 +52,9 @@ Agents only pick likely ones. Nobody can assign one that is fixed, out of scope 
 merge yet (backend/issues_api.py): a job we can't prove ends with nothing to show. merge is worked out again every time an issue is read, so a claim, a change in the
 repo's numbers or the user's first merged PR there shows at the next read. reason is Claude's plain sentence on the
 status, then "Merge: <label>, <why>." An issue with an assignee on GitHub is claimed without asking Claude; its checks
-and kind stay None.
+and kind stay None. So is one with someone else's open pull request that says it closes it (GitHub's closing reference),
+updated in the last TAKEN_PR_DAYS days: its maintainers don't want a second fix. An older one may be abandoned: Claude
+weighs that.
 
 Issues go in batches, not one Claude run each: up to BATCH issues of one repo take one GitHub call, and as many
 of them as fit in CHARS_PER_RUN take one Claude run, the repo said once; AT_ONCE batches run at the same time.
@@ -95,7 +97,7 @@ import json
 import os
 import re
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -159,6 +161,8 @@ CHECKS = [
 ]
 # Lines over which a change is big for someone with no merged pull request in the repo yet.
 BIG_LINES = 200
+# Someone else's open pull request that says it closes an issue, updated in this many days, means someone is on it.
+TAKEN_PR_DAYS = 30
 # How each merge value reads, in the reason (the pages have the same labels).
 MERGE_LABEL = {
     "likely": "Likely",
@@ -329,8 +333,18 @@ class IssueTags:
             # Someone else has it on GitHub: no need to ask. Assigned only to the user is theirs: Claude reads it.
             assignees = [user["login"] for user in issue["assignees"]["nodes"]]
             others = [name for name in assignees if login is None or name.lower() != login.lower()]
+            reason = ""
             if others:
                 reason = f"Assigned on GitHub to {', '.join(others)}."
+            # Or someone else's open pull request says it closes it, and isn't abandoned: no second fix.
+            recent = (datetime.now(UTC) - timedelta(days=TAKEN_PR_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            for pull in issue["closedByPullRequestsReferences"]["nodes"]:
+                pull_author = pull["author"]["login"] if pull["author"] else "ghost"
+                if reason or pull["state"] != "OPEN" or pull["updatedAt"] < recent:
+                    continue
+                if login is None or pull_author.lower() != login.lower():
+                    reason = f"Open pull request #{pull['number']} by {pull_author} says it closes it."
+            if reason:
                 found[issue_id] = {
                     "status": "assigned",
                     "merge": "claimed",
