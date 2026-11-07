@@ -30,11 +30,20 @@ again buttons and the pages' Refresh (Issues: every open issue in the list, afte
 its facts; Tracked: every free issue, after the checks) do it at once
 (refresh_tags), and say which ones that were free aren't anymore.
 
+The robot button over the Dashboard's Issues board sets Remove automatically, kept in AUTO_REMOVE_FILE,
+which takes issues out of the Issues list by rules the user picks: claimed (someone is on it, or it is already fixed), out of scope,
+complexity (easy, medium, hard), scope not clear, and opened more than older_than_days days ago (None: off). Only
+issues no agent has started (no job on them, or only cancelled ones), so work in progress never goes. Saving applies
+them at once; keep_tags applies them again after every round, so an issue that matches later goes then. Issues the
+user moved to Catalog stay too. Each time
+anything goes it is one undo step on the Issues page.
+
 When an issue goes from free to assigned either way, Agents.issue_taken tells the agent with a job on it who has it
 (the assignees from its facts, or the tags' reason), and the agent decides itself whether to keep working or stop.
 """
 
 import asyncio
+import json
 import re
 import time
 from datetime import UTC, datetime, timedelta
@@ -43,7 +52,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.shared import agents, issue_facts, issue_tags, issues, jobs, tracked, tracked_issues
-from github_searcher.issue_tags import CHECKS, NAME_VERSION, RULES_VERSION
+from github_searcher.issue_tags import CHECKS, DATA_DIR, NAME_VERSION, RULES_VERSION
 from github_searcher.search import CACHE, get_thread
 from sandbox.vms import VMsError
 
@@ -58,6 +67,16 @@ TAGS_FREE_SECONDS = 60 * 60
 ACTIVE_TAGS_SECONDS = 5 * 60
 # An issue that could not be tagged (Claude or GitHub down, the issue gone) is tried again after this long.
 TAGS_RETRY_SECONDS = 30 * 60
+# Remove automatically's rules; all off until saved once.
+AUTO_REMOVE_FILE = DATA_DIR / "issue_auto_remove.json"
+AUTO_REMOVE_OFF = {
+    "claimed": False,
+    "out_of_scope": False,
+    "levels": [],
+    "scope_not_clear": False,
+    "older_than_days": None,
+}
+LEVELS = ["easy", "medium", "hard"]
 
 
 class AssignRequest(BaseModel):
@@ -79,6 +98,70 @@ class BoardRequest(BaseModel):
     catalog: list[str]
     order: list[str]
     held: list[str]
+
+
+class AutoRemoveRequest(BaseModel):
+    claimed: bool
+    out_of_scope: bool
+    levels: list[str]  # of LEVELS
+    scope_not_clear: bool
+    older_than_days: int | None  # None: off
+
+
+def auto_remove_issues() -> list[str]:
+    """Take out of the Issues list what Remove automatically's rules pick, as one undo step; returns the ids taken out.
+    Only issues no agent has started: no job on them, or only cancelled ones."""
+    if not AUTO_REMOVE_FILE.is_file():
+        return []
+    rules = json.loads(AUTO_REMOVE_FILE.read_text())
+    tags = issue_tags.all()
+    facts = issue_facts.all()
+    started = [job["issue"] for job in jobs.list() if job["issue"] is not None and job["status"] != "cancelled"]
+    # The user's picks in Catalog stay too.
+    started += issues.board()["catalog"]
+    cutoff = None
+    if rules["older_than_days"] is not None:
+        cutoff = datetime.now(UTC) - timedelta(days=rules["older_than_days"])
+    picked = []
+    for item in issues.items():
+        if item["id"] in started:
+            continue
+        tag = tags.get(item["id"]) or {}
+        opened = (facts.get(item["id"]) or {}).get("created_at")
+        out_of_scope = tag.get("merge") == "out of scope"
+        if rules["claimed"] and tag.get("status") in ("assigned", "fixed"):
+            picked.append(item["id"])
+        elif rules["out_of_scope"] and out_of_scope:
+            picked.append(item["id"])
+        elif not out_of_scope and tag.get("complexity") in rules["levels"]:
+            picked.append(item["id"])
+        elif rules["scope_not_clear"] and tag.get("scope_clear") is False:
+            picked.append(item["id"])
+        elif cutoff is not None and opened is not None and datetime.fromisoformat(opened) < cutoff:
+            picked.append(item["id"])
+    if not picked:
+        return []
+    return issues.remove(picked)["removed"]
+
+
+@router.get("/issues/auto_remove")
+def get_auto_remove() -> dict:
+    rules = dict(AUTO_REMOVE_OFF)
+    if AUTO_REMOVE_FILE.is_file():
+        rules.update(json.loads(AUTO_REMOVE_FILE.read_text()))
+    return rules
+
+
+@router.put("/issues/auto_remove")
+def put_auto_remove(body: AutoRemoveRequest) -> dict:
+    """Keep the rules and apply them at once; returns them with the ids taken out now."""
+    if any(level not in LEVELS for level in body.levels):
+        raise HTTPException(status_code=400, detail="The levels are easy, medium and hard.")
+    if body.older_than_days is not None and (body.older_than_days < 1 or body.older_than_days > 3650):
+        raise HTTPException(status_code=400, detail="The days are 1 to 3650.")
+    rules = body.model_dump()
+    AUTO_REMOVE_FILE.write_text(json.dumps(rules, indent=2))
+    return {**rules, "removed": auto_remove_issues()}
 
 
 @router.post("/issues/remove")
@@ -381,4 +464,9 @@ async def keep_tags() -> None:
             for issue_id in todo:
                 if issue_id not in tagged:
                     failed.append(issue_id)
+        # New tags and facts may match Remove automatically's rules now. A failure there mustn't stop the tagging.
+        try:
+            auto_remove_issues()
+        except Exception:
+            pass
         await asyncio.sleep(TAGS_CHECK_SECONDS)
