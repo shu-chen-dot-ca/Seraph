@@ -59,7 +59,8 @@ cards of repos whose Level of automation has Take issues on (backend/repo_automa
 you), and only while the repo is under its Open PRs at once (its open PRs of yours and its issues with an open job before a
 PR, from queued to waiting on you; backend/repo_automation_api.py): a repo at it is skipped and the next card of
 another repo goes. Only cards that are Catalog's own: no job (or only cancelled ones), not paused, open on GitHub, and, like Assign, with its
-Merge in and not fixed, out of scope or can't validate (the others wait there). A card taken leaves Catalog's list, so
+Merge in and not fixed, out of scope or can't validate, and unlike Assign not claimed either: someone else is on it
+(assigned, or their open pull request closes it), so a second fix isn't wanted (the others wait there). A card taken leaves Catalog's list, so
 its job keeps it on the board, and a job cancelled later sends it back to Open, not to the next agent.
 
 The same robot's stale_pr_days (14 at first, None: off) closes PRs that stalled: an open PR of yours that an agent owns
@@ -696,9 +697,10 @@ def take_from_catalog() -> None:
         state = fact["state"] if fact else item["state"]
         if state == "CLOSED":
             continue
-        # Like Assign (assign_issue): once its Merge is in, and not when that says it can't be done.
+        # Like Assign (assign_issue): once its Merge is in, and not when that says it can't be done. Nor one someone else
+        # is on (claimed): assigned to them, or their open PR closes it; nobody wants a second fix.
         tag = tags.get(item["id"])
-        if tag is None or tag.get("merge") in (None, "fixed", "out of scope", "can't validate"):
+        if tag is None or tag.get("merge") in (None, "fixed", "out of scope", "can't validate", "claimed"):
             continue
         waiting.append(item["id"])
     # From the top: the board's order, ones not placed yet after (sorted keeps them in the order they were added).
