@@ -56,7 +56,9 @@ CATALOG_AGENTS_SECONDS, and while there is room it gives Catalog's cards to new 
 served (the board's order; ones not placed yet after, in the order they were added), each to its own new agent with the
 first free agent-N name and no target VM, so the agent picks the VM that suits the job itself (Agents.assign). Only
 cards of repos whose Level of automation has Take issues on (backend/repo_automation_api.py; the others wait there for
-you), and only cards that are Catalog's own: no job (or only cancelled ones), not paused, open on GitHub, and, like Assign, with its
+you), and only while the repo is under its Open PRs at once (its open PRs of yours and its issues with an open job before a
+PR, from queued to waiting on you; backend/repo_automation_api.py): a repo at it is skipped and the next card of
+another repo goes. Only cards that are Catalog's own: no job (or only cancelled ones), not paused, open on GitHub, and, like Assign, with its
 Merge in and not fixed, out of scope or can't validate (the others wait there). A card taken leaves Catalog's list, so
 its job keeps it on the board, and a job cancelled later sends it back to Open, not to the next agent.
 
@@ -702,10 +704,33 @@ def take_from_catalog() -> None:
     # From the top: the board's order, ones not placed yet after (sorted keeps them in the order they were added).
     waiting.sort(key=lambda issue_id: board["order"].index(issue_id) if issue_id in board["order"] else len(board["order"]))
 
-    for issue_id in waiting[:room]:
+    # Each repo's Open PRs at once (backend/repo_automation_api.py): its open PRs of yours and its issues with an open
+    # job before a PR (queued to waiting on you) count, by repo in lower case; while they reach it, its cards wait.
+    busy = {}
+    merged = {}
+    for pr in pr_tracking.summary()["items"]:
+        if pr["relation"] == "author" and pr["state"] == "open":
+            busy[pr["repo"].lower()] = busy.get(pr["repo"].lower(), 0) + 1
+        if pr["relation"] == "author" and pr["state"] == "merged":
+            merged[pr["repo"].lower()] = merged.get(pr["repo"].lower(), 0) + 1
+    for issue_id, job in latest.items():
+        if job["status"] in ["queued", "working", "waiting_on_user", "paused"] and job["repo"] is not None:
+            busy[job["repo"].lower()] = busy.get(job["repo"].lower(), 0) + 1
+    limits = {}
+    for repo, each in settings.items():
+        limits[repo.lower()] = each.get("max_prs", 5) if merged.get(repo.lower(), 0) > 0 else each.get("max_prs_first", 1)
+
+    for issue_id in waiting:
+        if room <= 0:
+            break
+        repo = issue_id.split("#")[0].lower()
+        if busy.get(repo, 0) >= limits.get(repo, 1):
+            continue
         agents.assign(issue_id, None, None)
         board = issues.board()
         issues.set_board([each for each in board["catalog"] if each != issue_id], board["order"], board["held"])
+        busy[repo] = busy.get(repo, 0) + 1
+        room -= 1
 
 
 async def keep_stale_prs() -> None:
