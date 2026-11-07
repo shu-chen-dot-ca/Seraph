@@ -193,6 +193,8 @@ class Agents:
         self.crashes = crashes
         # The Workflow tab's repositories (workflow.py): backend/shared.py puts it here once both are made.
         self.workflow = None
+        # What went wrong in how the app made agents work, as they report it (problems.py): backend/shared.py puts it here.
+        self.problems = None
         # The user's repositories, read with their sign-in: a repository's agent reads its repo and gets its code through it.
         self.your_repositories = your_repositories
         # The issues repository agents drafted for the user (issue_drafts.py).

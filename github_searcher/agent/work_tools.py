@@ -67,6 +67,9 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   (its newest pushes on a PR of its own: the branch goes back to a commit it had before one of them, only while nobody
   pushed since). A stalled PR of its own is made again as a fresh one: draft_pr with replaces (and every remake job,
   Agents.remake_pr, does it by itself); once the new one is on GitHub the old one is closed (github_account.py).
+- report_problem puts what went wrong in how the app made the agent work (a rule or tool that led it the wrong way,
+  something a maintainer or the user had to correct) on the Dashboard's Problems list (problems.py), for the user to
+  fix all at one time. Nobody answers it.
 - Questions: draft_question is only for what matters to the user; small choices the agent makes itself and says so in
   its progress. A question with options names the one the agent recommends, and is timed: when the user doesn't answer
   within the timer of their Settings, the app answers it with that recommendation (Agents.answer_questions). One about
@@ -603,6 +606,21 @@ class WorkTools:
                 },
             )(self.drop_commits),
             tool(
+                "report_problem",
+                "Report a problem in how the app made you work, so the user can fix the app: a rule or a tool that led you "
+                "the wrong way (you claimed or started an issue someone else was already on, a tool refused what it should "
+                "allow or allowed what it shouldn't, your instructions said two different things), or anything a maintainer "
+                "or the user had to correct you on. Not the project's own bugs, and not a question: it goes on the "
+                "Dashboard's Problems list, which the user fixes all at one time; nobody answers it, so go on with your work. "
+                "text: what happened (with links), why as far as you can tell (the rule or tool), and what should have "
+                "happened instead. about: the issue or PR it happened on (owner/name#number), if any.",
+                {
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}, "about": {"type": "string"}},
+                    "required": ["text"],
+                },
+            )(self.report_problem),
+            tool(
                 "draft_question",
                 "Ask the user a question through their Inbox, only when the answer matters. Small choices are yours (how to "
                 "test, names, which of two reasonable ways): decide, say what you chose and why with job_progress, and go on; "
@@ -1035,6 +1053,8 @@ class WorkTools:
             return f"Taking back {args.get('pr')}"
         if name == "drop_commits":
             return f"Taking back the commits of {args.get('pr')} after {(args.get('back_to') or '')[:10]}"
+        if name == "report_problem":
+            return "Reporting a problem: " + (args.get("text") or "").split("\n")[0][:120]
         if name == "paper_read":
             return f"Reading the paper, pages {args.get('pages')}"
         if name == "draft_report":
@@ -2202,6 +2222,20 @@ class WorkTools:
         except SendError as error:
             return {"content": [{"type": "text", "text": f"Nothing was taken back. {error}"}], "is_error": True}
         return {"content": [{"type": "text", "text": f"{pr}: {result}"}]}
+
+    async def report_problem(self, args: dict) -> dict:
+        text = args["text"].strip()
+        if not text:
+            return {"content": [{"type": "text", "text": "Say what happened, why, and what should have happened."}], "is_error": True}
+        about = (args.get("about") or "").strip() or None
+        # With the job the agent works on (none when it works on none).
+        job_id = None
+        for job in self.agents.jobs.for_agent(self.agent_id):
+            if job["status"] == "working":
+                job_id = job["id"]
+        item = await asyncio.to_thread(self.agents.problems.add, self.agent_id, job_id, about, text)
+        text = f"Reported as {item['id']} on the Dashboard's Problems list; the user fixes them all at one time. Go on with your work."
+        return {"content": [{"type": "text", "text": text}]}
 
     async def draft_question(self, args: dict) -> dict:
         question = args["question"].strip()
