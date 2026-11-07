@@ -828,7 +828,7 @@ class WorkTools:
             tool(
                 "desktop_add",
                 "Add a desktop to your target VM, running or not, when all of its desktops are taken and you would otherwise "
-                "wait: a VM has at most 3. It gets the lowest number free (desktops keep their numbers, so with 2 and 3 taken "
+                "wait, up to the VM's max desktops (vms_list shows it). It gets the lowest number free (desktops keep their numbers, so with 2 and 3 taken "
                 "the new one is desktop 1) and its own user, home folder, screen and browser. Setting it up takes under a "
                 "minute (a few more the first time). The agents already waiting in the VM's queue get it first; then "
                 "queue_for_vm. Each desktop takes memory from the others, so only when you would really wait, never a "
@@ -3348,6 +3348,7 @@ class WorkTools:
                 "disk_gb": vm_record.disk_gb,
                 "internet": vm_record.internet,
                 "desktops": desktops,
+                "max_desktops": vm_record.max_desktops,
                 "waiting": len(vm_record.queue),
                 "your_target": vm_record.name == self.record["target_vm"],
                 "forked_from": vm_record.forked_from or None,
