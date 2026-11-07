@@ -3933,8 +3933,24 @@ class WorkTools:
         if vm_name is None:
             text = "You have no target VM. Pick the VM that suits your jobs with vms_list and choose_vm, then queue again."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
+        # A desktop it asked for that was taken away (its notes may still name it): another one, with the project set up
+        # there again.
+        wanted = args.get("desktop") or None
         try:
-            place = self.agents.queue.join(vm_name, self.agent_id, args.get("desktop") or None)
+            vm_record = self.agents.vms.get(vm_name)
+        except VMsError:
+            text = f"{vm_name} is gone. Pick another VM with vms_list and choose_vm, then queue again."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if wanted is not None and wanted not in vm_record.desktops:
+            numbers = ", ".join(str(number) for number in vm_record.desktops)
+            text = (
+                f"{vm_name} has no desktop {wanted} anymore (its desktops are {numbers}): it was taken away, with what was set "
+                "up on it. Queue for another desktop, or leave desktop out for the first free one (desktop_add when all are "
+                "taken), and set your project up there again."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        try:
+            place = self.agents.queue.join(vm_name, self.agent_id, wanted)
             vm_record = self.agents.vms.get(vm_name)
         except (ValueError, VMsError) as error:
             return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
