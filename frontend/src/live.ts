@@ -71,6 +71,8 @@ export type RepoSignals = {
   outside_merge_rate: number | null; // merged / (merged + closed unmerged)
   median_days_to_first_reply: number | null;
   median_days_to_merge: number | null;
+  average_days_to_merge_30d?: number | null; // each outside contributor's mean over 30 days, then the mean of those
+  merge_authors_30d?: number; // how many contributors that average is over
   stale_outside_prs: number; // open over 30 days, nobody answered
   active_mergers_30d: number; // people who merged a PR in 30 days: the page calls them maintainers
   active_contributors?: number; // people who opened a PR in the window; missing until the next fetch

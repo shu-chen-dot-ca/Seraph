@@ -8,7 +8,8 @@ One JSON file, DATA_DIR/repo_signals.json, by repo (owner/name):
     Signals = {"fetched_at", "stars", "description", "topics", "language", "archived", "fork", "pushed_at",
                "pr_window_days",
                "outside_prs_90d", "outside_merged_90d", "outside_closed_90d", "outside_merge_rate",
-               "median_days_to_first_reply", "median_days_to_merge", "stale_outside_prs",
+               "median_days_to_first_reply", "median_days_to_merge", "average_days_to_merge_30d", "merge_authors_30d",
+               "stale_outside_prs",
                "active_mergers_30d", "active_contributors", "contributors_total", "commits_30d",
                "commits_total", "open_prs_total", "merged_prs_total", "closed_prs_total", "open_issues_total",
                "beginner_issues": [{"number", "title", "created_at", "labels", "assignees", "cross_references"}, ...],
@@ -34,6 +35,11 @@ Outside contributors are PR authors who aren't owners, members or collaborators,
   those reach back when they cover less than 90): outside_prs_90d, and median_days_to_first_reply, until the
   first review or comment by a maintainer (a merge without one counts as the reply). Only maintainers count: a
   bot's review (an AI reviewer, a CLA check) or another outsider's comment isn't a reply.
+- average_days_to_merge_30d: of every PR merged in the last 30 days (up to the 1,000 GitHub's search gives), the
+  outside contributors' ones: each contributor's mean days from opening to merge, then the mean of those, so one
+  person with many PRs counts once. A PR its own author merged doesn't count: whoever can merge is a maintainer.
+  merge_authors_30d is how many contributors that is; the average is None when there are none. A failed read keeps
+  the ones before.
 - reviewers: who reviews those PRs. Each one that got a review or comment is counted once: agent (only from an AI
   reviewer, a bot like CodeRabbit or Copilot: AI_REVIEWERS), both (an AI reviewer and a maintainer), or human (only
   from maintainers). CI and other bots (tests, coverage, a CLA check) don't count either way, nor do PRs nobody
@@ -107,6 +113,7 @@ from github_searcher.claude_judge import judge
 from github_searcher.search import (
     count_contributors,
     count_earlier_prs,
+    get_merged_prs_since,
     get_readme,
     get_repo_activity,
     get_repo_pulls,
@@ -403,6 +410,7 @@ class RepoSignals:
             asyncio.to_thread(get_repo_activity, owner, repo, since30, since90),
             asyncio.to_thread(get_readme, owner, repo),
             asyncio.to_thread(count_contributors, owner, repo),
+            asyncio.to_thread(get_merged_prs_since, owner, repo, since30),
         ]
         if need_feedback:
             calls.append(asyncio.to_thread(get_review_feedback, owner, repo))
@@ -416,9 +424,31 @@ class RepoSignals:
         readme = results[2] if isinstance(results[2], str) else ""
         # The count may fail alone: then it isn't known, like for a huge repo.
         contributors_total = results[3] if not isinstance(results[3], Exception) else None
+        merged_since = results[4] if not isinstance(results[4], Exception) else None
         feedback_data = None
-        if need_feedback and not isinstance(results[4], Exception):
-            feedback_data = results[4]
+        if need_feedback and not isinstance(results[5], Exception):
+            feedback_data = results[5]
+
+        # The average merge: each outside contributor's mean days to merge in the last 30 days, then the mean of those.
+        author_days = {}
+        for pull in merged_since or []:
+            author = pull.get("author")
+            if pull.get("authorAssociation") not in OUTSIDE or author is None or author["__typename"] != "User":
+                continue
+            if author["login"].lower().endswith("bot"):
+                continue
+            # Merged by its own author: a maintainer's PR, whatever GitHub calls them.
+            if pull["mergedBy"] is not None and pull["mergedBy"]["login"] == author["login"]:
+                continue
+            days = (datetime.fromisoformat(pull["mergedAt"]) - datetime.fromisoformat(pull["createdAt"])).total_seconds() / 86400
+            author_days.setdefault(author["login"], []).append(days)
+        author_means = [statistics.mean(days) for days in author_days.values()]
+        average_merge = round(statistics.mean(author_means), 1) if author_means else None
+        merge_authors = len(author_means)
+        if merged_since is None and previous is not None:
+            # The read failed: keep the ones before.
+            average_merge = previous.get("average_days_to_merge_30d")
+            merge_authors = previous.get("merge_authors_30d", 0)
 
         newcomer_logins = [login for login in logins if earlier.get(login) == 0]
         first_prs = []
@@ -644,6 +674,8 @@ class RepoSignals:
             "outside_merge_rate": merge_rate,
             "median_days_to_first_reply": round(statistics.median(replies), 1) if replies else None,
             "median_days_to_merge": round(statistics.median(merges), 1) if merges else None,
+            "average_days_to_merge_30d": average_merge,
+            "merge_authors_30d": merge_authors,
             "stale_outside_prs": stale,
             "active_mergers_30d": len(mergers),
             "active_contributors": len(contributors),

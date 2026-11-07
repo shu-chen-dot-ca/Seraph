@@ -502,6 +502,19 @@ def get_repo_activity(owner: str, repo: str, since30: str, since90: str) -> dict
         return data["data"]
 
 
+# PRs merged since a date, 100 a page: who opened them, how they relate to the repo, and who merged them.
+MERGED_SINCE_QUERY = """
+query($query: String!, $after: String) {
+  search(query: $query, type: ISSUE, first: 100, after: $after) {
+    pageInfo { hasNextPage endCursor }
+    nodes { ... on PullRequest { createdAt mergedAt authorAssociation author { login __typename } mergedBy { login } } }
+  }
+}
+"""
+# GitHub's search gives at most 1,000 results: 10 pages.
+MERGED_SINCE_PAGES = 10
+
+
 # A repo's totals: the commits on the default branch, the open, merged and closed (without a merge) PRs and the open
 # issues. For
 # signals read before repo_signals.py kept them; SIGNALS_QUERY reads them since.
@@ -540,6 +553,24 @@ def get_repo_totals(owner: str, repo: str) -> dict:
         "closed_prs_total": repository["closedPullRequests"]["totalCount"],
         "open_issues_total": repository["openIssues"]["totalCount"],
     }
+
+
+def get_merged_prs_since(owner: str, repo: str, since: str) -> list[dict]:
+    # Never cached. Every PR merged since that date (2026-10-07), up to the 1,000 GitHub's search gives.
+    nodes = []
+    after = None
+    for _ in range(MERGED_SINCE_PAGES):
+        variables = {"query": f"repo:{owner}/{repo} is:pr is:merged merged:>={since}", "after": after}
+        response = BALANCER.request("POST", "https://api.github.com/graphql", json={"query": MERGED_SINCE_QUERY, "variables": variables}, timeout=90)
+        response.raise_for_status()
+        data = response.json()
+        if data.get("errors"):
+            raise ValueError(data["errors"][0]["message"])
+        nodes += data["data"]["search"]["nodes"]
+        if not data["data"]["search"]["pageInfo"]["hasNextPage"]:
+            break
+        after = data["data"]["search"]["pageInfo"]["endCursor"]
+    return nodes
 
 
 def count_earlier_prs(owner: str, repo: str, logins: list[str], before: str) -> dict:
