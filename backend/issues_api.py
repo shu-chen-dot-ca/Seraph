@@ -69,6 +69,11 @@ agent as a fresh PR, all its changes on the newest code with a clean history and
 (Agents.remake_pr); once the new one is on GitHub the old one is closed (github_account.py). keep_stale_prs() looks
 every STALE_CHECK_SECONDS. Once per PR: not while a job on it is open, and never again after its remake job.
 
+An open job on a board issue the app no longer wants done is stopped by its agent (Agents.stop_job tells it, once):
+the issue was deleted on GitHub or moved away (keep_facts finds it gone, drop_gone_issue: it then leaves the list for
+good, so nothing tags, queues or takes it again), or its repo was deleted from Repos (stop_unwanted_jobs, every
+CATALOG_AGENTS_SECONDS).
+
 When an issue goes from free to assigned either way, Agents.issue_taken tells the agent with a job on it who has it
 (the assignees from its facts, or the tags' reason), and the agent decides itself whether to keep working or stop.
 """
@@ -499,9 +504,22 @@ async def keep_facts() -> None:
         for issue_id in todo:
             try:
                 await asyncio.to_thread(issue_facts.refresh, issue_id)
-            except Exception:
+            except Exception as error:
                 failed.append(issue_id)
+                # GitHub has no such issue anymore (deleted, or moved away): nobody takes it again.
+                if str(error).startswith(("Could not resolve to an Issue", "GitHub has no issue")):
+                    drop_gone_issue(issue_id)
         await asyncio.sleep(FACTS_CHECK_SECONDS)
+
+
+def drop_gone_issue(issue_id: str) -> None:
+    """An issue GitHub doesn't have anymore: the agent of an open job on it is told to stop (Agents.stop_job), and it
+    leaves the Issues list for good (with Catalog and the tagging) once no job on it is open; until then keep_facts
+    finds it gone again every ACTIVE_REFRESH_SECONDS."""
+    for job in jobs.list():
+        if job["issue"] == issue_id and job["status"] not in ["done", "cancelled"]:
+            agents.stop_job(job["id"], f"{issue_id} was deleted on GitHub (or moved away): there is nothing to fix there anymore.")
+    issues.dismiss([issue_id])
 
 
 async def keep_new_tags() -> None:
@@ -648,11 +666,25 @@ async def keep_catalog_agents() -> None:
     the board's issues (see the top of this file)."""
     while True:
         try:
+            stop_unwanted_jobs()
             take_from_catalog()
         except Exception:
             # A file or an agent failed: the next round tries again.
             traceback.print_exc()
         await asyncio.sleep(CATALOG_AGENTS_SECONDS)
+
+
+def stop_unwanted_jobs() -> None:
+    """Open jobs on the board's issues that the app no longer wants done: their repo was deleted from Repos. Each one's
+    agent is told to stop and cancel it (Agents.stop_job), once. An archived repo stays in Repos: its jobs go on."""
+    ids = [item["id"] for item in issues.items()]
+    in_repos = [item["full_name"].lower() for item in repos.items()]
+    for job in jobs.list():
+        if job["kind"] != "fix_issue" or job["issue"] not in ids or job["status"] in ["done", "cancelled"]:
+            continue
+        repo = job["issue"].split("#")[0]
+        if repo.lower() not in in_repos:
+            agents.stop_job(job["id"], f"{repo} was deleted from Repos: the user doesn't want work there anymore.")
 
 
 def take_from_catalog() -> None:

@@ -1505,6 +1505,21 @@ class Agents:
             self.jobs.add_timeline(job["id"], "notice", notice)
             self.notify(job["agent"], text)
 
+    def stop_job(self, job_id: str, why: str) -> None:
+        """The app no longer wants this job done (backend/issues_api.py: its issue was deleted on GitHub, or its repo
+        left Repos). Its agent is told to stop and cancel it itself, once: the notice on its timeline says so."""
+        job = self.jobs.get(job_id)
+        told = [entry for entry in job["timeline"] if entry["kind"] == "notice" and entry["text"].endswith("told the agent to stop")]
+        if told or job["agent"] not in self.agents or job["status"] in ["done", "cancelled"]:
+            return
+        self.jobs.add_timeline(job_id, "notice", f"{why.rstrip('.')}; told the agent to stop")
+        text = (
+            f"{why} Stop {job_id} ({job['title']}) now: cancel it with job_update (status cancelled) and a note saying "
+            "why, tidy up what you left for it in the VM, and release the VM if nothing else needs it. Draft nothing more "
+            "for it."
+        )
+        self.notify(job["agent"], text)
+
     def follow_up(self, entry: dict) -> dict | None:
         """Someone else wrote on a PR or issue an agent follows for the user (agent mode Drafts on the GitHub tab), the
         PR's checks failed, or anything else changed on the user's own PR (merged, closed, a push, a conflict, ...): an
