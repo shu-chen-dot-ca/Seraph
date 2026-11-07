@@ -35,7 +35,7 @@ from fastapi import APIRouter, HTTPException, Response, WebSocket
 from pydantic import BaseModel
 from starlette.websockets import WebSocketDisconnect, WebSocketState
 
-from backend.shared import agents, images, queue, remote_access, vms
+from backend.shared import agents, images, jobs, queue, remote_access, vms
 from github_searcher.remote_access import COOKIE, DOMAIN as REMOTE_DOMAIN
 from sandbox import file_transfer
 from sandbox.agent import long_runs
@@ -153,7 +153,9 @@ async def delete_vm(name: str) -> dict:
 
     The VM goes first: if it can't be deleted (busy starting or stopping, or Incus fails), nobody
     lost their place or their target VM. Its queue goes with its record, so after the delete the
-    agents in it are in no queue anymore; they are only told (and interrupted) here.
+    agents in it are in no queue anymore; they are told (and interrupted) here. Every agent with open work there (in its
+    queue, holding it, aimed at it, or with an open job on it) is then woken to find another VM itself: vms_list and
+    choose_vm, a desktop of its own there (desktop_add when all are taken), and its project set up again.
     """
     try:
         record = vms.get(name)
@@ -170,15 +172,32 @@ async def delete_vm(name: str) -> dict:
     waiting = list(record.queue)
     for line in record.desktops.values():
         waiting += [line["holder"]] + list(line["priority"])
+    affected = []
     for agent_id in waiting:
         if agent_id is None or agent_id == "user":
             continue
+        affected.append(agent_id)
         agents.on_kick(name, agent_id, f"The user deleted {name}; you are in no VM queue anymore.")
     # Agents aimed at this VM aim at nothing now, instead of at a VM that is gone.
     for summary in agents.summaries():
         if summary["target_vm"] != name:
             continue
+        affected.append(summary["id"])
         agents.set_target_vm(summary["id"], None)
+    # The ones with open work there don't stop: they find another VM and go on.
+    for job in jobs.list():
+        if job["vm"] == name:
+            affected.append(job["agent"])
+    for agent_id in set(affected):
+        open_jobs = [job for job in jobs.list() if job["agent"] == agent_id and job["status"] in ["queued", "working"]]
+        if not open_jobs:
+            continue
+        agents.notify(
+            agent_id,
+            f"{name} was deleted, with everything that was set up in it. Don't stop: pick another VM for your open jobs "
+            "with vms_list and choose_vm (one where your project is set up already, else the best fit), queue_for_vm (add "
+            "a desktop with desktop_add when all of its desktops are taken), set your project up there again, and carry on.",
+        )
     agents.changed()
     return {}
 
