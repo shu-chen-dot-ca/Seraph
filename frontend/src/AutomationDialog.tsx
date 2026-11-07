@@ -18,9 +18,10 @@ issues from Catalog, from the top, as many at once as the board's Max agents), Q
 recommendation, unless one must wait for you), Comments (posted on GitHub), Pull requests (sent once their review
 passed, with new titles and descriptions; agents may also update your open pull requests' branches there) and Open
 issues (agents open new issues there, assigned to you, where the project's rules allow it; each goes to the end of
-Catalog). Under it Issue level (Easy, Medium, Hard; Easy only at first): which issues may be taken. Then Open PRs at
-once, two numbers: how many of your pull requests may be open there at the same time until one of yours there is
-merged (1 at first), and after (5). Agents take no more of its Catalog cards while its open pull requests and its issues
+Catalog). Under it two columns: Until one is merged (on the left) and Once one is merged (on the right, once you are a
+contributor there). Each has the issue levels (Easy, Medium, Hard): which issues may be taken, Easy only on the left
+and all three on the right at first; and Open PRs at once: how many of your pull requests may be open there at the same
+time, 1 on the left and 5 on the right at first. Agents take no more of its Catalog cards while its open pull requests and its issues
 being worked on reach it, and a new pull request over it waits in Review until one is merged or closed (you can still
 send it by hand: Approve in the Inbox, or Publish on the Pull requests page). How many agents work at
 once is the Issues board's (BoardAutomationDialog.tsx), not a repo's.
@@ -50,7 +51,8 @@ export type Automation = {
   open_issues?: boolean; // missing on settings from before it
   max_prs_first?: number; // open PRs at once until one is merged there; missing on settings from before it (1)
   max_prs?: number; // and after (5)
-  levels: string[]; // "easy", "medium", "hard"
+  levels_first?: string[]; // which issues may be taken until one of yours there is merged; missing before it (Easy)
+  levels: string[]; // and once one is: "easy", "medium", "hard"
   instructions: string;
 };
 
@@ -64,7 +66,8 @@ const DEFAULTS: Automation = {
   open_issues: false,
   max_prs_first: 1,
   max_prs: 5,
-  levels: ["easy"],
+  levels_first: ["easy"],
+  levels: ["easy", "medium", "hard"],
   instructions: "",
 };
 
@@ -84,6 +87,7 @@ export default function AutomationDialog(props: { repos: string[]; onClose: () =
   // As typed (digits only); Save checks them.
   const [maxFirst, setMaxFirst] = useState("1");
   const [maxAfter, setMaxAfter] = useState("5");
+  const [levelsFirst, setLevelsFirst] = useState(["easy"]);
   const [levels, setLevels] = useState(DEFAULTS.levels);
   const [instructions, setInstructions] = useState(DEFAULTS.instructions);
   const [error, setError] = useState("");
@@ -111,12 +115,21 @@ export default function AutomationDialog(props: { repos: string[]; onClose: () =
         setOpenIssues(start.open_issues === true);
         setMaxFirst(String(start.max_prs_first ?? 1));
         setMaxAfter(String(start.max_prs ?? 5));
+        setLevelsFirst(start.levels_first ?? ["easy"]);
         setLevels(start.levels);
         setInstructions(start.instructions);
         setLoaded(true);
       })
       .catch((err) => setError(`Could not read them: ${err instanceof Error ? err.message : err}`));
   }, [reposKey]);
+
+  function toggleFirst(level: string) {
+    if (levelsFirst.includes(level)) {
+      setLevelsFirst(levelsFirst.filter((each) => each !== level));
+    } else {
+      setLevelsFirst([...levelsFirst, level]);
+    }
+  }
 
   function toggleLevel(level: string) {
     if (levels.includes(level)) {
@@ -143,6 +156,7 @@ export default function AutomationDialog(props: { repos: string[]; onClose: () =
       open_issues: openIssues,
       max_prs_first: Number(maxFirst),
       max_prs: Number(maxAfter),
+      levels_first: levelsFirst,
       levels: levels,
       instructions: instructions.trim(),
     };
@@ -211,33 +225,34 @@ export default function AutomationDialog(props: { repos: string[]; onClose: () =
               </button>
             </div>
 
-            <div>
-              <div className={heading}>Issue level</div>
-              <div className="flex gap-1">
+            {/* Left until one of your pull requests there is merged, right once you are a contributor there. */}
+            <div className="grid grid-cols-2 gap-x-2">
+              <div>
+                <div className={heading}>Until one is merged</div>
                 {Object.keys(LEVELS).map((level) => (
-                  <button
-                    key={level}
-                    type="button"
-                    className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-accent"
-                    onClick={() => toggleLevel(level)}
-                  >
+                  <button key={level} type="button" className={option} onClick={() => toggleFirst(level)}>
+                    <SelectBox checked={levelsFirst.includes(level)} />
+                    {LEVELS[level]}
+                  </button>
+                ))}
+                <label className="flex items-center justify-between gap-2 px-2 py-1">
+                  Open PRs at once
+                  <Input className="h-7 w-14" inputMode="numeric" value={maxFirst} onChange={(event) => setMaxFirst(event.target.value.replace(/\D/g, ""))} />
+                </label>
+              </div>
+              <div>
+                <div className={heading}>Once one is merged</div>
+                {Object.keys(LEVELS).map((level) => (
+                  <button key={level} type="button" className={option} onClick={() => toggleLevel(level)}>
                     <SelectBox checked={levels.includes(level)} />
                     {LEVELS[level]}
                   </button>
                 ))}
+                <label className="flex items-center justify-between gap-2 px-2 py-1">
+                  Open PRs at once
+                  <Input className="h-7 w-14" inputMode="numeric" value={maxAfter} onChange={(event) => setMaxAfter(event.target.value.replace(/\D/g, ""))} />
+                </label>
               </div>
-            </div>
-
-            <div>
-              <div className={heading}>Open PRs at once</div>
-              <label className="flex items-center justify-between gap-2 px-2 py-1">
-                Until one is merged
-                <Input className="h-7 w-20" inputMode="numeric" value={maxFirst} onChange={(event) => setMaxFirst(event.target.value.replace(/\D/g, ""))} />
-              </label>
-              <label className="flex items-center justify-between gap-2 px-2 py-1">
-                After one is merged
-                <Input className="h-7 w-20" inputMode="numeric" value={maxAfter} onChange={(event) => setMaxAfter(event.target.value.replace(/\D/g, ""))} />
-              </label>
             </div>
           </div>
 
