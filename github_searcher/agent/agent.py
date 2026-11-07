@@ -76,6 +76,14 @@ class Agent:
         self.context_used = record["context_used"]
         self.context_max = record["context_max"]
         self.cost_usd = record["cost_usd"]
+        # Over its whole life: how many times its context was compacted, and the tokens of every reply (what it was
+        # given, cached or not, plus what it wrote).
+        self.compactions = record["compactions"]
+        self.tokens_used = record["tokens_used"]
+        # The reply being counted now, and how many of its tokens are counted already: a reply comes in one message per
+        # block, each with the reply's usage so far.
+        self.reply_id = None
+        self.reply_tokens = 0
         self.computer_tools = computer_tools
         self.work_tools = work_tools
         # Called after every message, so the live feed sends the agent list again.
@@ -191,6 +199,7 @@ class Agent:
                 self.session_id = message.data["session_id"]
 
             if isinstance(message, SystemMessage) and message.subtype == "compact_boundary":
+                self.compactions += 1
                 self.history.append({"type": "system", "text": "Context compacted", "time": datetime.now(UTC).isoformat()})
 
             if isinstance(message, AssistantMessage) and message.error:
@@ -202,6 +211,11 @@ class Agent:
                 self.context_used += message.usage.get("cache_creation_input_tokens", 0)
                 self.context_used += message.usage.get("cache_read_input_tokens", 0)
                 self.context_used += message.usage.get("output_tokens", 0)
+                if message.message_id != self.reply_id:
+                    self.reply_id = message.message_id
+                    self.reply_tokens = 0
+                self.tokens_used += self.context_used - self.reply_tokens
+                self.reply_tokens = self.context_used
 
             if isinstance(message, ResultMessage):
                 self.session_id = message.session_id

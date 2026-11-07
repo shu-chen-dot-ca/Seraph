@@ -4,7 +4,7 @@ Each agent (agent/agent.py) is one Claude conversation with a record on disk,
 DATA_DIR/agents/<id>.json:
 
     {"id": "agent_a1b2c3", "name": "agent-1", "target_vm": "vm1" | null, "claude_session_id",
-     "history": [HistoryEntry, ...], "context_used", "context_max", "cost_usd", "created_at",
+     "history": [HistoryEntry, ...], "context_used", "context_max", "cost_usd", "compactions", "tokens_used", "created_at",
      "pending": [message, ...], "awake": bool, "archived_at": null | when it was archived,
      "name_by": "auto" | "user" | "agent"}
 
@@ -143,7 +143,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from github_searcher import search
-from github_searcher.agent.agent import Agent
+from github_searcher.agent.agent import AGENT_HOME, Agent
 from github_searcher.agent.work_tools import WorkTools
 from sandbox.agent import long_runs
 from sandbox.agent.tools import ComputerTools
@@ -242,6 +242,31 @@ class Agents:
         # "*.json" leaves out a "*.json.tmp" a crash may have left behind.
         for path in sorted(self.folder.glob("*.json")):
             record = json.loads(path.read_text())
+            # Agents from before compactions and tokens were counted: the compactions from the history, the tokens from
+            # Claude Code's own file of the conversation it has now (each reply once: its blocks come in lines of their
+            # own, each with the reply's usage).
+            if "compactions" not in record:
+                record["compactions"] = len([entry for entry in record["history"] if entry["type"] == "system" and entry["text"] == "Context compacted"])
+            if "tokens_used" not in record:
+                transcript = Path.home() / ".claude" / "projects" / re.sub(r"[^a-zA-Z0-9]", "-", str(AGENT_HOME)) / f"{record['claude_session_id']}.jsonl"
+                lines = transcript.read_text().splitlines() if record["claude_session_id"] is not None and transcript.exists() else []
+                replies = {}
+                for line in lines:
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    message = entry.get("message")
+                    if entry.get("type") != "assistant" or not isinstance(message, dict) or not message.get("usage"):
+                        continue
+                    usage = message["usage"]
+                    replies[message.get("id")] = (
+                        (usage.get("input_tokens") or 0)
+                        + (usage.get("cache_creation_input_tokens") or 0)
+                        + (usage.get("cache_read_input_tokens") or 0)
+                        + (usage.get("output_tokens") or 0)
+                    )
+                record["tokens_used"] = sum(replies.values())
             # partial, not a lambda: the target VM is read from this record each time, not from the loop variable.
             computer_tools = ComputerTools(self.vms, self.queue, record["id"], functools.partial(record.get, "target_vm"), record["history"])
             agent = Agent(record, computer_tools, WorkTools(self, record), self.changed)
@@ -338,6 +363,8 @@ class Agents:
         record["context_used"] = agent.context_used
         record["context_max"] = agent.context_max
         record["cost_usd"] = agent.cost_usd
+        record["compactions"] = agent.compactions
+        record["tokens_used"] = agent.tokens_used
         record["pending"] = self.pending[agent.id]
         record["awake"] = agent.busy or self.wake[agent.id].is_set()
         # Write, then rename: a crash never leaves half a record.
@@ -539,6 +566,8 @@ class Agents:
                     "context_used": agent.context_used,
                     "context_max": agent.context_max,
                     "cost_usd": agent.cost_usd,
+                    "compactions": agent.compactions,
+                    "tokens_used": agent.tokens_used,
                     "history_length": len(agent.history),
                     "pending": len([message for message in self.pending[agent.id] if message["from"] == "User"]),
                     "queued": [message["text"] for message in self.pending[agent.id] if message["from"] == "User"],
@@ -593,6 +622,8 @@ class Agents:
             "context_used": 0,
             "context_max": 0,
             "cost_usd": 0.0,
+            "compactions": 0,
+            "tokens_used": 0,
             "created_at": datetime.now(UTC).isoformat(),
             "archived_at": None,
             "name_by": name_by,

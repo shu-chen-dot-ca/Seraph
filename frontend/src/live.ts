@@ -668,6 +668,8 @@ export type AgentSummary = {
   context_used: number;
   context_max: number;
   cost_usd: number;
+  compactions: number; // how many times its context was compacted, over its whole life
+  tokens_used: number; // the tokens of all its replies over its whole life: what it was given (cached or not) and wrote
   history_length: number;
   pending: number; // user messages waiting for the current turn to end
   queued: string[]; // their texts, oldest first
