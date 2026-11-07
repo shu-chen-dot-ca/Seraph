@@ -14,7 +14,7 @@ human; Human only; Few reviews when too few to tell; hover for the counts, the p
 don't count), new contributors (people whose first PR there was recent, as "16 in 6 days": the days its 100 newest PRs
 cover; people who contributed before don't count; it sorts by new contributors a day), maintainers and PRs no
 maintainer answered. The Columns dialog has more (TABLE_COLUMNS: PRs, issues and commits a month, the trend, its
-issues in the Issues list, ...; github_searcher/repo_signals.py, kept fresh by the backend). There is no overall score: the numbers
+issues in the Issues list, ...; github_searcher/repo_signals.py, read once when a repo is added, again on Refresh on the Dashboard). There is no overall score: the numbers
 are shown as they are. What used to be tags under a row are columns too. Values are plain text in the page's own color: green,
 amber or red only where a value means something (the same rules as the Explore page). No lines between columns. Each
 row has two lines, so it isn't too long: the shown columns from the Outside contributors, Newcomers and Policy and

@@ -78,7 +78,7 @@ export type RepoSignals = {
   beginner_issues: BeginnerIssue[];
   unclaimed_beginner_issues: number;
   pr_window_days?: number; // how many days the 100 newest PRs reach back (at most 90)
-  // Missing on signals fetched before these were counted (until their next daily fetch).
+  // Missing on signals fetched before these were counted (until the backend reads them again, once).
   newcomers?: Newcomers;
   reviewers?: Reviewers;
   activity?: RepoActivity;

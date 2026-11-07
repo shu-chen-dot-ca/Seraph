@@ -15,10 +15,10 @@ When they have issues in the Issues list, the page asks whether those go too (an
 Tag puts picked repos under one tag of the user's own, or takes them out of theirs, as one undo step. It is only
 grouping: the page shows each tag's repos on top, under a header that folds them away, and the rest under No tag.
 
-The signals (github_searcher/repo_signals.py) are kept fresh by keep_signals(), which the app runs in
-the background, for the Repos list and the Tracked list alike (the Tracked page shows them as tags under an
-open repo): a new repo gets them within SIGNALS_CHECK_SECONDS, and each is fetched again once it is
-SIGNALS_REFRESH_SECONDS old (they change slowly).
+The signals (github_searcher/repo_signals.py) are read by keep_signals(), which the app runs in the background, for
+the Repos list and the Tracked list alike (the Tracked page shows them as tags under an open repo): a new repo gets
+them within SIGNALS_CHECK_SECONDS, and keeps them. They are read again only when you ask: Refresh on the Dashboard's
+Repository page, in a card's menu or for the picked cards (refresh_signals).
 
 Set up (a button on each row) gives a repo to an agent as a set_up_repo job (Agents.set_up_repo): the agent sets
 it up in its VM, running when it has a clear frontend, else cloned and opened in VS Code, and ends with a short
@@ -29,7 +29,7 @@ import asyncio
 import base64
 import re
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import httpx
 from fastapi import APIRouter, HTTPException
@@ -44,7 +44,6 @@ router = APIRouter(prefix="/api")
 # Bigger files are not shown: GitHub's contents API only sends files up to 1 MB.
 MAX_FILE_BYTES = 1024 * 1024
 SIGNALS_CHECK_SECONDS = 10
-SIGNALS_REFRESH_SECONDS = 24 * 60 * 60
 SIGNALS_RETRY_SECONDS = 60 * 60
 # Repos whose signals are fetched at the same time in a full round.
 SIGNALS_AT_ONCE = 4
@@ -62,6 +61,10 @@ class RemoveRequest(BaseModel):
 class ArchiveRequest(BaseModel):
     names: list[str]
     archived: bool
+
+
+class RefreshRequest(BaseModel):
+    names: list[str]
 
 
 class TagRequest(BaseModel):
@@ -116,6 +119,25 @@ def archive_repos(body: ArchiveRequest) -> dict:
     names = [name for name in body.names if name in listed]
     repos.set_archived(names, body.archived)
     return {"archived": repos.archived()}
+
+
+@router.post("/repos/refresh")
+async def refresh_signals(body: RefreshRequest) -> dict:
+    """Read repos' signals from GitHub again now, with Claude's judgments, and keep them (Refresh on the Dashboard's
+    Repository page: a card's, or the picked cards'). SIGNALS_AT_ONCE at a time, like keep_signals(); a few seconds
+    each. Answers when all are done, with the ones that failed."""
+    listed = [item["full_name"] for item in repos.items()]
+    names = [name for name in body.names if name in listed]
+    if not names:
+        raise HTTPException(status_code=404, detail="None of them is in Repos.")
+    failed = []
+    for start in range(0, len(names), SIGNALS_AT_ONCE):
+        batch = names[start:start + SIGNALS_AT_ONCE]
+        results = await asyncio.gather(*[repo_signals.refresh(name) for name in batch], return_exceptions=True)
+        for name, result in zip(batch, results):
+            if isinstance(result, Exception):
+                failed.append(name)
+    return {"refreshed": [name for name in names if name not in failed], "failed": failed}
 
 
 @router.post("/repos/remove")
@@ -239,10 +261,10 @@ def repo_readme(name: str) -> dict:
 
 
 async def keep_signals() -> None:
-    """Runs as long as the backend: fetches signals for repos that have none, or whose are a day old.
+    """Runs as long as the backend: fetches signals for repos that have none, once; they are kept after that
+    (refresh_signals reads one again when you ask).
 
-    By age, not by when the backend started, so a restart doesn't fetch them all again. A repo that
-    fails (GitHub down, the repo gone or renamed) is tried again after SIGNALS_RETRY_SECONDS.
+    A repo that fails (GitHub down, the repo gone or renamed) is tried again after SIGNALS_RETRY_SECONDS.
     Signals of repos that left both lists are dropped (an undo that brings one back fetches them again).
     """
     failed = []
@@ -258,13 +280,12 @@ async def keep_signals() -> None:
                 names.append(item["full_name"])
         repo_signals.forget(names)
         known = repo_signals.all()
-        old = (datetime.now(UTC) - timedelta(seconds=SIGNALS_REFRESH_SECONDS)).isoformat()
         todo = []
         for name in names:
             if name in failed:
                 continue
             # Signals from before activity was counted are as good as missing.
-            if name not in known or known[name]["fetched_at"] < old or "activity" not in known[name]:
+            if name not in known or "activity" not in known[name]:
                 todo.append(name)
         for start in range(0, len(todo), SIGNALS_AT_ONCE):
             batch = todo[start:start + SIGNALS_AT_ONCE]

@@ -81,7 +81,8 @@ fetch() gets the numbers from GitHub; complete() adds Claude's two judgments (po
 both unless told not to: Explore checks the numbers first and only pays for the judgments of repos it keeps.
 
 Kept apart from the Repos list on purpose, like issue_facts.py: the list's undo/redo should only undo what agents
-and the user did. The backend fetches signals for new repos, and for each again once a day (backend/repos_api.py).
+and the user did. The backend fetches signals for new repos once and keeps them; one is read again only when the user
+asks (Refresh on the Dashboard's Repository page, backend/repos_api.py).
 version goes up by one on every change, like the other stores.
 """
 
