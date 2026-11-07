@@ -87,4 +87,6 @@ Catalog is worked from the top: while fewer agents work than the board's **Max a
 
 The board's robot also has **Close inactive PRs after** (14 days at first): an open PR an agent opened for you, with no update on GitHub for that long, is made again by its agent as a fresh PR with a clean history and every review point done. Once the new one is on GitHub, the old one is closed. An agent can do the same for a PR of its own that stalled for other reasons.
 
+Before an agent claims, comments on or takes an issue, it reads all of it: every comment, every place it was mentioned, every related PR with its checks and reviews, and the checks on the default branch. If the issue is already fixed, a duplicate, taken by someone else's PR, or turned down by a maintainer, the agent closes it for us: its job stops and the issue leaves the board for good. Nothing on GitHub changes.
+
 Where the repo's Comments or Pull requests setting is on, an agent can also take back what it sent itself: delete its own comment, close its own PR, or drop its newest commits from its own PR.
