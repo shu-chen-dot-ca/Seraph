@@ -3,7 +3,7 @@ Live data from the backend, and the one fetch helper.
 
 One websocket to /api/live. On connect the server sends every topic, then only the topics that changed:
 {"topic": "repos" | "issues" | "tracked" | "explore" | "github" | "jobs" | "inbox" | "issue_drafts" | "prs" | "your_repos" | "notifications" | "agents"
-| "vms" | "images" | "resource" | "updates" | "projects" | "crashes" | "workflow",
+| "vms" | "images" | "resource" | "updates" | "projects" | "crashes" | "problems" | "workflow",
 "data": ...}.
 Each message replaces that topic in the store, and components read it with useLive(topic), so the page never
 polls and never re-fetches lists. When the socket drops it reconnects after a second, and the server sends
@@ -1100,6 +1100,18 @@ export type Crash = {
   note: string;
 };
 
+// What went wrong in how the app made an agent work, as the agent reported it (github_searcher/problems.py): the
+// Dashboard's Problems page.
+export type Problem = {
+  id: string;
+  at: string;
+  agent: string;
+  job: string | null;
+  about: string | null; // owner/name#n it happened on
+  text: string;
+  closed_at: string | null; // closed once fixed (Close all on the page)
+};
+
 // The Workflow tab (github_searcher/workflow.py): your own repositories that agents develop one confined issue at a
 // time, each as a pull request the review agent checks before it is merged or rejected.
 export type WorkflowIssue = {
@@ -1213,6 +1225,7 @@ export type Topics = {
   updates: UpdatesData;
   projects: Project[];
   crashes: Crash[]; // the newest first
+  problems: Problem[]; // the newest first
   workflow: WorkflowRepo[];
 };
 
@@ -1252,6 +1265,7 @@ const store = {
     },
     projects: [],
     crashes: [],
+    problems: [],
     workflow: [],
   } as Topics,
   loaded: {} as Partial<Record<keyof Topics, boolean>>,

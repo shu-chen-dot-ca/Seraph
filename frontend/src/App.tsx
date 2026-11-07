@@ -3,7 +3,8 @@ The whole app: a 36px header, a left list and one page on the right.
 The header's left has two tabs, the open one in full color with the accent under it:
 - Dashboard, the first page you see, with its own left list (DashboardNav.tsx): Pull requests (your own, Open and Closed,
   and Actions, what agents put on GitHub: PullRequests.tsx, plain), Issues (the Issues list as a board, IssueBoard.tsx), Repository (the Repos page's repos as
-  cards, RepositoryCards.tsx), Agents (every agent in a table, AgentList.tsx) and Virtual Machine (the VMs page and each
+  cards, RepositoryCards.tsx), Agents (every agent in a table, AgentList.tsx), Problems (what went wrong in how the app
+  made agents work, as they reported it: Problems.tsx) and Virtual Machine (the VMs page and each
   VM's page, the same pages as Home's).
 - Home, the backup with every page, with one left list (Sidebar.tsx) in four parts: with one left list (Sidebar.tsx) in four parts:
   - the work: Explore, Repos, Tracked, Issues, Jobs, Agents, VMs and Resource;
@@ -54,7 +55,7 @@ The page lives in the URL hash, so refresh and back/forward work and switching p
   Workflow: #/workflow  #/workflow?repo=owner/name (Workflow.tsx; takes tab=pulls|issues|chat|settings (none: Overview),
          state=closed and open=<number>, that pull request or issue)
   Dashboard: #/dashboard (= #/dashboard/pulls, takes state=closed|actions and open=owner/name%23n)  #/dashboard/issues  #/dashboard/repos
-         #/dashboard/agents (takes state=closed)
+         #/dashboard/agents (takes state=closed)  #/dashboard/problems (takes state=closed)
 Anything else (also no hash at all) opens the Dashboard. Links are plain <a href="#/..."> everywhere; App only reads the hash.
 
 A VM page, once visited, stays mounted (hidden) while you are elsewhere, so its desktop iframe keeps its
@@ -81,6 +82,7 @@ import Jobs from "@/Jobs";
 import Notifications from "@/Notifications";
 import Papers from "@/Papers";
 import PhoneVM from "@/PhoneVM";
+import Problems from "@/Problems";
 import PullRequests from "@/PullRequests";
 import Repos from "@/Repos";
 import Resource from "@/Resource";
@@ -474,6 +476,7 @@ export default function App() {
             {page === "dashboard" && id === "issues" && <IssueBoard />}
             {page === "dashboard" && id === "repos" && <RepositoryCards />}
             {page === "dashboard" && id === "agents" && <AgentList state={query.get("state") === "closed" ? "closed" : "open"} />}
+            {page === "dashboard" && id === "problems" && <Problems state={query.get("state") === "closed" ? "closed" : "open"} />}
             {page === "pulls" && (
               <PullRequests
                 key={query.get("view") ?? "created"}

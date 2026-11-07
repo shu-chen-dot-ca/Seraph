@@ -8,13 +8,15 @@ is marked:
 - Agents (#/dashboard/agents, AgentList.tsx): the agents in a table, Open and Closed, with how many are open (on an
   issue in Catalog, In progress, Review or Open PR on the Issues board). Like Home's Agents line without its fold (no line per agent) and without its +. An
   agent's chat (#/agents/<id>) stays on this tab when opened from here (App.tsx), and keeps this line marked.
+- Problems (#/dashboard/problems, Problems.tsx): what went wrong in how the app made agents work, as they reported it,
+  with how many are open.
 - Virtual Machine: the VMs page (#/vms), with running / all; the chevron folds its VMs. One child per VM, with its
   status (off, busy or free) like on Home; a click opens its page (#/vms/<name>). The VM pages are the same as Home's
   and stay on this tab when opened from here (App.tsx).
 In phone mode (App.tsx) the list is in the Menu instead, above Home's.
 */
 
-import { BookMarked, Bot, ChevronRight, CircleDot, GitPullRequest, Monitor } from "lucide-react";
+import { BookMarked, Bot, ChevronRight, CircleDot, GitPullRequest, Monitor, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 
 import { StatusDot, VM_TONE } from "@/components/ui/status-dot";
@@ -28,6 +30,7 @@ export default function DashboardNav(props: { page: string; id: string | null })
   const vms = useLive("vms");
   const jobs = useLive("jobs");
   const prs = useLive("prs");
+  const problems = useLive("problems");
   const running = vms.filter((vm) => vm.status === "running").length;
   // The open agents, the same as on the Agents page (AgentList.tsx): a job on an issue that waits in the queue, works,
   // waits on you or is paused, or waits on maintainers while its pull request is open (or not read yet); or an open
@@ -83,6 +86,12 @@ export default function DashboardNav(props: { page: string; id: string | null })
           <Bot className="size-4 text-muted-foreground" />
           Agents
           <span className="ml-auto text-muted-foreground tabular-nums">{openAgents.length}</span>
+        </a>
+
+        <a href="#/dashboard/problems" className={cn(row, "pl-6", props.page === "dashboard" && props.id === "problems" && selected)}>
+          <TriangleAlert className="size-4 text-muted-foreground" />
+          Problems
+          <span className="ml-auto text-muted-foreground tabular-nums">{problems.filter((problem) => problem.closed_at === null).length}</span>
         </a>
 
         <div className={cn(row, "gap-0 px-0", props.page === "vms" && props.id === null && selected)}>
