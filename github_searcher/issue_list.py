@@ -2,7 +2,7 @@
 
 One JSON file, DATA_DIR/issues.json:
 
-    {"items": [IssueItem, ...], "undo": [[IssueItem, ...], ...], "redo": [[IssueItem, ...], ...]}
+    {"items": [IssueItem, ...], "undo": [[IssueItem, ...], ...], "redo": [[IssueItem, ...], ...], "dismissed": [id, ...]}
 
     IssueItem = {"id": "owner/name#n", "repo", "number", "title", "labels", "state", "comments",
                  "html_url", "note", "added_by": "user" | "<agent id>", "added_at"}
@@ -16,6 +16,11 @@ An issue an agent is working on (a job on it queued, working, waiting on the use
 out, by the user, an agent or Remove closed and assigned: remove skips it and says so, and an undo or redo that
 would drop it keeps it. Cancel its job first.
 
+dismissed is what the user took off with the × on the Dashboard's Issues board (dismiss): removed like remove, and
+never added again by an agent or a bulk add (add skips them). Only the user adding that one issue by hand
+(allow_dismissed) puts it back, and takes it off dismissed. An undo brings the item back but leaves it dismissed; undo
+snapshots hold the items only. restore puts dismissed ones back (Undo on the toast after the ×): the items are kept in
+memory when dismissed, so it works until the backend restarts.
 The backend keeps one IssueList that the API and every agent share, so each method takes the
 lock. version goes up by one on every change; the live feed compares it to see what to send.
 """
@@ -48,9 +53,13 @@ class IssueList:
         self.path = DATA_DIR / "issues.json"
         self.lock = threading.Lock()
         self.version = 0
-        self.data = {"items": [], "undo": [], "redo": []}
+        self.data = {"items": [], "undo": [], "redo": [], "dismissed": []}
+        # Dismissed items by id, for restore. In memory only.
+        self.dismissed_items = {}
         if self.path.exists():
             self.data = json.loads(self.path.read_text())
+            # Lists from before dismissed have none.
+            self.data.setdefault("dismissed", [])
 
     def save(self) -> None:
         """Write the list to disk. Called with the lock held, after every change."""
@@ -58,7 +67,12 @@ class IssueList:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # Write, then rename: a crash never leaves half a file. No indent: the undo
         # snapshots make the file big.
-        saved = {"items": self.data["items"], "undo": self.data["undo"][-SAVED_STEPS:], "redo": self.data["redo"][-SAVED_STEPS:]}
+        saved = {
+            "items": self.data["items"],
+            "undo": self.data["undo"][-SAVED_STEPS:],
+            "redo": self.data["redo"][-SAVED_STEPS:],
+            "dismissed": self.data["dismissed"],
+        }
         temporary = self.path.with_name(self.path.name + ".tmp")
         temporary.write_text(json.dumps(saved))
         temporary.replace(self.path)
@@ -75,8 +89,9 @@ class IssueList:
         with self.lock:
             return len(self.data["redo"]) > 0
 
-    def add(self, items: list[dict]) -> list[str]:
-        """Add filled IssueItems as one undo step. Ids already in the list are skipped.
+    def add(self, items: list[dict], allow_dismissed: bool = False) -> list[str]:
+        """Add filled IssueItems as one undo step. Ids already in the list are skipped, and so are dismissed ones
+        unless allow_dismissed (the user adding that issue by hand), which takes them off dismissed.
 
         Returns the ids that were added.
         """
@@ -87,6 +102,10 @@ class IssueList:
                 # Also skips an id given twice in the same call.
                 if item["id"] in ids:
                     continue
+                if item["id"] in self.data["dismissed"] and not allow_dismissed:
+                    continue
+                if item["id"] in self.data["dismissed"]:
+                    self.data["dismissed"].remove(item["id"])
                 ids.append(item["id"])
                 new.append(copy.deepcopy(item))
             if not new:
@@ -119,6 +138,30 @@ class IssueList:
             self.data["items"] = [item for item in self.data["items"] if item["id"] not in removed]
             self.save()
             return {"removed": removed, "working": kept}
+
+    def dismiss(self, ids: list[str]) -> dict:
+        """Remove issues like remove, and keep the removed ones out for good (see the top of this file).
+
+        Returns what remove returns: {"removed", "working"}.
+        """
+        before = {item["id"]: item for item in self.items()}
+        result = self.remove(ids)
+        with self.lock:
+            for issue_id in result["removed"]:
+                self.dismissed_items[issue_id] = before[issue_id]
+                if issue_id not in self.data["dismissed"]:
+                    self.data["dismissed"].append(issue_id)
+            self.save()
+        return result
+
+    def restore(self, ids: list[str]) -> list[str]:
+        """Put dismissed issues back as one undo step and take them off dismissed. Returns the ids put back."""
+        items = [self.dismissed_items[issue_id] for issue_id in ids if issue_id in self.dismissed_items]
+        return self.add(items, allow_dismissed=True)
+
+    def dismissed(self) -> list[str]:
+        with self.lock:
+            return list(self.data["dismissed"])
 
     def set_note(self, id: str, note: str) -> None:
         """Replace an issue's note as one undo step. KeyError if the issue is not in the list."""

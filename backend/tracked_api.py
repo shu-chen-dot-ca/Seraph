@@ -267,7 +267,9 @@ def add_issue(body: AddIssueRequest) -> dict:
                 "added_by": "user",
                 "added_at": datetime.now(UTC).isoformat(),
             }
-        ]
+        ],
+        # The user picked this one: it comes back even if they once took it off the board.
+        allow_dismissed=True,
     )
     if not added:
         raise HTTPException(status_code=409, detail=f"{issue_id} is already in Issues.")

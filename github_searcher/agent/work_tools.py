@@ -1120,6 +1120,7 @@ class WorkTools:
 
     async def issues_add(self, args: dict) -> dict:
         in_list = [item["id"].lower() for item in await asyncio.to_thread(self.agents.issues.items)]
+        dismissed = [issue_id.lower() for issue_id in await asyncio.to_thread(self.agents.issues.dismissed)]
         tags = await asyncio.to_thread(self.agents.issue_tags.all)
         report = {}
         items = []
@@ -1133,6 +1134,9 @@ class WorkTools:
                 continue
             if issue_id.lower() in in_list:
                 report[issue_id] = "already in Issues"
+                continue
+            if issue_id.lower() in dismissed:
+                report[issue_id] = "skipped: the user removed it from the board; never add it again"
                 continue
             # Agents only pick issues a pull request from us would likely get merged for; the user may add any.
             tag = tags.get(issue_id)

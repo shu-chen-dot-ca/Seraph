@@ -83,6 +83,33 @@ def remove_issues(body: IdsRequest) -> dict:
     return result
 
 
+@router.post("/issues/dismiss")
+def dismiss_issues(body: IdsRequest) -> dict:
+    """The × on a card of the Dashboard's Issues board: remove them, and no agent or bulk add brings them back
+    (github_searcher/issue_list.py). One an agent is working on stays; working lists them."""
+    return issues.dismiss(body.ids)
+
+
+@router.post("/issues/delete")
+def delete_issues(body: IdsRequest) -> dict:
+    """Delete on a card's ⋯ on the Dashboard's Issues board, in any column: its open jobs are cancelled (their agents
+    are told to stop, like Cancel on the Jobs page), then it is removed like the × (no agent or bulk add brings it back).
+    Returns what dismiss returns."""
+    for job in jobs.list():
+        if job["issue"] in body.ids and job["status"] not in ("done", "cancelled"):
+            jobs.add_timeline(job["id"], "status", "Stopped by you: its issue was deleted")
+            jobs.update(job["id"], status="cancelled")
+            agents.notify(job["agent"], f"The user deleted the issue {job['issue']}, so {job['id']} ({job['title']}) is cancelled. Stop working on it and go on with your other jobs.")
+    return issues.dismiss(body.ids)
+
+
+@router.post("/issues/restore")
+def restore_issues(body: IdsRequest) -> dict:
+    """Undo on the toast after a card's ×: put those issues back and take them off dismissed. Returns the ids put
+    back (none for one removed before the backend last started)."""
+    return {"restored": issues.restore(body.ids)}
+
+
 @router.post("/issues/undo")
 def undo_issues() -> dict:
     return {"changed": issues.undo()}
