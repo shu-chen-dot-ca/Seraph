@@ -180,7 +180,8 @@ TAKEN_ADVICE = (
     "NONE and BOT are not), and search_issues how often their PRs get merged there (`repo:{repo} is:pr is:merged "
     "author:LOGIN`). A maintainer, a member, or someone who often gets PRs merged there: stop. Cancel {job} with "
     "job_update (status cancelled) and a note in plain words on who took it and why you stopped, then go on with your "
-    "other jobs. A new, unknown or bot-like account: keep going, and say why with job_progress."
+    "other jobs. A new, unknown or bot-like account: keep going, and say why with job_progress. When it is someone else's "
+    "open PR that closes it, stop whoever they are: close_issue with the PR's link, since nobody wants a second fix."
 )
 
 

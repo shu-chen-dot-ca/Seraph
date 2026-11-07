@@ -164,7 +164,7 @@ query($owner: String!, $name: String!, $number: Int!, $comments: String, $timeli
 }
 fragment Comment on IssueComment { body createdAt authorAssociation author { login __typename } }
 fragment Related on PullRequest {
-  number title url state isDraft createdAt mergedAt repository { nameWithOwner } author { login } reviewDecision
+  number title url state isDraft createdAt updatedAt mergedAt repository { nameWithOwner } author { login } reviewDecision
   commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
   comments(last: 10) { nodes { body createdAt author { login } } }
   reviews(last: 5) { nodes { body state createdAt author { login } } }

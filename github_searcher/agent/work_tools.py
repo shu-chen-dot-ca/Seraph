@@ -156,6 +156,7 @@ from claude_agent_sdk import tool
 from github_searcher.artifacts import ArtifactsError
 from github_searcher.github_account import SendError
 from github_searcher.inbox import ASK_SETTINGS_FILE, AUTOMATION_FILE, MUST_WAIT, TIMER_MINUTES
+from github_searcher.issue_tags import TAKEN_PR_DAYS
 from github_searcher.jobs import EVIDENCE_DIR
 from github_searcher.projects import TITLE, TITLE_CHARS
 from github_searcher.search import get_contents, get_issue_in_full, get_issue_status, get_merged_prs, get_pr_status, get_readme, get_repository, get_thread, get_tree
@@ -289,6 +290,9 @@ class WorkTools:
         self.guides_read = set()
         # When it last read each issue or PR in full with read_issue (owner/name#n, lower case): time.time().
         self.threads_read = {}
+        # What read_issue found someone else on it with (owner/name#n, lower case): their open PR that closes it, as a
+        # line for the agent ("" when nobody). A claim and taking the issue refuse while it is set.
+        self.threads_taken = {}
 
     def list(self) -> list:
         names = {"type": "array", "items": {"type": "string"}}
@@ -1622,6 +1626,10 @@ class WorkTools:
                     "turns out invalid (fixed already, a duplicate, someone else's PR, a maintainer said no), close_issue instead."
                 )
                 return {"content": [{"type": "text", "text": text}], "is_error": True}
+            # Someone else's open PR closes it: no second fix.
+            if self.threads_taken.get(job["issue"].lower()):
+                text = f"{self.threads_taken[job['issue'].lower()]}: someone else is on it. Don't start a second fix: close_issue with that link."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
         # The tests have to work on the unchanged code before any change is made. When another job on the same repo
         # already got the official checks passing on this VM, the project is set up there: that run counts for this job too.
         before = job["tests"]["before"]
@@ -1725,6 +1733,10 @@ class WorkTools:
         read_at = self.threads_read.get(target.lower())
         if read_at is None or time.time() - read_at > READ_SECONDS:
             text = f"First read {target} in full with read_issue (every comment, mention, related PR and check), then write the comment."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        # No claim on an issue someone else's open PR closes: its maintainers don't want a second fix.
+        if job["kind"] == "fix_issue" and self.threads_taken.get(target.lower()):
+            text = f"{self.threads_taken[target.lower()]}: someone else is on it. Don't claim it: close_issue with that link."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         draft = self.agents.inbox.create(
             "comment", self.agent_id, title, args["body"], job=job["id"], repo=name, target=target, evidence=job["evidence"], overview=overview
@@ -2036,6 +2048,7 @@ class WorkTools:
                     "draft": each["isDraft"],
                     "author": each["author"]["login"] if each["author"] else "ghost",
                     "opened": each["createdAt"],
+                    "updated": each["updatedAt"],
                     "review": each["reviewDecision"],
                     "checks": rollup["state"] if rollup else None,
                     "closes_it": closes,
@@ -2083,7 +2096,21 @@ class WorkTools:
                 code = [{"path": comment["path"], "text": comment["body"]} for comment in review["comments"]["nodes"]]
                 result["pr"]["reviews"].append({"at": review["createdAt"], "author": author, "role": role, "state": review["state"], "text": review["body"], "on_code": code})
 
+        # Someone else's open PR that says it closes it, not abandoned (TAKEN_PR_DAYS, like the issue tags): someone is on
+        # it, and its maintainers don't want a second fix. The user's own PRs (ours too, made as the user) don't count.
+        login = self.agents.your_repositories.github_account.status().get("login") or ""
+        recent = (datetime.now(UTC) - timedelta(days=TAKEN_PR_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        taken = ""
+        for pr in result["related_prs"]:
+            if pr["state"] == "open" and pr["closes_it"] and pr["author"].lower() != login.lower() and pr["updated"] >= recent:
+                taken = f"{pr['pr']} by {pr['author']} ({pr['url']}) is open and closes it"
         self.threads_read[thread.lower()] = time.time()
+        self.threads_taken[thread.lower()] = taken
+        if taken:
+            result["someone_else_is_on_it"] = (
+                f"{taken}: someone else is on it. Don't claim it, comment that you'd like it or start a second fix: on a "
+                "fix_issue job, close_issue with that link."
+            )
         return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
     async def close_issue(self, args: dict) -> dict:
