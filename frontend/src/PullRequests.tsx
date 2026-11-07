@@ -14,7 +14,8 @@ The bars on top, like GitHub's:
 Everything is in the address, so a reload or back keeps it. On a narrow screen (a phone) the bars wrap.
 A row, like GitHub's list: the state (open, draft, merged, closed), the repo (a lock when private), the title and
 labels; under it the number, who opened it and when (or when it was merged or closed), checks and review while open,
-and when it last changed; on the right how many comments. A click opens it in the thread pop-up (ThreadDialog.tsx,
+and when it last changed; on the right how many files it changes, the lines added (green) and removed (red), and
+how many comments. A click opens it in the thread pop-up (ThreadDialog.tsx,
 open=owner/name%23n); closing it reads the list again.
 The Dashboard's Pull requests (#/dashboard/pulls) is this page too, plain: only Created by me, with Open and Closed and
 Refresh, no filter, Visibility, Repository or Sort (base is where it is, plain says so). Each row starts with its
@@ -24,8 +25,8 @@ repo, linked to it on GitHub, since it has no number yet). Rows go by repo, A to
 first within a repo (on Closed, the merged ones first and the closed ones always at the bottom), and say when they were opened in days ("opened 5 days ago"; merged and closed ones also when that
 happened). Its Open tab also lists, under
 the open ones and in gray, the local pull requests: PR drafts not sent to GitHub yet (waiting in the Inbox, or approved
-before you signed in; new PRs, not new versions of open ones), under Not published with Publish all. Each has Publish
-on its right. Publish asks first (Enter confirms), then opens each on GitHub as you, all at once, the same as
+before you signed in; new PRs, not new versions of open ones), under Not published with Publish all. Each has its
+files and lines (counted from its diff) and Publish on its right. Publish asks first (Enter confirms), then opens each on GitHub as you, all at once, the same as
 Approve in the Inbox (a waiting one) or Send to GitHub (an approved one): a toast each, with Open. A sent one leaves
 the list, and the open list is read again when all are done.
 The Dashboard's has a third tab, Actions (state=actions), with how many: everything agents put on GitHub as you, newest
@@ -80,6 +81,10 @@ type PullRequest = {
   comments: number;
   review: "approved" | "changes_requested" | "review_required" | "none";
   checks: "passed" | "failed" | "running" | "none";
+  // How many files it changes and lines it adds and removes (missing in a list kept from before they were read).
+  files?: number;
+  additions?: number;
+  deletions?: number;
 };
 
 // open and closed: how many GitHub has, which may be more than were read.
@@ -594,6 +599,13 @@ export default function PullRequests(props: {
                       {pr.state === "open" && REVIEW_TEXT[pr.review] !== "" && <span className={REVIEW_COLOR[pr.review]}>· {REVIEW_TEXT[pr.review]}</span>}
                     </div>
                   </div>
+                  {pr.files !== undefined && (
+                    <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground tabular-nums">
+                      {pr.files === 1 ? "1 file" : `${pr.files} files`}
+                      <span className="text-ok">+{pr.additions}</span>
+                      <span className="text-destructive">−{pr.deletions}</span>
+                    </span>
+                  )}
                   {pr.comments > 0 && (
                     <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
                       <MessageSquare className="size-3" /> {pr.comments}
@@ -630,6 +642,13 @@ export default function PullRequests(props: {
                     {!props.plain && <span>updated {timeAgo(pr.updated_at)}</span>}
                   </div>
                 </div>
+                {pr.files !== undefined && (
+                  <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground tabular-nums">
+                    {pr.files === 1 ? "1 file" : `${pr.files} files`}
+                    <span className="text-ok">+{pr.additions}</span>
+                    <span className="text-destructive">−{pr.deletions}</span>
+                  </span>
+                )}
                 {pr.comments > 0 && (
                   <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
                     <MessageSquare className="size-3" /> {pr.comments}
@@ -651,31 +670,53 @@ export default function PullRequests(props: {
         )}
         {props.plain &&
           props.state === "open" &&
-          localPRs.map((draft) => (
-            <div key={draft.id} className="flex items-center gap-3 border-b px-3 py-2 text-muted-foreground">
-              {draft.repo !== null && <img src={`https://github.com/${draft.repo.split("/")[0]}.png?size=72`} alt="" className="size-9 shrink-0 rounded-md opacity-60" />}
-              <div className="flex h-9 min-w-0 flex-1 flex-col justify-between">
-                <div className="truncate leading-tight font-medium">{draft.title}</div>
-                <div className="flex min-w-0 items-center gap-1.5 text-xs leading-tight whitespace-nowrap">
-                  <GitPullRequest className="size-3.5 shrink-0" />
-                  <a href={`https://github.com/${draft.repo}`} target="_blank" rel="noreferrer" className="truncate hover:text-foreground hover:underline">
-                    {draft.repo}
-                  </a>
-                  <span>· Not published, drafted {daysAgo(draft.created_at)}</span>
+          localPRs.map((draft) => {
+            // The files and lines its diff changes, counted from the diff itself.
+            let files = 0;
+            let additions = 0;
+            let deletions = 0;
+            for (const line of draft.diff.split("\n")) {
+              if (line.startsWith("diff --git ")) {
+                files += 1;
+              } else if (line.startsWith("+") && !line.startsWith("+++")) {
+                additions += 1;
+              } else if (line.startsWith("-") && !line.startsWith("---")) {
+                deletions += 1;
+              }
+            }
+            return (
+              <div key={draft.id} className="flex items-center gap-3 border-b px-3 py-2 text-muted-foreground">
+                {draft.repo !== null && <img src={`https://github.com/${draft.repo.split("/")[0]}.png?size=72`} alt="" className="size-9 shrink-0 rounded-md opacity-60" />}
+                <div className="flex h-9 min-w-0 flex-1 flex-col justify-between">
+                  <div className="truncate leading-tight font-medium">{draft.title}</div>
+                  <div className="flex min-w-0 items-center gap-1.5 text-xs leading-tight whitespace-nowrap">
+                    <GitPullRequest className="size-3.5 shrink-0" />
+                    <a href={`https://github.com/${draft.repo}`} target="_blank" rel="noreferrer" className="truncate hover:text-foreground hover:underline">
+                      {draft.repo}
+                    </a>
+                    <span>· Not published, drafted {daysAgo(draft.created_at)}</span>
+                  </div>
                 </div>
+                {files > 0 && (
+                  <span className="flex shrink-0 items-center gap-1.5 text-xs tabular-nums">
+                    {files === 1 ? "1 file" : `${files} files`}
+                    <span className="text-ok">+{additions}</span>
+                    <span className="text-destructive">−{deletions}</span>
+                  </span>
+                )}
+                {publishing.includes(draft.id) && (
+                  <span className="flex shrink-0 items-center gap-1.5 text-xs">
+                    <Loader2 className="size-3.5 animate-spin" /> Publishing…
+                  </span>
+                )}
+                {!publishing.includes(draft.id) && (
+                  <Button size="xs" variant="outline" className="shrink-0" onClick={() => askPublish([draft])}>
+                    Publish
+                  </Button>
+                )}
               </div>
-              {publishing.includes(draft.id) && (
-                <span className="flex shrink-0 items-center gap-1.5 text-xs">
-                  <Loader2 className="size-3.5 animate-spin" /> Publishing…
-                </span>
-              )}
-              {!publishing.includes(draft.id) && (
-                <Button size="xs" variant="outline" className="shrink-0" onClick={() => askPublish([draft])}>
-                  Publish
-                </Button>
-              )}
-            </div>
-          ))}
+            );
+          })}
       </div>
 
       <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
