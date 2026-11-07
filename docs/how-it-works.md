@@ -93,6 +93,8 @@ Before an agent claims, comments on or takes an issue, it reads all of it: every
 
 An issue deleted on GitHub leaves the board for good: nothing tags, queues or takes it again. When an issue's repo is deleted from Repos, or its repo turns out to take no AI-made contributions, an agent working on it is told to stop and cancels its job.
 
+**Remove automatically** (the board's robot) applies to Open and Catalog alike, right after new tags come in and every 15 minutes. An issue our agents opened for you stays.
+
 When something goes wrong because of how the app made an agent work (a rule or tool that led it the wrong way, something a maintainer or you had to correct), the agent reports it on the Dashboard's **Problems** page, so you can fix them all at one time. **Close all** moves them to Closed once they are fixed.
 
 Where the repo's Comments or Pull requests setting is on, an agent can also take back what it sent itself: delete its own comment, close its own PR, or drop its newest commits from its own PR.
