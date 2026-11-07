@@ -95,6 +95,15 @@ decide: approved means keep working, rejected means stop the agent (its job is c
 A draft is decided once. A decided draft can be deleted (the Inbox's Delete); a pending one can't, its agent waits
 for the answer. Its job keeps the id (jobs.py "drafts"), and whoever reads one skips it once it is gone.
 
+ACTIONS_FILE is the list of everything agents put on GitHub, oldest first, for the Dashboard's Pull requests, Actions
+(GET /api/actions): each draft once it is sent (mark_sent), and what an agent does on GitHub itself (work_tools.py
+open_issue and update_branch, add_action). It stays when the draft is deleted. The first time, it is made from the
+drafts sent before it existed.
+
+    actions.json: [{"draft": draft id | None, "kind": "pr" | "comment" | "edit" | "issue" | "update_branch",
+                    "agent", "job": job id | None, "title",
+                    "sent": {"url", "repo", "number", "at", ...: the draft's "sent", or the same four}}, ...]
+
 The backend keeps one Inbox that the API and every agent share, so each method takes the
 lock. version goes up by one on every change; the live feed compares it to see what to send.
 """
@@ -119,6 +128,7 @@ DECISIONS = ["approved", "rejected", "replied"]
 # with the agent's recommendation, and the kinds of question that always wait for the user (all of them until the
 # user switches some off). Read from the file each time it is needed; these are the defaults.
 ASK_SETTINGS_FILE = DATA_DIR / "ask_settings.json"
+ACTIONS_FILE = DATA_DIR / "actions.json"
 TIMER_MINUTES = 10
 MUST_WAIT = ["money", "sensitive", "github", "delete"]
 
@@ -158,6 +168,19 @@ class Inbox:
             draft.setdefault("answered_by", None)
             self.drafts[draft["id"]] = draft
 
+        # What agents put on GitHub. The first time, the drafts sent before it existed, by when they were sent.
+        self.sent_actions: list[dict] = []
+        if ACTIONS_FILE.is_file():
+            self.sent_actions = json.loads(ACTIONS_FILE.read_text())
+        else:
+            for draft in sorted(self.drafts.values(), key=lambda draft: draft["sent"]["at"] if draft["sent"] else ""):
+                if draft["sent"] is None:
+                    continue
+                self.sent_actions.append(
+                    {"draft": draft["id"], "kind": draft["kind"], "agent": draft["agent"], "job": draft["job"], "title": draft["title"], "sent": draft["sent"]}
+                )
+            self.save_actions()
+
     def save(self, draft: dict) -> None:
         """Write one draft to disk. Called with the lock held, after every change."""
         self.version += 1
@@ -166,6 +189,24 @@ class Inbox:
         temporary = self.folder / f"{draft['id']}.json.tmp"
         temporary.write_text(json.dumps(draft, indent=2))
         temporary.replace(self.folder / f"{draft['id']}.json")
+
+    def save_actions(self) -> None:
+        """Write the actions to disk. Called with the lock held, after every change."""
+        ACTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temporary = ACTIONS_FILE.with_name(ACTIONS_FILE.name + ".tmp")
+        temporary.write_text(json.dumps(self.sent_actions, indent=2))
+        temporary.replace(ACTIONS_FILE)
+
+    def actions(self) -> list[dict]:
+        """Everything agents put on GitHub, newest first."""
+        with self.lock:
+            return copy.deepcopy(list(reversed(self.sent_actions)))
+
+    def add_action(self, action: dict) -> None:
+        """Something an agent did on GitHub itself, not from a draft (work_tools.py open_issue and update_branch)."""
+        with self.lock:
+            self.sent_actions.append(copy.deepcopy(action))
+            self.save_actions()
 
     def list(self) -> list[dict]:
         """All drafts, newest first."""
@@ -316,6 +357,15 @@ class Inbox:
             if draft_id not in self.drafts:
                 raise KeyError(f"No draft {draft_id}")
             draft = self.drafts[draft_id]
+            # A new action the first time; a deleted comment comes here again (deleted_at), and its action says so too.
+            if draft["sent"] is None:
+                self.sent_actions.append(
+                    {"draft": draft["id"], "kind": draft["kind"], "agent": draft["agent"], "job": draft["job"], "title": draft["title"], "sent": copy.deepcopy(sent)}
+                )
+            for action in self.sent_actions:
+                if action["draft"] == draft_id:
+                    action["sent"] = copy.deepcopy(sent)
+            self.save_actions()
             draft["sent"] = copy.deepcopy(sent)
             self.save(draft)
             return copy.deepcopy(draft)

@@ -20,6 +20,9 @@ drafts themselves reach the browser through /api/live.
 POST /inbox/delete deletes decided drafts for good (pending ones stay: their agents wait for an answer). Their
 agents aren't told, and what was sent to GitHub stays there.
 
+GET /actions is everything agents put on GitHub, newest first (inbox.py ACTIONS_FILE): the Dashboard's Pull requests,
+Actions. Sent drafts stay in it when they are deleted here.
+
 A draft's evidence (screenshots, images, command output) is files in EVIDENCE_DIR,
 served by name. Names are only ever ones the agent tools made (ev_<hex>.<ext>), so
 a request can't reach any other file.
@@ -54,6 +57,11 @@ class DeleteRequest(BaseModel):
 class EditRequest(BaseModel):
     title: str
     body: str
+
+
+@router.get("/actions")
+def actions() -> list[dict]:
+    return inbox.actions()
 
 
 @router.post("/inbox/delete")
