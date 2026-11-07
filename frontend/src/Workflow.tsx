@@ -73,7 +73,7 @@ export default function Workflow(props: { repo: string | null; tab: string; stat
   if (props.repo !== null) {
     const found = repos.find((each) => each.repo.toLowerCase() === props.repo?.toLowerCase());
     if (found === undefined) {
-      return <div className="p-4 text-muted-foreground">{props.repo} isn't on the Workflow tab.</div>;
+      return <div className="p-4 text-muted-foreground">{props.repo} isn't in Workflow.</div>;
     }
     record = found;
   }
@@ -168,7 +168,7 @@ function Settings(props: { record: WorkflowRepo }) {
     setBusy("remove");
     try {
       await api(`/api/workflow/${record.repo}`, { method: "DELETE" });
-      toast.success(`Removed ${record.repo} from the Workflow tab`);
+      toast.success(`Removed ${record.repo} from Workflow`);
       window.location.hash = "#/workflow";
     } catch (err) {
       toast.error(`Could not remove it: ${err instanceof Error ? err.message : err}`);
@@ -275,7 +275,7 @@ function Settings(props: { record: WorkflowRepo }) {
       <AlertDialog open={removing} onOpenChange={setRemoving}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove {record.repo} from the Workflow tab?</AlertDialogTitle>
+            <AlertDialogTitle>Remove {record.repo} from Workflow?</AlertDialogTitle>
             <AlertDialogDescription>
               Its agents stop and are archived, their open jobs cancelled. Its issues and pull requests here are forgotten; nothing on GitHub changes. The
               VM {record.vm} stays: delete it on the VMs page if you don't need it.

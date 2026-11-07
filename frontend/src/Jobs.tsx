@@ -231,7 +231,7 @@ export default function Jobs(props: { selected: string | null }) {
                       <a
                         href={`#/github/${prIds.includes(each.thread) ? "pulls" : "issues"}?open=${encodeURIComponent(each.thread)}`}
                         className="truncate hover:text-foreground hover:underline"
-                        title="Open it on the GitHub tab"
+                        title="Open it in the app"
                         onClick={(event) => event.stopPropagation()}
                       >
                         {each.thread}
@@ -327,7 +327,7 @@ export default function Jobs(props: { selected: string | null }) {
                       <a
                         href={`#/github/${prIds.includes(job.thread) ? "pulls" : "issues"}?open=${encodeURIComponent(job.thread)}`}
                         className="text-primary hover:underline"
-                        title="Open it on the GitHub tab"
+                        title="Open it in the app"
                       >
                         {job.thread}
                       </a>

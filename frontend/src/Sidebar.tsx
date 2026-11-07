@@ -1,6 +1,6 @@
 /*
-The Home tab's left tree, like Proxmox's resource tree (the GitHub tab has its own list, GitHubNav.tsx, with the Inbox,
-your PRs and issues and your account). Every line is a link to a page, in the order the work flows, in three parts:
+The Home tab's left list, like Proxmox's resource tree: every page of the app but the Dashboard's (DashboardNav.tsx). Every
+line is a link to a page, in the order the work flows:
 - finding work: Explore (the search for new repos; shows how many found repos wait for the user's approve or remove, with a green dot while a run
   goes), Repos, Tracked (new issues in the repos the user keeps an eye on), Issues
   (one child per issue an agent is on now: its latest job queued, working or waiting on you, waiting on you first;
@@ -9,6 +9,8 @@ your PRs and issues and your account). Every line is a link to a page, in the or
 - doing it, under a line: Jobs (open / all), Agents (one child per agent), then under another line VMs (one child per VM);
 - the computer, under another line: Resource (this computer's CPU, memory, GPUs, disk, network and battery,
   Resource.tsx);
+- then three parts, each under a line and its heading: GitHub (GitHubNav.tsx: the Inbox, your PRs and issues, your
+  account and repositories), Workspace (WorkspaceNav.tsx) and Workflow (WorkflowNav.tsx);
 - pinned at the bottom: Settings (below).
 Counts and status dots come straight from the live store, so the tree updates itself.
 The chevrons only fold Issues / Agents / VMs; clicking a name opens that page.
@@ -21,16 +23,18 @@ goes back to its list. Archived agents aren't listed here (they are on the Agent
 can only be archived, not deleted.
 Settings stays pinned at the bottom while the tree scrolls; it opens SettingsDialog (theme, accent color, Reset view and
 the env vars for all VMs), which App owns.
-In phone mode (App.tsx) the tree is in the Menu instead, with the GitHub and Workspace tabs' lists under it. A touch
-screen has no hover, so there the + and ⋯ show always, in place of the counts and statuses (index.css).
+In phone mode (App.tsx) the tree is in the Menu instead, under the Dashboard's list. A touch screen has no hover, so there the + and ⋯ show always, in place of the counts and statuses (index.css).
 */
 
 import { Archive, Bot, ChevronRight, CircleDot, Compass, Eye, FolderGit2, Gauge, ListTodo, Monitor, MoreHorizontal, Pencil, Plus, Settings, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
+import GitHubNav from "@/GitHubNav";
 import NewJobDialog from "@/NewJobDialog";
 import NewVMDialog from "@/NewVMDialog";
+import WorkflowNav from "@/WorkflowNav";
+import WorkspaceNav from "@/WorkspaceNav";
 
 import {
   AlertDialog,
@@ -51,7 +55,7 @@ import { AGENT_TONE, JOB_LABEL, StatusDot, VM_TONE } from "@/components/ui/statu
 import { api, useLive, useLiveValue, type IssueItem, type Job } from "@/live";
 import { cn } from "@/lib/utils";
 
-export default function Sidebar(props: { page: string; id: string | null; onOpenSettings: () => void }) {
+export default function Sidebar(props: { page: string; id: string | null; section: string; repo: string | null; onOpenSettings: () => void }) {
   const [issuesOpen, setIssuesOpen] = useState(true);
   const [agentsOpen, setAgentsOpen] = useState(true);
   const [vmsOpen, setVMsOpen] = useState(true);
@@ -198,6 +202,8 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
 
   // The open page: an accent wash, and its icon in the accent (the icon is the row's first svg, or its link's).
   const selected = "bg-selected text-foreground ring-1 ring-primary/15 ring-inset hover:bg-selected [&>a>svg]:text-primary [&>svg]:text-primary";
+  // The heading over each of the last three parts.
+  const heading = "px-2 pt-1 pb-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase";
 
   return (
     <nav className="flex w-56 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground select-none">
@@ -423,6 +429,18 @@ export default function Sidebar(props: { page: string; id: string | null; onOpen
           <Gauge className="size-4 text-muted-foreground" />
           Resource
         </a>
+
+        <div className="mx-1 my-2 border-t" />
+        <div className={heading}>GitHub</div>
+        <GitHubNav page={props.page} section={props.section} repo={props.repo} />
+
+        <div className="mx-1 my-2 border-t" />
+        <div className={heading}>Workspace</div>
+        <WorkspaceNav page={props.page} />
+
+        <div className="mx-1 my-2 border-t" />
+        <div className={heading}>Workflow</div>
+        <WorkflowNav repo={props.repo} open={props.page === "workflow"} />
       </div>
 
       <div className="border-t p-2">
