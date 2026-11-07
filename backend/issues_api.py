@@ -64,6 +64,12 @@ Merge in and not fixed, out of scope or can't validate, and unlike Assign not cl
 (assigned, or their open pull request closes it), so a second fix isn't wanted (the others wait there). A card taken leaves Catalog's list, so
 its job keeps it on the board, and a job cancelled later sends it back to Open, not to the next agent.
 
+An issue one of our agents opened as you (open_issue in github_searcher/agent/work_tools.py, the Actions in inbox.py)
+is claimed for you on GitHub, so an agent always takes it: whatever its repo's Take issues and Open PRs at once say, as
+long as nobody else has it and it isn't out of scope. Each round, one of those that is still free and no agent ever
+started goes back to the top of Catalog if it isn't there, and one someone else has now (tagged assigned) leaves
+Catalog for Open.
+
 The same robot's stale_pr_days (14 at first, None: off) closes PRs that stalled: an open PR of yours that an agent owns
 (opened from its draft, never one you opened by hand) with no update on GitHub for that many days is made again by its
 agent as a fresh PR, all its changes on the newest code with a clean history and every review point done
@@ -713,6 +719,34 @@ def take_from_catalog() -> None:
     items = issues.items()
     ids = [item["id"] for item in items]
     all_jobs = jobs.list()
+    facts = issue_facts.all()
+    tags = issue_tags.all()
+
+    # The issues our agents opened as you (lower case): claimed for you, so an agent always takes them.
+    opened = []
+    for action in inbox.actions():
+        if action["kind"] == "issue":
+            opened.append(f"{action['sent']['repo']}#{action['sent']['number']}".lower())
+    # Ours still free that no agent ever started go to the top of Catalog; ours someone else has now leave it.
+    started = [job["issue"] for job in all_jobs if job["issue"] is not None]
+    board = issues.board()
+    catalog = list(board["catalog"])
+    order = list(board["order"])
+    for item in items:
+        tag = tags.get(item["id"])
+        if item["id"].lower() not in opened or tag is None:
+            continue
+        fact = facts.get(item["id"])
+        state = fact["state"] if fact else item["state"]
+        if item["id"] in catalog and tag["status"] == "assigned":
+            catalog.remove(item["id"])
+        if item["id"] in catalog or item["id"] in started or item["id"] in board["held"]:
+            continue
+        if state != "CLOSED" and tag["status"] == "free" and tag.get("merge") != "out of scope":
+            catalog.insert(0, item["id"])
+            order = [item["id"]] + [each for each in order if each != item["id"]]
+    if catalog != board["catalog"]:
+        issues.set_board(catalog, order, board["held"])
 
     # The agents working on the board's issues now.
     working = []
@@ -731,9 +765,7 @@ def take_from_catalog() -> None:
         if job["issue"] is not None and (job["issue"] not in latest or job["created_at"] > latest[job["issue"]]["created_at"]):
             latest[job["issue"]] = job
     board = issues.board()
-    facts = issue_facts.all()
-    tags = issue_tags.all()
-    # The repos agents take issues of (their Level of automation: Take issues), in lower case.
+    # The repos agents take issues of (their Level of automation: Take issues), in lower case. Ours go either way.
     settings = {}
     if AUTOMATION_FILE.is_file():
         settings = json.loads(AUTOMATION_FILE.read_text())
@@ -741,7 +773,9 @@ def take_from_catalog() -> None:
     no_ai = [name.lower() for name, each in repo_signals.all().items() if (each.get("ai_policy") or {}).get("tag") == "no_ai"]
     waiting = []
     for item in items:
-        if item["id"] not in board["catalog"] or item["id"] in board["held"] or item["repo"].lower() not in taking:
+        if item["id"] not in board["catalog"] or item["id"] in board["held"]:
+            continue
+        if item["repo"].lower() not in taking and item["id"].lower() not in opened:
             continue
         # Never a repo that doesn't take AI-made contributions (its AI policy, repo_signals.py).
         if item["repo"].lower() in no_ai:
@@ -781,7 +815,8 @@ def take_from_catalog() -> None:
         if room <= 0:
             break
         repo = issue_id.split("#")[0].lower()
-        if busy.get(repo, 0) >= limits.get(repo, 1):
+        # Ours go even when the repo is at its Open PRs at once.
+        if busy.get(repo, 0) >= limits.get(repo, 1) and issue_id.lower() not in opened:
             continue
         agents.assign(issue_id, None, None)
         board = issues.board()

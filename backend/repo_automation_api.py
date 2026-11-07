@@ -44,7 +44,8 @@ What each does:
   in the Inbox, or Publish on the Pull requests page.
 - Open issues: agents may open new issues on the repo as you, claimed for you (assigned, else your comment saying you
   are on it), where the project's rules allow it (open_issue, work_tools.py); each goes to the top of the Issues
-  board's Catalog, before every other card, where an agent takes it first when the repo's Take issues is on.
+  board's Catalog, before every other card, where another agent takes it first, whatever the repo's Take issues and
+  Open PRs at once say (keep_catalog_agents in backend/issues_api.py).
 
 keep_adding() runs in the background, every ADD_CHECK_SECONDS. For each repo in Repos (not archived, and not one that
 doesn't take AI-made contributions: AI policy no_ai, repo_signals.py) with Add issues on,

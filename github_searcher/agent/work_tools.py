@@ -53,8 +53,8 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   without the user: the app sends them or answers them (backend/repo_automation_api.py). Two tools act on GitHub
   themselves, as the user, and only where it allows them; elsewhere they refuse: open_issue (Open issues: a new issue
   the project's rules allow, claimed for the user (assigned, else the user's comment saying they are on it), which
-  goes in the Issues list at the top of the board's Catalog, before every other card, where an agent takes it when the
-  repo's Take issues is on) and update_branch (Pull requests: GitHub's Update branch on the user's
+  goes in the Issues list at the top of the board's Catalog, before every other card, where another agent takes it
+  whatever the repo's Take issues says) and update_branch (Pull requests: GitHub's Update branch on the user's
   open PR). open_issue refuses until the agent read the repo's rules (contributing_guide). What they did is kept for
   the Dashboard's Actions (Inbox.add_action), like every sent draft.
 - Reading first: read_issue reads an issue or PR in full, right then (never cached): every comment, where it was
@@ -537,7 +537,8 @@ class WorkTools:
                 "and never a request for someone else to do something. Write it the way the project's issue template and its "
                 "rules ask (title and body as on GitHub), with how to make it happen and what you saw. It is opened at once, "
                 "is claimed for the user (assigned, or their comment saying they are on it where GitHub doesn't let them assign), and "
-                "goes in the Issues list at the top of the board's Catalog: an issue we open comes before every other one.",
+                "goes in the Issues list at the top of the board's Catalog: an issue we open comes before every other one, "
+                "and another agent takes it whatever the repo's Take issues says.",
                 {
                     "type": "object",
                     "properties": {
@@ -1904,7 +1905,7 @@ class WorkTools:
         await asyncio.to_thread(self.agents.inbox.add_action, action)
 
         # In the Issues list, and at the top of the board's Catalog: an issue we opened goes before every other card, so
-        # an agent takes it first (the repo's Take issues).
+        # an agent takes it first, whatever the repo's Take issues says (take_from_catalog in backend/issues_api.py).
         issue_id = f"{opened['repo']}#{opened['number']}"
         claimed = "assigned to the user"
         if opened["claimed"] == "comment":
@@ -1931,7 +1932,7 @@ class WorkTools:
         await asyncio.to_thread(self.agents.issues.set_board, catalog, order, board["held"])
         text = (
             f"Opened {issue_id} as the user ({opened['url']}), {claimed}. It is in the Issues list, at the top of the "
-            "board's Catalog, so an agent takes it first when the user lets agents take the repo's issues. Go on with your own job."
+            "board's Catalog, so another agent takes it first. Go on with your own job."
         )
         return {"content": [{"type": "text", "text": text}]}
 
