@@ -76,7 +76,8 @@ thread pop-up (backend/github_api.py), after its "are you sure?". No agent and n
 
 manage(action, repo, number) is one change you make from the GitHub tab, as you: close or reopen one
 of your PRs, delete a closed PR's branch from your fork, or delete one of your comments (in a PR's or
-issue's conversation in the thread pop-up). It
+issue's conversation in the thread pop-up). An agent's update_branch (work_tools.py, where the repo's Level of
+automation has Pull requests) is one too: GitHub's Update branch on your open PR, which merges its base in. It
 checks first that the PR is yours and the branch is in your fork.
 open_issue(repo, title, body) opens an issue as you, assigned to you: an agent's open_issue (work_tools.py, where the
 repo's Level of automation has Open issues). GitHub keeps the assignee only when you may assign on that repo. Following your PRs is pr_tracking.py.
@@ -902,8 +903,9 @@ class GithubAccount:
 
     def manage(self, action: str, repo: str, number: int) -> str:
         """One change on GitHub from the GitHub tab, as you. action: "close" or "reopen" your PR repo#number,
-        "delete_branch" (a closed or merged PR's branch, from your fork), or "delete_comment" (number is the comment's
-        id on GitHub). Returns what happened, in words; SendError says why it didn't. Runs in a thread."""
+        "update_branch" (your open PR: GitHub merges its base in), "delete_branch" (a closed or merged PR's branch,
+        from your fork), or "delete_comment" (number is the comment's id on GitHub). Returns what happened, in words;
+        SendError says why it didn't. Runs in a thread."""
         account = self.load()
         if account is None:
             raise SendError("Sign in with GitHub first: the GitHub tab, Account.")
@@ -933,6 +935,13 @@ class GithubAccount:
                     if action == "reopen":
                         return "Reopened it."
                     return "Closed it."
+                if action == "update_branch":
+                    if pull["state"] != "open":
+                        raise SendError("It isn't open.")
+                    # Only from the head GitHub has now, so nothing pushed meanwhile is merged over unseen.
+                    response = client.put(f"/repos/{repo}/pulls/{number}/update-branch", json={"expected_head_sha": pull["head"]["sha"]})
+                    response.raise_for_status()
+                    return f"GitHub is merging the newest {pull['base']['ref']} into its branch now."
                 if action == "delete_branch":
                     # Deleting an open PR's branch would close it without a word: close it first.
                     if pull["state"] != "closed":

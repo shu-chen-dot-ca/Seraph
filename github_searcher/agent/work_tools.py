@@ -48,12 +48,12 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   Every PR draft goes to a reviewer agent first (Agents.give_review) and reaches the Inbox only once the review passes:
   a project's reviewer, or else the repo's own reviewer, which checks it on the author's desktop.
 - The repo's Level of automation (set by the user on the Dashboard, inbox.py AUTOMATION_FILE) lets some drafts go
-  without the user: the app sends them or answers them (backend/repo_automation_api.py). One tool acts on GitHub
-  itself, as the user, and only where it allows it; elsewhere it refuses: open_issue (Open issues: a new issue the
-  project's rules allow, assigned to the user, which goes in the Issues list and to the end of the board's Catalog,
-  where an agent takes it when the repo's Take issues is on). open_issue refuses until the agent read the repo's
-  rules (contributing_guide). What it did is kept for the Dashboard's Actions (Inbox.add_action), like every sent
-  draft.
+  without the user: the app sends them or answers them (backend/repo_automation_api.py). Two tools act on GitHub
+  themselves, as the user, and only where it allows them; elsewhere they refuse: open_issue (Open issues: a new issue
+  the project's rules allow, assigned to the user, which goes in the Issues list and to the end of the board's
+  Catalog, where an agent takes it when the repo's Take issues is on) and update_branch (Pull requests: GitHub's Update branch on the user's
+  open PR). open_issue refuses until the agent read the repo's rules (contributing_guide). What they did is kept for
+  the Dashboard's Actions (Inbox.add_action), like every sent draft.
 - Questions: draft_question is only for what matters to the user; small choices the agent makes itself and says so in
   its progress. A question with options names the one the agent recommends, and is timed: when the user doesn't answer
   within the timer of their Settings, the app answers it with that recommendation (Agents.answer_questions). One about
@@ -518,6 +518,19 @@ class WorkTools:
                 },
             )(self.open_issue),
             tool(
+                "update_branch",
+                "Bring one of the user's open PRs (pr: owner/name#number) up to date with the branch it goes into, as "
+                "GitHub's Update branch button does (it merges that branch into the PR's), only where the user lets agents do "
+                "it (the repo's Level of automation: Pull requests; elsewhere it refuses). For a PR that is behind with no "
+                "conflict, when the project wants it current or a check needs the newer code. Not when the project's rules "
+                "ask for a rebase instead of merge commits, or when it conflicts: then rebase it with draft_pr (pr and rebase).",
+                {
+                    "type": "object",
+                    "properties": {"pr": {"type": "string"}},
+                    "required": ["pr"],
+                },
+            )(self.update_branch),
+            tool(
                 "draft_question",
                 "Ask the user a question through their Inbox, only when the answer matters. Small choices are yours (how to "
                 "test, names, which of two reasonable ways): decide, say what you chose and why with job_progress, and go on; "
@@ -930,6 +943,8 @@ class WorkTools:
             return f"Drafting a new title and description for {args.get('target')}"
         if name == "open_issue":
             return f"Opening an issue on {args.get('repo')}: {args.get('title')}"
+        if name == "update_branch":
+            return f"Updating the branch of {args.get('pr')}"
         if name == "paper_read":
             return f"Reading the paper, pages {args.get('pages')}"
         if name == "draft_report":
@@ -1759,6 +1774,36 @@ class WorkTools:
             "board's Catalog, where an agent takes it when the user lets agents take the repo's issues. Go on with your own job."
         )
         return {"content": [{"type": "text", "text": text}]}
+
+    async def update_branch(self, args: dict) -> dict:
+        pr = args["pr"].strip()
+        repo, _, number = pr.rpartition("#")
+        if repo.count("/") != 1 or not number.isdigit():
+            return {"content": [{"type": "text", "text": "pr must be owner/name#number."}], "is_error": True}
+        settings = {}
+        if AUTOMATION_FILE.is_file():
+            settings = json.loads(AUTOMATION_FILE.read_text())
+        allowed = [name.lower() for name, rules in settings.items() if rules.get("pull_requests")]
+        if repo.lower() not in allowed:
+            text = (
+                f"The user doesn't let agents act on PRs on {repo} (its Level of automation: Pull requests is off). When it "
+                "needs the newer code, rebase it with draft_pr (pr and rebase) for the user to approve."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        try:
+            result = await asyncio.to_thread(self.agents.your_repositories.github_account.manage, "update_branch", repo, int(number))
+        except SendError as error:
+            return {"content": [{"type": "text", "text": f"Its branch wasn't updated. {error}"}], "is_error": True}
+
+        # On the Dashboard's Actions, with the job the agent works on (none when it works on none).
+        job_id = None
+        for job in self.agents.jobs.for_agent(self.agent_id):
+            if job["status"] == "working":
+                job_id = job["id"]
+        sent = {"url": f"https://github.com/{repo}/pull/{number}", "repo": repo, "number": int(number), "at": datetime.now(UTC).isoformat()}
+        action = {"draft": None, "kind": "update_branch", "agent": self.agent_id, "job": job_id, "title": "", "sent": sent}
+        await asyncio.to_thread(self.agents.inbox.add_action, action)
+        return {"content": [{"type": "text", "text": f"{pr}: {result}"}]}
 
     async def draft_question(self, args: dict) -> dict:
         question = args["question"].strip()

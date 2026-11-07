@@ -28,6 +28,7 @@ What each does:
   reviewer passed it) or an edit (a new title and description of your PR or issue) is sent as you, as Approve with
   Send does (github_account.py), then approved, so its agent hears it the same way. One GitHub refuses (or that has to
   wait, like a PR whose claim isn't decided yet) stays in the Inbox for you, and is tried again after SEND_RETRY_SECONDS.
+  Pull requests also lets agents update the branch of your open PRs there (update_branch, work_tools.py).
 - Open issues: agents may open new issues on the repo as you, assigned to you, where the project's rules allow it
   (open_issue, work_tools.py); each goes to the end of the Issues board's Catalog, where an agent takes it when the
   repo's Take issues is on.
