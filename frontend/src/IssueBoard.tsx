@@ -2,7 +2,8 @@
 The Dashboard's Issues page (#/dashboard/issues): the issues in the Issues list as a board, one card per issue, in five
 columns from left to right, by the issue's latest job and your pull request for it:
 - Open: no job yet, or the last one was cancelled.
-- Catalog: you moved it there (Add, or dragged), or a job waits in the queue for its agent.
+- Catalog: you moved it there (Add, here or in a repo's pop-up on the Repository page, or dragged), or a job waits in
+  the queue for its agent.
 - In progress: an agent is working on it.
 - Review: its draft waits for you in the Inbox.
 - Open PR: your pull request for it is open on GitHub. A dot after the name: green while an agent works on it (a

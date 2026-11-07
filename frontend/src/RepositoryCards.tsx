@@ -1,7 +1,8 @@
 /*
 The Dashboard's Repository page (#/dashboard/repos): the repos on the Repos page as cards, two to a row (one on a phone).
 A card: the owner's picture as its logo, owner/name (opens it on GitHub), its description and its tags. A click
-anywhere else on it (not its buttons) opens its issues in a pop-up, with their tags (RepositoryIssuesDialog.tsx). At the bottom
+anywhere else on it (not its buttons) opens all its open issues in a pop-up, with their tags and Add (to the end of the
+Issues board's Catalog: RepositoryIssuesDialog.tsx). At the bottom
 left yours: how many of your pull requests it merged and how many are still open. At the bottom right everyone's, the
 repo's own numbers in all: its stars, open, merged and closed (without a merge) pull requests, commits, contributors (everyone
 who ever contributed) and open issues, each once the signals have it (a repo read before they were counted gets them by itself within
@@ -420,7 +421,7 @@ export default function RepositoryCards() {
       </div>
 
       {automation.length > 0 && <AutomationDialog repos={automation} onClose={() => setAutomation([])} />}
-      <RepositoryIssuesDialog repo={issuesOf} onClose={() => setIssuesOf(null)} />
+      <RepositoryIssuesDialog repo={issuesOf} archived={issuesOf !== null && repos.archived.includes(issuesOf)} onClose={() => setIssuesOf(null)} />
     </div>
   );
 }
