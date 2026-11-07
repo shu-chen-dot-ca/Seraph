@@ -69,6 +69,8 @@ Before you decide, you can edit the text, **Redraft** with a note, or **Discuss*
 3. Evidence pictures go on a `pr-pictures` branch in your fork.
 4. The change is pushed to a new branch in your fork, and the PR is opened from there.
 
+Every issue an agent takes starts with a claim, a short comment that you are taking it on, so nobody else does meanwhile (not when you are already assigned). The claim comes to the Inbox before the PR. When the project's rules ask for a maintainer to assign contributors first, the PR also waits until they assign you on GitHub, after the claim is out; until then Approve says it can't go yet, and with the repo's **Pull requests** automation on it goes by itself once you are assigned.
+
 ## Level of automation
 
 The robot on a repo's card (Dashboard, Repository) sets what agents do there without asking you, as you. An issue's own robot on the Issues board changes Questions, Comments and Pull requests for that issue only.
