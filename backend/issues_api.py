@@ -22,8 +22,10 @@ again. Opening a row and the Refresh button fetch them at once.
 
 Each issue's tags (free / assigned / waiting, its merge: likely or what stands in the way, its kind:
 github_searcher/issue_tags.py) are made by keep_tags(), also in the background, except an issue in the Issues list
-with none yet: keep_new_tags() tags those on its own, every NEW_TAGS_SECONDS and again right after a failure, so a new
-one never waits behind keep_tags' long rounds or TAGS_RETRY_SECONDS. keep_tags,
+with none yet or none read since it was added: keep_new_tags() tags those on its own, from fresh (an issue tagged before
+it came in, on the Tracked page, is read again, and the new tags show on every page), every
+NEW_TAGS_SECONDS and again right after a failure, so a new one never waits behind keep_tags' long rounds or
+TAGS_RETRY_SECONDS. Remove automatically decides on an issue only once it has those. keep_tags,
 for the Issues list and the tracked repos' issues alike: new issues get theirs
 within TAGS_CHECK_SECONDS, an issue that changed on GitHub gets them again, and
 a free one every TAGS_FREE_SECONDS anyway (someone may have taken it), and a free one an agent is on (a job on it
@@ -154,7 +156,10 @@ def auto_remove_issues() -> list[str]:
     for item in issues.items():
         if item["id"] in started:
             continue
-        tag = tags.get(item["id"]) or {}
+        # The rules decide on tags read since it was added; keep_new_tags reads it again first.
+        tag = tags.get(item["id"])
+        if tag is None or datetime.fromisoformat(tag["judged_at"]) < datetime.fromisoformat(item["added_at"]):
+            continue
         opened = (facts.get(item["id"]) or {}).get("created_at")
         out_of_scope = tag.get("merge") == "out of scope"
         if rules["claimed"] and tag.get("status") in ("assigned", "fixed"):
@@ -422,15 +427,26 @@ async def keep_facts() -> None:
 
 
 async def keep_new_tags() -> None:
-    """Runs as long as the backend: tags the Issues list's issues that have no tags yet, at once, apart from keep_tags,
-    and tries a failed one again on the next round instead of waiting TAGS_RETRY_SECONDS."""
+    """Runs as long as the backend: tags the Issues list's issues that have no tags yet or none read since they were
+    added, at once and from fresh, apart from keep_tags: one tagged before it came in (on the Tracked page,
+    ...) is read again, and its new tags are the ones every page shows. Then Remove automatically's rules decide on them.
+    A failed one is tried again on the next round instead of waiting TAGS_RETRY_SECONDS."""
     while True:
         known = issue_tags.all()
-        todo = [item["id"] for item in issues.items() if item["id"] not in known]
+        todo = []
+        for item in issues.items():
+            tag = known.get(item["id"])
+            if tag is None or datetime.fromisoformat(tag["judged_at"]) < datetime.fromisoformat(item["added_at"]):
+                todo.append(item["id"])
         if todo:
-            # A batch that fails leaves its issues untagged: the next round tries them again.
+            # Forced: nothing from before is kept. A batch that fails leaves its issues as they were: the next round
+            # tries them again.
             try:
-                await issue_tags.tag(todo)
+                await issue_tags.tag(todo, force=True)
+            except Exception:
+                pass
+            try:
+                auto_remove_issues()
             except Exception:
                 pass
         await asyncio.sleep(NEW_TAGS_SECONDS)
@@ -458,6 +474,7 @@ async def keep_tags() -> None:
         if AUTO_REMOVE_FILE.is_file():
             rules.update(json.loads(AUTO_REMOVE_FILE.read_text()))
         listed = [item["id"] for item in issues.items()]
+        added_at = {item["id"]: item["added_at"] for item in issues.items()}
         catalog = issues.board()["catalog"]
         latest = {}
         for job in jobs.list():
@@ -499,6 +516,9 @@ async def keep_tags() -> None:
             due = issue_id in listed and not (job is not None and job["status"] == "done")
             if tags is None and issue_id in listed:
                 # keep_new_tags tags it, at once.
+                continue
+            if issue_id in listed and datetime.fromisoformat(tags["judged_at"]) < datetime.fromisoformat(added_at[issue_id]):
+                # Not read since it was added: keep_new_tags reads it again, at once.
                 continue
             if tags is None:
                 todo.append(issue_id)
