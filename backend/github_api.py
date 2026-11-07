@@ -21,7 +21,12 @@ agent drafts then waits for you in the Inbox.
 
 The buttons (each asks "are you sure?" in the browser first): post a comment as you, delete one of your comments
 (refused when it isn't yours; a draft that posted it keeps when it was deleted), close or reopen one of your PRs,
-delete a closed or merged PR's branch from your fork. After a change to a PR, the PRs are read again. Check now
+delete a closed or merged PR's branch from your fork. After a change to a PR, the PRs are read again.
+
+keep_branches_clean(), also in the background, does that last one by itself: every BRANCHES_CHECK_SECONDS, each PR of
+yours that is no longer open (merged or closed) and still has its branch in your own fork gets that branch deleted, like
+GitHub's Delete branch button (the PR's page on GitHub has Restore branch, to reopen one). Only branches in your fork,
+only PRs that aren't open; one GitHub refuses is tried again only when the branch has a newer commit. Check now
 (POST /api/github/refresh) reads them all at once. The PRs and issues reach the browser through /api/live (topic
 "prs"), the drafts with the Inbox (topic "inbox").
 """
@@ -44,6 +49,7 @@ router = APIRouter(prefix="/api")
 
 PRS_CHECK_SECONDS = 15
 PRS_REFRESH_SECONDS = 5 * 60
+BRANCHES_CHECK_SECONDS = 10 * 60
 PR_ACTIONS = ["close", "reopen", "delete_branch"]
 THREAD_ID = r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)#(\d+)"
 NAME = r"[A-Za-z0-9_.-]+"
@@ -434,6 +440,31 @@ async def delete_comment(owner: str, name: str, comment_id: int) -> dict:
         inbox.mark_sent(draft["id"], {**sent, "deleted_at": now})
     pr_tracking.wanted = True
     return {"done": done}
+
+
+async def keep_branches_clean() -> None:
+    """Runs as long as the backend: deletes the branch in your fork of every PR of yours that is no longer open (see the
+    top of this file)."""
+    # Each PR's branch tried already, by the commit it was at: the PRs' next read shows it gone.
+    tried = {}
+    while True:
+        account = github_account.status()
+        prs = []
+        if account["connected"]:
+            prs = pr_tracking.summary()["items"]
+        for pr in prs:
+            head = pr["head"]
+            if pr["relation"] != "author" or pr["state"] == "open" or head is None:
+                continue
+            if head["repo"].split("/")[0].lower() != account["login"].lower() or tried.get(pr["id"]) == head["sha"]:
+                continue
+            tried[pr["id"]] = head["sha"]
+            try:
+                await asyncio.to_thread(github_account.manage, "delete_branch", pr["repo"], pr["number"])
+            except SendError:
+                continue
+            pr_tracking.wanted = True
+        await asyncio.sleep(BRANCHES_CHECK_SECONDS)
 
 
 async def keep_prs() -> None:
