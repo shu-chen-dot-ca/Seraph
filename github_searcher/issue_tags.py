@@ -10,6 +10,7 @@ each issue instead and gives it tags we define. One JSON file, DATA_DIR/issue_ta
                                "no outside prs" | "large feature" | "big change" | "can't validate",
                       "checks": {"belongs", "linux", "apolitical", "open", "modest", "validatable": bool} | None,
                       "kind": "bug" | "feature" | "docs" | "question" | None, "lines": int | None,
+                      "name": str | None, "name_version": int, "complexity": "easy" | "medium" | "hard" | None, "scope_clear": bool | None,
                       "reason", "updated_at", "judged_at"}, ...}
 
 status weighs everything about who may take it: assignees, open pull requests that would close it, the labels
@@ -68,6 +69,16 @@ adds and removes together, tests included (0 when there is nothing to change); i
 None when the issue is assigned on GitHub. Tags from before merge (with a level: easy, medium or hard) are read again
 once, by the backend on its own, and so are tags from before a check was added: their answers to checks still in
 CHECKS are kept like any others, a new check takes Claude's new answer.
+name is the issue's short name for the Dashboard's Issues board, one line: what our agent has to do, as a short
+command starting with a verb ("Fix SQL query logic", "Add compact table view"), in general software words any engineer
+understands without knowing the project: no names of the project's own features, components or products; no "Bug:" or
+"Feat:" in front. NAME_EXAMPLES show Claude the style. Once given it stays (a forced read names it again), so a card keeps its name. name_version is
+NAME_VERSION when it was given: when the naming rules change NAME_VERSION goes up, and every name from before is made
+again, once. None when the issue is assigned on GitHub (the board shows the GitHub title then).
+complexity (easy, medium or hard: how hard the fix is for a capable programmer new to the project) and scope_clear
+(whether what to change and what done looks like are clear) are for the board's cards too. Both stay while the issue
+hasn't changed on GitHub (a forced read asks again), and are None when it is assigned on GitHub; tags from before
+them are read again once for them.
 Cost isn't a concern here: Claude reads at high effort, CHARS_PER_RUN of issues a run. judged_at is when it was last
 read.
 
@@ -168,6 +179,22 @@ COMMENT_CHARS = 1000
 BOT_CHARS = 200
 PULL_COMMENT_CHARS = 400
 REASON_CHARS = 240
+# The short name: at most this long, and how it should read: general words, nothing only the project's people know.
+NAME_CHARS = 60
+NAME_EXAMPLES = [
+    "Fix SQL query logic",
+    "Fix retry on server overload",
+    "Fix crash on JSON array input",
+    "Fix project detection in setup",
+    "Fix audio label timing",
+    "Add compact table view",
+    "Add text editing for binary fields",
+    "Add settings via HTTP headers",
+    "Add OAuth sign-in to web UI",
+    "Update install docs",
+]
+# Goes up when the naming rules change: every name from before is made again, once.
+NAME_VERSION = 3
 EFFORT = "high"
 # A line where an issue template asks whether the author will fix it themselves: "Are you willing to submit a PR?",
 # "Would you like to work on this?", "I'm interested in implementing this", ... The line and the next few (the answer) are kept.
@@ -189,6 +216,9 @@ SCHEMA = {
                     "status": {"type": "string", "enum": ["free", "assigned", "waiting", "fixed"]},
                     "kind": {"type": "string", "enum": ["bug", "feature", "docs", "question"]},
                     "lines": {"type": "integer"},
+                    "name": {"type": "string"},
+                    "complexity": {"type": "string", "enum": ["easy", "medium", "hard"]},
+                    "scope_clear": {"type": "boolean"},
                     "reason": {"type": "string"},
                     "belongs": {"type": "boolean"},
                     "linux": {"type": "boolean"},
@@ -197,7 +227,7 @@ SCHEMA = {
                     "modest": {"type": "boolean"},
                     "validatable": {"type": "boolean"},
                 },
-                "required": ["number", "status", "kind", "lines", "reason", "belongs", "linux", "apolitical", "open", "modest", "validatable"],
+                "required": ["number", "status", "kind", "lines", "name", "complexity", "scope_clear", "reason", "belongs", "linux", "apolitical", "open", "modest", "validatable"],
             },
         }
     },
@@ -295,7 +325,20 @@ class IssueTags:
             assignees = [user["login"] for user in issue["assignees"]["nodes"]]
             if assignees:
                 reason = f"Assigned on GitHub to {', '.join(assignees)}."
-                found[issue_id] = {"status": "assigned", "merge": "claimed", "checks": None, "kind": None, "lines": None, "reason": reason, "updated_at": issue["updatedAt"], "judged_at": now}
+                found[issue_id] = {
+                    "status": "assigned",
+                    "merge": "claimed",
+                    "checks": None,
+                    "kind": None,
+                    "lines": None,
+                    "name": None,
+                    "name_version": NAME_VERSION,
+                    "complexity": None,
+                    "scope_clear": None,
+                    "reason": reason,
+                    "updated_at": issue["updatedAt"],
+                    "judged_at": now,
+                }
                 continue
             updated[number] = issue["updatedAt"]
 
@@ -472,6 +515,19 @@ class IssueTags:
                 "kind: bug, feature (new behavior or an improvement), docs, or question (a support question, nothing to fix).\n\n"
                 "lines: a rough guess of how many lines the fix's pull request changes: the lines added and removed together, "
                 "as GitHub counts them, its tests included. 0 when there is nothing to change.\n\n"
+                "name: the issue's short name on a board card, one line: what has to be done to close it, as a short command "
+                "that starts with a verb (Fix, Add, Update, Remove, Speed up, ...), in a few plain words, at most 6. No 'Bug:' or "
+                "'Feat:' in front, no issue number, no file or function names, no quotes, no period. Use general software words "
+                "any engineer understands without knowing this project: say what kind of thing it is (crash, button, table view, "
+                "API, config, CLI command, login, retry, docs, ...), never the project's own names for its features, components, "
+                "modes or products, nor the names of the services it talks to. Like these:\n"
+                + "".join(f"- {example}\n" for example in NAME_EXAMPLES)
+                + "\n"
+                "complexity: how hard the fix is for a capable programmer new to the project. easy: a small, local change "
+                "with an obvious approach. medium: several places to change, or some digging to find the cause. hard: a deep "
+                "cause, a tricky design, or a lot to learn about the project first.\n\n"
+                "scope_clear: is it clear what to change and what done looks like (expected behavior, steps to reproduce for "
+                "a bug, the wanted outcome for a feature)? No when it is vague, open-ended, or still being argued about.\n\n"
                 "reason: one short, plain sentence on why it has that status, at most 160 characters (no file or function "
                 "names).\n\n"
                 "Answer for every issue, by its number.\n\n" + "\n\n".join(run)
@@ -490,6 +546,21 @@ class IssueTags:
                     checks[key] = item[key]
                 kind = item["kind"]
                 lines = max(item["lines"], 0)
+                # The short name: one line, no period at the end, cut to NAME_CHARS. Once given it stays, unless forced.
+                name = " ".join(item["name"].split()).rstrip(".")
+                if len(name) > NAME_CHARS:
+                    name = name[:NAME_CHARS - 1].rstrip() + "…"
+                before = self.tags.get(f"{full_name}#{item['number']}")
+                if before is not None and before.get("name") and before.get("name_version") == NAME_VERSION and not force:
+                    name = before["name"]
+                # Complexity and whether the scope is clear stay while the issue hasn't changed, unless forced.
+                complexity = item["complexity"]
+                scope_clear = item["scope_clear"]
+                unchanged = before is not None and not force and before["updated_at"] == updated[item["number"]]
+                if unchanged and before.get("complexity"):
+                    complexity = before["complexity"]
+                if unchanged and before.get("scope_clear") is not None:
+                    scope_clear = before["scope_clear"]
                 if item["number"] in kept:
                     # The answers from before stay; a check added since (not among them) takes the new answer, and so
                     # do lines when there were none.
@@ -540,6 +611,10 @@ class IssueTags:
                     "checks": checks,
                     "kind": kind,
                     "lines": lines,
+                    "name": name,
+                    "name_version": NAME_VERSION,
+                    "complexity": complexity,
+                    "scope_clear": scope_clear,
                     "reason": reason,
                     "updated_at": updated[item["number"]],
                     "judged_at": datetime.now(UTC).isoformat(),

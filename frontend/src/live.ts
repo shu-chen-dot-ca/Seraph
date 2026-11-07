@@ -178,6 +178,9 @@ export type IssueTags = {
   checks?: Record<string, boolean> | null;
   kind: "bug" | "feature" | "docs" | "question" | null;
   lines?: number | null;
+  name?: string | null; // the short name on the Dashboard's Issues board ("Fix SQL query logic"); null when assigned on GitHub
+  complexity?: "easy" | "medium" | "hard" | null; // how hard the fix is; null when assigned on GitHub
+  scope_clear?: boolean | null; // what to change and what done looks like are clear; null when assigned on GitHub
   reason: string;
   updated_at: string;
   judged_at: string;

@@ -43,7 +43,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.shared import agents, issue_facts, issue_tags, issues, jobs, tracked, tracked_issues
-from github_searcher.issue_tags import CHECKS
+from github_searcher.issue_tags import CHECKS, NAME_VERSION
 from github_searcher.search import CACHE, get_thread
 from sandbox.vms import VMsError
 
@@ -238,7 +238,8 @@ async def keep_facts() -> None:
 
 async def keep_tags() -> None:
     """Runs as long as the backend: tags every issue that has no tags yet, changed on GitHub since, was free an hour ago
-    (5 minutes ago when an agent is on it), or is from before merge or before one of its checks.
+    (5 minutes ago when an agent is on it), or is from before merge, one of its checks, complexity or the naming rules
+    (issue_tags.NAME_VERSION).
 
     Those are the Issues list's issues, then the tracked repos' open issues nobody is assigned to (the page
     shows an assigned one as assigned without asking), newest first. issue_tags.tag batches them.
@@ -290,6 +291,9 @@ async def keep_tags() -> None:
                 todo.append(issue_id)
             elif tags["checks"] is not None and any(key not in tags["checks"] for key, question in CHECKS):
                 # From before one of the checks (issue_tags.CHECKS) was added: once more, for it.
+                todo.append(issue_id)
+            elif tags["checks"] is not None and ("complexity" not in tags or tags.get("name_version") != NAME_VERSION):
+                # From before complexity and scope, or named by older naming rules: once more, for them.
                 todo.append(issue_id)
 
         if todo:
