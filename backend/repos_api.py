@@ -18,7 +18,8 @@ grouping: the page shows each tag's repos on top, under a header that folds them
 The signals (github_searcher/repo_signals.py) are read by keep_signals(), which the app runs in the background, for
 the Repos list and the Tracked list alike (the Tracked page shows them as tags under an open repo): a new repo gets
 them within SIGNALS_CHECK_SECONDS, and keeps them. They are read again only when you ask: Refresh on the Dashboard's
-Repository page, in a card's menu or for the picked cards (refresh_signals).
+Repository page, in a card's menu or for the picked cards (refresh_signals). Signals kept from before the totals
+(commits, open, merged and closed PRs, open issues) were counted get just those, with one small read each.
 
 Set up (a button on each row) gives a repo to an agent as a set_up_repo job (Agents.set_up_repo): the agent sets
 it up in its VM, running when it has a clear frontend, else cloned and opened in VS Code, and ends with a short
@@ -36,7 +37,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.shared import agents, issues, repo_signals, repos, tracked
-from github_searcher.search import get_contents, get_readme, get_repository, get_tree
+from github_searcher.search import get_contents, get_readme, get_repo_totals, get_repository, get_tree
 from sandbox.vms import VMsError
 
 router = APIRouter(prefix="/api")
@@ -293,4 +294,16 @@ async def keep_signals() -> None:
             for name, result in zip(batch, results):
                 if isinstance(result, Exception):
                     failed.append(name)
+        # Signals from before the totals (commits, open, merged and closed PRs, open issues) were counted get them with one
+        # small read each, not a whole new read (that asks Claude again).
+        known = repo_signals.all()
+        for name in names:
+            if name in failed or name not in known or "merged_prs_total" in known[name]:
+                continue
+            try:
+                totals = await asyncio.to_thread(get_repo_totals, name.split("/")[0], name.split("/")[1])
+            except (httpx.HTTPError, ValueError):
+                failed.append(name)
+                continue
+            repo_signals.update(name, totals)
         await asyncio.sleep(SIGNALS_CHECK_SECONDS)

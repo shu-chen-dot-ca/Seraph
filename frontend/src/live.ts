@@ -74,7 +74,15 @@ export type RepoSignals = {
   stale_outside_prs: number; // open over 30 days, nobody answered
   active_mergers_30d: number; // people who merged a PR in 30 days: the page calls them maintainers
   active_contributors?: number; // people who opened a PR in the window; missing until the next fetch
+  contributors_total?: number | null; // everyone who ever contributed, as on the repo's GitHub page; null: GitHub won't count them
   commits_30d: number;
+  // In all: the commits on the default branch, the open, merged and closed (without a merge) PRs and the open issues; missing until
+  // the next fetch.
+  commits_total?: number;
+  open_prs_total?: number;
+  merged_prs_total?: number;
+  closed_prs_total?: number;
+  open_issues_total?: number;
   beginner_issues: BeginnerIssue[];
   unclaimed_beginner_issues: number;
   pr_window_days?: number; // how many days the 100 newest PRs reach back (at most 90)

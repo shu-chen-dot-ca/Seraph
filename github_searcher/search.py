@@ -8,7 +8,7 @@ them and waits out rate limits. Errors come back as httpx.HTTPStatusError, as be
 own_token for one of your repositories, which may be private: they go with your sign-in then (token_balancer.py).
 """
 
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlparse
 
 from github_searcher.token_balancer import BALANCER
 
@@ -41,6 +41,21 @@ def get_contents(owner: str, repo: str, path: str, ref: str = "") -> dict | list
     response.raise_for_status()
     CACHE[key] = response.json()
     return CACHE[key]
+
+
+def count_contributors(owner: str, repo: str) -> int | None:
+    """Everyone who ever contributed to the repo, the number on its GitHub page. Never cached. Asked one per page, so
+    the last page's number is the count. None when GitHub won't list them (a repo with a huge history)."""
+    response = BALANCER.request("GET", f"https://api.github.com/repos/{owner}/{repo}/contributors", params={"per_page": 1})
+    if response.status_code == 403 and "too large" in response.text:
+        return None
+    if response.status_code == 204:
+        return 0
+    response.raise_for_status()
+    last = response.links.get("last")
+    if last is None:
+        return len(response.json())
+    return int(parse_qs(urlparse(last["url"]).query)["page"][0])
 
 
 def search_repositories(q: str, page: int = 1) -> dict:
@@ -280,7 +295,8 @@ def get_issues_for_tags(owner: str, repo: str, numbers: list[int], login: str | 
 # GitHub over its 10 seconds for a big repo). $prs is 100, less for huge repos (see SIGNALS_SIZES).
 # SIGNALS_QUERY:
 # - oldestOpen: the $prs oldest open PRs (the ones nobody answered for a month are the stale pile);
-# - commits on the default branch since $since;
+# - commits on the default branch since $since, and in all;
+# - how many PRs are open, merged and closed without a merge, and how many issues are open, in all;
 # - open issues under beginner-style labels (GitHub's label search is loose, repo_signals.py keeps the real ones);
 # - the files where projects write their AI policy, read from the default branch (null when missing).
 # PULLS_QUERY:
@@ -300,7 +316,11 @@ query($owner: String!, $name: String!, $since: GitTimestamp!, $prs: Int!, $issue
         comments(first: 5) { nodes { authorAssociation author { login __typename } } }
       }
     }
-    defaultBranchRef { target { ... on Commit { history(since: $since) { totalCount } } } }
+    defaultBranchRef { target { ... on Commit { history(since: $since) { totalCount } allHistory: history { totalCount } } } }
+    openPullRequests: pullRequests(states: OPEN) { totalCount }
+    mergedPullRequests: pullRequests(states: MERGED) { totalCount }
+    closedPullRequests: pullRequests(states: CLOSED) { totalCount }
+    openIssues: issues(states: OPEN) { totalCount }
     firstLabels: labels(first: 10, query: "first") { nodes { ...LabelIssues } }
     beginnerLabels: labels(first: 10, query: "beginner") { nodes { ...LabelIssues } }
     easyLabels: labels(first: 10, query: "easy") { nodes { ...LabelIssues } }
@@ -480,6 +500,46 @@ def get_repo_activity(owner: str, repo: str, since30: str, since90: str) -> dict
                 continue
             raise ValueError(message)
         return data["data"]
+
+
+# A repo's totals: the commits on the default branch, the open, merged and closed (without a merge) PRs and the open
+# issues. For
+# signals read before repo_signals.py kept them; SIGNALS_QUERY reads them since.
+TOTALS_QUERY = """
+query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    defaultBranchRef { target { ... on Commit { history { totalCount } } } }
+    openPullRequests: pullRequests(states: OPEN) { totalCount }
+    mergedPullRequests: pullRequests(states: MERGED) { totalCount }
+    closedPullRequests: pullRequests(states: CLOSED) { totalCount }
+    openIssues: issues(states: OPEN) { totalCount }
+  }
+}
+"""
+
+
+def get_repo_totals(owner: str, repo: str) -> dict:
+    # Never cached. Returns {"commits_total", "open_prs_total", "merged_prs_total", "closed_prs_total", "open_issues_total"}.
+    variables = {"owner": owner, "name": repo}
+    response = BALANCER.request("POST", "https://api.github.com/graphql", json={"query": TOTALS_QUERY, "variables": variables}, timeout=90)
+    response.raise_for_status()
+    data = response.json()
+    if data.get("errors"):
+        raise ValueError(data["errors"][0]["message"])
+    repository = data["data"]["repository"]
+    if repository is None:
+        raise ValueError(f"GitHub has no repo {owner}/{repo}")
+    commits = 0
+    target = (repository["defaultBranchRef"] or {}).get("target") or {}
+    if target.get("history"):
+        commits = target["history"]["totalCount"]
+    return {
+        "commits_total": commits,
+        "open_prs_total": repository["openPullRequests"]["totalCount"],
+        "merged_prs_total": repository["mergedPullRequests"]["totalCount"],
+        "closed_prs_total": repository["closedPullRequests"]["totalCount"],
+        "open_issues_total": repository["openIssues"]["totalCount"],
+    }
 
 
 def count_earlier_prs(owner: str, repo: str, logins: list[str], before: str) -> dict:

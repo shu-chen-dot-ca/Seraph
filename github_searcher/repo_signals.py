@@ -9,7 +9,8 @@ One JSON file, DATA_DIR/repo_signals.json, by repo (owner/name):
                "pr_window_days",
                "outside_prs_90d", "outside_merged_90d", "outside_closed_90d", "outside_merge_rate",
                "median_days_to_first_reply", "median_days_to_merge", "stale_outside_prs",
-               "active_mergers_30d", "active_contributors", "commits_30d",
+               "active_mergers_30d", "active_contributors", "contributors_total", "commits_30d",
+               "commits_total", "open_prs_total", "merged_prs_total", "closed_prs_total", "open_issues_total",
                "beginner_issues": [{"number", "title", "created_at", "labels", "assignees", "cross_references"}, ...],
                "unclaimed_beginner_issues",
                "newcomers": {"prs", "merged", "closed", "merge_rate", "median_days_to_first_reply", "returned",
@@ -41,6 +42,9 @@ Outside contributors are PR authors who aren't owners, members or collaborators,
 stale_outside_prs: their open PRs over 30 days old that no maintainer has answered (among the 100 oldest
 open PRs). active_mergers_30d: how many people merged a PR in the last 30 days (bots not counted); the page calls
 them its maintainers. active_contributors: how many people opened a PR in that window, anyone but bots.
+contributors_total: everyone who ever contributed, the number on the repo's GitHub page (None when GitHub won't count
+them: a repo with a huge history). commits_total: the commits on the default branch, in all. open_prs_total,
+merged_prs_total, closed_prs_total (closed without a merge) and open_issues_total: GitHub's counts, in all.
 beginner_issues: open issues under a good-first / beginner / easy / help-wanted label, newest first. Unclaimed
 ones have no assignee and no cross reference (a PR or issue that mentions them).
 
@@ -100,7 +104,15 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from github_searcher.claude_judge import judge
-from github_searcher.search import count_earlier_prs, get_readme, get_repo_activity, get_repo_pulls, get_repo_signals, get_review_feedback
+from github_searcher.search import (
+    count_contributors,
+    count_earlier_prs,
+    get_readme,
+    get_repo_activity,
+    get_repo_pulls,
+    get_repo_signals,
+    get_review_feedback,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # override: the backend reloads itself on code changes, and .env changes should apply then too.
@@ -212,6 +224,14 @@ class RepoSignals:
             for key in ["_policy_text", "_policy_files", "_policy_basis", "_feedback_text", "_feedback_notes", "_feedback_prs"]:
                 kept.pop(key, None)
             self.signals[name] = kept
+            self.save()
+
+    def update(self, name: str, values: dict) -> None:
+        """Add to a repo's kept signals (the totals, for ones read before they were counted). Nothing when it has none."""
+        with self.lock:
+            if name not in self.signals:
+                return
+            self.signals[name].update(values)
             self.save()
 
     async def refresh(self, name: str) -> dict:
@@ -382,6 +402,7 @@ class RepoSignals:
             asyncio.to_thread(count_earlier_prs, owner, repo, logins, window_start.strftime("%Y-%m-%d")),
             asyncio.to_thread(get_repo_activity, owner, repo, since30, since90),
             asyncio.to_thread(get_readme, owner, repo),
+            asyncio.to_thread(count_contributors, owner, repo),
         ]
         if need_feedback:
             calls.append(asyncio.to_thread(get_review_feedback, owner, repo))
@@ -393,9 +414,11 @@ class RepoSignals:
         earlier = results[0]
         activity_data = results[1]
         readme = results[2] if isinstance(results[2], str) else ""
+        # The count may fail alone: then it isn't known, like for a huge repo.
+        contributors_total = results[3] if not isinstance(results[3], Exception) else None
         feedback_data = None
-        if need_feedback and not isinstance(results[3], Exception):
-            feedback_data = results[3]
+        if need_feedback and not isinstance(results[4], Exception):
+            feedback_data = results[4]
 
         newcomer_logins = [login for login in logins if earlier.get(login) == 0]
         first_prs = []
@@ -450,9 +473,12 @@ class RepoSignals:
                 stale += 1
 
         commits = 0
+        commits_total = 0
         target = (data["defaultBranchRef"] or {}).get("target") or {}
         if target.get("history"):
             commits = target["history"]["totalCount"]
+        if target.get("allHistory"):
+            commits_total = target["allHistory"]["totalCount"]
 
         # Each issue once, with every beginner-style label it has.
         found = {}
@@ -621,7 +647,13 @@ class RepoSignals:
             "stale_outside_prs": stale,
             "active_mergers_30d": len(mergers),
             "active_contributors": len(contributors),
+            "contributors_total": contributors_total,
             "commits_30d": commits,
+            "commits_total": commits_total,
+            "open_prs_total": data["openPullRequests"]["totalCount"],
+            "merged_prs_total": data["mergedPullRequests"]["totalCount"],
+            "closed_prs_total": data["closedPullRequests"]["totalCount"],
+            "open_issues_total": data["openIssues"]["totalCount"],
             "beginner_issues": beginner[:BEGINNER_ISSUES_KEPT],
             "unclaimed_beginner_issues": len(unclaimed),
             "newcomers": {
