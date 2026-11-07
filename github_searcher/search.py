@@ -1,4 +1,4 @@
-"""Reads from GitHub: repos, files, READMEs, PR and issue activity, threads, merged PRs, issue facts, issue and code search,
+"""Reads from GitHub: repos, files, READMEs, a repo's open issues, PR and issue activity, threads, merged PRs, issue facts, issue and code search,
 how your PRs and issues stand (their checks and GitHub Actions runs, pr_tracking.py), and everything the GitHub tab's
 thread pop-up shows of one PR or issue (backend/github_api.py): its whole timeline, commits, checks and files changed,
 and one comment (whose it is, before you delete it).
@@ -723,6 +723,44 @@ def get_tracked_issues(owner: str, repo: str) -> dict:
     if data.get("errors"):
         raise ValueError(data["errors"][0]["message"])
     return data["data"]["repository"]
+
+
+# Every open issue of a repo, newest first, 100 a page (a click on a card on the Dashboard's Repository page, and Add
+# issues: backend/repo_automation_api.py).
+OPEN_ISSUES_QUERY = """
+query($owner: String!, $name: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    issues(first: 100, after: $after, states: OPEN, orderBy: {field: CREATED_AT, direction: DESC}) {
+      pageInfo { hasNextPage endCursor }
+      nodes { number title url createdAt updatedAt labels(first: 10) { nodes { name } } comments { totalCount } }
+    }
+  }
+}
+"""
+
+
+def get_open_issues(owner: str, repo: str) -> list[dict]:
+    # Never cached: the pop-up shows them as they are now. One request per 100 issues.
+    nodes = []
+    after = None
+    while True:
+        response = BALANCER.request(
+            "POST",
+            "https://api.github.com/graphql",
+            json={"query": OPEN_ISSUES_QUERY, "variables": {"owner": owner, "name": repo, "after": after}},
+            timeout=60,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if data.get("errors"):
+            raise ValueError(data["errors"][0]["message"])
+        if data["data"]["repository"] is None:
+            raise ValueError(f"GitHub has no repo {owner}/{repo}")
+        page = data["data"]["repository"]["issues"]
+        nodes += page["nodes"]
+        if not page["pageInfo"]["hasNextPage"]:
+            return nodes
+        after = page["pageInfo"]["endCursor"]
 
 
 # One PR as it stands, for the GitHub tab (pr_tracking.py): its state, its branch (headRef is null once the branch is

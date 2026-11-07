@@ -12,6 +12,13 @@ Remove only takes repos off the list: nothing is blocked, so Explore and agents 
 many repos at once (the page's multi-select), as one undo step, and stops tracking them too (an undo step on Tracked).
 When they have issues in the Issues list, the page asks whether those go too (an undo step on Issues).
 
+A click on a card on the Dashboard's Repository page shows every open issue of the repo, read from GitHub each time
+(repo_issues), with the tags the app has for each, and whether those are complete: there are some, by the current
+rules (a merge, a complexity), and read since the issue last changed on GitHub. The pop-up has the others tagged at
+once (tag_repo_issues), so each issue of a repo is read once, and again only after it changes; the next time the
+pop-up opens they are there. One that goes into the Issues list is read again there (keep_new_tags in
+backend/issues_api.py).
+
 Tag puts picked repos under one tag of the user's own, or takes them out of theirs, as one undo step. It is only
 grouping: the page shows each tag's repos on top, under a header that folds them away, and the rest under No tag.
 
@@ -36,8 +43,9 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.shared import agents, issues, repo_signals, repos, tracked
-from github_searcher.search import get_contents, get_readme, get_repo_totals, get_repository, get_tree
+from backend.shared import agents, issue_tags, issues, repo_signals, repos, tracked
+from github_searcher.issue_tags import RULES_VERSION
+from github_searcher.search import get_contents, get_open_issues, get_readme, get_repo_totals, get_repository, get_tree
 from sandbox.vms import VMsError
 
 router = APIRouter(prefix="/api")
@@ -66,6 +74,11 @@ class ArchiveRequest(BaseModel):
 
 class RefreshRequest(BaseModel):
     names: list[str]
+
+
+class TagIssuesRequest(BaseModel):
+    name: str  # owner/name
+    numbers: list[int]
 
 
 class TagRequest(BaseModel):
@@ -120,6 +133,56 @@ def archive_repos(body: ArchiveRequest) -> dict:
     names = [name for name in body.names if name in listed]
     repos.set_archived(names, body.archived)
     return {"archived": repos.archived()}
+
+
+@router.get("/repos/issues")
+def repo_issues(name: str) -> dict:
+    """Every open issue of a repo on GitHub, newest first, each with the tags the app has for it (None for one it never
+    read): a click on a card on the Dashboard's Repository page. A second or two; one more per 100 issues."""
+    if name.count("/") != 1:
+        raise HTTPException(status_code=400, detail="Give the repo as owner/name.")
+    try:
+        nodes = get_open_issues(name.split("/")[0], name.split("/")[1])
+    except httpx.HTTPStatusError as error:
+        raise HTTPException(status_code=502, detail=f"GitHub error {error.response.status_code}: {error.response.text[:200]}")
+    except (httpx.HTTPError, ValueError) as error:
+        raise HTTPException(status_code=502, detail=f"Could not read its issues from GitHub: {error}")
+    tags = issue_tags.all()
+    found = []
+    for node in nodes:
+        tag = tags.get(f"{name}#{node['number']}")
+        # Complete: by the current rules (a merge, a complexity unless GitHub shows an assignee), read since its last change.
+        complete = (
+            tag is not None
+            and tag.get("merge") is not None
+            and (tag.get("checks") is None or tag.get("complexity") is not None)
+            and tag.get("rules_version") == RULES_VERSION
+            and tag["updated_at"] == node["updatedAt"]
+        )
+        found.append(
+            {
+                "number": node["number"],
+                "title": node["title"],
+                "url": node["url"],
+                "created_at": node["createdAt"],
+                "labels": [label["name"] for label in node["labels"]["nodes"]],
+                "comments": node["comments"]["totalCount"],
+                "tags": tag,
+                "complete": complete,
+            }
+        )
+    return {"issues": found}
+
+
+@router.post("/repos/issues/tag")
+async def tag_repo_issues(body: TagIssuesRequest) -> dict:
+    """Tag these issues of a repo now, from fresh: the ones its pop-up shows without complete tags (repo_issues). Returns
+    their tags by number, None for one that couldn't be read (the pop-up asks again the next time it opens). Many
+    issues take a few minutes."""
+    ids = [f"{body.name}#{number}" for number in body.numbers]
+    await issue_tags.tag(ids, force=True)
+    tags = issue_tags.all()
+    return {"tags": {str(number): tags.get(f"{body.name}#{number}") for number in body.numbers}}
 
 
 @router.post("/repos/refresh")
