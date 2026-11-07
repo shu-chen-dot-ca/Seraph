@@ -9,7 +9,7 @@
    - The evidence is real screenshots of the project running.
 4. **Review.** A reviewer agent checks every PR draft first, the way the project's maintainers will: every point the issue or a reviewer asked for, and the edge cases of its kind. Only then it lands in the Inbox. It has an **Overview** in plain words, with a **Checklist** of every point asked (what isn't done comes first) and what was **Also tested**, the **Diff**, and the **PR message** written to the project's contributing guide.
 5. **Send.** Approve rebuilds the change on your computer, pushes it to a new branch in your fork, and opens the pull request as you.
-6. **Follow up.** Every open PR of yours has an agent that owns it, and it hears about every change there: replies, reviews, checks, pushes, conflicts with main, labels, merged or closed. It first reproduces what was reported in a VM, and tests the rest of that kind of mistake too, then drafts the answer, the next version, a rebase or a new title and description, and it comes back to the Inbox. Nothing is posted or pushed until you approve it.
+6. **Follow up.** Every open PR of yours has an agent that owns it, and it hears about every change there: replies, reviews, checks, pushes, conflicts with main, labels, merged or closed. It first reproduces what was reported in a VM, and tests the rest of that kind of mistake too, then drafts the answer, the next version, a rebase or a new title and description, and it comes back to the Inbox. Nothing is posted or pushed until you approve it, unless the repo's [Level of automation](#level-of-automation) lets it go.
 
 ## Judging repos
 
@@ -68,3 +68,21 @@ Before you decide, you can edit the text, **Redraft** with a note, or **Discuss*
 2. The agent's commits are replayed under your name and your noreply email address.
 3. Evidence pictures go on a `pr-pictures` branch in your fork.
 4. The change is pushed to a new branch in your fork, and the PR is opened from there.
+
+## Level of automation
+
+The robot on a repo's card (Dashboard, Repository) sets what agents do there without asking you, as you. An issue's own robot on the Issues board changes Questions, Comments and Pull requests for that issue only.
+
+| Setting | What happens without you |
+|---|---|
+| **Add issues** | The repo's open issues on GitHub whose level is one of its issue levels go to the board's Open, each once: one you take off isn't added again. The board reads each again from fresh as it comes in, and its own rules decide on it |
+| **Queue issues** | The repo's issues that fit go to the board's Catalog: their tags were read again recently, after their last change, and they pass the filter (free, merge likely, one of the repo's issue levels, its instructions) |
+| **Take issues** | Agents take the repo's issues from Catalog |
+| **Questions** | A question with a recommended answer is answered with it at once (money, sensitive, GitHub and delete questions still wait, as Settings say) |
+| **Comments** | Comments are posted |
+| **Pull requests** | PRs are sent once the reviewer passed them, and new titles and descriptions too. Agents may also update your open PR's branch with its base |
+| **Open issues** | Agents may open new issues where the project's rules allow it, assigned to you. Each goes to the end of Catalog |
+
+Catalog is worked from the top: while fewer agents work than the board's **Max agents**, the next card of a repo with **Take issues** on goes to a new agent, which picks its VM itself. A send GitHub refuses stays in the Inbox for you.
+
+Where the repo's Comments or Pull requests setting is on, an agent can also take back what it sent itself: delete its own comment, close its own PR, or drop its newest commits from its own PR.
