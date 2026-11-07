@@ -47,6 +47,9 @@ anything goes it is one undo step on the Issues page. One rule is always on, wha
 no longer in Repos, or archived there, goes from Open and Catalog alike (not one an agent has started). Deleting or
 archiving a repo applies it at once (backend/repos_api.py).
 
+Add in a repo's pop-up on the Dashboard's Repository page (add_to_catalog) puts any open issue of the repo at the end of
+Catalog, whatever its tags say, even one taken off the board for good.
+
 The same robot's max_agents is how many agents work on the board's issues at once: agents with a job queued or working
 on an issue in the Issues list, or on a follow-up on a pull request. keep_catalog_agents() looks every
 CATALOG_AGENTS_SECONDS, and while there is room it gives Catalog's cards to new agents from the top, first come first
@@ -126,6 +129,15 @@ class BoardRequest(BaseModel):
     catalog: list[str]
     order: list[str]
     held: list[str]
+
+
+class CatalogRequest(BaseModel):
+    repo: str
+    number: int
+    title: str
+    labels: list[str]
+    comments: int
+    url: str
 
 
 class AutoRemoveRequest(BaseModel):
@@ -252,6 +264,42 @@ def set_board(body: BoardRequest) -> dict:
     order, and which are paused (held)."""
     issues.set_board(body.catalog, body.order, body.held)
     return {"ok": True}
+
+
+@router.post("/issues/catalog")
+def add_to_catalog(body: CatalogRequest) -> dict:
+    """Add on an issue in a repo's pop-up on the Dashboard's Repository page: it goes to the end of Catalog, put in the
+    Issues list first when it isn't there, whatever its tags say and even if it was taken off the board for good. Not one
+    an agent has started (a job on it that isn't cancelled), nor one of a repo not in Repos or archived there."""
+    archived = [name.lower() for name in repos.archived()]
+    in_repos = [item["full_name"].lower() for item in repos.items() if item["full_name"].lower() not in archived]
+    if body.repo.lower() not in in_repos:
+        raise HTTPException(status_code=409, detail=f"{body.repo} isn't in Repos, or it is archived.")
+    issue_id = f"{body.repo}#{body.number}"
+    for job in jobs.list():
+        if job["issue"] == issue_id and job["status"] != "cancelled":
+            raise HTTPException(status_code=409, detail=f"An agent already started on {issue_id}.")
+
+    item = {
+        "id": issue_id,
+        "repo": body.repo,
+        "number": body.number,
+        "title": body.title,
+        "labels": body.labels,
+        "state": "OPEN",
+        "comments": body.comments,
+        "html_url": body.url,
+        "note": "",
+        "added_by": "user",
+        "added_at": datetime.now(UTC).isoformat(),
+    }
+    # One already in the list is skipped; it only moves.
+    issues.add([item], allow_dismissed=True)
+    board = issues.board()
+    catalog = [each for each in board["catalog"] if each != issue_id] + [issue_id]
+    order = [each for each in board["order"] if each != issue_id] + [issue_id]
+    issues.set_board(catalog, order, board["held"])
+    return {"added": issue_id}
 
 
 @router.post("/issues/pause")
