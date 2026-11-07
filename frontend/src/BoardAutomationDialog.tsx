@@ -4,8 +4,9 @@ Automation (AutomationDialog.tsx). Kept by the backend (backend/issues_api.py, G
 
 Left, Remove automatically: which issues leave the Issues list by themselves. Claimed, Out of scope and Scope not clear,
 then Complexity (Easy, Medium, Hard) in a row, then Opened more than N days ago (30 at first). Only issues no agent has
-started and that aren't in Catalog go. The backend applies them again as issues get read, so one that matches later
-goes then; each time anything goes it is one undo step on the Issues page.
+started go, from Open and Catalog alike (not one our agents opened for you). The backend applies them again right after
+issues get tagged and every 15 minutes, so one that matches later goes then; each time anything goes it is one undo
+step on the Issues page.
 Right, Refresh every (minutes): how often the board's issues are read again, by column: Open (30 at first), Catalog
 (15) and In progress, Review and Open PR (5). Finished ones are read again only when they change on GitHub. Under it Max agents
 at once: how many agents work on the board's issues at the same time (3 at first); while there is room, the backend
