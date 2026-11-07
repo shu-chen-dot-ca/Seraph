@@ -83,7 +83,7 @@ The robot on a repo's card (Dashboard, Repository) sets what agents do there wit
 | **Questions** | A question with a recommended answer is answered with it at once (money, sensitive, GitHub and delete questions still wait, as Settings say) |
 | **Comments** | Comments are posted |
 | **Pull requests** | PRs are sent once the reviewer passed them, and new titles and descriptions too. Agents may also update your open PR's branch with its base |
-| **Open issues** | Agents may open new issues where the project's rules allow it, claimed for you (assigned, or your comment saying you're on it). Each goes to the top of Catalog, before everything else |
+| **Open issues** | Agents may open new issues where the project's rules allow it, claimed for you (assigned, or your comment saying you're on it). Each goes to the top of Catalog, before everything else, and another agent takes it even when **Take issues** is off |
 
 Catalog is worked from the top: while fewer agents work than the board's **Max agents**, the next card of a repo with **Take issues** on goes to a new agent, which picks its VM itself. A send GitHub refuses stays in the Inbox for you.
 
