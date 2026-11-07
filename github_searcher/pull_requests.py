@@ -11,7 +11,8 @@ The page filters them (visibility, repository) and sorts them itself.
     {"items": [{"id": "owner/name#n", "repo", "private", "number", "title", "url", "state": "open" | "closed" | "merged",
                 "draft", "author", "created_at", "updated_at", "closed_at", "labels": [{"name", "color"}], "comments",
                 "review": "approved" | "changes_requested" | "review_required" | "none",
-                "checks": "passed" | "failed" | "running" | "none"}],
+                "checks": "passed" | "failed" | "running" | "none",
+                "files": how many files it changes, "additions": lines added, "deletions": lines removed}],
      "open": how many open ones GitHub has, "closed": how many closed ones, "login": who they are for, "at": when}
 """
 
@@ -31,6 +32,7 @@ query($query: String!, $after: String) {
     nodes {
       ... on PullRequest {
         number title url state isDraft createdAt updatedAt closedAt reviewDecision author { login }
+        changedFiles additions deletions
         repository { nameWithOwner isPrivate }
         labels(first: 10) { nodes { name color } }
         comments { totalCount }
@@ -87,5 +89,8 @@ def read(your_repositories, view: str) -> dict:
             "comments": node["comments"]["totalCount"],
             "review": (node["reviewDecision"] or "none").lower(),
             "checks": checks,
+            "files": node["changedFiles"],
+            "additions": node["additions"],
+            "deletions": node["deletions"],
         })
     return {"items": items, "open": counts["open"], "closed": counts["closed"], "login": login, "at": datetime.now(UTC).isoformat()}
