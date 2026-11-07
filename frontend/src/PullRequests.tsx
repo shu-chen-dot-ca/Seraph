@@ -28,11 +28,18 @@ before you signed in; new PRs, not new versions of open ones), under Not publish
 on its right. Publish asks first (Enter confirms), then opens each on GitHub as you, all at once, the same as
 Approve in the Inbox (a waiting one) or Send to GitHub (an approved one): a toast each, with Open. A sent one leaves
 the list, and the open list is read again when all are done.
+The Dashboard's has a third tab, Actions (state=actions), with how many: everything agents put on GitHub as you, newest
+first (GET /api/actions, github_searcher/inbox.py): a pull request opened, a new version pushed or a rebase, a comment,
+a new title and description, an issue opened, a branch updated. A row like a pull request's: the repo's logo, on top
+what it did and its title (none for a comment), at the bottom the repo and number where it happened (a link to it on
+GitHub), the issue it was for (on GitHub: its job's, else the one its pull request links, else the opened issue
+itself) and the agent (its chat); on the right how long ago. A deleted comment says Deleted. A click opens the thread
+in the pop-up. It is read again on Refresh, on every tab change and whenever a draft changes.
 PRs in archived repos are left out, like on GitHub. At most the 500 most recently updated open ones and closed ones are
 read; a line says so when GitHub has more.
 */
 
-import { GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Loader2, Lock, MessageSquare, RefreshCw } from "lucide-react";
+import { Bot, CircleDot, GitBranch, GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Loader2, Lock, MessageSquare, Pencil, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -78,6 +85,17 @@ type PullRequest = {
 // open and closed: how many GitHub has, which may be more than were read.
 type PullRequestList = { items: PullRequest[]; open: number; closed: number; login: string; at: string };
 
+// What GET /api/actions gives (github_searcher/inbox.py ACTIONS_FILE): one thing an agent put on GitHub. sent is the
+// draft's (live.ts DraftSent), or only url, repo, number and at for what the agent did itself (issue, update_branch).
+type AgentAction = {
+  draft: string | null;
+  kind: "pr" | "comment" | "edit" | "issue" | "update_branch";
+  agent: string;
+  job: string | null;
+  title: string;
+  sent: { url: string; repo: string; number: number; at: string; update?: boolean; rebase_of?: string | null; deleted_at?: string };
+};
+
 const VIEWS: Record<string, string> = { created: "Created by me", assigned: "Assigned to me", mentioned: "Mentioned", "review-requested": "Review requests" };
 const SORTS: Record<string, string> = {
   "created-desc": "Newest",
@@ -104,6 +122,12 @@ export default function PullRequests(props: {
 }) {
   const yourRepos = useLive("your_repos");
   const inbox = useLive("inbox");
+  const agents = useLive("agents");
+  const jobs = useLive("jobs");
+  const prs = useLive("prs");
+  // The Dashboard's Actions.
+  const [actions, setActions] = useState<AgentAction[] | null>(null);
+  const [actionsError, setActionsError] = useState("");
   // Local pull requests being published, and the ones Publish asks about (they stay set while the dialog fades out).
   const [publishing, setPublishing] = useState<string[]>([]);
   const [toPublish, setToPublish] = useState<Draft[]>([]);
@@ -155,10 +179,35 @@ export default function PullRequests(props: {
     };
   }, [props.view, reload]);
 
+  // The Dashboard's Actions: read with the list, on every tab change and whenever a draft changes (one was sent).
+  useEffect(() => {
+    if (!props.plain) {
+      return;
+    }
+    let current = true;
+    api<AgentAction[]>("/api/actions")
+      .then((result) => {
+        if (current) {
+          setActions(result);
+          setActionsError("");
+        }
+      })
+      .catch((err) => {
+        if (current) {
+          setActionsError(err instanceof Error ? err.message : String(err));
+        }
+      });
+    return () => {
+      current = false;
+    };
+  }, [props.plain, props.state, reload, inbox]);
+
+  const onActions = props.state === "actions";
+
   // This list's address (only what isn't the default), and the same with one setting changed (null: its default).
   const params = new URLSearchParams();
-  if (props.state === "closed") {
-    params.set("state", "closed");
+  if (props.state !== "open") {
+    params.set("state", props.state);
   }
   if (props.view !== "created") {
     params.set("view", props.view);
@@ -245,7 +294,7 @@ export default function PullRequests(props: {
   // How many of this tab GitHub has that weren't read (more than 500).
   const readOpen = items.filter((pr) => pr.state === "open").length;
   let unread = 0;
-  if (list !== null) {
+  if (list !== null && !onActions) {
     unread = props.state === "open" ? list.open - readOpen : list.closed - (items.length - readOpen);
   }
 
@@ -287,9 +336,9 @@ export default function PullRequests(props: {
     setReload((count) => count + 1);
   }
 
-  // Open and Closed: in the second bar, or alone in the first one when plain.
+  // Open and Closed: in the second bar, or alone in the first one when plain, then with Actions.
   const stateTabs = (
-    <Tabs value={props.state} onValueChange={(value) => go("state", value === "closed" ? "closed" : null)}>
+    <Tabs value={props.state} onValueChange={(value) => go("state", value === "open" ? null : value)}>
       <TabsList>
         <TabsTrigger value="open" className="px-2.5">
           Open <span className="text-xs text-muted-foreground tabular-nums">{list !== null ? openCount : ""}</span>
@@ -297,6 +346,11 @@ export default function PullRequests(props: {
         <TabsTrigger value="closed" className="px-2.5">
           Closed <span className="text-xs text-muted-foreground tabular-nums">{list !== null ? closedCount : ""}</span>
         </TabsTrigger>
+        {props.plain && (
+          <TabsTrigger value="actions" className="px-2.5">
+            Actions <span className="text-xs text-muted-foreground tabular-nums">{actions !== null ? actions.length : ""}</span>
+          </TabsTrigger>
+        )}
       </TabsList>
     </Tabs>
   );
@@ -323,7 +377,7 @@ export default function PullRequests(props: {
           <Input className="w-52 max-md:w-auto max-md:min-w-0 max-md:flex-1" placeholder="Filter pull requests" value={filter} onChange={(event) => setFilter(event.target.value)} />
         )}
         <div className="ml-auto flex items-center gap-1.5">
-          {list !== null && <span className="mr-1 text-xs text-muted-foreground max-md:hidden">Updated {timeAgo(list.at)}</span>}
+          {list !== null && !onActions && <span className="mr-1 text-xs text-muted-foreground max-md:hidden">Updated {timeAgo(list.at)}</span>}
           <Button size="sm" variant="outline" disabled={loading} onClick={() => setReload((count) => count + 1)}>
             {loading ? <Loader2 className="animate-spin" /> : <RefreshCw />} Refresh
           </Button>
@@ -374,7 +428,8 @@ export default function PullRequests(props: {
         </div>
       )}
 
-      {error !== "" && !signedOut && <div className="shrink-0 border-b bg-destructive/10 px-3 py-1.5 text-destructive">Could not read them from GitHub: {error}</div>}
+      {error !== "" && !signedOut && !onActions && <div className="shrink-0 border-b bg-destructive/10 px-3 py-1.5 text-destructive">Could not read them from GitHub: {error}</div>}
+      {actionsError !== "" && onActions && <div className="shrink-0 border-b bg-destructive/10 px-3 py-1.5 text-destructive">Could not read the actions: {actionsError}</div>}
       {unread > 0 && (
         <div className="shrink-0 border-b px-3 py-1.5 text-xs text-muted-foreground">
           GitHub has {unread} more, updated earlier. Only the 500 most recently updated are here.
@@ -382,7 +437,7 @@ export default function PullRequests(props: {
       )}
 
       <div className="min-h-0 flex-1 overflow-auto">
-        {signedOut && (
+        {signedOut && !onActions && (
           <div className="px-3 py-2 text-muted-foreground">
             <a href="#/github/account" className="text-primary hover:underline">
               Sign in with GitHub
@@ -390,13 +445,102 @@ export default function PullRequests(props: {
             to see your pull requests.
           </div>
         )}
-        {!signedOut && list === null && error === "" && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
-        {!signedOut && list !== null && rows.length === 0 && (
+        {!signedOut && !onActions && list === null && error === "" && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
+        {!signedOut && !onActions && list !== null && rows.length === 0 && (
           <div className="px-3 py-2 text-muted-foreground">
             {needle !== "" ? "Nothing matches the filter." : props.state === "closed" ? "No closed pull requests." : "No open pull requests."}
           </div>
         )}
+        {onActions && actions === null && actionsError === "" && <div className="px-3 py-2 text-muted-foreground">Loading…</div>}
+        {onActions && actions !== null && actions.length === 0 && <div className="px-3 py-2 text-muted-foreground">No actions yet.</div>}
+        {onActions &&
+          actions !== null &&
+          actions.map((action) => {
+            const thread = `${action.sent.repo}#${action.sent.number}`;
+            // What it did, its icon and its title (a comment's draft title only says where it went).
+            let what = "Opened a pull request";
+            let icon = <GitPullRequest className="text-ok" />;
+            let title = action.title;
+            if (action.kind === "pr" && action.sent.update) {
+              what = action.sent.rebase_of ? "Rebased a pull request" : "Pushed a new version";
+            }
+            if (action.kind === "comment") {
+              what = "Commented";
+              icon = <MessageSquare />;
+              title = "";
+            }
+            if (action.kind === "edit") {
+              what = "Changed the title and description";
+              icon = <Pencil />;
+            }
+            if (action.kind === "issue") {
+              what = "Opened an issue";
+              icon = <CircleDot className="text-ok" />;
+            }
+            if (action.kind === "update_branch") {
+              what = "Updated the branch";
+              icon = <GitBranch />;
+              title = items.find((pr) => pr.id === thread)?.title ?? "";
+            }
+            // The issue it was for: its job's, else the one its pull request links, else the issue it opened.
+            const job = jobs.find((each) => each.id === action.job);
+            let issue: string | null = null;
+            let issueUrl = "";
+            if (job !== undefined && job.issue !== null) {
+              issue = job.issue;
+              issueUrl = `https://github.com/${job.issue.replace("#", "/issues/")}`;
+            }
+            const tracked = prs.items.find((each) => each.id === (job?.thread ?? thread));
+            if (issue === null && tracked !== undefined && tracked.issues.length > 0) {
+              issue = `${tracked.repo}#${tracked.issues[0].number}`;
+              issueUrl = tracked.issues[0].url;
+            }
+            if (issue === null && action.kind === "issue") {
+              issue = thread;
+              issueUrl = action.sent.url;
+            }
+            const agent = agents.find((each) => each.id === action.agent);
+            return (
+              <div
+                key={`${action.sent.url} ${action.sent.at}`}
+                className={cn("flex cursor-pointer items-center gap-3 border-b px-3 py-2 hover:bg-accent/50", thread === props.open && "bg-selected hover:bg-selected")}
+                onClick={() => go("open", thread)}
+              >
+                <img src={`https://github.com/${action.sent.repo.split("/")[0]}.png?size=72`} alt="" className="size-9 shrink-0 rounded-md" />
+                <div className="flex h-9 min-w-0 flex-1 flex-col justify-between">
+                  <div className="flex min-w-0 items-center gap-2 leading-tight">
+                    <span className="shrink-0 font-medium">{what}</span>
+                    {title !== "" && <span className="truncate text-muted-foreground">{title}</span>}
+                  </div>
+                  <div className="flex min-w-0 items-center gap-1.5 text-xs leading-tight whitespace-nowrap text-muted-foreground [&>svg]:size-3.5 [&>svg]:shrink-0">
+                    {icon}
+                    <a href={action.sent.url} target="_blank" rel="noreferrer" className="truncate hover:text-foreground hover:underline" onClick={(event) => event.stopPropagation()}>
+                      {action.sent.repo} #{action.sent.number}
+                    </a>
+                    {action.sent.deleted_at && <span>· Deleted</span>}
+                    {issue !== null && (
+                      <>
+                        <span>·</span>
+                        <a href={issueUrl} target="_blank" rel="noreferrer" className="hover:text-foreground hover:underline" onClick={(event) => event.stopPropagation()}>
+                          Issue #{issue.split("#")[1]}
+                        </a>
+                      </>
+                    )}
+                    <span>·</span>
+                    <Bot />
+                    <a href={`#/agents/${action.agent}`} className="truncate hover:text-foreground hover:underline" onClick={(event) => event.stopPropagation()}>
+                      {agent?.name ?? action.agent}
+                    </a>
+                  </div>
+                </div>
+                <span className="shrink-0 text-xs text-muted-foreground tabular-nums" title={new Date(action.sent.at).toLocaleString()}>
+                  {timeAgo(action.sent.at)}
+                </span>
+              </div>
+            );
+          })}
         {!signedOut &&
+          !onActions &&
           rows.map((pr) => {
             let icon = <GitPullRequest className="size-4 shrink-0 text-ok" />;
             let when = `#${pr.number} opened ${timeAgo(pr.created_at)} by ${pr.author}`;

@@ -1,7 +1,8 @@
 /*
 The Dashboard tab's left list, with the same rows as Home's (Sidebar.tsx). Every line is a link to a page; the open one
 is marked:
-- Pull requests (#/dashboard/pulls, also #/dashboard): your own pull requests, Open and Closed (PullRequests.tsx, plain).
+- Pull requests (#/dashboard/pulls, also #/dashboard): your own pull requests, Open and Closed, and Actions: what agents
+  put on GitHub (PullRequests.tsx, plain).
 - Issues (#/dashboard/issues, IssueBoard.tsx): the Issues list as a board, Open to Finished, with how many issues.
 - Repository (#/dashboard/repos, RepositoryCards.tsx): the repos on the Repos page as cards, with how many are there.
 - Agents (#/dashboard/agents, AgentList.tsx): the agents in a table, Open and Closed, with how many are open (on an

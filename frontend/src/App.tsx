@@ -1,8 +1,8 @@
 /*
 The whole app: a 36px header, a left list and one page on the right.
 The header's left has two tabs, the open one in full color with the accent under it:
-- Dashboard, the first page you see, with its own left list (DashboardNav.tsx): Pull requests (your own, Open and Closed:
-  PullRequests.tsx, plain), Issues (the Issues list as a board, IssueBoard.tsx), Repository (the Repos page's repos as
+- Dashboard, the first page you see, with its own left list (DashboardNav.tsx): Pull requests (your own, Open and Closed,
+  and Actions, what agents put on GitHub: PullRequests.tsx, plain), Issues (the Issues list as a board, IssueBoard.tsx), Repository (the Repos page's repos as
   cards, RepositoryCards.tsx), Agents (every agent in a table, AgentList.tsx) and Virtual Machine (the VMs page and each
   VM's page, the same pages as Home's).
 - Home, the backup with every page, with one left list (Sidebar.tsx) in four parts: with one left list (Sidebar.tsx) in four parts:
@@ -53,7 +53,7 @@ The page lives in the URL hash, so refresh and back/forward work and switching p
          #/vm (PhoneVM.tsx)
   Workflow: #/workflow  #/workflow?repo=owner/name (Workflow.tsx; takes tab=pulls|issues|chat|settings (none: Overview),
          state=closed and open=<number>, that pull request or issue)
-  Dashboard: #/dashboard (= #/dashboard/pulls, takes state=closed and open=owner/name%23n)  #/dashboard/issues  #/dashboard/repos
+  Dashboard: #/dashboard (= #/dashboard/pulls, takes state=closed|actions and open=owner/name%23n)  #/dashboard/issues  #/dashboard/repos
          #/dashboard/agents (takes state=closed)
 Anything else (also no hash at all) opens the Dashboard. Links are plain <a href="#/..."> everywhere; App only reads the hash.
 
@@ -461,7 +461,7 @@ export default function App() {
             )}
             {page === "dashboard" && (id === null || id === "pulls") && (
               <PullRequests
-                state={query.get("state") === "closed" ? "closed" : "open"}
+                state={query.get("state") === "closed" ? "closed" : query.get("state") === "actions" ? "actions" : "open"}
                 view="created"
                 visibility="all"
                 repo={null}
