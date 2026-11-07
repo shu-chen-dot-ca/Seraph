@@ -42,7 +42,7 @@ cp .env.example .env
 | `AGENT_CONTEXT_CAP` | `500000` | How large an agent's context gets before it is compacted |
 | `BACKEND_PORT` | `8001` | The backend's port, on 127.0.0.1 only |
 | `DATA_DIR` | `data` | Everything Seraph keeps |
-| `SANDBOX_*_DEFAULT` | 4 CPUs, 8 GB, 48 GB | A new VM's size |
+| `SANDBOX_*_DEFAULT` | 8 CPUs, 8 GB, 128 GB | A new VM's size |
 | `SANDBOX_MIN_FREE_RAM_GB` | `8` | Memory that must stay free |
 | `REMOTE_ACCESS_*` | | Optional: see [remote access](../remote_access/README.md) |
 

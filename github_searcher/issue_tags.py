@@ -98,7 +98,7 @@ DATA_DIR = PROJECT_ROOT / os.environ["DATA_DIR"]
 # Where our agent fixes an issue (sandbox/): the prompt says so, since the checks are about this setup.
 SANDBOX = (
     "Our agent (Claude Code) fixes the issue inside a sandbox VM: a Linux desktop (Ubuntu, Debian or Fedora) with a "
-    "shell, mouse and keyboard, a browser, Docker and internet, 2 to 16 CPUs, up to 16 GB of RAM, and an NVIDIA GPU when "
+    "shell, mouse and keyboard, a browser, Docker and internet, 2 to 16 CPUs, up to 32 GB of RAM, and an NVIDIA GPU when "
     "one is handed in. It clones the repo, reproduces the problem, writes the fix, runs the project's tests before and "
     "after, and takes screenshots or command output as proof."
 )
