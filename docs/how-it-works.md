@@ -91,6 +91,8 @@ The board's robot also has **Close inactive PRs after** (14 days at first): an o
 
 Before an agent claims, comments on or takes an issue, it reads all of it: every comment, every place it was mentioned, every related PR with its checks and reviews, and the checks on the default branch. If the issue is already fixed, a duplicate, taken by someone else's PR, or turned down by a maintainer, the agent closes it for us: its job stops and the issue leaves the board for good. Nothing on GitHub changes. Someone else's open PR that closes the issue always counts, whether or not they commented first: the agent can't claim it or start a second fix.
 
+An issue deleted on GitHub leaves the board for good: nothing tags, queues or takes it again. When an issue's repo is deleted from Repos, an agent working on it is told to stop and cancels its job.
+
 When something goes wrong because of how the app made an agent work (a rule or tool that led it the wrong way, something a maintainer or you had to correct), the agent reports it on the Dashboard's **Problems** page, so you can fix them all at one time. **Close all** moves them to Closed once they are fixed.
 
 Where the repo's Comments or Pull requests setting is on, an agent can also take back what it sent itself: delete its own comment, close its own PR, or drop its newest commits from its own PR.
