@@ -30,7 +30,10 @@ again buttons and the pages' Refresh (Issues: every open issue in the list, afte
 its facts; Tracked: every free issue, after the checks) do it at once
 (refresh_tags), and say which ones that were free aren't anymore.
 
-The robot button over the Dashboard's Issues board sets Remove automatically, kept in AUTO_REMOVE_FILE,
+The robot button over the Dashboard's Issues board sets two things, kept in AUTO_REMOVE_FILE. How often the board's
+issues are read again (keep_tags): refresh_open_minutes for ones no agent has started (30 at first), _catalog_ for ones
+whose job waits in the queue (15), _ongoing_ for ones an agent works on or that wait on a review (5); finished ones
+(job done) only when they change on GitHub. The tracked repos' issues keep TAGS_FREE_SECONDS. And Remove automatically,
 which takes issues out of the Issues list by rules the user picks: claimed (someone is on it, or it is already fixed), out of scope,
 complexity (easy, medium, hard), scope not clear, and opened more than older_than_days days ago (None: off). Only
 issues no agent has started (no job on them, or only cancelled ones), so work in progress never goes. Saving applies
@@ -75,6 +78,9 @@ AUTO_REMOVE_OFF = {
     "levels": [],
     "scope_not_clear": False,
     "older_than_days": None,
+    "refresh_open_minutes": 30,
+    "refresh_catalog_minutes": 15,
+    "refresh_ongoing_minutes": 5,
 }
 LEVELS = ["easy", "medium", "hard"]
 
@@ -106,6 +112,9 @@ class AutoRemoveRequest(BaseModel):
     levels: list[str]  # of LEVELS
     scope_not_clear: bool
     older_than_days: int | None  # None: off
+    refresh_open_minutes: int
+    refresh_catalog_minutes: int
+    refresh_ongoing_minutes: int
 
 
 def auto_remove_issues() -> list[str]:
@@ -159,6 +168,9 @@ def put_auto_remove(body: AutoRemoveRequest) -> dict:
         raise HTTPException(status_code=400, detail="The levels are easy, medium and hard.")
     if body.older_than_days is not None and (body.older_than_days < 1 or body.older_than_days > 3650):
         raise HTTPException(status_code=400, detail="The days are 1 to 3650.")
+    for minutes in [body.refresh_open_minutes, body.refresh_catalog_minutes, body.refresh_ongoing_minutes]:
+        if minutes < 1 or minutes > 1440:
+            raise HTTPException(status_code=400, detail="Refresh every 1 to 1440 minutes.")
     rules = body.model_dump()
     AUTO_REMOVE_FILE.write_text(json.dumps(rules, indent=2))
     return {**rules, "removed": auto_remove_issues()}
@@ -405,6 +417,16 @@ async def keep_tags() -> None:
         known = issue_tags.all()
         facts = issue_facts.all()
         checks = tracked_issues.all()
+        # The board's refresh intervals (the robot button over it).
+        rules = dict(AUTO_REMOVE_OFF)
+        if AUTO_REMOVE_FILE.is_file():
+            rules.update(json.loads(AUTO_REMOVE_FILE.read_text()))
+        listed = [item["id"] for item in issues.items()]
+        catalog = issues.board()["catalog"]
+        latest = {}
+        for job in jobs.list():
+            if job["issue"] is not None and (job["issue"] not in latest or job["created_at"] > latest[job["issue"]]["created_at"]):
+                latest[job["issue"]] = job
         # Each issue and its last change on GitHub (None when not known yet).
         candidates = []
         for item in issues.items():
@@ -430,13 +452,25 @@ async def keep_tags() -> None:
             tags = known.get(issue_id)
             if issue_id in failed or issue_id in todo:
                 continue
+            # Where it is on the board: open (no job, or only cancelled), catalog (queued, or moved there), ongoing, or
+            # finished (done).
+            job = latest.get(issue_id)
+            minutes = rules["refresh_open_minutes"]
+            if issue_id in catalog or (job is not None and job["status"] == "queued"):
+                minutes = rules["refresh_catalog_minutes"]
+            if job is not None and job["status"] in ("working", "waiting_on_user", "waiting_on_maintainers"):
+                minutes = rules["refresh_ongoing_minutes"]
+            due = issue_id in listed and not (job is not None and job["status"] == "done")
             if tags is None:
                 todo.append(issue_id)
             elif updated_at is not None and tags["updated_at"] != updated_at:
                 todo.append(issue_id)
-            elif tags["status"] == "free" and datetime.fromisoformat(tags["judged_at"]) < free_before:
+            elif due and datetime.fromisoformat(tags["judged_at"]) < datetime.now(UTC) - timedelta(minutes=minutes):
+                # In the Issues list: read again at the board's refresh interval for where it is.
                 todo.append(issue_id)
-            elif tags["status"] == "free" and issue_id in active and datetime.fromisoformat(tags["judged_at"]) < active_before:
+            elif issue_id not in listed and tags["status"] == "free" and datetime.fromisoformat(tags["judged_at"]) < free_before:
+                todo.append(issue_id)
+            elif issue_id not in listed and tags["status"] == "free" and issue_id in active and datetime.fromisoformat(tags["judged_at"]) < active_before:
                 todo.append(issue_id)
             elif "merge" not in tags:
                 # From before merge (it had a level: easy, medium or hard): once more, by the merge rules.
