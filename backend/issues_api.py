@@ -21,7 +21,9 @@ a minute: a new comment changes the issue on GitHub, so keep_tags has Claude rea
 again. Opening a row and the Refresh button fetch them at once.
 
 Each issue's tags (free / assigned / waiting, its merge: likely or what stands in the way, its kind:
-github_searcher/issue_tags.py) are made by keep_tags(), also in the background,
+github_searcher/issue_tags.py) are made by keep_tags(), also in the background, except an issue in the Issues list
+with none yet: keep_new_tags() tags those on its own, every NEW_TAGS_SECONDS and again right after a failure, so a new
+one never waits behind keep_tags' long rounds or TAGS_RETRY_SECONDS. keep_tags,
 for the Issues list and the tracked repos' issues alike: new issues get theirs
 within TAGS_CHECK_SECONDS, an issue that changed on GitHub gets them again, and
 a free one every TAGS_FREE_SECONDS anyway (someone may have taken it), and a free one an agent is on (a job on it
@@ -70,6 +72,8 @@ TAGS_FREE_SECONDS = 60 * 60
 ACTIVE_TAGS_SECONDS = 5 * 60
 # An issue that could not be tagged (Claude or GitHub down, the issue gone) is tried again after this long.
 TAGS_RETRY_SECONDS = 30 * 60
+# An issue in the Issues list with no tags yet is tagged within this long (keep_new_tags), and tried again as soon.
+NEW_TAGS_SECONDS = 5
 # Remove automatically's rules; all off until saved once.
 AUTO_REMOVE_FILE = DATA_DIR / "issue_auto_remove.json"
 AUTO_REMOVE_OFF = {
@@ -400,6 +404,21 @@ async def keep_facts() -> None:
         await asyncio.sleep(FACTS_CHECK_SECONDS)
 
 
+async def keep_new_tags() -> None:
+    """Runs as long as the backend: tags the Issues list's issues that have no tags yet, at once, apart from keep_tags,
+    and tries a failed one again on the next round instead of waiting TAGS_RETRY_SECONDS."""
+    while True:
+        known = issue_tags.all()
+        todo = [item["id"] for item in issues.items() if item["id"] not in known]
+        if todo:
+            # A batch that fails leaves its issues untagged: the next round tries them again.
+            try:
+                await issue_tags.tag(todo)
+            except Exception:
+                pass
+        await asyncio.sleep(NEW_TAGS_SECONDS)
+
+
 async def keep_tags() -> None:
     """Runs as long as the backend: tags every issue that has no tags yet, changed on GitHub since, was free an hour ago
     (5 minutes ago when an agent is on it), or is from before merge, one of its checks, complexity, the naming rules (issue_tags.NAME_VERSION) or the status
@@ -461,6 +480,9 @@ async def keep_tags() -> None:
             if job is not None and job["status"] in ("working", "waiting_on_user", "waiting_on_maintainers"):
                 minutes = rules["refresh_ongoing_minutes"]
             due = issue_id in listed and not (job is not None and job["status"] == "done")
+            if tags is None and issue_id in listed:
+                # keep_new_tags tags it, at once.
+                continue
             if tags is None:
                 todo.append(issue_id)
             elif updated_at is not None and tags["updated_at"] != updated_at:

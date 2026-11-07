@@ -113,6 +113,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(asyncio.to_thread(BALANCER.prime)),
         asyncio.create_task(issues_api.keep_facts()),
         asyncio.create_task(issues_api.keep_tags()),
+        asyncio.create_task(issues_api.keep_new_tags()),
         asyncio.create_task(repos_api.keep_signals()),
         asyncio.create_task(tracked_api.keep_tracked()),
         asyncio.create_task(github_api.keep_prs()),
