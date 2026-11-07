@@ -54,6 +54,10 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   Catalog, where an agent takes it when the repo's Take issues is on) and update_branch (Pull requests: GitHub's Update branch on the user's
   open PR). open_issue refuses until the agent read the repo's rules (contributing_guide). What they did is kept for
   the Dashboard's Actions (Inbox.add_action), like every sent draft.
+- Reading first: read_issue reads an issue or PR in full, right then (never cached): every comment, where it was
+  mentioned (issues, PRs, commits), the PRs linked to it or that would close it with their checks and newest comments,
+  assignments and labels, and the checks on the default branch. draft_comment on a thread and a fix_issue job going
+  past understand (taking it) refuse until it was read so within READ_SECONDS.
 - Questions: draft_question is only for what matters to the user; small choices the agent makes itself and says so in
   its progress. A question with options names the one the agent recommends, and is timed: when the user doesn't answer
   within the timer of their Settings, the app answers it with that recommendation (Agents.answer_questions). One about
@@ -130,6 +134,7 @@ import secrets
 import shlex
 import subprocess
 import tempfile
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -141,7 +146,7 @@ from github_searcher.github_account import SendError
 from github_searcher.inbox import ASK_SETTINGS_FILE, AUTOMATION_FILE, MUST_WAIT, TIMER_MINUTES
 from github_searcher.jobs import EVIDENCE_DIR
 from github_searcher.projects import TITLE, TITLE_CHARS
-from github_searcher.search import get_contents, get_issue_status, get_merged_prs, get_pr_status, get_readme, get_repository, get_thread, get_tree
+from github_searcher.search import get_contents, get_issue_in_full, get_issue_status, get_merged_prs, get_pr_status, get_readme, get_repository, get_thread, get_tree
 from sandbox.agent import long_runs
 from sandbox.agent.computer_use import Computer, ComputerError
 from sandbox.agent.tools import HIDE_MIN_LENGTH
@@ -172,6 +177,9 @@ TAIL_CHARS = 2000
 TEST_TIMEOUT = long_runs.RUN_LIMIT_SECONDS
 # A fix_issue job can't go past set_up until its tests passed on the unchanged code.
 STEPS_AFTER_SETUP = ["reproduce", "fix", "test", "draft"]
+# How long ago read_issue may have read an issue or PR for a comment on it, or for taking it (a fix_issue job
+# going past understand): newer comments, PRs and checks may have come since.
+READ_SECONDS = 60 * 60
 # What a test run covers: focused, the basic checks (the tests that cover the change: the default), or full, the
 # project's official checks (what its rules ask to run before a PR, e.g. the whole suite and its lint script).
 TEST_SCOPES = ["full", "focused"]
@@ -267,6 +275,8 @@ class WorkTools:
         self.pr_examples_read = set()
         # The repos (owner/name, lower case) whose rules for contributors it read with contributing_guide.
         self.guides_read = set()
+        # When it last read each issue or PR in full with read_issue (owner/name#n, lower case): time.time().
+        self.threads_read = {}
 
     def list(self) -> list:
         names = {"type": "array", "items": {"type": "string"}}
@@ -530,6 +540,17 @@ class WorkTools:
                     "required": ["pr"],
                 },
             )(self.update_branch),
+            tool(
+                "read_issue",
+                "Read an issue or PR (owner/name#number) in full, as it is right now: its text, every comment, where it was "
+                "mentioned (other issues, PRs and commits), the PRs linked to it or that would close it with their state, "
+                "review, checks and newest comments, who was assigned and when, its labels, and the checks on the repo's "
+                "default branch (and a PR's own reviews and checks). Read it before you take an issue, claim it or comment on it: "
+                "draft_comment and a fix_issue job going past understand refuse until you read it "
+                "within the hour. Read all of it, and every related PR it shows: someone may be on it, it may be fixed "
+                "already or a duplicate, or a maintainer may have said how (or whether) they want it done.",
+                {"type": "object", "properties": {"thread": {"type": "string"}}, "required": ["thread"]},
+            )(self.read_issue),
             tool(
                 "draft_question",
                 "Ask the user a question through their Inbox, only when the answer matters. Small choices are yours (how to "
@@ -945,6 +966,8 @@ class WorkTools:
             return f"Opening an issue on {args.get('repo')}: {args.get('title')}"
         if name == "update_branch":
             return f"Updating the branch of {args.get('pr')}"
+        if name == "read_issue":
+            return f"Reading {args.get('thread')} in full"
         if name == "paper_read":
             return f"Reading the paper, pages {args.get('pages')}"
         if name == "draft_report":
@@ -1503,6 +1526,12 @@ class WorkTools:
         step = (args.get("step") or "").strip().lower().replace(" ", "_") or None
         if step is not None and step not in job["steps"]:
             return {"content": [{"type": "text", "text": f"step must be one of: {', '.join(job['steps'])}."}], "is_error": True}
+        # Taking the issue: past understand only once everything about it was read, recently.
+        if job["kind"] == "fix_issue" and job["issue"] is not None and step not in [None, "understand"] and job["step"] in [None, "understand"]:
+            read_at = self.threads_read.get(job["issue"].lower())
+            if read_at is None or time.time() - read_at > READ_SECONDS:
+                text = f"First read {job['issue']} in full with read_issue: every comment, mention, related PR and check."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
         # The tests have to work on the unchanged code before any change is made. When another job on the same repo
         # already got the official checks passing on this VM, the project is set up there: that run counts for this job too.
         before = job["tests"]["before"]
@@ -1602,6 +1631,11 @@ class WorkTools:
                     return {"content": [{"type": "text", "text": text}], "is_error": True}
             title = f"Claim {target}"
 
+        # Everything about the thread is read first, recently: someone may be on it, or it may be settled already.
+        read_at = self.threads_read.get(target.lower())
+        if read_at is None or time.time() - read_at > READ_SECONDS:
+            text = f"First read {target} in full with read_issue (every comment, mention, related PR and check), then write the comment."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
         draft = self.agents.inbox.create(
             "comment", self.agent_id, title, args["body"], job=job["id"], repo=name, target=target, evidence=job["evidence"], overview=overview
         )
@@ -1804,6 +1838,159 @@ class WorkTools:
         action = {"draft": None, "kind": "update_branch", "agent": self.agent_id, "job": job_id, "title": "", "sent": sent}
         await asyncio.to_thread(self.agents.inbox.add_action, action)
         return {"content": [{"type": "text", "text": f"{pr}: {result}"}]}
+
+    async def read_issue(self, args: dict) -> dict:
+        thread = args["thread"].strip()
+        repo, _, number = thread.rpartition("#")
+        if repo.count("/") != 1 or not number.isdigit():
+            return {"content": [{"type": "text", "text": "thread must be owner/name#number."}], "is_error": True}
+        try:
+            data = await asyncio.to_thread(get_issue_in_full, repo.split("/")[0], repo.split("/")[1], int(number))
+        except httpx.HTTPStatusError as error:
+            return {"content": [{"type": "text", "text": f"GitHub error {error.response.status_code}: {error.response.text[:300]}"}], "is_error": True}
+        except (httpx.HTTPError, ValueError) as error:
+            return {"content": [{"type": "text", "text": f"Could not read it from GitHub: {error}"}], "is_error": True}
+        if data is None:
+            return {"content": [{"type": "text", "text": f"{repo} has no issue or PR #{number}."}], "is_error": True}
+
+        result = {
+            "kind": "pr" if data["__typename"] == "PullRequest" else "issue",
+            "title": data["title"],
+            "url": data["url"],
+            "state": data["state"].lower(),
+            "opened": data["createdAt"],
+            "updated": data["updatedAt"],
+            "author": data["author"]["login"] if data["author"] else "ghost",
+            "author_role": data["authorAssociation"],
+            "labels": [label["name"] for label in data["labels"]["nodes"]],
+            "assignees": [person["login"] for person in data["assignees"]["nodes"]],
+            "body": data["body"] or "",
+            "comments": [],
+            "timeline": [],
+            "related_prs": [],
+        }
+        if data["__typename"] == "Issue":
+            result["state_reason"] = data["stateReason"]
+            result["milestone"] = data["milestone"]["title"] if data["milestone"] else None
+        # Every comment, in full.
+        for comment in data["comments"]["nodes"]:
+            author = comment["author"]["login"] if comment["author"] else "ghost"
+            role = "BOT" if comment["author"] and comment["author"]["__typename"] != "User" else comment["authorAssociation"]
+            result["comments"].append({"at": comment["createdAt"], "author": author, "role": role, "text": comment["body"]})
+
+        # The PRs tied to it: the ones that would close it, and every one that mentions it. Each once.
+        related = []
+        if data["__typename"] == "Issue":
+            for each in data["closedByPullRequestsReferences"]["nodes"]:
+                related.append((each, True))
+        # What happened to it, oldest first, in one line each.
+        for event in data["timelineItems"]["nodes"]:
+            kind = event["__typename"]
+            at = event.get("createdAt", "")
+            actor = (event.get("actor") or {}).get("login", "ghost")
+            line = ""
+            if kind == "CrossReferencedEvent":
+                source = event["source"]
+                where = f"{source['repository']['nameWithOwner']}#{source['number']}"
+                what = "PR" if source["__typename"] == "PullRequest" else "issue"
+                state = source["state"].lower()
+                if source["__typename"] == "PullRequest" and source.get("mergedAt"):
+                    state = "merged"
+                line = f"{at} {actor} mentioned it in {what} {where} ({state}): {source['title']}"
+                if event["willCloseTarget"]:
+                    line += ". That PR would close it"
+                if source["__typename"] == "PullRequest":
+                    related.append((source, event["willCloseTarget"]))
+            if kind == "ReferencedEvent" and event["commit"] is not None:
+                line = f"{at} {actor} referenced it in commit {event['commit']['oid'][:10]} of {event['commitRepository']['nameWithOwner']}: {event['commit']['messageHeadline']}"
+            if kind in ["ConnectedEvent", "DisconnectedEvent"] and event["subject"]:
+                linked = "linked" if kind == "ConnectedEvent" else "unlinked"
+                line = f"{at} {actor} {linked} #{event['subject']['number']} ({event['subject']['state'].lower()}): {event['subject']['title']}"
+            if kind in ["AssignedEvent", "UnassignedEvent"]:
+                person = (event.get("assignee") or {}).get("login", "someone")
+                line = f"{at} {actor} {'assigned' if kind == 'AssignedEvent' else 'unassigned'} {person}"
+            if kind in ["LabeledEvent", "UnlabeledEvent"]:
+                line = f"{at} {actor} {'added' if kind == 'LabeledEvent' else 'removed'} the label {event['label']['name']}"
+            if kind == "ClosedEvent":
+                line = f"{at} {actor} closed it"
+                closer = event.get("closer") or {}
+                if closer.get("__typename") == "PullRequest":
+                    line += f" with PR #{closer['number']} ({closer['url']})"
+                if closer.get("__typename") == "Commit":
+                    line += f" with commit {closer['oid'][:10]} ({closer['url']})"
+            if kind == "ReopenedEvent":
+                line = f"{at} {actor} reopened it"
+            if kind == "MarkedAsDuplicateEvent" and event.get("canonical"):
+                line = f"{at} {actor} marked it a duplicate of #{event['canonical']['number']} ({event['canonical']['url']})"
+            if line:
+                result["timeline"].append(line)
+
+        seen = []
+        for each, closes in related:
+            where = f"{each['repository']['nameWithOwner']}#{each['number']}"
+            if where in seen:
+                continue
+            seen.append(where)
+            state = "merged" if each["mergedAt"] else each["state"].lower()
+            rollup = each["commits"]["nodes"][0]["commit"]["statusCheckRollup"] if each["commits"]["nodes"] else None
+            result["related_prs"].append(
+                {
+                    "pr": where,
+                    "title": each["title"],
+                    "url": each["url"],
+                    "state": state,
+                    "draft": each["isDraft"],
+                    "author": each["author"]["login"] if each["author"] else "ghost",
+                    "opened": each["createdAt"],
+                    "review": each["reviewDecision"],
+                    "checks": rollup["state"] if rollup else None,
+                    "closes_it": closes,
+                    "newest_comments": [
+                        {"at": comment["createdAt"], "author": comment["author"]["login"] if comment["author"] else "ghost", "text": comment["body"][:1500]}
+                        for comment in each["comments"]["nodes"]
+                    ],
+                    "newest_reviews": [
+                        {"at": review["createdAt"], "author": review["author"]["login"] if review["author"] else "ghost", "state": review["state"], "text": review["body"][:1500]}
+                        for review in each["reviews"]["nodes"]
+                    ],
+                }
+            )
+
+        # The checks on the default branch's newest commit: failing there is not this change's doing.
+        branch = data["default_branch"]
+        rollup = branch["target"]["statusCheckRollup"] if branch and branch["target"] else None
+        failing = []
+        for context in (rollup["contexts"]["nodes"] if rollup else []):
+            if context.get("conclusion") in ["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"] or context.get("state") in ["FAILURE", "ERROR"]:
+                failing.append(context.get("name") or context.get("context"))
+        result["default_branch_checks"] = {"branch": branch["name"] if branch else None, "state": rollup["state"] if rollup else None, "failing": failing}
+
+        if data["__typename"] == "PullRequest":
+            head = data["commits"]["nodes"][0]["commit"] if data["commits"]["nodes"] else None
+            rollup = head["statusCheckRollup"] if head else None
+            failing = []
+            for context in (rollup["contexts"]["nodes"] if rollup else []):
+                if context.get("conclusion") in ["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"] or context.get("state") in ["FAILURE", "ERROR"]:
+                    failing.append(context.get("name") or context.get("context"))
+            result["pr"] = {
+                "draft": data["isDraft"],
+                "merged": data["merged"],
+                "base": data["baseRefName"],
+                "head": data["headRefName"],
+                "newest_commit": head["oid"] if head else None,
+                "mergeable": data["mergeable"],
+                "review": data["reviewDecision"],
+                "checks": {"state": rollup["state"] if rollup else None, "failing": failing},
+                "reviews": [],
+            }
+            for review in data["reviews"]["nodes"]:
+                author = review["author"]["login"] if review["author"] else "ghost"
+                role = "BOT" if review["author"] and review["author"]["__typename"] != "User" else review["authorAssociation"]
+                code = [{"path": comment["path"], "text": comment["body"]} for comment in review["comments"]["nodes"]]
+                result["pr"]["reviews"].append({"at": review["createdAt"], "author": author, "role": role, "state": review["state"], "text": review["body"], "on_code": code})
+
+        self.threads_read[thread.lower()] = time.time()
+        return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
     async def draft_question(self, args: dict) -> dict:
         question = args["question"].strip()

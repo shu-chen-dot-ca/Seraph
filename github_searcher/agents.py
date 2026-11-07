@@ -106,7 +106,7 @@ was missed one review round at a time.
 When an issue an agent has a job for goes from free to assigned (someone else is on it now: the
 tags say so, backend/issues_api.py), issue_taken() tells the agent who has it (the assignees' logins, or else the
 tags' reason), once per job, and puts that on the job's timeline. The user isn't asked: the agent finds out who that is
-(read_thread shows each person's role, search_issues their merged PRs there) and stops, cancelling its job with a note
+(read_issue shows each person's role, search_issues their merged PRs there) and stops, cancelling its job with a note
 on who took it, for a maintainer, a member or someone who often gets PRs merged there; for a new, unknown or bot-like
 account it goes on. The Inbox's "taken" items from before that still decide as they did: Keep working tells the agent
 to go on; Stop the agent cancels the job, and when the agent is busy with it right now, stops its turn and what it runs
@@ -175,7 +175,7 @@ LIVE_CHECK_SECONDS = 5
 # What an agent does when its job's issue was assigned to someone else (issue_taken): it decides itself,
 # the user isn't asked.
 TAKEN_ADVICE = (
-    " Decide yourself whether to go on; the user isn't asked. Find out who that is: read_thread shows the assignees and "
+    " Decide yourself whether to go on; the user isn't asked. Find out who that is: read_issue shows the assignees and "
     "each person's role (OWNER, MEMBER and COLLABORATOR are the project's own people; CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR, "
     "NONE and BOT are not), and search_issues how often their PRs get merged there (`repo:{repo} is:pr is:merged "
     "author:LOGIN`). A maintainer, a member, or someone who often gets PRs merged there: stop. Cancel {job} with "
@@ -1497,7 +1497,7 @@ class Agents:
             if job["kind"] != "follow_up" or job["thread"] != thread or job["status"] in ["done", "cancelled"]:
                 continue
             text = (
-                f"More on {thread} ({entry['title']}) for {job['id']}: {entry['reason']}. Read it again with read_thread and take "
+                f"More on {thread} ({entry['title']}) for {job['id']}: {entry['reason']}. Read it again with read_issue and take "
                 "it into account: reproduce anything new it reports or asks about in the VM before you act on it."
             )
             if entry["failed_sha"]:
@@ -1525,7 +1525,7 @@ class Agents:
         # Merged or closed: only its end to take in.
         if ended:
             text += (
-                f"\nIt is {entry['state']} now, so nothing more goes there. You own it for the user: read it with read_thread, "
+                f"\nIt is {entry['state']} now, so nothing more goes there. You own it for the user: read it with read_issue, "
                 f"then mark {job['id']} done (job_update) with a note on how it ended, and tidy up what you left for it in a "
                 "VM (its branch's note) the next time you hold that VM. If a maintainer asked something on the way out, a short "
                 f"reply is still fine: draft_comment with target {thread}."
@@ -1543,7 +1543,7 @@ class Agents:
             "or when its checks fail, you do the work it needs yourself and draft it, and the user approves every push and "
             "comment before it goes out (Approve sends it as them). Never ask the user to do any of it by hand: no push, "
             "rebase, conflict or edit for them to do. You never post, push or send anything yourself.\n"
-            "First read the whole thread with read_thread. Then reproduce what it reports or asks about, in the VM, before "
+            "First read the whole thread with read_issue: every comment and review, the mentions, the related PRs and the checks. Then reproduce what it reports or asks about, in the VM, before "
             "you change code or answer: the bug a reviewer saw, the failing check, the conflict with main, whether something "
             "works. Never act on reading alone; add what you saw as evidence. When it doesn't happen, change nothing and say "
             "so in a reply, with what you ran. A reviewer's case is one example of a kind: once it reproduces, find and test "

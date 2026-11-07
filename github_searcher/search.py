@@ -116,6 +116,121 @@ query($owner: String!, $name: String!, $number: Int!) {
 """
 
 
+# Everything about one issue or PR, for an agent right before it comments on it or takes it (agent/work_tools.py
+# read_issue): its text, every comment, its timeline (where it was mentioned: issues, PRs and commits; the PRs and issues
+# linked to it; assignments, labels, closing, reopening, duplicates), the PRs that would close it, with each related PR's
+# state, review decision, checks and newest comments and reviews, and the checks on the repo's default branch. A PR also
+# has its reviews, its branches, whether it conflicts and its own checks. Comments and the timeline come 100 at a time.
+READ_ISSUE_CHECKS = "statusCheckRollup { state contexts(first: 50) { nodes { ... on CheckRun { name conclusion status } ... on StatusContext { context state } } } }"
+READ_ISSUE_QUERY = """
+query($owner: String!, $name: String!, $number: Int!, $comments: String, $timeline: String) {
+  repository(owner: $owner, name: $name) {
+    defaultBranchRef { name target { ... on Commit { oid CHECKS } } }
+    issueOrPullRequest(number: $number) {
+      __typename
+      ... on Issue {
+        title body state stateReason createdAt updatedAt url authorAssociation author { login __typename }
+        labels(first: 30) { nodes { name } }
+        assignees(first: 10) { nodes { login } }
+        milestone { title }
+        comments(first: 100, after: $comments) { pageInfo { hasNextPage endCursor } nodes { ...Comment } }
+        timelineItems(first: 100, after: $timeline, itemTypes: [CROSS_REFERENCED_EVENT, REFERENCED_EVENT, CONNECTED_EVENT,
+          DISCONNECTED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT, LABELED_EVENT, UNLABELED_EVENT, CLOSED_EVENT, REOPENED_EVENT,
+          MARKED_AS_DUPLICATE_EVENT]) {
+          pageInfo { hasNextPage endCursor }
+          nodes { __typename ...Cross ...Referenced ...Connected ...Disconnected ...Assigned ...Unassigned ...Labeled ...Unlabeled ...Closed ...Reopened ...Duplicate }
+        }
+        closedByPullRequestsReferences(first: 20, includeClosedPrs: true) { nodes { ...Related } }
+      }
+      ... on PullRequest {
+        title body state isDraft merged mergedAt createdAt updatedAt url authorAssociation author { login __typename }
+        labels(first: 30) { nodes { name } }
+        assignees(first: 10) { nodes { login } }
+        baseRefName headRefName mergeable reviewDecision
+        commits(last: 1) { nodes { commit { oid CHECKS } } }
+        comments(first: 100, after: $comments) { pageInfo { hasNextPage endCursor } nodes { ...Comment } }
+        timelineItems(first: 100, after: $timeline, itemTypes: [CROSS_REFERENCED_EVENT, REFERENCED_EVENT, CONNECTED_EVENT,
+          DISCONNECTED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT, LABELED_EVENT, UNLABELED_EVENT, CLOSED_EVENT, REOPENED_EVENT,
+          MARKED_AS_DUPLICATE_EVENT]) {
+          pageInfo { hasNextPage endCursor }
+          nodes { __typename ...Cross ...Referenced ...Connected ...Disconnected ...Assigned ...Unassigned ...Labeled ...Unlabeled ...Closed ...Reopened ...Duplicate }
+        }
+        reviews(first: 100) {
+          nodes { body state createdAt authorAssociation author { login __typename } comments(first: 50) { nodes { body path createdAt author { login } } } }
+        }
+      }
+    }
+  }
+}
+fragment Comment on IssueComment { body createdAt authorAssociation author { login __typename } }
+fragment Related on PullRequest {
+  number title url state isDraft createdAt mergedAt repository { nameWithOwner } author { login } reviewDecision
+  commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+  comments(last: 10) { nodes { body createdAt author { login } } }
+  reviews(last: 5) { nodes { body state createdAt author { login } } }
+}
+fragment Cross on CrossReferencedEvent {
+  createdAt willCloseTarget actor { login }
+  source { __typename ... on Issue { number title url state repository { nameWithOwner } } ... on PullRequest { ...Related } }
+}
+fragment Referenced on ReferencedEvent { createdAt actor { login } commit { oid messageHeadline url } commitRepository { nameWithOwner } }
+fragment Connected on ConnectedEvent {
+  createdAt actor { login } subject { ... on Issue { number title url state } ... on PullRequest { number title url state } }
+}
+fragment Disconnected on DisconnectedEvent {
+  createdAt actor { login } subject { ... on Issue { number title url state } ... on PullRequest { number title url state } }
+}
+fragment Assigned on AssignedEvent { createdAt actor { login } assignee { ... on User { login } ... on Bot { login } } }
+fragment Unassigned on UnassignedEvent { createdAt actor { login } assignee { ... on User { login } ... on Bot { login } } }
+fragment Labeled on LabeledEvent { createdAt actor { login } label { name } }
+fragment Unlabeled on UnlabeledEvent { createdAt actor { login } label { name } }
+fragment Closed on ClosedEvent { createdAt actor { login } closer { __typename ... on PullRequest { number url } ... on Commit { oid url } } }
+fragment Reopened on ReopenedEvent { createdAt actor { login } }
+fragment Duplicate on MarkedAsDuplicateEvent {
+  createdAt actor { login } canonical { ... on Issue { number url } ... on PullRequest { number url } }
+}
+""".replace("CHECKS", READ_ISSUE_CHECKS)
+
+
+def get_issue_in_full(owner: str, repo: str, number: int) -> dict | None:
+    """READ_ISSUE_QUERY's issue or PR with every comment and timeline item (None: no issue or PR with that number), and
+    its repo's default branch as "default_branch". Never cached: it is read right before an agent decides."""
+    thread = None
+    after = {"comments": None, "timeline": None}
+    while True:
+        response = BALANCER.request(
+            "POST",
+            "https://api.github.com/graphql",
+            json={"query": READ_ISSUE_QUERY, "variables": {"owner": owner, "name": repo, "number": number, **after}},
+            timeout=60,
+        )
+        response.raise_for_status()
+        data = response.json()
+        if data.get("errors"):
+            raise ValueError(data["errors"][0]["message"])
+        if data["data"]["repository"] is None:
+            raise ValueError(f"GitHub has no repo {owner}/{repo}")
+        page = data["data"]["repository"]["issueOrPullRequest"]
+        if page is None:
+            return None
+        if thread is None:
+            thread = page
+            thread["default_branch"] = data["data"]["repository"]["defaultBranchRef"]
+        else:
+            thread["comments"]["nodes"] += page["comments"]["nodes"]
+            thread["timelineItems"]["nodes"] += page["timelineItems"]["nodes"]
+        more = False
+        # One that is done is asked from its end again, so it gives nothing more.
+        for key, field in [("comments", "comments"), ("timeline", "timelineItems")]:
+            info = page[field]["pageInfo"]
+            if info["endCursor"] is not None:
+                after[key] = info["endCursor"]
+            if info["hasNextPage"]:
+                more = True
+        if not more:
+            return thread
+
+
 def get_thread(owner: str, repo: str, number: int) -> dict:
     key = ("thread", owner, repo, number)
     if key in CACHE:
