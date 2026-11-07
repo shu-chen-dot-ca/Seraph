@@ -353,6 +353,19 @@ class Agents:
             # Its turn is cut off here: after the restart it is woken with this (start()).
             if agent.busy:
                 text = "The backend restarted in the middle of your turn; check my_jobs and carry on."
+                # Its runs go on in the VM through a restart (long_runs.py), but a log file of its own may still be empty
+                # then: it is told, so it doesn't take them for lost and start them again (reticle#1525).
+                runs = []
+                for vm_record in self.vms.list():
+                    for run in vm_record.runs:
+                        if run["agent"] == agent.id:
+                            runs.append(f"{run['id']} in {vm_record.name} (`{run['label'][:120]}`)")
+                if runs:
+                    text += (
+                        " A restart doesn't stop your runs: these go on in the VM until they end, and you get each one's result "
+                        "in a message then (a file it writes may stay empty until it ends), so don't start them again: "
+                        + "; ".join(runs) + "."
+                    )
                 self.pending[agent.id].insert(0, {"from": "System", "text": text, "shown": False})
             self.save(agent)
             await agent.stop()
