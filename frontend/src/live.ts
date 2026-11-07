@@ -1176,7 +1176,8 @@ export type WorkflowPRParts = {
 
 export type Topics = {
   repos: ListData<ListedRepo>;
-  issues: ListData<IssueItem>;
+  // catalog and order: the Dashboard's Issues board (moved to Catalog; every card's place), github_searcher/issue_list.py.
+  issues: ListData<IssueItem> & { catalog: string[]; order: string[]; held: string[] };
   tracked: ListData<TrackedRepo>;
   explore: ExploreData;
   github: GithubStatus | null;
@@ -1201,7 +1202,7 @@ export type Topics = {
 const store = {
   topics: {
     repos: { items: [], can_undo: false, can_redo: false },
-    issues: { items: [], can_undo: false, can_redo: false },
+    issues: { items: [], can_undo: false, can_redo: false, catalog: [], order: [], held: [] },
     tracked: { items: [], can_undo: false, can_redo: false },
     explore: { profile: { about: "", lanes: [] }, run: null, found: [] },
     github: null,

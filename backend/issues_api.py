@@ -71,6 +71,16 @@ class IdsRequest(BaseModel):
     ids: list[str]
 
 
+class IssueIdRequest(BaseModel):
+    id: str
+
+
+class BoardRequest(BaseModel):
+    catalog: list[str]
+    order: list[str]
+    held: list[str]
+
+
 @router.post("/issues/remove")
 def remove_issues(body: IdsRequest) -> dict:
     """Remove one or many issues (the page's multi-select) as one undo step. The ones an agent is working on stay:
@@ -101,6 +111,38 @@ def delete_issues(body: IdsRequest) -> dict:
             jobs.update(job["id"], status="cancelled")
             agents.notify(job["agent"], f"The user deleted the issue {job['issue']}, so {job['id']} ({job['title']}) is cancelled. Stop working on it and go on with your other jobs.")
     return issues.dismiss(body.ids)
+
+
+@router.post("/issues/board")
+def set_board(body: BoardRequest) -> dict:
+    """The Dashboard's Issues board after Add, Cancel, a drag, Pause or Resume: which issues are in Catalog, every card's
+    order, and which are paused (held)."""
+    issues.set_board(body.catalog, body.order, body.held)
+    return {"ok": True}
+
+
+@router.post("/issues/pause")
+async def pause_issue(body: IssueIdRequest) -> dict:
+    """Pause on the Dashboard's Issues board: the issue is held, and every open job for it is paused, its agent stopped
+    when it is working on it (Agents.pause_job), until Resume."""
+    board = issues.board()
+    held = [issue_id for issue_id in board["held"] if issue_id != body.id] + [body.id]
+    issues.set_board(board["catalog"], board["order"], held)
+    for job in jobs.list():
+        if job["issue"] == body.id and job["status"] in ("queued", "working", "waiting_on_user"):
+            await agents.pause_job(job["id"])
+    return {"ok": True}
+
+
+@router.post("/issues/resume")
+def resume_issue(body: IssueIdRequest) -> dict:
+    """Resume on the board: the issue isn't held anymore, and its paused jobs go on (Agents.resume_job)."""
+    board = issues.board()
+    issues.set_board(board["catalog"], board["order"], [issue_id for issue_id in board["held"] if issue_id != body.id])
+    for job in jobs.list():
+        if job["issue"] == body.id and job["status"] == "paused":
+            agents.resume_job(job["id"])
+    return {"ok": True}
 
 
 @router.post("/issues/restore")

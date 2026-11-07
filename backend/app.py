@@ -212,7 +212,7 @@ def topic_data(topic: str):
         for item in items:
             item["facts"] = facts.get(item["id"])
             item["tags"] = tags.get(item["id"])
-        return {"items": items, "can_undo": issues.can_undo(), "can_redo": issues.can_redo()}
+        return {"items": items, "can_undo": issues.can_undo(), "can_redo": issues.can_redo(), **issues.board()}
     # Each tracked repo carries its latest check (tracked_issues.py), like issues carry their facts, each issue
     # in it its tags (issue_tags.py), and the repo its signals (repo_signals.py), like on the Repos page.
     if topic == "tracked":

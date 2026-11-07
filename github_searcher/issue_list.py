@@ -2,7 +2,8 @@
 
 One JSON file, DATA_DIR/issues.json:
 
-    {"items": [IssueItem, ...], "undo": [[IssueItem, ...], ...], "redo": [[IssueItem, ...], ...], "dismissed": [id, ...]}
+    {"items": [IssueItem, ...], "undo": [[IssueItem, ...], ...], "redo": [[IssueItem, ...], ...], "dismissed": [id, ...],
+     "catalog": [id, ...], "order": [id, ...], "held": [id, ...]}
 
     IssueItem = {"id": "owner/name#n", "repo", "number", "title", "labels", "state", "comments",
                  "html_url", "note", "added_by": "user" | "<agent id>", "added_at"}
@@ -21,6 +22,13 @@ never added again by an agent or a bulk add (add skips them). Only the user addi
 (allow_dismissed) puts it back, and takes it off dismissed. An undo brings the item back but leaves it dismissed; undo
 snapshots hold the items only. restore puts dismissed ones back (Undo on the toast after the ×): the items are kept in
 memory when dismissed, so it works until the backend restarts.
+catalog and order are the Dashboard's Issues board: catalog the issues the user moved to its Catalog column (Add, or
+dragged there), order every card's place on the board, top to bottom (set_board, after a drag). Catalog's order is its
+priority: new agents take the top ones first (keep_catalog_agents in backend/issues_api.py), and a card taken
+leaves catalog (its job keeps it on the board). held is the
+issues paused (Pause on a Catalog or In progress card, backend/issues_api.py): their jobs are paused and their agents
+stop working on them (Agents.pause_job) until Resume. Neither is an undo
+step; ids no longer in the list are ignored.
 The backend keeps one IssueList that the API and every agent share, so each method takes the
 lock. version goes up by one on every change; the live feed compares it to see what to send.
 """
@@ -53,13 +61,16 @@ class IssueList:
         self.path = DATA_DIR / "issues.json"
         self.lock = threading.Lock()
         self.version = 0
-        self.data = {"items": [], "undo": [], "redo": [], "dismissed": []}
+        self.data = {"items": [], "undo": [], "redo": [], "dismissed": [], "catalog": [], "order": [], "held": []}
         # Dismissed items by id, for restore. In memory only.
         self.dismissed_items = {}
         if self.path.exists():
             self.data = json.loads(self.path.read_text())
-            # Lists from before dismissed have none.
+            # Lists from before dismissed and the board have none.
             self.data.setdefault("dismissed", [])
+            self.data.setdefault("catalog", [])
+            self.data.setdefault("order", [])
+            self.data.setdefault("held", [])
 
     def save(self) -> None:
         """Write the list to disk. Called with the lock held, after every change."""
@@ -72,6 +83,9 @@ class IssueList:
             "undo": self.data["undo"][-SAVED_STEPS:],
             "redo": self.data["redo"][-SAVED_STEPS:],
             "dismissed": self.data["dismissed"],
+            "catalog": self.data["catalog"],
+            "order": self.data["order"],
+            "held": self.data["held"],
         }
         temporary = self.path.with_name(self.path.name + ".tmp")
         temporary.write_text(json.dumps(saved))
@@ -158,6 +172,18 @@ class IssueList:
         """Put dismissed issues back as one undo step and take them off dismissed. Returns the ids put back."""
         items = [self.dismissed_items[issue_id] for issue_id in ids if issue_id in self.dismissed_items]
         return self.add(items, allow_dismissed=True)
+
+    def board(self) -> dict:
+        """The Issues board's {"catalog": [id, ...], "order": [id, ...], "held": [id, ...]}."""
+        with self.lock:
+            return {"catalog": list(self.data["catalog"]), "order": list(self.data["order"]), "held": list(self.data["held"])}
+
+    def set_board(self, catalog: list[str], order: list[str], held: list[str]) -> None:
+        with self.lock:
+            self.data["catalog"] = catalog
+            self.data["order"] = order
+            self.data["held"] = held
+            self.save()
 
     def dismissed(self) -> list[str]:
         with self.lock:
