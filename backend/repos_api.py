@@ -10,7 +10,8 @@ GitHub for its own spelling, stars and description, and added by the user as one
 
 Remove only takes repos off the list: nothing is blocked, so Explore and agents may find and add them again. It takes
 many repos at once (the page's multi-select), as one undo step, and stops tracking them too (an undo step on Tracked).
-When they have issues in the Issues list, the page asks whether those go too (an undo step on Issues).
+When they have issues in the Issues list, the page asks whether those go too (an undo step on Issues). The ones on the
+Issues board's Open and Catalog go either way, and so do an archived repo's (auto_remove_issues in backend/issues_api.py).
 
 A click on a card on the Dashboard's Repository page shows every open issue of the repo, read from GitHub each time
 (repo_issues), with the tags the app has for each, and whether those are complete: there are some, by the current
@@ -43,6 +44,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from backend.issues_api import auto_remove_issues
 from backend.shared import agents, issue_tags, issues, repo_signals, repos, tracked
 from github_searcher.issue_tags import RULES_VERSION
 from github_searcher.search import get_contents, get_open_issues, get_readme, get_repo_totals, get_repository, get_tree
@@ -132,6 +134,8 @@ def archive_repos(body: ArchiveRequest) -> dict:
     listed = [item["full_name"] for item in repos.items()]
     names = [name for name in body.names if name in listed]
     repos.set_archived(names, body.archived)
+    # Its issues on the Issues board's Open and Catalog go now, not after keep_tags' round.
+    auto_remove_issues()
     return {"archived": repos.archived()}
 
 
@@ -221,6 +225,8 @@ def remove_repos(body: RemoveRequest) -> dict:
         ids = [item["id"] for item in issues.items() if item["repo"].lower() in removed_lower]
         if ids:
             working = issues.remove(ids)["working"]
+    # Without issues too, the ones on the Issues board's Open and Catalog go, now rather than after keep_tags' round.
+    auto_remove_issues()
     return {"removed": removed, "working": working}
 
 

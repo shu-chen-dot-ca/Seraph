@@ -43,7 +43,9 @@ complexity (easy, medium, hard), scope not clear, and opened more than older_tha
 issues no agent has started (no job on them, or only cancelled ones), so work in progress never goes. Saving applies
 them at once; keep_tags applies them again after every round, so an issue that matches later goes then. Issues the
 user moved to Catalog stay too. Each time
-anything goes it is one undo step on the Issues page.
+anything goes it is one undo step on the Issues page. One rule is always on, whatever the robot says: an issue of a repo
+no longer in Repos, or archived there, goes from Open and Catalog alike (not one an agent has started). Deleting or
+archiving a repo applies it at once (backend/repos_api.py).
 
 The same robot's max_agents is how many agents work on the board's issues at once: agents with a job queued or working
 on an issue in the Issues list, or on a follow-up on a pull request. keep_catalog_agents() looks every
@@ -68,7 +70,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.shared import agents, issue_facts, issue_tags, issues, jobs, tracked, tracked_issues
+from backend.shared import agents, issue_facts, issue_tags, issues, jobs, repos, tracked, tracked_issues
 from github_searcher.issue_tags import CHECKS, DATA_DIR, NAME_VERSION, RULES_VERSION
 from github_searcher.search import CACHE, get_thread
 from sandbox.vms import VMsError
@@ -140,21 +142,31 @@ class AutoRemoveRequest(BaseModel):
 
 def auto_remove_issues() -> list[str]:
     """Take out of the Issues list what Remove automatically's rules pick, as one undo step; returns the ids taken out.
-    Only issues no agent has started: no job on them, or only cancelled ones."""
-    if not AUTO_REMOVE_FILE.is_file():
-        return []
-    rules = json.loads(AUTO_REMOVE_FILE.read_text())
+    Only issues no agent has started: no job on them, or only cancelled ones. Those of a repo no longer in Repos (or
+    archived there) always go, Catalog's too, whatever the rules."""
+    # Until saved once the rules are all off: only the repo rule takes anything.
+    rules = dict(AUTO_REMOVE_OFF)
+    if AUTO_REMOVE_FILE.is_file():
+        rules.update(json.loads(AUTO_REMOVE_FILE.read_text()))
     tags = issue_tags.all()
     facts = issue_facts.all()
     started = [job["issue"] for job in jobs.list() if job["issue"] is not None and job["status"] != "cancelled"]
-    # The user's picks in Catalog stay too.
-    started += issues.board()["catalog"]
+    catalog = issues.board()["catalog"]
+    # By repo name in lower case: an issue's repo may be spelled its own way.
+    archived = [name.lower() for name in repos.archived()]
+    in_repos = [item["full_name"].lower() for item in repos.items() if item["full_name"].lower() not in archived]
     cutoff = None
     if rules["older_than_days"] is not None:
         cutoff = datetime.now(UTC) - timedelta(days=rules["older_than_days"])
     picked = []
     for item in issues.items():
         if item["id"] in started:
+            continue
+        if item["repo"].lower() not in in_repos:
+            picked.append(item["id"])
+            continue
+        # The user's picks in Catalog stay.
+        if item["id"] in catalog:
             continue
         # The rules decide on tags read since it was added; keep_new_tags reads it again first.
         tag = tags.get(item["id"])
