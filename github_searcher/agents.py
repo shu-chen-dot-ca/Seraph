@@ -8,10 +8,9 @@ DATA_DIR/agents/<id>.json:
      "pending": [message, ...], "awake": bool, "archived_at": null | when it was archived,
      "name_by": "auto" | "user" | "agent"}
 
-name_by says who gave the name. An agent made without one gets the first free "agent-N" (auto); while it
-has that, it may name itself once, for the work it does (WorkTools.name_yourself), and the app tells it so
-with its first message or job. A name the user gave (user) is never changed by the agent, and one it gave
-itself (agent) stays too; the user can always rename it.
+name_by says who gave the name. Every agent is called "agent-N", the first free number (auto): agents don't name
+themselves, and the app gives its own agents (reviewers, workers, chat agents) no names either. Only the user renames
+one (user). Agents from before that were named for their work got the next free number once, by age (numbered).
 
 Any agent can be archived: it stops, its open jobs are cancelled and it leaves every VM queue, but its
 conversation stays, so it can pick up where it left off (an update on its PR). The app's messages to an
@@ -267,6 +266,23 @@ class Agents:
                 self.wake[agent.id].set()
             self.nudges[agent.id] = {"count": 0, "state": None}
             self.workers[agent.id] = asyncio.create_task(self.work(agent))
+
+        # Every agent is called agent-N: older ones named for their work (by themselves or the app) get the next free
+        # number, oldest first, once.
+        names = [agent.name for agent in self.agents.values()]
+        for agent in sorted(self.agents.values(), key=lambda each: each.record.get("created_at", "")):
+            if agent.record.get("numbered"):
+                continue
+            if not re.fullmatch(r"agent-\d+", agent.name):
+                number = 1
+                while f"agent-{number}" in names:
+                    number += 1
+                agent.name = f"agent-{number}"
+                agent.record["name"] = agent.name
+                agent.record["name_by"] = "auto"
+                names.append(agent.name)
+            agent.record["numbered"] = True
+            self.save(agent)
 
         # The queues are saved with the VMs: take out agents whose record is gone.
         for vm_record in self.vms.list():
@@ -580,6 +596,7 @@ class Agents:
             "created_at": datetime.now(UTC).isoformat(),
             "archived_at": None,
             "name_by": name_by,
+            "numbered": True,
             "repo": None,
             "live": None,
             "project": None,
@@ -697,11 +714,6 @@ class Agents:
         waiting = [message for message in self.pending[agent_id] if message["from"] == "User"]
         if len(waiting) >= MAX_QUEUED:
             raise ValueError(f"{MAX_QUEUED} messages already wait; send more when one has gone in")
-        # Its very first message: an agent with the automatic name hears it may name itself.
-        agent = self.agents[agent_id]
-        if agent.record["name_by"] == "auto" and not agent.history and not self.pending[agent_id]:
-            hint = f"You have the automatic name {agent.name}. Once you know what the user wants, give yourself a short name for that work with name_yourself."
-            self.pending[agent_id].append({"from": "System", "text": hint, "shown": False})
         self.pending[agent_id].append({"from": "User", "text": text.strip(), "shown": False})
         self.wake[agent_id].set()
         self.version += 1
@@ -828,8 +840,6 @@ class Agents:
         text = f"New job {job['id']}: {title}"
         if instructions:
             text += f"\nInstructions from the user: {instructions}"
-        if agent.record["name_by"] == "auto":
-            text += f"\nYou still have the automatic name {agent.name}: give yourself a short name for your work with name_yourself."
         if vm_name is None:
             text += "\nYou have no target VM: pick the VM that suits the job with vms_list and choose_vm, then queue_for_vm when ready."
         else:
@@ -862,8 +872,6 @@ class Agents:
         text = f"New job {job['id']}: {title}"
         if instructions:
             text += f"\nInstructions from the user: {instructions}"
-        if agent.record["name_by"] == "auto":
-            text += f"\nYou still have the automatic name {agent.name}: give yourself a short name for your work with name_yourself."
         if vm_name is None:
             text += "\nYou have no target VM. If the job needs one, pick the one that suits it with vms_list and choose_vm."
         else:
@@ -902,8 +910,6 @@ class Agents:
         )
         if instructions:
             text += f"\nInstructions from the user: {instructions}"
-        if agent.record["name_by"] == "auto":
-            text += f"\nYou still have the automatic name {agent.name}: give yourself a short name for your work with name_yourself."
         if vm_name is None:
             text += "\nYou have no target VM: pick the VM that suits the job with vms_list and choose_vm, then queue_for_vm when ready."
         else:
@@ -955,8 +961,6 @@ class Agents:
         )
         if instructions:
             text += f"\nInstructions from the user: {instructions}"
-        if agent.record["name_by"] == "auto":
-            text += f"\nYou still have the automatic name {agent.name}: give yourself a short name for your work with name_yourself."
         if vm_name is None:
             text += "\nYou have no target VM: pick the VM that suits the job with vms_list and choose_vm, then queue_for_vm when you have read the paper."
         else:
@@ -976,13 +980,7 @@ class Agents:
         vm_name (made by backend/repo_live_api.py). It is named after the repo. prepare_live() goes on from there."""
         if self.live_agent(repo) is not None:
             raise ValueError(f"{repo} has its agent already")
-        names = [agent.name for agent in self.agents.values()]
-        name = repo.split("/")[1]
-        number = 2
-        while name in names:
-            name = f"{repo.split('/')[1]}-{number}"
-            number += 1
-        created = self.create(name)
+        created = self.create()
         agent = self.agents[created["id"]]
         agent.record["repo"] = repo
         agent.record["live"] = {"state": "preparing", "error": None}
@@ -1127,17 +1125,12 @@ class Agents:
         project = self.projects.get(repo)
         if project is None:
             return
-        name = repo.split("/")[1]
         vm_names = [vm_record.name for vm_record in self.vms.list()]
         workers = [agent_id for agent_id in project["workers"] if agent_id in self.agents]
         for agent_id in workers:
             self.unarchive(agent_id)
         while len(workers) < project["agents"]:
-            names = [agent.name for agent in self.agents.values()]
-            number = 1
-            while f"{name}-dev-{number}" in names:
-                number += 1
-            created = self.create(f"{name}-dev-{number}")
+            created = self.create()
             agent = self.agents[created["id"]]
             agent.record["project"] = project["repo"]
             agent.record["role"] = "worker"
@@ -1156,13 +1149,7 @@ class Agents:
         if reviewer in self.agents:
             self.unarchive(reviewer)
         else:
-            names = [agent.name for agent in self.agents.values()]
-            reviewer_name = f"{name}-review"
-            number = 2
-            while reviewer_name in names:
-                reviewer_name = f"{name}-review-{number}"
-                number += 1
-            created = self.create(reviewer_name)
+            created = self.create()
             agent = self.agents[created["id"]]
             agent.record["project"] = project["repo"]
             agent.record["role"] = "reviewer"
@@ -1223,13 +1210,7 @@ class Agents:
                 if agent.record.get("role") == "reviewer" and agent.record.get("reviews") == draft["repo"].lower():
                     reviewer = agent.id
             if reviewer is None:
-                names = [agent.name for agent in self.agents.values()]
-                reviewer_name = f"{draft['repo'].split('/')[1]}-review"
-                number = 2
-                while reviewer_name in names:
-                    reviewer_name = f"{draft['repo'].split('/')[1]}-review-{number}"
-                    number += 1
-                created = self.create(reviewer_name)
+                created = self.create()
                 agent = self.agents[created["id"]]
                 agent.record["role"] = "reviewer"
                 agent.record["reviews"] = draft["repo"].lower()
@@ -1543,8 +1524,6 @@ class Agents:
         )
         if entry["kind"] == "pr" and not own_pr:
             text += "\nThe PR's code isn't the user's to change: a reply or nothing."
-        if agent.record["name_by"] == "auto":
-            text += f"\nYou still have the automatic name {agent.name}: give yourself a short name for your work with name_yourself."
         if vm_name is None:
             text += (
                 "\nYou have no target VM. Reproducing and a new version need one: pick it with vms_list and choose_vm, then "

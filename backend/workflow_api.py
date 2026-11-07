@@ -429,23 +429,13 @@ def workflow_agents(repo: str) -> None:
     record = workflow.get(repo)
     if record is None:
         return
-    base = repo.split("/")[1].lower()
-    if repo.lower() == SELF_REPO.lower():
-        base = "seraph"
-    names = [agent.name for agent in agents.agents.values()]
     vm_names = [vm_record.name for vm_record in vms.list()]
 
     chat = record["chat"]
     if chat in agents.agents:
         agents.unarchive(chat)
     else:
-        agent_name = f"{base}-chat"
-        number = 2
-        while agent_name in names:
-            agent_name = f"{base}-chat-{number}"
-            number += 1
-        created = agents.create(agent_name)
-        names.append(agent_name)
+        created = agents.create()
         agent = agents.agents[created["id"]]
         agent.record["workflow"] = record["repo"]
         agent.record["workflow_role"] = "chat"
@@ -461,11 +451,7 @@ def workflow_agents(repo: str) -> None:
     for agent_id in workers:
         agents.unarchive(agent_id)
     while len(workers) < record["agents"]:
-        number = 1
-        while f"{base}-worker-{number}" in names:
-            number += 1
-        created = agents.create(f"{base}-worker-{number}")
-        names.append(f"{base}-worker-{number}")
+        created = agents.create()
         agent = agents.agents[created["id"]]
         agent.record["workflow"] = record["repo"]
         agent.record["workflow_role"] = "worker"
@@ -484,12 +470,7 @@ def workflow_agents(repo: str) -> None:
     if reviewer in agents.agents:
         agents.unarchive(reviewer)
     else:
-        agent_name = f"{base}-reviewer"
-        number = 2
-        while agent_name in names:
-            agent_name = f"{base}-reviewer-{number}"
-            number += 1
-        created = agents.create(agent_name)
+        created = agents.create()
         agent = agents.agents[created["id"]]
         agent.record["workflow"] = record["repo"]
         agent.record["workflow_role"] = "reviewer"
