@@ -566,6 +566,10 @@ export type TrackedPR = {
   head: { repo: string; branch: string; sha: string } | null; // its branch and newest commit (null: the branch is gone)
   base: string | null; // the branch it goes into
   mergeable: "yes" | "conflicts" | "unknown"; // whether it conflicts with base (unknown while GitHub works it out)
+  // The lines it adds and removes and the files it changes; missing until it is read again.
+  additions?: number;
+  deletions?: number;
+  changed_files?: number;
   last_activity: ThreadActivity | null;
   your_last_at: string | null; // your newest comment or review there
   checked_at: string;
