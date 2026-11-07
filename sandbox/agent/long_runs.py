@@ -1,7 +1,7 @@
 """Long commands an agent runs in a VM (a test suite, a big install or build), apart from the call that started them.
 
 A run goes on by itself in the VM (setsid, its output in a file there), so it keeps going while its agent does
-other things, sleeps (it is woken to check on it), loses the VM (sandbox/vm_queue.py), or the backend restarts. Only the
+other things, steps aside so another agent can use the VM (sandbox/vm_queue.py), or the backend restarts. Only the
 VM stopping or restarting, the user's Stop (stop) or RUN_LIMIT_SECONDS end it early.
 
 Its agent either waits for it (the bash and run_tests tools wait up to FOREGROUND_SECONDS, then leave it going in

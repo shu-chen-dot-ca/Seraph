@@ -9,7 +9,7 @@
    - The evidence is real screenshots of the project running.
 4. **Review.** A reviewer agent checks every PR draft first, the way the project's maintainers will: every point the issue or a reviewer asked for, and the edge cases of its kind. Only then it lands in the Inbox. It has an **Overview** in plain words, with a **Checklist** of every point asked (what isn't done comes first) and what was **Also tested**, the **Diff**, and the **PR message** written to the project's contributing guide.
 5. **Send.** Approve rebuilds the change on your computer, pushes it to a new branch in your fork, and opens the pull request as you.
-6. **Follow up.** Every open PR of yours has an agent that owns it, and it hears about every change there: replies, reviews, checks, pushes, conflicts with main, labels, merged or closed. It first reproduces what was reported in a VM, and tests the rest of that kind of mistake too, then drafts the answer (inside a reviewer's conversation on a line of code when that is where they asked), the next version, a rebase, a new title and description, or one of the buttons you would click on GitHub (request a review again, ready for review, convert to draft, allow edits by maintainers, update branch, resolve conversations, close, reopen), and it comes back to the Inbox. Nothing is posted or pushed until you approve it.
+6. **Follow up.** Every open PR of yours has an agent that owns it, and it hears about every change there: replies, reviews, checks, pushes, conflicts with main, labels, merged or closed. It first reproduces what was reported in a VM, and tests the rest of that kind of mistake too, then drafts the answer, the next version, a rebase or a new title and description, and it comes back to the Inbox. Nothing is posted or pushed until you approve it.
 
 ## Judging repos
 
@@ -48,11 +48,7 @@ How hard the code is doesn't decide much: the agent writes hard code. What matte
 
 Agents only pick issues whose Merge is Likely. You can assign the others, except Fixed, Out of scope and Can't validate: a job that can't be proven ends with nothing to show. An agent that finds out mid-job that it can't validate a fix cancels the job itself, without asking.
 
-Every issue is also tagged **free**, **assigned**, **waiting** or **fixed**. An issue with a fix already posted in a comment counts as taken. If an issue gets taken while an agent works on it, the agent is told who took it and decides itself: it stops (and says who and why on the job) for a maintainer, a member of the project or someone who often gets PRs merged there, and keeps going for a new or unknown account.
-
-Some repos or issues want you to claim an issue before you start, often with a `/claim` comment. There the agent drafts that claim first, as **Claim owner/name#n** in your Inbox, and goes straight on with the fix without waiting for you or the maintainers. When you come back you find the claim and the PR, to approve in that order: the PR can't be sent before the claim is decided. If the maintainers assign someone else, the agent decides the same way as when an issue gets taken.
-
-Agents never ask maintainers or anyone else on GitHub for anything beyond what the issue or the project's rules ask for, and they assume nobody answers: open choices they decide themselves and explain in the PR.
+Every issue is also tagged **free**, **assigned**, **waiting** or **fixed**. An issue with a fix already posted in a comment counts as taken. If an issue gets taken while an agent works on it, the Inbox asks you whether to keep working or stop the agent.
 
 ## The Inbox
 
@@ -61,11 +57,9 @@ Agents never ask maintainers or anyone else on GitHub for anything beyond what t
 | **PR** | Overview, Diff, PR message | Opens the pull request as you, pushes a new version to one you already opened, or force-pushes a rebase of it |
 | **Comment** | Overview, Comment | Posts it as you |
 | **Edit** | Overview, Changes, Title and description | Changes the title and description of your own PR or issue |
-| **Action** | Overview, the comment posted with it (if any) | Does it on your own PR or issue: requests a review, marks it ready for review or a draft, allows edits by maintainers, updates the branch, resolves conversations, closes or reopens it |
 | **Question** | – | You **Reply**, or pick one of the answers the agent offers |
-| **Taken** | – | **Keep working** or **Stop the agent**. Only older ones: agents now decide this themselves |
-
-Agents only ask when it matters; small choices they make themselves and say so on the job. A question with answers to pick from has the one the agent recommends, and waits for you for the time set in **Settings** (10 minutes unless you change it): then the app picks the recommended answer and the agent goes on. A question about money, politics or another sensitive subject, what gets sent to GitHub, or deleting something that can't come back always waits for you, and so does one you answer in your own words. In **Settings** you choose which of those four always wait.
+| **Taken** | – | **Keep working** or **Stop the agent** |
+| **Report** | Overview, Results, Problems, Files | Ends a [paper](papers.md) job. Nothing is sent. |
 
 Before you decide, you can edit the text, **Redraft** with a note, or **Discuss** it with the agent. If you approve before signing in, **Send to GitHub** sends it later. **Download .patch** gives you the change as a file instead.
 

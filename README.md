@@ -35,7 +35,7 @@ You need Linux, Incus with KVM, Python 3.14 with uv, and Node 22. [Setup →](do
 
 ![Developing your own repository](docs/development.svg)
 
-[Development and releases →](docs/own-repositories.md)
+[Development and releases →](docs/own-repositories.md) · [Papers →](docs/papers.md)
 
 ## Live copy and updates
 

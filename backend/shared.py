@@ -31,7 +31,6 @@ from github_searcher.jobs import Jobs
 from github_searcher.notifications import Notifications
 from github_searcher.pr_tracking import PRTracking
 from github_searcher.projects import Projects
-from github_searcher.repo_groups import RepoGroups
 from github_searcher.repo_list import RepoList
 from github_searcher.repo_signals import RepoSignals
 from github_searcher.remote_access import RemoteAccess
@@ -70,7 +69,6 @@ queue = VMQueue(vms)
 artifacts = Artifacts()
 issue_drafts = IssueDrafts()
 projects = Projects(your_repositories)
-repo_groups = RepoGroups()
 agents = Agents(repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues, repo_signals, issue_tags, explore, artifacts, your_repositories, issue_drafts, projects, crashes)
 # The Workflow tab's repositories; its agents' tools reach it through Agents.
 workflow = Workflow(your_repositories, github_account)

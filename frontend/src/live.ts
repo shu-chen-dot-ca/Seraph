@@ -357,11 +357,12 @@ export type JobStatus = "queued" | "working" | "waiting_on_user" | "waiting_on_m
 
 export type Job = {
   id: string;
-  kind: string; // "fix_issue" | "task" | "follow_up" | "review" | "set_up_repo" | future kinds
+  kind: string; // "fix_issue" | "task" | "reproduce_paper" | future kinds
   title: string;
   agent: string;
   issue: string | null;
   thread: string | null; // follow_up: the PR or issue on GitHub it answers ("owner/name#n")
+  paper: string | null; // reproduce_paper: the PDF in the agent's artifacts ("papers/name.pdf")
   repo: string | null;
   vm: string | null;
   status: JobStatus;
@@ -402,7 +403,8 @@ export type TestRun = {
 };
 
 // What a draft is about, in plain words for the user (github_searcher/inbox.py). PRs have problem, cause, fix, risks,
-// checklist and also_tested; comments have problem and why.
+// checklist and also_tested; comments have problem and why. A report on a paper (draft_report) has paper, claims,
+// verdict, results, problems and unchecked.
 export type DraftOverview = {
   project?: string;
   problem?: string;
@@ -412,17 +414,29 @@ export type DraftOverview = {
   checklist?: ChecklistPoint[]; // every point that was asked, done or not (PRs from before it have none)
   also_tested?: string[]; // the cases of the same kind the agent ran beyond the asked example
   why?: string;
+  paper?: string;
+  claims?: string;
+  verdict?: string;
+  results?: ReportResult[];
+  problems?: ReportProblem[];
+  unchecked?: string[];
 };
 
 // One point a PR draft was asked for (the issue's requirement, or a reviewer's point): whether it does it, and what shows
 // it or why not.
 export type ChecklistPoint = { item: string; done: boolean; how: string };
 
+// One number of a paper next to the agent's (and what the authors' own code gives, "" when not run).
+export type ReportResult = { what: string; paper: string; ours: string; authors: string; note: string };
+
+// A problem the agent found in a paper; evidence is the command run on the job that shows it.
+export type ReportProblem = { title: string; what: string; why: string; evidence: string };
+
 export type DraftStatus = "pending" | "approved" | "rejected" | "replied";
 
 export type Draft = {
   id: string;
-  kind: "pr" | "comment" | "question" | "taken" | "edit" | "action"; // taken: old, made by the app when an issue an agent worked on was taken (agents decide that themselves now); edit: a new title and description for your own PR or issue; action: one change on your own PR or issue (DraftAction)
+  kind: "pr" | "comment" | "question" | "taken" | "report" | "edit"; // taken: old, made by the app when an issue an agent worked on was taken (agents decide that themselves now); report: on a paper; edit: a new title and description for your own PR or issue
   agent: string;
   job: string | null;
   repo: string | null;
@@ -457,17 +471,6 @@ export type Draft = {
   answer_by: string | null;
   must_wait: "money" | "sensitive" | "github" | "delete" | "open" | null;
   answered_by: "user" | "timer" | null; // who answered it, once it is answered
-  reply_to: number | null; // comment: a reply inside a PR's conversation on lines of code (the comment's id on GitHub)
-  action: DraftAction | null; // action: what it does (body: a comment posted with it, "" for none)
-};
-
-// An action draft: one change on your own PR or issue, the buttons you would click on GitHub (github_searcher/inbox.py).
-export type DraftAction = {
-  name: "request_review" | "ready_for_review" | "convert_to_draft" | "allow_maintainer_edits" | "update_branch" | "resolve" | "close" | "reopen";
-  reviewers: string[]; // request_review: their logins
-  conversations: string[]; // resolve: the review threads' ids
-  close_reason: "completed" | "not_planned" | null; // close, on an issue
-  head_sha: string; // a PR's newest commit when drafted
 };
 
 // A project's PR draft is reviewed by the project's reviewer before it reaches the Inbox (github_searcher/inbox.py).
@@ -492,7 +495,7 @@ export type DraftCommit = {
 
 // A PR or comment Approve sent to GitHub from your account. PRs keep what following them up will need.
 export type DraftSent = {
-  kind: "pr" | "comment" | "edit" | "action";
+  kind: "pr" | "comment" | "edit";
   url: string;
   number: number;
   repo: string;
@@ -508,9 +511,8 @@ export type DraftSent = {
   title?: string; // edit: the new title it set
   update?: boolean; // PR: a new version pushed onto a PR that was already open
   rebase_of?: string | null; // PR update: the PR's commit a rebase replaced (a force push)
-  comment_url?: string | null; // PR update or action: the comment posted with it (null: none was)
-  comment_error?: string | null; // PR update or action: why GitHub refused the comment, when it did (the rest went through)
-  action?: DraftAction["name"]; // action: which one was done
+  comment_url?: string | null; // PR update: the comment posted with it (null: none was)
+  comment_error?: string | null; // PR update: why GitHub refused the comment, when it did (the push went through)
 };
 
 // One of your PRs on GitHub and how it stands (github_searcher/pr_tracking.py): the ones Approve sent, and your
@@ -1161,13 +1163,6 @@ export type WorkflowPRParts = {
   tests?: { before: TestRun | null; after: TestRun | null };
 };
 
-// Your groups of repositories, in their order, and the ones pinned to the left list (github_searcher/repo_groups.py).
-// Repos are "owner/name" in lower case, each in one group at most.
-export type RepoGroups = {
-  groups: { name: string; repos: string[] }[];
-  pinned: string[];
-};
-
 // ---- The live store ----
 
 export type Topics = {
@@ -1190,7 +1185,6 @@ export type Topics = {
   projects: Project[];
   crashes: Crash[]; // the newest first
   workflow: WorkflowRepo[];
-  repo_groups: RepoGroups;
 };
 
 // Empty until the first message, so components never deal with "not loaded yet".
@@ -1230,7 +1224,6 @@ const store = {
     projects: [],
     crashes: [],
     workflow: [],
-    repo_groups: { groups: [], pinned: [] },
   } as Topics,
   loaded: {} as Partial<Record<keyof Topics, boolean>>,
   connected: false,

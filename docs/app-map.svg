@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 444" width="1280" height="444" role="img" aria-label="Seraph's left list in three parts. What waits for you: the Inbox with its Questions and Approvals tabs, and Notifications. Projects, private and open source: each project's board from Open to Done, one page per issue with its whole timeline, Find issues and Find projects, and the project's Agents and Settings. Agents and machines: Agents with each agent's chat, Machines with desktops and Images, and Settings." font-family="'Instrument Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 444" width="1280" height="444" role="img" aria-label="Seraph's three header tabs and their pages. Home, for finding and fixing issues on open source: Explore, Repos, Tracked, Issues, Jobs, Agents, VMs, Resource. GitHub, for following and answering your GitHub work: Overview, Inbox, Notifications, Tasks, Pull requests, Issues, Your repositories, Account. Workspace, for your own projects and research: Home, Pull requests, Papers, Settings, and a repository's page with Agents, Code, Issues, Pull requests, Commits, Actions, Development and Releases." font-family="'Instrument Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
   <style>
     .bg { fill: #faf9f7; }
     .lane { fill: #f2f0ec; stroke: #e3dfd8; }
@@ -21,60 +21,99 @@
   <rect class="bg" x="0" y="0" width="1280" height="444" rx="18"/>
 
   <text class="t" x="40" y="46" font-size="20" font-weight="600">The app</text>
-  <text class="m" x="1240" y="46" font-size="13" text-anchor="end">Go to finds anything by name or number. New starts any kind of work.</text>
+  <text class="m" x="1240" y="46" font-size="13" text-anchor="end">The same agents, VMs and Inbox behind all three tabs.</text>
 
-  <!-- What waits for you -->
+  <!-- Home -->
   <rect class="lane" x="40" y="76" width="380" height="316" rx="14"/>
-  <text class="t" x="64" y="108" font-size="17" font-weight="600">What waits for you</text>
-  <text class="m" x="64" y="130" font-size="12">Answer first, then approve</text>
+  <text class="t" x="64" y="108" font-size="17" font-weight="600">Home</text>
+  <text class="m" x="64" y="130" font-size="12">Find and fix issues on open source</text>
 
-  <rect class="key" x="60" y="150" width="340" height="110" rx="9"/>
-  <text class="accent" x="74" y="174" font-size="13" font-weight="600">Inbox</text>
-  <text class="t" x="74" y="198" font-size="12">Questions: an agent asked; some go ahead on a timer</text>
-  <text class="t" x="74" y="216" font-size="12">Approvals: send or merge, one by one or many at once</text>
-  <text class="m" x="74" y="244" font-size="11.5">Plain words first; the diff and exact text under Details</text>
+  <rect class="box" x="60" y="150" width="161" height="50" rx="9"/>
+  <text class="t" x="74" y="171" font-size="13" font-weight="600">Explore</text>
+  <text class="m" x="74" y="188" font-size="11.5">finds new repos</text>
+  <rect class="box" x="239" y="150" width="161" height="50" rx="9"/>
+  <text class="t" x="253" y="171" font-size="13" font-weight="600">Repos</text>
+  <text class="m" x="253" y="188" font-size="11.5">recommended repos</text>
 
-  <rect class="box" x="60" y="270" width="340" height="50" rx="9"/>
-  <text class="t" x="74" y="291" font-size="13" font-weight="600">Notifications</text>
-  <text class="m" x="74" y="308" font-size="11.5">from GitHub, each opening the issue it belongs to</text>
+  <rect class="box" x="60" y="210" width="161" height="50" rx="9"/>
+  <text class="t" x="74" y="231" font-size="13" font-weight="600">Tracked</text>
+  <text class="m" x="74" y="248" font-size="11.5">repos you watch</text>
+  <rect class="box" x="239" y="210" width="161" height="50" rx="9"/>
+  <text class="t" x="253" y="231" font-size="13" font-weight="600">Issues</text>
+  <text class="m" x="253" y="248" font-size="11.5">issues to assign</text>
 
-  <!-- Projects -->
+  <rect class="box" x="60" y="270" width="161" height="50" rx="9"/>
+  <text class="t" x="74" y="291" font-size="13" font-weight="600">Jobs</text>
+  <text class="m" x="74" y="308" font-size="11.5">steps of every job</text>
+  <rect class="box" x="239" y="270" width="161" height="50" rx="9"/>
+  <text class="t" x="253" y="291" font-size="13" font-weight="600">Agents</text>
+  <text class="m" x="253" y="308" font-size="11.5">chats and desktops</text>
+
+  <rect class="box" x="60" y="330" width="161" height="50" rx="9"/>
+  <text class="t" x="74" y="351" font-size="13" font-weight="600">VMs</text>
+  <text class="m" x="74" y="368" font-size="11.5">desktops and images</text>
+  <rect class="box" x="239" y="330" width="161" height="50" rx="9"/>
+  <text class="t" x="253" y="351" font-size="13" font-weight="600">Resource</text>
+  <text class="m" x="253" y="368" font-size="11.5">this computer</text>
+
+  <!-- GitHub -->
   <rect class="lane" x="450" y="76" width="380" height="316" rx="14"/>
-  <text class="t" x="474" y="108" font-size="17" font-weight="600">Projects</text>
-  <text class="m" x="474" y="130" font-size="12">Private (yours) and open source</text>
+  <text class="t" x="474" y="108" font-size="17" font-weight="600">GitHub</text>
+  <text class="m" x="474" y="130" font-size="12">Follow and answer your GitHub work</text>
 
-  <rect class="box" x="470" y="150" width="340" height="70" rx="9"/>
-  <text class="t" x="484" y="173" font-size="13" font-weight="600">A project's board</text>
-  <text class="t" x="484" y="194" font-size="12">Open · In progress · In review · Approval · Sent · Done</text>
-  <text class="m" x="484" y="211" font-size="11.5">Assign an open issue to an agent</text>
+  <rect class="box" x="470" y="150" width="161" height="50" rx="9"/>
+  <text class="t" x="484" y="171" font-size="13" font-weight="600">Overview</text>
+  <text class="m" x="484" y="188" font-size="11.5">at a glance</text>
+  <rect class="key" x="649" y="150" width="161" height="50" rx="9"/>
+  <text class="accent" x="663" y="171" font-size="13" font-weight="600">Inbox</text>
+  <text class="m" x="663" y="188" font-size="11.5">drafts to approve</text>
 
-  <rect class="box" x="470" y="230" width="340" height="50" rx="9"/>
-  <text class="t" x="484" y="251" font-size="13" font-weight="600">An issue's page</text>
-  <text class="m" x="484" y="268" font-size="11.5">its whole story on one timeline, with the proof</text>
+  <rect class="box" x="470" y="210" width="161" height="50" rx="9"/>
+  <text class="t" x="484" y="231" font-size="13" font-weight="600">Notifications</text>
+  <text class="m" x="484" y="248" font-size="11.5">from GitHub</text>
+  <rect class="box" x="649" y="210" width="161" height="50" rx="9"/>
+  <text class="t" x="663" y="231" font-size="13" font-weight="600">Tasks</text>
+  <text class="m" x="663" y="248" font-size="11.5">agent work by issue</text>
 
-  <rect class="box" x="470" y="290" width="161" height="50" rx="9"/>
-  <text class="t" x="484" y="311" font-size="13" font-weight="600">Find</text>
-  <text class="m" x="484" y="328" font-size="11.5">issues and projects</text>
-  <rect class="box" x="649" y="290" width="161" height="50" rx="9"/>
-  <text class="t" x="663" y="311" font-size="13" font-weight="600">Agents · Settings</text>
-  <text class="m" x="663" y="328" font-size="11.5">of each project</text>
+  <rect class="box" x="470" y="270" width="161" height="50" rx="9"/>
+  <text class="t" x="484" y="291" font-size="13" font-weight="600">Pull requests</text>
+  <text class="m" x="484" y="308" font-size="11.5">yours, full threads</text>
+  <rect class="box" x="649" y="270" width="161" height="50" rx="9"/>
+  <text class="t" x="663" y="291" font-size="13" font-weight="600">Issues</text>
+  <text class="m" x="663" y="308" font-size="11.5">yours, full threads</text>
 
-  <!-- Agents and machines -->
+  <rect class="box" x="470" y="330" width="161" height="50" rx="9"/>
+  <text class="t" x="484" y="351" font-size="13" font-weight="600">Your repositories</text>
+  <text class="m" x="484" y="368" font-size="11.5">code · PRs · Actions</text>
+  <rect class="box" x="649" y="330" width="161" height="50" rx="9"/>
+  <text class="t" x="663" y="351" font-size="13" font-weight="600">Account</text>
+  <text class="m" x="663" y="368" font-size="11.5">sign in with GitHub</text>
+
+  <!-- Workspace -->
   <rect class="lane" x="860" y="76" width="380" height="316" rx="14"/>
-  <text class="t" x="884" y="108" font-size="17" font-weight="600">Agents and machines</text>
-  <text class="m" x="884" y="130" font-size="12">The agents and where they work</text>
+  <text class="t" x="884" y="108" font-size="17" font-weight="600">Workspace</text>
+  <text class="m" x="884" y="130" font-size="12">Your own projects and research</text>
 
   <rect class="box" x="880" y="150" width="161" height="50" rx="9"/>
-  <text class="t" x="894" y="171" font-size="13" font-weight="600">Agents</text>
-  <text class="m" x="894" y="188" font-size="11.5">chats and jobs</text>
+  <text class="t" x="894" y="171" font-size="13" font-weight="600">Home</text>
+  <text class="m" x="894" y="188" font-size="11.5">your repositories</text>
   <rect class="box" x="1059" y="150" width="161" height="50" rx="9"/>
-  <text class="t" x="1073" y="171" font-size="13" font-weight="600">Machines</text>
-  <text class="m" x="1073" y="188" font-size="11.5">desktops and images</text>
+  <text class="t" x="1073" y="171" font-size="13" font-weight="600">Pull requests</text>
+  <text class="m" x="1073" y="188" font-size="11.5">every PR you're in</text>
 
-  <rect class="box" x="880" y="210" width="340" height="50" rx="9"/>
-  <text class="t" x="894" y="231" font-size="13" font-weight="600">Settings</text>
-  <text class="m" x="894" y="248" font-size="11.5">GitHub account · when agents ask you · theme · updates</text>
+  <rect class="box" x="880" y="210" width="161" height="50" rx="9"/>
+  <text class="t" x="894" y="231" font-size="13" font-weight="600">Papers</text>
+  <text class="m" x="894" y="248" font-size="11.5">reproduce a paper</text>
+  <rect class="box" x="1059" y="210" width="161" height="50" rx="9"/>
+  <text class="t" x="1073" y="231" font-size="13" font-weight="600">Settings</text>
+  <text class="m" x="1073" y="248" font-size="11.5">theme · updates</text>
 
-  <text class="m" x="40" y="424" font-size="13">On a phone the left list is a row of tabs at the bottom.</text>
+  <rect class="box" x="880" y="270" width="340" height="110" rx="9"/>
+  <text class="t" x="894" y="294" font-size="13" font-weight="600">A repository's page</text>
+  <text class="t" x="894" y="318" font-size="12">Agents · Code · Issues · Pull requests</text>
+  <text class="t" x="894" y="336" font-size="12">Commits · Actions · Development · Releases</text>
+  <text class="m" x="894" y="364" font-size="11.5">Development: agents work on it for you</text>
+
+  <text class="m" x="40" y="424" font-size="13">Below 768 px wide, one Menu drawer holds all three tabs.</text>
   <text class="m" x="1240" y="424" font-size="13" text-anchor="end">Pages update live; nothing needs a refresh.</text>
 </svg>

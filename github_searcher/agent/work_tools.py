@@ -15,10 +15,7 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   answers with draft_comment (target: the thread), draft_pr with pr (a new version of the user's own PR), or by
   marking the job done when nothing needs an answer. A question it drafts for the job is about the thread.
 - Drafts: nothing goes to GitHub from here. A PR, an issue comment or a question becomes a draft
-  in the user's Inbox and its job waits on the user. So does draft_action, one change on the user's own PR or issue,
-  the buttons they would click on GitHub: request a review, ready for review or back to draft, allow edits by
-  maintainers, update the branch, resolve conversations on lines of code, close, reopen. A comment with reply_to
-  answers inside one of a PR's conversations on lines of code instead of below it. A fix_issue job takes one comment only: the claim on its issue,
+  in the user's Inbox and its job waits on the user. A fix_issue job takes one comment only: the claim on its issue,
   when the repo's rules ask contributors to claim an issue or be assigned before they start ("Claim owner/name#n" in
   the Inbox). The claim holds nothing up: the job goes on to its PR while the claim waits for the user, and nobody waits
   for the maintainers to assign the user (we assume nobody answers). The user approves the claim, then the PR. A PR draft's diff is read from the repo
@@ -76,13 +73,20 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   long they take (up to TEST_TIMEOUT). It refuses until the agent read the rules (contributing_guide).
   The suite is a run (sandbox/agent/long_runs.py): run_tests waits for it up to long_runs.FOREGROUND_SECONDS, then
   it goes on in the background (background: true starts it that way). The agent can work on, or end its turn and
-  sleep, keeping the VM (agents.py wakes it every 30 minutes to check on the run). When it ends, finish_tests keeps the
+  step aside, so another agent uses the VM meanwhile (sandbox/vm_queue.py). When it ends, finish_tests keeps the
   result on the job (agents.py calls it for a run in the background); an after run counts only if the code is still
   the code it started on.
   A passing before is needed to go past set_up and an after for a PR draft; an official before of
   another job on the same repo and VM counts too (job_progress carries it over), so a project already
   set up isn't set up again. A follow_up job's new version of a PR needs only the after: the PR's first
   version had the before.
+- Papers: a reproduce_paper job (the Workspace tab's Papers page) has the user's PDF in the agent's artifacts. paper_read
+  shows it page by page, as pictures (formulas, tables and figures as printed) with their text; it only reads a job's
+  paper, which only the user puts there, so a file from a VM is never opened by a PDF reader on this computer.
+  draft_report puts the agent's report in the Inbox: in plain words what the paper is, claims and how it came out, the
+  paper's numbers next to the agent's (and the authors' code's), the problems it found, each with the command run
+  (evidence) that shows it, what it couldn't check and why, the full technical report, and its code from the VM (shown
+  like a diff, every file new). Approving it ends the job; nothing goes anywhere.
 - Artifacts: the agent's own folder on this computer (github_searcher/artifacts.py), the Artifacts tab of its page.
   It lists it, looks at its pictures and text (artifact_view: a picture comes back as a picture), keeps
   screenshots of its VM there, and copies files between it and the VM it holds; never anywhere else on this
@@ -92,8 +96,7 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
 - VMs: the agent sees every VM with what its image has (sandbox/images.py lists each image once) and
   its notes, and picks the one that suits its jobs as its target VM (the user can set it too). It can't make VMs.
   It joins its target VM's queue (sandbox/vm_queue.py) and releases the VM when its jobs there are done. While
-  only its run goes (a test suite, a build), it keeps the VM and sleeps (agents.py): it is woken when the run ends, or
-  every 30 minutes to check on it.
+  only its run goes (a test suite, a build), it steps aside instead (agents.py): it is in the VM's priority line then.
   The notes (sandbox/vms.py) say what agents and the user set up in a VM since it was made, so the next
   agent knows (e.g. that a project is already cloned and built there, and what was added on top). Only the
   agent holding the VM adds or removes them (vm_note_add, vm_note_remove), never the user's own. They come
@@ -120,7 +123,9 @@ import re
 import secrets
 import shlex
 import subprocess
+import tempfile
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx
 from claude_agent_sdk import tool
@@ -188,11 +193,6 @@ CHECKLIST_ITEM_CHARS = 200
 CHECKLIST_HOW_CHARS = 300
 ALSO_TESTED_MAX = 15
 ALSO_TESTED_CHARS = 250
-# What draft_action can do on the user's own PR or issue, by GitHub's own names for them, and the ones only a PR has.
-ACTIONS = ["request_review", "ready_for_review", "convert_to_draft", "allow_maintainer_edits", "update_branch", "resolve", "close", "reopen"]
-PR_ACTIONS = ["request_review", "ready_for_review", "convert_to_draft", "allow_maintainer_edits", "update_branch", "resolve"]
-# Why an issue is closed, as GitHub says it.
-CLOSE_REASONS = ["completed", "not_planned"]
 # A question's options are buttons in the Inbox: a few, each a few words.
 QUESTION_OPTIONS_MAX = 4
 QUESTION_OPTION_CHARS = 80
@@ -232,6 +232,16 @@ GUIDE_CHARS = 30_000
 GUIDE_TOTAL_CHARS = 120_000
 # A picture made with matplotlib says so in its file ("Software: Matplotlib version ..."): the agent drew it.
 MATPLOTLIB_MARK = b"matplotlib"
+# paper_read shows at most this many pages at once, each as a JPEG this many pixels on its long side (still sharp
+# enough for formulas and small print in tables).
+PAPER_PAGES = 10
+PAPER_PIXELS = 1400
+# A report: how many rows of numbers and how many problems at most, and how long each plain-words part may be.
+REPORT_RESULTS_MAX = 40
+REPORT_PROBLEMS_MAX = 10
+REPORT_CELL_CHARS = 200
+# A report's code: files in the folder up to this size (KiB) are shown; bigger ones are data or output, not code.
+REPORT_FILE_KIB = 1000
 # The overview's wording, said once for every tool that takes one.
 PLAIN = (
     "Plain words for someone who has never seen this project or its code: no function or file names, "
@@ -385,7 +395,7 @@ class WorkTools:
                 "Show the user where one of your jobs stands. They watch this to follow your work, and they don't know the project's "
                 "code. step: the step you are on now, one of the job's steps (my_jobs lists them; for fix_issue: understand, set_up, "
                 "reproduce, fix, test, draft; for set_up_repo: understand, set_up, show, introduce; for follow_up: understand, reproduce, "
-                "work, test, draft). Going back is fine, e.g. from test to fix when tests fail. headline: one sentence in "
+                "work, test, draft; for reproduce_paper: read, set_up, rebuild, compare, check, report). Going back is fine, e.g. from test to fix when tests fail. headline: one sentence in "
                 "everyday words on what you are doing and how it is going, for someone who doesn't know the code (no file, function or "
                 "test names, no jargon). detail: the same in technical terms (files, tests, errors), shown when they look closer. "
                 "about: what the job is about, in everyday words; set it once, when you understand the issue. Call this at every new "
@@ -417,8 +427,8 @@ class WorkTools:
                 f"Waits for the tests up to {long_runs.FOREGROUND_SECONDS // 60} minutes; still running then, they go on in the "
                 "background and you get the result in a message when they end. background: true starts them that way at once, "
                 "for a run you expect to take more than about 5 minutes (most full runs): then do what else you have in this VM "
-                "(not in the repo folder), or end your turn; you keep the VM, and you are woken when they end, or every 30 "
-                f"minutes to check on them. Stopped after {TEST_TIMEOUT // 3600} hours.",
+                "(not in the repo folder), or end your turn, and the VM goes to whoever waits meanwhile; you get it back first "
+                f"once the run is over. Stopped after {TEST_TIMEOUT // 3600} hours.",
                 {
                     "type": "object",
                     "properties": {
@@ -442,16 +452,13 @@ class WorkTools:
                 "(to assign, review, run checks, decide, answer): assume nobody replies. Nothing is posted: the user decides, "
                 "and you get a message with their decision. A reply's job waits on the user meanwhile; a claim's doesn't: go "
                 "straight on with the fix, without waiting for the user or the maintainers. "
-                "body is the comment as it would be posted. reply_to: on a PR, the id of a comment in one of its conversations "
-                "on lines of code (read_thread), to answer in that conversation instead of below the PR. project, problem and "
-                "why are only for the user, in the Inbox's overview. " + PLAIN,
+                "body is the comment as it would be posted. project, problem and why are only for the user, in the Inbox's overview. " + PLAIN,
                 {
                     "type": "object",
                     "properties": {
                         "job_id": {"type": "string"},
                         "target": {"type": "string"},
                         "body": {"type": "string"},
-                        "reply_to": {"type": "integer"},
                         "project": {"type": "string", "description": "One line: what the project is, e.g. 'matplotlib: a Python library that draws charts'."},
                         "problem": {"type": "string", "description": "What the issue is about: what goes wrong, for whom, when. Specific, 1 to 2 sentences."},
                         "why": {"type": "string", "description": "Why post this comment now, in 1 to 2 sentences. For a claim, the rule that asks for it."},
@@ -483,37 +490,6 @@ class WorkTools:
                 },
             )(self.draft_edit),
             tool(
-                "draft_action",
-                "Draft one change on one of the user's own PRs or issues (target: owner/name#number; a follow_up job's thread) "
-                "for the user's Inbox, the buttons the user would click on GitHub: request_review asks reviewers to look again "
-                "(reviewers: their logins; after a new version answers their points), ready_for_review marks a draft PR ready, "
-                "convert_to_draft makes it a draft again (it isn't ready after all), allow_maintainer_edits lets the project's "
-                "maintainers push to its branch (when one asks), update_branch merges the newest base branch into it on GitHub "
-                "(it is behind and the project wants it up to date, with no conflicts: a conflict needs a rebase, draft_pr with "
-                "rebase), resolve marks conversations on lines of code resolved (conversations: their ids from read_thread; only "
-                "once the change they asked for is on GitHub, and only where the project's people let the author resolve), close "
-                "(close_reason for an issue: completed or not_planned) and reopen. body: an optional comment posted with it, as "
-                "the user would write it (why it is closed, what changed for the reviewers); leave it out when a draft_pr or "
-                "draft_comment says it already. Nothing is done yet: the user decides, approving does it on GitHub as them, and "
-                "you get a message with their decision. project, problem and why are only for the user. " + PLAIN,
-                {
-                    "type": "object",
-                    "properties": {
-                        "job_id": {"type": "string"},
-                        "target": {"type": "string"},
-                        "action": {"type": "string", "enum": ACTIONS},
-                        "reviewers": {"type": "array", "items": {"type": "string"}},
-                        "conversations": {"type": "array", "items": {"type": "string"}},
-                        "close_reason": {"type": "string", "enum": CLOSE_REASONS},
-                        "body": {"type": "string"},
-                        "project": {"type": "string", "description": "One line: what the project is, e.g. 'matplotlib: a Python library that draws charts'."},
-                        "problem": {"type": "string", "description": "What happened on the PR or issue that calls for it, in 1 to 2 sentences."},
-                        "why": {"type": "string", "description": "Why do this now, in 1 to 2 sentences."},
-                    },
-                    "required": ["job_id", "target", "action", "project", "problem", "why"],
-                },
-            )(self.draft_action),
-            tool(
                 "draft_question",
                 "Ask the user a question through their Inbox, only when the answer matters. Small choices are yours (how to "
                 "test, names, which of two reasonable ways): decide, say what you chose and why with job_progress, and go on; "
@@ -543,6 +519,71 @@ class WorkTools:
                     "required": ["question"],
                 },
             )(self.draft_question),
+            tool(
+                "paper_read",
+                "Read the paper of one of your reproduce_paper jobs: its pages as pictures (formulas, tables and figures as "
+                f"printed), then their text. pages: one page ('3') or a range ('1-5'), at most {PAPER_PAGES} at a time. The "
+                "result says how many pages it has. Read every page, the appendix too, before you build anything.",
+                {
+                    "type": "object",
+                    "properties": {"job_id": {"type": "string"}, "pages": {"type": "string"}},
+                    "required": ["job_id", "pages"],
+                },
+            )(self.paper_read),
+            tool(
+                "draft_report",
+                "Put your report on a reproduce_paper job in the user's Inbox (only while you hold the VM): the last step. The "
+                "job waits on the user; approving it ends the job. Nothing is sent anywhere. paper, claims and verdict are for "
+                "the user, who doesn't know the field: " + PLAIN + " results: the paper's numbers next to yours, one row each "
+                "(what: e.g. 'age coefficient, MIMIC-IV'; paper and ours: the numbers as printed; authors: what the authors' own "
+                "code gives, when you ran it; note: a few words, e.g. 'same to 3 decimals'). problems: what you found wrong, "
+                "each proven by a command run on the job (evidence_add kind command, stage other, topic the problem's title) "
+                "that shows it: give that evidence id. No proof, no problem. unchecked: what you couldn't check and why (e.g. "
+                "'the hospital data is private'). body: the full report, technical, in markdown. code: the folder in the VM "
+                "with your code (e.g. ~/valoris): every file in it under 1 MB is shown to the user, so keep only your scripts "
+                "and small inputs there, no data downloads or results. No emoji.",
+                {
+                    "type": "object",
+                    "properties": {
+                        "job_id": {"type": "string"},
+                        "title": {"type": "string", "description": "One line: the paper and how it came out, e.g. 'VALORIS: the numbers reproduce, two claims don't hold'."},
+                        "paper": {"type": "string", "description": "One line: what the paper is, e.g. 'VALORIS: a way for hospitals to fit one model together without sharing patient records'."},
+                        "claims": {"type": "string", "description": "What the paper says it achieves, in 1 to 3 sentences."},
+                        "verdict": {"type": "string", "description": "How it came out, in 1 to 3 sentences: what reproduced, what didn't, what is wrong."},
+                        "results": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "what": {"type": "string"},
+                                    "paper": {"type": "string"},
+                                    "ours": {"type": "string"},
+                                    "authors": {"type": "string"},
+                                    "note": {"type": "string"},
+                                },
+                                "required": ["what", "paper", "ours"],
+                            },
+                        },
+                        "problems": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "title": {"type": "string", "description": "A few words, e.g. 'Privacy holds only on paper'."},
+                                    "what": {"type": "string", "description": "What is wrong, in plain words, 1 to 3 sentences."},
+                                    "why": {"type": "string", "description": "Why it matters: who or what it affects, 1 to 2 sentences."},
+                                    "evidence": {"type": "string", "description": "The id of the command run on the job that shows it (ev_...)."},
+                                },
+                                "required": ["title", "what", "why", "evidence"],
+                            },
+                        },
+                        "unchecked": {"type": "array", "items": {"type": "string"}},
+                        "body": {"type": "string"},
+                        "code": {"type": "string"},
+                    },
+                    "required": ["job_id", "title", "paper", "claims", "verdict", "results", "problems", "body", "code"],
+                },
+            )(self.draft_report),
             tool(
                 "artifacts_list",
                 "See what is in your artifacts: your own folder on the user's computer, the Artifacts tab of your page. The user "
@@ -866,8 +907,10 @@ class WorkTools:
             return "Asking: " + (args.get("question") or "").split("\n")[0][:120]
         if name == "draft_edit":
             return f"Drafting a new title and description for {args.get('target')}"
-        if name == "draft_action":
-            return f"Drafting {str(args.get('action')).replace('_', ' ')} on {args.get('target')}"
+        if name == "paper_read":
+            return f"Reading the paper, pages {args.get('pages')}"
+        if name == "draft_report":
+            return f"Drafting the report: {args.get('title')}"
         if name == "draft_pr" and args.get("pr") and args.get("rebase") is True:
             return f"Drafting a rebase of {args['pr']}: {args.get('title')}"
         if name == "draft_pr" and args.get("pr"):
@@ -1324,6 +1367,7 @@ class WorkTools:
                     "title": job["title"],
                     "issue": job["issue"],
                     "thread": job["thread"],
+                    "paper": job["paper"],
                     "repo": job["repo"],
                     "vm": job["vm"],
                     "status": job["status"],
@@ -1495,10 +1539,6 @@ class WorkTools:
         if job["status"] in CLOSED_STATUSES:
             text = f"{job['id']} is {job['status']} (the user may have cancelled it): no drafts for it anymore. Move on."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
-        reply_to = args.get("reply_to")
-        if reply_to is not None and job["kind"] == "fix_issue":
-            text = "A claim goes below the issue: leave reply_to out."
-            return {"content": [{"type": "text", "text": text}], "is_error": True}
         # We don't comment and wait for other people: a fix goes straight to a PR. The one comment on a fix_issue job is
         # the claim a repo's rules ask for before contributors start (Agents.decide parks the job until the user is assigned).
         title = f"Comment on {target}"
@@ -1516,27 +1556,8 @@ class WorkTools:
                     return {"content": [{"type": "text", "text": text}], "is_error": True}
             title = f"Claim {target}"
 
-        # An answer in a conversation on lines of code goes to its first comment: GitHub takes no replies to replies.
-        if reply_to is not None:
-            try:
-                thread = await asyncio.to_thread(get_thread, name.split("/")[0], name.split("/")[1], int(target.split("#")[1]))
-            except (httpx.HTTPError, ValueError) as error:
-                return {"content": [{"type": "text", "text": f"Could not read {target}: {error}"}], "is_error": True}
-            first = None
-            if thread is not None and thread["__typename"] == "PullRequest":
-                for conversation in thread["reviewThreads"]["nodes"]:
-                    ids = [line["databaseId"] for line in conversation["comments"]["nodes"]]
-                    if reply_to in ids:
-                        first = ids[0]
-            if first is None:
-                text = f"{reply_to} isn't a comment in a conversation on lines of code of {target}: use a comment's id from read_thread's conversations."
-                return {"content": [{"type": "text", "text": text}], "is_error": True}
-            reply_to = first
-            title = f"Reply in a conversation on {target}"
-
         draft = self.agents.inbox.create(
-            "comment", self.agent_id, title, args["body"], job=job["id"], repo=name, target=target, evidence=job["evidence"], overview=overview,
-            reply_to=reply_to,
+            "comment", self.agent_id, title, args["body"], job=job["id"], repo=name, target=target, evidence=job["evidence"], overview=overview
         )
         # A claim holds nothing up: the rules ask for it, so the user approves it, and nobody waits for the maintainers'
         # answer. The job goes on to its PR, which the user can only send once the claim is decided (github_account.py).
@@ -1643,145 +1664,6 @@ class WorkTools:
         )
         return {"content": [{"type": "text", "text": text}]}
 
-    async def draft_action(self, args: dict) -> dict:
-        try:
-            job = self.agents.jobs.get(args["job_id"])
-        except KeyError:
-            return {"content": [{"type": "text", "text": f"No job {args['job_id']}."}], "is_error": True}
-        if job["agent"] != self.agent_id:
-            return {"content": [{"type": "text", "text": f"{job['id']} is not your job."}], "is_error": True}
-        if job["status"] in CLOSED_STATUSES:
-            text = f"{job['id']} is {job['status']} (the user may have cancelled it): no drafts for it anymore. Move on."
-            return {"content": [{"type": "text", "text": text}], "is_error": True}
-        target = (args.get("target") or "").strip()
-        repo = target.split("#")[0]
-        if "#" not in target or repo.count("/") != 1 or not target.split("#")[-1].isdigit():
-            return {"content": [{"type": "text", "text": "target must be owner/name#number: the user's own PR or issue."}], "is_error": True}
-        action = args.get("action")
-        if action not in ACTIONS:
-            return {"content": [{"type": "text", "text": f"action is one of: {', '.join(ACTIONS)}."}], "is_error": True}
-        overview = {
-            "project": (args.get("project") or "").strip(),
-            "problem": (args.get("problem") or "").strip(),
-            "why": (args.get("why") or "").strip(),
-        }
-        for part, text in overview.items():
-            limit = OVERVIEW_PROJECT_CHARS if part == "project" else OVERVIEW_PART_CHARS
-            if not text:
-                return {"content": [{"type": "text", "text": f"Give {part}: the user reads it to decide."}], "is_error": True}
-            if len(text) > limit:
-                text = f"{part} is {len(text)} characters; keep it under {limit}. Short and plain: the user reads it at a glance."
-                return {"content": [{"type": "text", "text": text}], "is_error": True}
-        body = (args.get("body") or "").strip()
-        found = EMOJI.findall(" ".join([body] + list(overview.values())))
-        if found:
-            return {"content": [{"type": "text", "text": NO_EMOJI + " ".join(sorted(set(found)))}], "is_error": True}
-
-        # As it is now, never cached: what the user approves still fits it (sending checks it again).
-        owner = repo.split("/")[0]
-        name = repo.split("/")[1]
-        number = int(target.split("#")[1])
-        pull = None
-        try:
-            pull = await asyncio.to_thread(get_pr_status, owner, name, number)
-        except (httpx.HTTPError, ValueError):
-            # GraphQL says "Could not resolve" for a number that is an issue when asked for a PR.
-            pull = None
-        thread = pull
-        if pull is None:
-            try:
-                thread = await asyncio.to_thread(get_issue_status, owner, name, number)
-            except (httpx.HTTPError, ValueError) as error:
-                return {"content": [{"type": "text", "text": f"Could not read {target}: {error}"}], "is_error": True}
-        if thread is None:
-            return {"content": [{"type": "text", "text": f"{target} is not a PR or issue on GitHub."}], "is_error": True}
-        if pull is None and action in PR_ACTIONS:
-            return {"content": [{"type": "text", "text": f"{target} is an issue: {action} is only for a PR."}], "is_error": True}
-        # Only the user's own: with their sign-in the app knows who they are (sending checks it again).
-        account = self.agents.your_repositories.github_account.status()
-        author = ""
-        if thread["author"] is not None:
-            author = thread["author"]["login"]
-        if account["connected"] and author.lower() != account["login"].lower():
-            text = f"{target} was opened by {author}, not the user: draft_action is only for the user's own PR or issue."
-            return {"content": [{"type": "text", "text": text}], "is_error": True}
-
-        # Only what changes something on GitHub.
-        state = thread["state"].lower()
-        if action == "reopen" and state != "closed":
-            return {"content": [{"type": "text", "text": f"{target} is {state}: only a closed one can be reopened."}], "is_error": True}
-        if action != "reopen" and state != "open":
-            return {"content": [{"type": "text", "text": f"{target} is {state}: {action} is only for an open one."}], "is_error": True}
-        if action == "ready_for_review" and not pull["isDraft"]:
-            return {"content": [{"type": "text", "text": f"{target} isn't a draft: it is ready for review already."}], "is_error": True}
-        if action == "convert_to_draft" and pull["isDraft"]:
-            return {"content": [{"type": "text", "text": f"{target} is a draft already."}], "is_error": True}
-        if action == "allow_maintainer_edits" and pull["maintainerCanModify"]:
-            return {"content": [{"type": "text", "text": f"{target} lets maintainers edit it already."}], "is_error": True}
-        if action == "update_branch" and pull["mergeable"] == "CONFLICTING":
-            text = f"{target} conflicts with {pull['baseRefName']}: GitHub can't update it. Rebase it in the VM and draft_pr with rebase: true."
-            return {"content": [{"type": "text", "text": text}], "is_error": True}
-
-        reviewers = []
-        for login in args.get("reviewers") or []:
-            login = login.strip().lstrip("@")
-            if login != "" and login not in reviewers:
-                reviewers.append(login)
-        if action == "request_review" and not reviewers:
-            return {"content": [{"type": "text", "text": "Give reviewers: the GitHub logins of the people to ask."}], "is_error": True}
-        if author.lower() in [login.lower() for login in reviewers]:
-            return {"content": [{"type": "text", "text": "The user can't review their own PR: leave them out of reviewers."}], "is_error": True}
-
-        conversations = []
-        for conversation_id in args.get("conversations") or []:
-            if conversation_id.strip() != "" and conversation_id.strip() not in conversations:
-                conversations.append(conversation_id.strip())
-        if action == "resolve":
-            if not conversations:
-                return {"content": [{"type": "text", "text": "Give conversations: the ids of the ones to resolve, from read_thread."}], "is_error": True}
-            try:
-                data = await asyncio.to_thread(get_thread, owner, name, number)
-            except (httpx.HTTPError, ValueError) as error:
-                return {"content": [{"type": "text", "text": f"Could not read {target}: {error}"}], "is_error": True}
-            open_ids = [conversation["id"] for conversation in data["reviewThreads"]["nodes"] if not conversation["isResolved"]]
-            unknown = [conversation_id for conversation_id in conversations if conversation_id not in open_ids]
-            if unknown:
-                text = f"{', '.join(unknown)}: not open conversations on {target}. Use the ids of unresolved ones from read_thread."
-                return {"content": [{"type": "text", "text": text}], "is_error": True}
-
-        close_reason = None
-        if action == "close" and pull is None:
-            close_reason = args.get("close_reason") or "completed"
-
-        head_sha = ""
-        if pull is not None:
-            head_sha = pull["headRefOid"]
-
-        who = ", ".join(f"@{login}" for login in reviewers)
-        titles = {
-            "request_review": f"Request a review from {who} on {target}",
-            "ready_for_review": f"Mark {target} ready for review",
-            "convert_to_draft": f"Convert {target} to draft",
-            "allow_maintainer_edits": f"Allow edits by maintainers on {target}",
-            "update_branch": f"Update the branch of {target}",
-            "resolve": f"Resolve {len(conversations)} conversations on {target}",
-            "close": f"Close {target}",
-            "reopen": f"Reopen {target}",
-        }
-        if action == "resolve" and len(conversations) == 1:
-            titles["resolve"] = f"Resolve a conversation on {target}"
-        record = {"name": action, "reviewers": reviewers, "conversations": conversations, "close_reason": close_reason, "head_sha": head_sha}
-        draft = self.agents.inbox.create(
-            "action", self.agent_id, titles[action], body, job=job["id"], repo=repo, target=target, evidence=job["evidence"],
-            overview=overview, action=record,
-        )
-        self.agents.jobs.update(job["id"], status="waiting_on_user", drafts=job["drafts"] + [draft["id"]])
-        text = (
-            f"{draft['id']} is in the user's Inbox. Nothing was done on GitHub: the user decides, and you'll get a message "
-            f"with their decision. {job['id']} waits on the user now; move on to your next job."
-        )
-        return {"content": [{"type": "text", "text": text}]}
-
     async def draft_question(self, args: dict) -> dict:
         question = args["question"].strip()
         if not question:
@@ -1854,6 +1736,201 @@ class WorkTools:
         )
         self.agents.jobs.update(job["id"], status="waiting_on_user", drafts=job["drafts"] + [draft["id"]])
         text = f"Your question is in the user's Inbox. {job['id']} waits on the user now; move on to your next job. " + answer
+        return {"content": [{"type": "text", "text": text}]}
+
+    async def paper_read(self, args: dict) -> dict:
+        try:
+            job = self.agents.jobs.get(args["job_id"])
+        except KeyError:
+            return {"content": [{"type": "text", "text": f"No job {args['job_id']}."}], "is_error": True}
+        if job["agent"] != self.agent_id:
+            return {"content": [{"type": "text", "text": f"{job['id']} is not your job."}], "is_error": True}
+        if job["paper"] is None:
+            return {"content": [{"type": "text", "text": f"{job['id']} has no paper."}], "is_error": True}
+        try:
+            target = self.agents.artifacts.resolve(self.agent_id, job["paper"])
+        except ArtifactsError as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        if not target.is_file():
+            text = f"{job['paper']} is not in your artifacts anymore (the user may have moved it); ask the user where it is."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        info = await asyncio.to_thread(subprocess.run, ["pdfinfo", str(target)], capture_output=True, text=True, timeout=60)
+        match = re.search(r"^Pages:\s+(\d+)", info.stdout, re.MULTILINE)
+        if info.returncode != 0 or match is None:
+            return {"content": [{"type": "text", "text": f"Could not read {job['paper']} as a PDF: {info.stderr.strip()}"}], "is_error": True}
+        total = int(match.group(1))
+        parts = (args.get("pages") or "").replace(" ", "").split("-")
+        if len(parts) > 2 or not all(part.isdigit() for part in parts):
+            return {"content": [{"type": "text", "text": "pages is one page ('3') or a range ('1-5')."}], "is_error": True}
+        first = int(parts[0])
+        last = int(parts[-1])
+        if first < 1 or last < first or first > total:
+            return {"content": [{"type": "text", "text": f"The paper has pages 1 to {total}."}], "is_error": True}
+        last = min(last, total, first + PAPER_PAGES - 1)
+
+        content = [{"type": "text", "text": f"{job['paper']}: pages {first} to {last} of {total}, as pictures, then their text."}]
+        with tempfile.TemporaryDirectory() as folder:
+            command = ["pdftoppm", "-f", str(first), "-l", str(last), "-scale-to", str(PAPER_PIXELS), "-jpeg", "-jpegopt", "quality=80", str(target), f"{folder}/page"]
+            render = await asyncio.to_thread(subprocess.run, command, capture_output=True, text=True, timeout=300)
+            if render.returncode != 0:
+                return {"content": [{"type": "text", "text": f"Could not show the pages: {render.stderr.strip()}"}], "is_error": True}
+            # page-01.jpg, page-02.jpg, ...: the same width of number, so they sort in page order.
+            for picture in sorted(Path(folder).glob("page*.jpg")):
+                data = await asyncio.to_thread(picture.read_bytes)
+                content.append({"type": "image", "data": base64.b64encode(data).decode(), "mimeType": "image/jpeg"})
+        words = await asyncio.to_thread(subprocess.run, ["pdftotext", "-layout", "-f", str(first), "-l", str(last), str(target), "-"], capture_output=True, text=True, timeout=120)
+        text = words.stdout.strip()[:50_000]
+        if text == "":
+            text = "(These pages have no text layer: read the pictures.)"
+        if last < total:
+            text += f"\n\n[Pages {last + 1} to {total} are next.]"
+        content.append({"type": "text", "text": text})
+        return {"content": content}
+
+    async def draft_report(self, args: dict) -> dict:
+        try:
+            job = self.agents.jobs.get(args["job_id"])
+        except KeyError:
+            return {"content": [{"type": "text", "text": f"No job {args['job_id']}."}], "is_error": True}
+        if job["agent"] != self.agent_id:
+            return {"content": [{"type": "text", "text": f"{job['id']} is not your job."}], "is_error": True}
+        if job["kind"] != "reproduce_paper":
+            return {"content": [{"type": "text", "text": "draft_report is for reproduce_paper jobs."}], "is_error": True}
+        if job["status"] in CLOSED_STATUSES:
+            text = f"{job['id']} is {job['status']} (the user may have cancelled it): no drafts for it anymore. Move on."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        title = (args.get("title") or "").strip()
+        body = (args.get("body") or "").strip()
+        if title == "" or body == "":
+            return {"content": [{"type": "text", "text": "Give the report a title and a body."}], "is_error": True}
+
+        # The user reads these first: they must be there, and short.
+        overview = {
+            "paper": (args.get("paper") or "").strip(),
+            "claims": (args.get("claims") or "").strip(),
+            "verdict": (args.get("verdict") or "").strip(),
+        }
+        for part, text in overview.items():
+            limit = OVERVIEW_PROJECT_CHARS if part == "paper" else OVERVIEW_PART_CHARS
+            if not text:
+                return {"content": [{"type": "text", "text": f"Give {part}: the user reads it to understand the report."}], "is_error": True}
+            if len(text) > limit:
+                text = f"{part} is {len(text)} characters; keep it under {limit}. Short and plain: the user reads it at a glance."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        results = []
+        for row in args.get("results") or []:
+            result = {
+                "what": str(row.get("what") or "").strip(),
+                "paper": str(row.get("paper") or "").strip(),
+                "ours": str(row.get("ours") or "").strip(),
+                "authors": str(row.get("authors") or "").strip(),
+                "note": str(row.get("note") or "").strip(),
+            }
+            if result["what"] == "" or result["paper"] == "" or result["ours"] == "":
+                return {"content": [{"type": "text", "text": "Every row of results needs what, paper and ours."}], "is_error": True}
+            for value in result.values():
+                if len(value) > REPORT_CELL_CHARS:
+                    text = f"A row of results has a part of {len(value)} characters; keep each under {REPORT_CELL_CHARS}."
+                    return {"content": [{"type": "text", "text": text}], "is_error": True}
+            results.append(result)
+        if len(results) > REPORT_RESULTS_MAX:
+            text = f"{len(results)} rows of results; keep it to the {REPORT_RESULTS_MAX} that matter most, the rest goes in the body."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        # Each problem is proven by a command run on the job: its output shows the problem.
+        commands = [item["id"] for item in job["evidence"] if item["kind"] == "command"]
+        problems = []
+        for row in args.get("problems") or []:
+            problem = {
+                "title": str(row.get("title") or "").strip(),
+                "what": str(row.get("what") or "").strip(),
+                "why": str(row.get("why") or "").strip(),
+                "evidence": str(row.get("evidence") or "").strip(),
+            }
+            if problem["title"] == "" or problem["what"] == "" or problem["why"] == "":
+                return {"content": [{"type": "text", "text": "Every problem needs a title, what and why."}], "is_error": True}
+            if len(problem["title"]) > REPORT_CELL_CHARS or len(problem["what"]) > OVERVIEW_PART_CHARS or len(problem["why"]) > OVERVIEW_PART_CHARS:
+                text = f"Keep a problem's title under {REPORT_CELL_CHARS} characters, and what and why under {OVERVIEW_PART_CHARS} each."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+            if problem["evidence"] not in commands:
+                text = (
+                    f"\"{problem['title']}\" has no proof: evidence must be the id of a command run on {job['id']} that shows it "
+                    "(evidence_add kind command, stage other, topic the problem's title; my_jobs lists them). A problem you "
+                    "can't show with a run is not a problem yet: check it, or leave it out."
+                )
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+            problems.append(problem)
+        if len(problems) > REPORT_PROBLEMS_MAX:
+            text = f"{len(problems)} problems; keep the {REPORT_PROBLEMS_MAX} that matter most, the rest goes in the body."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        unchecked = [str(item).strip() for item in (args.get("unchecked") or []) if str(item).strip()]
+        overview["results"] = results
+        overview["problems"] = problems
+        overview["unchecked"] = unchecked
+
+        everything = [title, body] + [overview["paper"], overview["claims"], overview["verdict"]] + unchecked
+        for row in results + problems:
+            everything += list(row.values())
+        found = EMOJI.findall(" ".join(everything))
+        if found:
+            return {"content": [{"type": "text", "text": NO_EMOJI + " ".join(sorted(set(found)))}], "is_error": True}
+
+        vm_name = self.record["target_vm"]
+        if vm_name is None:
+            return {"content": [{"type": "text", "text": "You have no target VM."}], "is_error": True}
+        try:
+            vm_record = self.agents.vms.get(vm_name)
+        except VMsError as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        desktop = vm_record.holding(self.agent_id)
+        if desktop is None:
+            text = "You don't hold a VM. Call queue_for_vm and wait for the message that it is yours."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        # The desktop it holds: commands run as its user, in its home folder.
+        vm = vm_record.desktop_vm(desktop)
+
+        # The code, as a diff where every file is new, so the Inbox shows it like a PR's. Files over REPORT_FILE_KIB are
+        # left out: data and results, not code. git diff --no-index exits 1 when the files differ, which they always do.
+        code = (args.get("code") or "").strip()
+        folder = shlex.quote(code.removeprefix("~/") or ".")
+        command = (
+            f"cd -- {folder} && find . -type f -not -path './.git/*' -size -{REPORT_FILE_KIB}k -printf '%P\\n' | sort | "
+            f"while read -r file; do git diff --no-index --no-color -- /dev/null \"$file\"; done | head -c {DIFF_LIMIT + 1}"
+        )
+        try:
+            result = await asyncio.to_thread(vm.exec, command, 120)
+        except Exception as error:
+            return {"content": [{"type": "text", "text": f"Could not reach the VM: {error}"}], "is_error": True}
+        diff = result.stdout
+        if diff.strip() == "":
+            text = f"Found no code in {code} ({result.stderr.strip() or 'no files under 1 MB'}). code is the folder in the VM with your scripts; git must be installed."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if len(diff.encode()) > DIFF_LIMIT:
+            text = f"The code in {code} is over {DIFF_LIMIT // 1000} KB. Keep only your scripts and small inputs there: move data and results out."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        # The code is shown in the Inbox and sent to the browser: a secret must never be in it. Named by its variable.
+        for env_name, value in list(vm_record.global_env.items()) + list(vm_record.env.items()):
+            if len(value) >= HIDE_MIN_LENGTH and value in diff:
+                text = f"The code contains the value of the environment variable {env_name}. Take it out (read it as ${env_name}), then try again."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+
+        # The user may have cancelled the job while the command ran.
+        job = self.agents.jobs.get(job["id"])
+        if job["status"] in CLOSED_STATUSES:
+            text = f"{job['id']} is {job['status']} now (the user may have cancelled it): no draft was made. Move on."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        draft = self.agents.inbox.create(
+            "report", self.agent_id, title, body, job=job["id"], diff=diff, vm=vm_name, path=code, evidence=job["evidence"], overview=overview
+        )
+        self.agents.jobs.update(job["id"], status="waiting_on_user", step="report", drafts=job["drafts"] + [draft["id"]])
+        files = len([line for line in diff.split("\n") if line.startswith("diff --git ")])
+        text = (
+            f"{draft['id']} is in the user's Inbox: {len(results)} results, {len(problems)} problems, {files} files of code. "
+            f"Nothing was sent anywhere. {job['id']} waits on the user now; release_vm if nothing else needs {vm_name}, and "
+            "you'll get a message with their decision."
+        )
         return {"content": [{"type": "text", "text": text}]}
 
     async def artifacts_list(self, args: dict) -> dict:
@@ -3026,7 +3103,7 @@ class WorkTools:
         vm = vm_record.desktop_vm(desktop)
 
         # The diff is read with the tag of the agent's VM tools (ComputerTools), so losing the VM stops that. The suite
-        # itself is a run (long_runs.py) with a tag of its own: it goes on when the agent is skipped or loses the VM.
+        # itself is a run (long_runs.py) with a tag of its own: it goes on when the agent steps aside or loses the VM.
         tag = f"sandbox-agent-{self.agent_id}"
         # Commands run in the user's home, so ~/click and click are the same folder.
         folder = shlex.quote(args["path"].strip().removeprefix("~/"))
@@ -3090,7 +3167,7 @@ class WorkTools:
         later = (
             f"you get the result in a message when it ends, and it is kept on {job['id']} then. Leave {args['path']} alone "
             f"until then: the tests run on what is in it. If you have more to do in {vm_name}, do it; otherwise end your turn: "
-            f"you keep {vm_name}, and you are woken when it ends, or every 30 minutes to check on it."
+            f"whoever waits gets {vm_name} meanwhile, and you get it back first once the run is over."
         )
         if args.get("background"):
             return {"content": [{"type": "text", "text": f"Started the tests in the background as {run['id']}: " + later}]}
@@ -3330,7 +3407,7 @@ class WorkTools:
 
         if place > 0 and self.agent_id not in vm_record.queue:
             text = (
-                f"The user skipped you on desktop {desktop} of {vm_name}; you are number {place} in its priority line: you get it "
+                f"You stepped aside from desktop {desktop} of {vm_name} and are number {place} in its priority line: you get it "
                 "back before the agents waiting in its queue, once your run there is over. End your turn; you'll get a message "
                 "when it's yours."
             )
@@ -3438,7 +3515,7 @@ class WorkTools:
             if desktop is not None:
                 status["you"] += f", desktop {desktop}"
             if desktop is not None and self.agent_id in vm_record.desktops[desktop]["priority"]:
-                status["you"] = f"number {place} in the priority line of desktop {desktop} of {vm_name} (the user skipped you; you get it back first)"
+                status["you"] = f"number {place} in the priority line of desktop {desktop} of {vm_name} (you stepped aside; you get it back first)"
             status["vm_status"] = vm_record.status
             status["desktops"] = [
                 {"desktop": number, "holder": line["holder"], "priority": list(line["priority"])}

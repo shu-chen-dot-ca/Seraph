@@ -25,7 +25,7 @@ class GithubTools:
         return [
             tool("read_readme", "Read the README of repos, by full name (owner/name). Each README is cut at 4,000 characters. Use it whenever the README would help you judge or answer, whether or not you plan to add the repo.", {"type": "object", "properties": {"names": {"type": "array", "items": {"type": "string"}}}, "required": ["names"]})(self.read_readme),
             tool("check_activity", "Check how repos treat outside contributors, by full name (owner/name), the same numbers the Repos page shows: of outside contributors' PRs in the last 90 days, the merge rate (merged / merged + closed unmerged) and median days to a first reply and to merge; their open PRs over 30 days old nobody answered (stale); how many people merged PRs and how many commits landed in the last 30 days; open good-first / beginner / help-wanted issues (with assignees and cross references: above 0 usually means taken); the AI policy from CONTRIBUTING, AI_POLICY.md or AGENTS.md (welcome, disclose, no_ai, unclear or none, with the deciding quote); how newcomers' first PRs fare (merged, reply speed, came back); PRs, issues and commits a month and how often maintainers answer new issues; and the review atmosphere (warm, neutral, strict or curt, a summary and what reviewers ask for).", {"type": "object", "properties": {"names": {"type": "array", "items": {"type": "string"}}}, "required": ["names"]})(self.check_activity),
-            tool("read_thread", "Read issues or PRs in full: the description and the comments, with who wrote each and their role. A PR also has its reviews, its conversations on lines of code (each with its id and its comments' ids, and whether it is resolved), who is asked to review it now, whether it is a draft and whether maintainers can edit it. Each is given as owner/name#number, e.g. 'feast-dev/feast#1234'.", {"type": "object", "properties": {"threads": {"type": "array", "items": {"type": "string"}}}, "required": ["threads"]})(self.read_thread),
+            tool("read_thread", "Read issues or PRs in full: the description and the comments, plus review comments for PRs, with who wrote each and their role. Each is given as owner/name#number, e.g. 'feast-dev/feast#1234'.", {"type": "object", "properties": {"threads": {"type": "array", "items": {"type": "string"}}}, "required": ["threads"]})(self.read_thread),
             tool("list_files", "List the files in a repo (owner/name) on its default branch, with sizes. path limits it to one folder, e.g. 'src/'; leave it empty for the whole repo.", {"type": "object", "properties": {"name": {"type": "string"}, "path": {"type": "string"}}, "required": ["name"]})(self.list_files),
             tool("read_files", "Read source files of one repo (owner/name) on its default branch, by path, all in one call. Lines are numbered. Each file is cut at 400 lines; start_line reads further down.", {"type": "object", "properties": {"name": {"type": "string"}, "paths": {"type": "array", "items": {"type": "string"}}, "start_line": {"type": "integer"}}, "required": ["name", "paths"]})(self.read_files),
             tool("search_code", "Search code on GitHub. q is a code search query, e.g. 'retry repo:feast-dev/feast' or 'def score language:python repo:truera/trulens'. Returns up to 50 matching files with the matching lines. Only the default branch is searched.", {"q": str})(self.search_code),
@@ -139,15 +139,6 @@ class GithubTools:
             if data["__typename"] == "PullRequest":
                 result["merged"] = data["merged"]
                 result["merged_at"] = data["mergedAt"][:10] if data["mergedAt"] else None
-                result["draft"] = data["isDraft"]
-                result["maintainers_can_edit"] = data["maintainerCanModify"]
-                # Who is asked to review it now (a team by its name).
-                result["review_requested"] = []
-                for request in data["reviewRequests"]["nodes"]:
-                    reviewer = request["requestedReviewer"]
-                    if reviewer is None:
-                        continue
-                    result["review_requested"].append(reviewer.get("login") or reviewer.get("slug"))
 
             for comment in data["comments"]["nodes"]:
                 text = comment["body"]
@@ -167,30 +158,13 @@ class GithubTools:
                         text = text[:800] + "\n[cut]"
                     author = review["author"]["login"] if review["author"] else "ghost"
                     role = "BOT" if review["author"] and review["author"]["__typename"] != "User" else review["authorAssociation"]
-                    result["reviews"].append({"at": review["createdAt"][:16], "author": author, "role": role, "verdict": review["state"], "text": text})
-
-                # The comments on lines of code, by conversation, with their replies. A conversation's id is what
-                # draft_action resolves, a comment's id what draft_comment's reply_to answers.
-                result["conversations"] = []
-                for conversation in data["reviewThreads"]["nodes"]:
                     lines = []
-                    for line in conversation["comments"]["nodes"]:
+                    for line in review["comments"]["nodes"]:
                         line_text = line["body"]
                         if len(line_text) > 500:
                             line_text = line_text[:500] + "\n[cut]"
-                        line_author = line["author"]["login"] if line["author"] else "ghost"
-                        line_role = "BOT" if line["author"] and line["author"]["__typename"] != "User" else line["authorAssociation"]
-                        lines.append({"id": line["databaseId"], "at": line["createdAt"][:16], "author": line_author, "role": line_role, "text": line_text})
-                    result["conversations"].append({
-                        "id": conversation["id"],
-                        "file": conversation["path"],
-                        "line": conversation["line"],
-                        "resolved": conversation["isResolved"],
-                        "outdated": conversation["isOutdated"],
-                        "comments": lines,
-                    })
-                if data["reviewThreads"]["totalCount"] > len(data["reviewThreads"]["nodes"]):
-                    result["conversations_not_shown"] = data["reviewThreads"]["totalCount"] - len(data["reviewThreads"]["nodes"])
+                        lines.append({"file": line["path"], "text": line_text})
+                    result["reviews"].append({"at": review["createdAt"][:16], "author": author, "role": role, "verdict": review["state"], "text": text, "on_lines": lines})
 
             report[thread] = result
 

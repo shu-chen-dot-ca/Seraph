@@ -1,15 +1,15 @@
 """Your GitHub account: the one you sign in with, whose token sends what you approve in the Inbox, as you, and
 that the GitHub tab uses to manage what you sent and to post your own comments.
 
-Sign in works like "Sign in with GitHub" on any website. The Settings page (#/settings) asks sign_in_url() for
-GitHub's own page, which asks you whether Seraph may act as you. Once you click Authorize
+Sign in works like "Sign in with GitHub" on any website. The GitHub tab's Account page (#/github/account, in its left
+list) asks sign_in_url() for GitHub's own page, which asks you whether Seraph may act as you. Once you click Authorize
 there, GitHub sends the browser back to the callback (backend/github_account_api.py), and finish_sign_in() trades the
 code it brings for your token, with the app's client secret. SCOPES is what it asks for: about all you can do on
 github.com yourself (your repos, public and private, workflow files, the organizations you are in, gists,
 notifications, your profile). Signing in again later skips GitHub's question; it shows who to sign in as when you
 have more than one account on github.com.
 
-For that the app is registered on GitHub as an OAuth App, once, by you (the Settings page walks you through it).
+For that the app is registered on GitHub as an OAuth App, once, by you (the Account page walks you through it).
 save_app() keeps its client ID and secret in DATA_DIR/github_app.json, not .env. An OAuth App, not a GitHub App:
 signing in with a GitHub App only works on the repos it is installed on, so it couldn't open PRs on other people's
 projects (fine-grained tokens can't either). An organization may block OAuth Apps it hasn't approved; for those,
@@ -42,17 +42,9 @@ send(draft_id) sends a PR, comment or edit draft once, as it was shown in the In
    the project's default branch), with the draft's title and body. If GitHub refuses it, the new
    branch is deleted again, so trying again starts clean.
 A PR waits for the claim of its job (a comment the project's rules ask for before a PR) to be decided first.
-A comment is posted on its issue or PR (its pictures go to your fork the same way); one with reply_to goes inside that
-conversation on lines of code of the PR instead.
+A comment is posted on its issue or PR (its pictures go to your fork the same way).
 An edit (a new title and description for your own PR or issue) changes them on GitHub, only when it is yours and still
 has the text the agent saw ("previous"), else it refuses (the agent redrafts on the text as it is now).
-An action (inbox.py) is one change on your own PR or issue, refused when it isn't yours or no longer fits (a reopen of
-one that is open, a PR that is no draft anymore marked ready, ...): request_review asks its reviewers to review it
-(again), ready_for_review and convert_to_draft are GitHub's GraphQL mutations of those names, allow_maintainer_edits
-lets maintainers push to its branch, update_branch is GitHub's Update branch (it merges the base branch in, only while
-the PR is still at head_sha; "commit" is the merge it made, once GitHub shows it), resolve resolves review threads, and
-close and reopen change its state. Its comment, when it has one, is posted after it; if GitHub refuses only the comment,
-the action stays sent and "comment_error" says why.
 
 A PR draft with update_of is the agent's next version of your open PR (a follow-up: a reviewer asked for
 changes, or its checks failed), not a new PR. The PR is read first, with your token: it must be open, opened
@@ -78,8 +70,6 @@ What was sent is kept on the draft as "sent" (Inbox.mark_sent):
              "comment_url": the comment posted with it | None, "comment_error": None | why it wasn't posted
     comment: {"kind": "comment", "url", "id", "repo", "number", "as", "at", "deleted_at" once deleted from the GitHub tab}
     edit:    {"kind": "edit", "url", "repo", "number", "title", "as", "at"}
-    action:  {"kind": "action", "action": its name, "url", "repo", "number", "commit": update_branch's merge | None,
-              "comment_url": None | the comment posted with it, "comment_error": None | why it wasn't posted, "as", "at"}
 
 comment(target, body) posts your own comment, as you, on a PR or issue: the comment box of the GitHub tab's
 thread pop-up (backend/github_api.py), after its "are you sure?". No agent and no draft is involved.
@@ -123,8 +113,6 @@ SCOPES = "repo workflow read:org gist notifications user"
 PICTURES_BRANCH = "pr-pictures"
 # Seconds a new fork may take before its branches can be used.
 FORK_WAIT = 120
-# Seconds Update branch may take before its merge shows on the PR (send_action); after that it is sent without it.
-UPDATE_WAIT = 20
 # A text file up to this size goes inside the tree it is in (tree()); a bigger one is uploaded on its own.
 INLINE_BYTES = 1_000_000
 # git without the user's own git settings, and never looking for a repo above the temporary folder.
@@ -268,7 +256,7 @@ class GithubAccount:
         self.path.unlink(missing_ok=True)
 
     def send(self, draft_id: str) -> dict:
-        """Sends a PR, comment, edit or action draft to GitHub as you, once. Returns the draft with "sent". Runs in a thread."""
+        """Sends a PR or comment draft to GitHub as you, once. Returns the draft with "sent". Runs in a thread."""
         account = self.load()
         if account is None:
             raise SendError("Sign in with GitHub first: the GitHub tab, Account.")
@@ -277,8 +265,8 @@ class GithubAccount:
             draft = self.inbox.get(draft_id)
             if draft["sent"] is not None:
                 raise SendError(f"It is on GitHub already: {draft['sent']['url']}")
-            if draft["kind"] not in ["pr", "comment", "edit", "action"]:
-                raise SendError("Only PRs, comments, new titles and descriptions and actions go to GitHub.")
+            if draft["kind"] not in ["pr", "comment", "edit"]:
+                raise SendError("Only PRs, comments and new titles and descriptions go to GitHub.")
             # The claim a repo's rules ask for goes out before the PR (agents.py): on a fix_issue job, its one comment.
             if draft["kind"] == "pr" and draft["update_of"] is None and draft["job"] is not None:
                 for other in self.inbox.list():
@@ -298,8 +286,6 @@ class GithubAccount:
                         sent = self.send_pr(client, account, draft)
                     elif draft["kind"] == "edit":
                         sent = self.send_edit(client, account, draft)
-                    elif draft["kind"] == "action":
-                        sent = self.send_action(client, account, draft)
                     else:
                         sent = self.post_comment(client, account, draft)
             except httpx.HTTPStatusError as error:
@@ -782,10 +768,7 @@ class GithubAccount:
             fork = self.fork(client, account, repo)
             body = self.pictures(client, account, fork, draft)
         self.step = "posting the comment"
-        if draft["reply_to"] is not None:
-            response = client.post(f"/repos/{repo}/pulls/{number}/comments/{draft['reply_to']}/replies", json={"body": body})
-        else:
-            response = client.post(f"/repos/{repo}/issues/{number}/comments", json={"body": body})
+        response = client.post(f"/repos/{repo}/issues/{number}/comments", json={"body": body})
         response.raise_for_status()
         comment = response.json()
         return {
@@ -829,123 +812,6 @@ class GithubAccount:
             "repo": repo,
             "number": int(number),
             "title": draft["title"],
-            "as": account["login"],
-            "at": datetime.now(UTC).isoformat(),
-        }
-
-    def send_action(self, client: httpx.Client, account: dict, draft: dict) -> dict:
-        """One change on your own PR or issue (the module docstring), then the comment posted with it, when it has one."""
-        repo, _, number = (draft["target"] or "").rpartition("#")
-        action = draft["action"]
-        if repo == "" or not number.isdigit() or action is None:
-            raise SendError("This draft doesn't say what to do, or on which PR or issue. Reply to the agent to draft it again.")
-        name = action["name"]
-        # GitHub's issues API is the PR's too: whose it is and its state.
-        self.step = "reading it"
-        response = client.get(f"/repos/{repo}/issues/{number}")
-        response.raise_for_status()
-        thread = response.json()
-        if thread["user"]["login"].lower() != account["login"].lower():
-            raise SendError(f"{repo}#{number} isn't yours: it was opened by {thread['user']['login']}.")
-        pull = None
-        if "pull_request" in thread:
-            response = client.get(f"/repos/{repo}/pulls/{number}")
-            response.raise_for_status()
-            pull = response.json()
-        # It may have changed since the agent drafted this (you, or a maintainer, on GitHub).
-        if pull is None and name not in ["close", "reopen"]:
-            raise SendError(f"{repo}#{number} is an issue, not a PR.")
-        if pull is not None and pull["merged"]:
-            raise SendError("It is merged already.")
-        if name == "reopen" and thread["state"] != "closed":
-            raise SendError("It is open already.")
-        if name != "reopen" and thread["state"] != "open":
-            raise SendError("It is closed now.")
-        if name == "ready_for_review" and not pull["draft"]:
-            raise SendError("It is ready for review already.")
-        if name == "convert_to_draft" and pull["draft"]:
-            raise SendError("It is a draft already.")
-
-        commit = None
-        if name == "request_review":
-            self.step = "requesting the review"
-            response = client.post(f"/repos/{repo}/pulls/{number}/requested_reviewers", json={"reviewers": action["reviewers"]})
-            response.raise_for_status()
-        if name in ["ready_for_review", "convert_to_draft"]:
-            # Only GitHub's GraphQL API does these. Its errors come with a 200.
-            mutation = "markPullRequestReadyForReview"
-            self.step = "marking it ready for review"
-            if name == "convert_to_draft":
-                mutation = "convertPullRequestToDraft"
-                self.step = "converting it to a draft"
-            query = f"mutation($id: ID!) {{ {mutation}(input: {{pullRequestId: $id}}) {{ clientMutationId }} }}"
-            response = client.post("/graphql", json={"query": query, "variables": {"id": pull["node_id"]}})
-            response.raise_for_status()
-            errors = response.json().get("errors")
-            if errors:
-                raise SendError(f"GitHub refused while {self.step}: {errors[0]['message']}")
-        if name == "resolve":
-            query = "mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { clientMutationId } }"
-            for index, thread_id in enumerate(action["conversations"]):
-                self.step = f"resolving conversation {index + 1} of {len(action['conversations'])}"
-                response = client.post("/graphql", json={"query": query, "variables": {"id": thread_id}})
-                response.raise_for_status()
-                errors = response.json().get("errors")
-                if errors:
-                    raise SendError(f"GitHub refused while {self.step}: {errors[0]['message']}")
-        if name == "allow_maintainer_edits":
-            self.step = "allowing edits by maintainers"
-            response = client.patch(f"/repos/{repo}/pulls/{number}", json={"maintainer_can_modify": True})
-            response.raise_for_status()
-        if name == "update_branch":
-            # GitHub refuses once the PR moved past the commit the agent saw.
-            self.step = "updating the branch"
-            response = client.put(f"/repos/{repo}/pulls/{number}/update-branch", json={"expected_head_sha": action["head_sha"]})
-            response.raise_for_status()
-            # It merges in the background. Its merge is kept once it shows, so pr_tracking.py knows it is no one else's.
-            self.step = "waiting for GitHub to update the branch"
-            for second in range(UPDATE_WAIT):
-                time.sleep(1)
-                response = client.get(f"/repos/{repo}/pulls/{number}")
-                response.raise_for_status()
-                if response.json()["head"]["sha"] != action["head_sha"]:
-                    commit = response.json()["head"]["sha"]
-                    break
-        if name in ["close", "reopen"]:
-            fields = {"state": "open"}
-            self.step = "reopening it"
-            if name == "close":
-                fields = {"state": "closed"}
-                self.step = "closing it"
-            # Why an issue is closed (completed or not_planned); a PR has no reason.
-            if name == "close" and pull is None and action["close_reason"] is not None:
-                fields["state_reason"] = action["close_reason"]
-            response = client.patch(f"/repos/{repo}/issues/{number}", json=fields)
-            response.raise_for_status()
-
-        # It is done on GitHub now: a comment GitHub refuses (a locked conversation, say) doesn't undo that, so it is kept
-        # with what was sent instead of failing the send.
-        comment_url = None
-        comment_error = None
-        if draft["body"].strip() != "":
-            self.step = "posting the comment"
-            try:
-                response = client.post(f"/repos/{repo}/issues/{number}/comments", json={"body": draft["body"]})
-            except httpx.HTTPError as error:
-                comment_error = f"Could not reach GitHub: {error}"
-            if comment_error is None and response.status_code >= 400:
-                comment_error = f"GitHub answered {response.status_code}: {response.text[:200]}"
-            if comment_error is None:
-                comment_url = response.json()["html_url"]
-        return {
-            "kind": "action",
-            "action": name,
-            "url": thread["html_url"],
-            "repo": repo,
-            "number": int(number),
-            "commit": commit,
-            "comment_url": comment_url,
-            "comment_error": comment_error,
             "as": account["login"],
             "at": datetime.now(UTC).isoformat(),
         }

@@ -1,6 +1,6 @@
 # Your own repositories
 
-Development has no page since the redesign: your private projects are developed through [Workflow](workflow.md). This describes Development as it was; its backend is still there.
+To start, open a repository on the Workspace tab, then choose **Development → Start development**.
 
 ![Developing your own repository](development.svg)
 

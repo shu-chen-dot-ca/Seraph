@@ -1,11 +1,11 @@
-"""Your GitHub account, on the Settings page (#/settings): sign in with GitHub, see who you are signed in as, sign out.
+"""The GitHub tab's Account page: sign in with GitHub, see who you are signed in as, sign out.
 
 Sign in (github_searcher/github_account.py has how it works):
 - PUT /api/github_account/app keeps the OAuth App's client ID and secret, the one-time setup.
 - POST /api/github_account/sign_in gives the page GitHub's address to go to. A POST, so only this app's own pages
   can start one (backend/app.py checks the Origin).
 - GitHub sends the browser back to GET /api/github_account/callback, through the Vite dev server like every /api
-  address. It signs you in and goes back to the Settings page: #/settings?signed_in=<login>, or ?error=<why>
+  address. It signs you in and goes back to the Account page: #/github/account?signed_in=<login>, or ?error=<why>
   (also when you click Cancel on GitHub's page).
 - PUT /api/github_account takes a classic token pasted by hand instead (Use a token instead).
 
@@ -87,11 +87,11 @@ def sign_in() -> dict:
 def callback(code: str = "", state: str = "", error: str = "", error_description: str = "") -> RedirectResponse:
     """Where GitHub sends the browser back to, with a code to trade for your token, or why not."""
     if error == "access_denied":
-        return RedirectResponse("/#/settings?" + urlencode({"error": "Sign in cancelled."}))
+        return RedirectResponse("/#/github/account?" + urlencode({"error": "Sign in cancelled."}))
     if error != "":
-        return RedirectResponse("/#/settings?" + urlencode({"error": error_description or error}))
+        return RedirectResponse("/#/github/account?" + urlencode({"error": error_description or error}))
     try:
         account = github_account.finish_sign_in(code, state)
     except ValueError as problem:
-        return RedirectResponse("/#/settings?" + urlencode({"error": str(problem)}))
-    return RedirectResponse("/#/settings?" + urlencode({"signed_in": account["login"]}))
+        return RedirectResponse("/#/github/account?" + urlencode({"error": str(problem)}))
+    return RedirectResponse("/#/github/account?" + urlencode({"signed_in": account["login"]}))

@@ -38,8 +38,8 @@ with them after the restart; one cut off in the middle of a turn gets one more s
 After each turn the worker enforces the VM rule: an agent never holds a VM it has nothing to do in.
 - Holding a VM with no queued or working job for it: the VM is released for it.
 - Holding one while only its run goes there (a test suite or build it left going, sandbox/agent/long_runs.py): it
-  keeps the VM and sleeps. It is woken when the run ends, or after CHECK_IN_SECONDS to look how the run does
-  (watch_runs). It never steps aside by itself; only the user's Skip does that (VMQueue.step_aside).
+  steps aside (VMQueue.step_aside). The next one gets the VM, and the agent waits in the VM's priority line, which
+  comes before its waiting line: it gets the VM back as soon as its run is over and the VM is free.
 - Holding one with open jobs there: it is reminded to go on with them now, not to wait for an answer in chat. After
   MAX_NUDGES reminders in a row with no change to its jobs, the VM is released for it.
 - In no queue but with queued jobs for a VM: it is reminded to queue_for_vm (MAX_NUDGES times at most).
@@ -53,15 +53,16 @@ VM is killed, except its runs).
 Runs nobody waits for anymore (the agent's turn ended, or the backend restarted) are checked every
 RUN_CHECK_SECONDS (watch_runs). When one ends, its agent gets the result (bash: ComputerTools.bash_result; tests:
 WorkTools.finish_tests, which keeps it on the job). An agent in that VM's priority line gets it together with the
-message that the VM is its again; any other agent right away. An agent holding the VM while its run goes, with nothing
-else to do, is woken every CHECK_IN_SECONDS to check on the run. Archiving or deleting an agent stops its runs.
+message that the VM is its again; any other agent right away. Archiving or deleting an agent stops its runs.
 
 The user's side: assign() turns an issue into a job for an agent, set_up_repo() a repo from the
 Repos list (its Set up button) into a set_up_repo job: the agent reads the README and docs, sets an
 app with a clear frontend up and leaves it running on the VM's desktop (a server in the VM's demo
 service, so it outlives the agent's turn and VM restarts), or clones a library or other low-level
 repo and opens it in VS Code there, then writes a short introduction to the repo in its chat and
-the job's notes. decide() passes the user's decision on a draft back to its agent (with the link,
+the job's notes. reproduce_paper() turns a paper the user added on the Workspace tab's Papers page (a PDF, kept in the
+agent's artifacts under papers/) into a reproduce_paper job: the agent reads it, rebuilds it in the VM, compares the
+numbers, checks the claims and drafts a report (draft_report). decide() passes the user's decision on a draft back to its agent (with the link,
 when Approve sent it to GitHub, or pushed a new version onto the user's PR). When the user edited the draft
 before deciding, the agent also gets the final text, so it learns how they want it written.
 A timed question (inbox.py: options, a recommended one and answer_by) that the user hasn't answered by its answer_by
@@ -166,8 +167,6 @@ DEMO_DIR = os.environ["SANDBOX_VM_DEMO_DIR"]
 SAVE_SECONDS = 5
 # How often the runs nobody waits for are checked.
 RUN_CHECK_SECONDS = 10
-# An agent that holds its VM while its run goes sleeps this long at most, then is woken to check on the run.
-CHECK_IN_SECONDS = 30 * 60
 # How often timed questions are checked for an answer_by that passed.
 QUESTION_CHECK_SECONDS = 10
 OPEN_STATUSES = ["queued", "working"]
@@ -428,14 +427,17 @@ class Agents:
             if agent.stopped or self.wake[agent.id].is_set():
                 continue
 
-            # Only its run goes in the VM now: it keeps the VM and sleeps. It is woken when the run ends, or after
-            # CHECK_IN_SECONDS to check on it (watch_runs).
+            # Only its run goes in the VM now: it steps aside, so whoever waits gets the VM meanwhile.
             runs = []
             for vm_record in self.vms.list():
                 if place == 0 and vm_record.name == vm_name:
                     runs = [run for run in vm_record.runs if run["agent"] == agent.id]
             if runs:
-                text = f"Sleeping while its run goes in {vm_name}; it keeps the VM and checks on the run every {CHECK_IN_SECONDS // 60} minutes"
+                try:
+                    self.queue.step_aside(vm_name, agent.id)
+                except (ValueError, VMsError):
+                    continue
+                text = f"Stepped aside from {vm_name} while its run goes; it gets the VM back first once the run is over"
                 agent.history.append({"type": "system", "text": text, "time": datetime.now(UTC).isoformat()})
                 self.save(agent)
                 self.version += 1
@@ -480,7 +482,7 @@ class Agents:
                 status = "working"
             if place is not None and place > 0:
                 status = "in_queue"
-            # In a VM's priority line: the user skipped it while its run goes, and it gets the VM back first.
+            # In a VM's priority line: it stepped aside while its run goes, and gets the VM back first.
             desktop = None
             for vm_record in self.vms.list():
                 if vm_record.name == vm_name:
@@ -906,6 +908,59 @@ class Agents:
             text += "\nYou have no target VM: pick the VM that suits the job with vms_list and choose_vm, then queue_for_vm when ready."
         else:
             text += f"\nIt is for {vm_name}. Use queue_for_vm when ready."
+        self.notify(agent_id, text)
+        return job
+
+    def reproduce_paper(self, title: str, file_name: str, data: bytes, agent_id: str | None, vm_name: str | None,
+                        instructions: str = "", agent_name: str = "") -> dict:
+        """The user adds a paper (a PDF) on the Papers page for an agent (a new one when agent_id is None) to reproduce: a
+        reproduce_paper job (see "Reproducing a paper" in agent/prompt.md). The PDF goes in the agent's artifacts, under
+        papers/, where the agent reads it (paper_read). agent_name names that new agent; empty gives it "agent-N"."""
+        if not data.startswith(b"%PDF"):
+            raise ValueError("That file is not a PDF.")
+        if vm_name is not None and vm_name not in [vm_record.name for vm_record in self.vms.list()]:
+            raise ValueError(f"No VM named {vm_name}")
+        if agent_id is None:
+            agent_id = self.create(agent_name)["id"]
+        if agent_id not in self.agents:
+            raise KeyError(f"No agent {agent_id}")
+        agent = self.agents[agent_id]
+        # Raises ValueError while the agent waits for or holds another VM.
+        if vm_name is not None:
+            self.set_target_vm(agent_id, vm_name)
+        self.unarchive(agent_id)
+
+        # papers/<name>.pdf, with a number when the agent has a paper by that name already.
+        stem = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(file_name).stem).strip("-.")
+        if stem == "":
+            stem = "paper"
+        path = f"papers/{stem}.pdf"
+        number = 2
+        while self.artifacts.resolve(agent_id, path).exists():
+            path = f"papers/{stem}-{number}.pdf"
+            number += 1
+        self.artifacts.save(agent_id, path, data)
+
+        title = title.strip()
+        if title == "":
+            title = stem
+        title = f"Reproduce {title}"
+        vm_name = agent.record["target_vm"]
+        job = self.jobs.create("reproduce_paper", title, agent_id, "user", vm=vm_name, instructions=instructions, paper=path)
+        text = f"New job {job['id']}: {title}"
+        text += (
+            f"\nThe paper is {path} in your artifacts. Read all of it with paper_read first, a few pages at a time, then "
+            "reproduce it as in Reproducing a paper: rebuild it from the paper alone, compare the numbers, check the claims, "
+            "and end with draft_report."
+        )
+        if instructions:
+            text += f"\nInstructions from the user: {instructions}"
+        if agent.record["name_by"] == "auto":
+            text += f"\nYou still have the automatic name {agent.name}: give yourself a short name for your work with name_yourself."
+        if vm_name is None:
+            text += "\nYou have no target VM: pick the VM that suits the job with vms_list and choose_vm, then queue_for_vm when you have read the paper."
+        else:
+            text += f"\nIt is for {vm_name}. Use queue_for_vm when you have read the paper."
         self.notify(agent_id, text)
         return job
 
@@ -1475,24 +1530,11 @@ class Agents:
                 "with when: after and base the commit your branch now starts from (e.g. origin/main). Then draft_pr with pr "
                 f"{thread}, that base and rebase: true; Approve force-pushes it. Its body is the comment posted with the push "
                 "(what it is rebased onto, and how each conflict was settled)."
-                "\n- A reviewer's comment on a line of code: answer it in its conversation, draft_comment with reply_to (the "
-                "comment's id from read_thread's conversations), not below the PR."
-                f"\n- What the user would click on GitHub, with draft_action on {thread}: request_review to ask the reviewers "
-                "to look again once a new version with their points is on the PR (not before), ready_for_review when it is a "
-                "draft and ready, convert_to_draft when it isn't ready after all, allow_maintainer_edits when a maintainer asks "
-                "to push to it, update_branch when it is behind and the project wants it up to date (no conflicts), resolve for "
-                "conversations whose change is pushed (only where the project's people let the author resolve), close when a "
-                "maintainer asks or it is no longer needed (say why in its body)."
             )
         if own:
             text += (
                 f"\n- A new title or description, when someone asks for one on the user's own {what}, or its text no longer "
                 f"matches what it does: draft_edit with target {thread}. Approve changes them on GitHub as the user."
-            )
-        if own and entry["kind"] == "issue":
-            text += (
-                f"\n- Closing the user's own issue when it is fixed or no longer needed (or reopening it): draft_action on "
-                f"{thread} with close (close_reason completed or not_planned) or reopen, and why in its body."
             )
         text += (
             f"\n- Nothing, when nothing needs an answer (a thank-you, a bot's note with no findings, checks that passed, a "
@@ -1563,7 +1605,7 @@ class Agents:
         if job is not None and job["status"] == "waiting_on_user" and not claim:
             job = self.jobs.update(job["id"], status="queued")
 
-        kinds = {"pr": "PR", "comment": "comment", "question": "question", "edit": "title and description", "action": "action"}
+        kinds = {"pr": "PR", "comment": "comment", "question": "question", "report": "report", "edit": "title and description"}
         about = f"your {kinds.get(draft['kind'], draft['kind'])} draft {draft_id} ({draft['title']})"
         job_name = job["id"] if job is not None else "your work"
         # Approve sends a PR or comment first when the user's GitHub account is connected (inbox_api.py): then it is on GitHub.
@@ -1599,15 +1641,6 @@ class Agents:
             text = f"The user approved {about}, and {sent['repo']}#{sent['number']} has the new text on GitHub now: {sent['url']}. Carry on with {job_name}."
         elif decision == "approved" and draft["kind"] == "edit":
             text = f"The user approved {about}. They change it on GitHub themselves. Carry on with {job_name}."
-        elif decision == "approved" and draft["kind"] == "action" and sent is not None:
-            text = f"The user approved {about}, and it is done on GitHub: {sent['url']}."
-            if sent["comment_url"]:
-                text += f" Your text is posted there as their comment: {sent['comment_url']}."
-            if sent["comment_error"]:
-                text += f" The comment couldn't be posted ({sent['comment_error']}); tell the user in one line."
-            text += f" If it finishes {job_name}, mark the job done with job_update."
-        elif decision == "approved" and draft["kind"] == "action":
-            text = f"The user approved {about}. They do it on GitHub themselves. If it finishes {job_name}, mark the job done with job_update."
         elif decision == "approved" and claim and sent is not None:
             text = (
                 f"The user approved {about}, and it is posted: {sent['url']}. Nothing else to do for it: nobody waits for the "
@@ -1622,6 +1655,8 @@ class Agents:
             text = f"The user approved {about}, and it is posted: {sent['url']}. Carry on with {job_name}."
         elif decision == "approved" and draft["kind"] == "comment":
             text = f"The user approved {about}. They post it themselves. Carry on with {job_name}."
+        elif decision == "approved" and draft["kind"] == "report":
+            text = f"The user approved {about}. It finishes {job_name}: mark the job done with job_update."
         elif decision == "approved":
             text = f"The user approved {about}. Carry on with {job_name}."
         elif decision == "rejected" and claim:
@@ -1747,34 +1782,8 @@ class Agents:
                     # The VM was deleted meanwhile.
                     pass
 
-            # An agent holding its VM while its runs go sleeps CHECK_IN_SECONDS at most after its last turn, then it is
-            # woken to check on them. Not one the user stopped, or one with messages waiting already.
-            now = datetime.now(UTC)
-            for vm_record in self.vms.list():
-                for agent_id in {run["agent"] for run in vm_record.runs if run["background"]}:
-                    agent = self.agents.get(agent_id)
-                    if agent is None or agent.busy or agent.stopped or self.pending[agent_id]:
-                        continue
-                    if agent.record["archived_at"] is not None or vm_record.holding(agent_id) is None:
-                        continue
-                    times = [entry["time"] for entry in agent.history[-20:] if entry.get("time")]
-                    if times and (now - datetime.fromisoformat(times[-1])).total_seconds() < CHECK_IN_SECONDS:
-                        continue
-                    lines = []
-                    for run in [run for run in vm_record.runs if run["agent"] == agent_id]:
-                        minutes = round((now - datetime.fromisoformat(run["started_at"])).total_seconds() / 60)
-                        lines.append(f"- {run['id']}, going {minutes} minutes, its output in {run['log']}: `{run['label'][:200]}`")
-                    text = (
-                        f"You slept {CHECK_IN_SECONDS // 60} minutes while your runs go in {vm_record.name}:\n" + "\n".join(lines) + "\n"
-                        "Check on them now: read the end of each log and see whether it still makes progress. If one hangs, or "
-                        "waits for something that won't come, stop it (`pkill -f ' sandbox-<run id>$'`) and fix the cause. "
-                        f"Otherwise end your turn again: you keep {vm_record.name}, and you hear when a run ends, or in "
-                        f"{CHECK_IN_SECONDS // 60} minutes."
-                    )
-                    self.notify(agent_id, text)
-
     async def run_ended(self, vm_record, run: dict, ended: dict) -> None:
-        """A run in the background ended: its agent gets the result. One the user skipped on this VM gets it with
+        """A run in the background ended: its agent gets the result. One that stepped aside from this VM gets it with
         the message that the VM is its again (finish_run, right after this, may give it the VM at once), so it starts
         one turn with both; any other agent is woken now."""
         agent = self.agents.get(run["agent"])

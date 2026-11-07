@@ -181,7 +181,6 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
   draft_pr: GitPullRequest,
   run_tests: FlaskConical,
   draft_comment: MessageSquare,
-  draft_action: GitPullRequest,
   draft_question: CircleHelp,
   draft_issue: CircleDot,
   queue_for_vm: ListOrdered,
@@ -1170,7 +1169,7 @@ export default function AgentChat(props: { agentId: string; compact?: boolean })
                   <AlertDialogDescription>
                     {confirmAction === "archive"
                       ? "It stops, its open jobs are cancelled and it leaves every VM queue. Its conversation stays: it is under Archived on the Agents page, and a message or a job brings it back."
-                      : "Its conversation is deleted, its open jobs are cancelled and it leaves every VM queue. Its drafts stay in Approvals on the Dashboard."}
+                      : "Its conversation is deleted, its open jobs are cancelled and it leaves every VM queue. Its drafts stay in the Inbox."}
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>

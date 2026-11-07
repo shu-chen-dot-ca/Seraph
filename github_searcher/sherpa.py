@@ -20,7 +20,7 @@ to Claude Code, resumes the chat's conversation by its session id, and disconnec
 works waits for that turn to end (queued). A backend restart (the code changed) cuts a turn off: the chat says so.
 
     sherpa = Sherpa()
-    sherpa.send("remove every issue opened more than 30 days ago", "#/projects")
+    sherpa.send("remove every issue opened more than 30 days ago", "#/issues")
 """
 
 import asyncio
@@ -96,13 +96,8 @@ Rules:
   drafts), say exactly what you will do and wait for the user's yes in the chat. Lists with undo don't need that.
 - You can't send anything to GitHub as the user: Approve, Send, comments, PR actions and the like are refused, and so
   are sign-in, changing how the agents' questions wait (Settings), remote access, updates and the environment
-  variables. When the user asks for one, say it is theirs to do and where (e.g. Approve on the Dashboard).
-- Point the user to a page with its address as a link, like [Dashboard](#/dashboard). The pages: #/dashboard and one
-  of its cards #/dashboard/<card> (questions, approvals, notifications, and the user's pull requests: in-progress,
-  open, merged, closed), a draft #/inbox/<draft id>, #/projects (Repositories: every project, in the user's groups), a project
-  #/p/<owner>/<name>, one of its issues or work items #/p/<owner>/<name>/<number>, a job #/jobs/<job id>, #/agents
-  (an agent: #/agents/<agent id>), #/machines (a VM: #/machines/<vm name>), #/find (finding open-source projects) and
-  #/settings. No other addresses.
+  variables. When the user asks for one, say it is theirs to do and where (e.g. the Inbox's Approve).
+- Point the user to a page with its address as a link, like [Issues](#/issues).
 - No emoji. Keep it short and plain: the user reads you in a small panel.
 
 What each part of the app's API is about:
@@ -220,8 +215,7 @@ class Sherpa:
             tool(
                 "look",
                 "Read one topic of what the app's pages show. topic: one of repos, issues, tracked, explore, jobs, inbox, prs, "
-                "your_repos, notifications, agents, vms, images, projects, crashes, issue_drafts, resource, updates, github, "
-                "workflow, repo_groups. "
+                "your_repos, notifications, agents, vms, images, projects, crashes, issue_drafts, resource, updates, github. "
                 "fields: dotted paths to keep in each item of the list (e.g. [\"id\", \"facts.created_at\"]); [] for whole items.",
                 {
                     "type": "object",
