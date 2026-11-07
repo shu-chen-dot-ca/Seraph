@@ -24,7 +24,7 @@ there without asking you; only the settings so far). The ⋯ on a card opens its
 - Refresh reads the repo's signals from GitHub again now (POST /api/repos/refresh, a few seconds).
 - Delete, at once: a repo with any pull request of yours (open, closed or merged) moves to the Archived section at the
   bottom, under a line, and can't be deleted
-  (POST /api/repos/archive): it stays in Repos, and Take issues takes nothing there. Any other leaves Repos and stops
+  (POST /api/repos/archive): it stays in Repos, and Queue issues queues nothing there. Any other leaves Repos and stops
   being tracked, like Delete on the Repos page (Ctrl+Z on the Repos page brings it back). Either way its issues on the
   Issues board's Open and Catalog go (backend/issues_api.py auto_remove_issues); the ones an agent started stay.
 An archived card has no box and no robot; its ⋯ has Unarchive, which moves it back up.

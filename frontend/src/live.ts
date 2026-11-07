@@ -490,7 +490,7 @@ export type Draft = {
   recommended: string | null;
   answer_by: string | null;
   must_wait: "money" | "sensitive" | "github" | "delete" | "open" | null;
-  answered_by: "user" | "timer" | null; // who answered it, once it is answered
+  answered_by: "user" | "timer" | "automation" | null; // who answered it, once it is answered (automation: its repo's or issue's Level of automation)
 };
 
 // A project's PR draft is reviewed by the project's reviewer before it reaches the Inbox (github_searcher/inbox.py).

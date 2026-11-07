@@ -9,7 +9,8 @@ goes then; each time anything goes it is one undo step on the Issues page.
 Right, Refresh every (minutes): how often the board's issues are read again, by column: Open (30 at first), Catalog
 (15) and In progress, Review and Open PR (5). Finished ones are read again only when they change on GitHub. Under it Max agents
 at once: how many agents work on the board's issues at the same time (3 at first); while there is room, the backend
-gives Catalog's cards to new agents from the top, first come first served (keep_catalog_agents in backend/issues_api.py).
+gives Catalog's cards to new agents from the top, first come first served, the cards of repos with Take issues on
+(keep_catalog_agents in backend/issues_api.py).
 The number boxes take digits only. Save checks them, keeps it all and applies the removal at once (a toast says how many
 went); Cancel, Esc or the X drop the changes.
 */

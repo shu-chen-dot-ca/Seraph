@@ -4,13 +4,21 @@ Repository page (RepositoryCards.tsx), and by a click on an issue card's logo on
 Repository page's top bar robot opens it for all the picked repos at once, titled "3 repositories": it starts from the
 first one's settings and Save gives them all the same ones. Its
 Questions, Comments and Pull requests are the default for each of the repo's issues on the board; an issue's own robot
-changes them for that issue (IssueAutomationDialog.tsx). Take issues is the repo's only.
+changes them for that issue (IssueAutomationDialog.tsx). Add issues, Queue issues, Take issues and Open issues are the
+repo's only.
 Kept by the backend (backend/repo_automation_api.py, GET and PUT /api/repos/automation). Settings from before, kept in
 this browser, are what it opens on for a repo the backend has none for; Save moves them to the backend.
 
-Left, Level of automation, what agents do there without asking you: Take issues (an agent picks which of the repo's
-issues go to the Issues board's Catalog, by the issue levels and the instructions: the one part that acts so far), Questions (their questions to you are answered for them), Comments (posted on GitHub) and Pull requests
-(sent). Under it Issue level (Easy, Medium, Hard; Easy only at first): which issues may be taken. How many agents work at
+Left, Level of automation, what agents do there without asking you, as you (the backend acts on it:
+backend/repo_automation_api.py): Add issues (the repo's open issues on GitHub whose level is picked below go into the
+Issues board's Open, each once: one you take off isn't added again; the board reads each again as it comes in, and its
+own Automation decides on it), Queue issues (the repo's issues that fit go to the Issues board's Catalog: their tags
+are refreshed and they pass the filter, the issue levels and the instructions), Take issues (agents take the repo's
+issues from Catalog, from the top, as many at once as the board's Max agents), Questions (their questions to you are answered for them with their
+recommendation, unless one must wait for you), Comments (posted on GitHub), Pull requests (sent once their review
+passed, with new titles and descriptions; agents may also update your open pull requests' branches there) and Open
+issues (agents open new issues there, assigned to you, where the project's rules allow it; each goes to the end of
+Catalog). Under it Issue level (Easy, Medium, Hard; Easy only at first): which issues may be taken. How many agents work at
 once is the Issues board's (BoardAutomationDialog.tsx), not a repo's.
 Right, Instructions: optional, added on top of the default instructions, e.g. which issues to take or skip even when
 their level is picked. The default instructions always skip issues that are political or politically sensitive,
@@ -28,19 +36,25 @@ import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/live";
 
 export type Automation = {
+  add_issues?: boolean; // missing on settings from before it
+  queue_issues?: boolean; // missing on settings from before it: Take issues said then
   take_issues: boolean;
   questions: boolean;
   comments: boolean;
   pull_requests: boolean;
+  open_issues?: boolean; // missing on settings from before it
   levels: string[]; // "easy", "medium", "hard"
   instructions: string;
 };
 
 const DEFAULTS: Automation = {
+  add_issues: false,
+  queue_issues: false,
   take_issues: false,
   questions: false,
   comments: false,
   pull_requests: false,
+  open_issues: false,
   levels: ["easy"],
   instructions: "",
 };
@@ -51,10 +65,13 @@ export default function AutomationDialog(props: { repos: string[]; onClose: () =
   const title = props.repos.length === 1 ? props.repos[0] : `${props.repos.length} repositories`;
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [addIssues, setAddIssues] = useState(false);
+  const [queueIssues, setQueueIssues] = useState(false);
   const [takeIssues, setTakeIssues] = useState(DEFAULTS.take_issues);
   const [questions, setQuestions] = useState(DEFAULTS.questions);
   const [comments, setComments] = useState(DEFAULTS.comments);
   const [pullRequests, setPullRequests] = useState(DEFAULTS.pull_requests);
+  const [openIssues, setOpenIssues] = useState(false);
   const [levels, setLevels] = useState(DEFAULTS.levels);
   const [instructions, setInstructions] = useState(DEFAULTS.instructions);
   const [error, setError] = useState("");
@@ -73,10 +90,13 @@ export default function AutomationDialog(props: { repos: string[]; onClose: () =
             start = DEFAULTS;
           }
         }
+        setAddIssues(start.add_issues === true);
+        setQueueIssues(start.queue_issues ?? start.take_issues);
         setTakeIssues(start.take_issues);
         setQuestions(start.questions);
         setComments(start.comments);
         setPullRequests(start.pull_requests);
+        setOpenIssues(start.open_issues === true);
         setLevels(start.levels);
         setInstructions(start.instructions);
         setLoaded(true);
@@ -94,10 +114,13 @@ export default function AutomationDialog(props: { repos: string[]; onClose: () =
 
   async function save() {
     const next: Automation = {
+      add_issues: addIssues,
+      queue_issues: queueIssues,
       take_issues: takeIssues,
       questions: questions,
       comments: comments,
       pull_requests: pullRequests,
+      open_issues: openIssues,
       levels: levels,
       instructions: instructions.trim(),
     };
@@ -136,6 +159,14 @@ export default function AutomationDialog(props: { repos: string[]; onClose: () =
           <div className="flex flex-col gap-3">
             <div>
               <div className={heading}>Level of automation</div>
+              <button type="button" className={option} onClick={() => setAddIssues(!addIssues)}>
+                <SelectBox checked={addIssues} />
+                Add issues
+              </button>
+              <button type="button" className={option} onClick={() => setQueueIssues(!queueIssues)}>
+                <SelectBox checked={queueIssues} />
+                Queue issues
+              </button>
               <button type="button" className={option} onClick={() => setTakeIssues(!takeIssues)}>
                 <SelectBox checked={takeIssues} />
                 Take issues
@@ -151,6 +182,10 @@ export default function AutomationDialog(props: { repos: string[]; onClose: () =
               <button type="button" className={option} onClick={() => setPullRequests(!pullRequests)}>
                 <SelectBox checked={pullRequests} />
                 Pull requests
+              </button>
+              <button type="button" className={option} onClick={() => setOpenIssues(!openIssues)}>
+                <SelectBox checked={openIssues} />
+                Open issues
               </button>
             </div>
 

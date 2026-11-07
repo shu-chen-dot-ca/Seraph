@@ -44,8 +44,9 @@ column). Dropped on a Catalog card it goes before that card, dropped on its empt
 to is outlined while dragging. Catalog and the order are kept by the backend (POST /api/issues/board, issue_list.py),
 so they are the same everywhere.
 
-Catalog's order is its priority: while fewer than the board's Max agents work, the backend gives the top card to a new
-agent (agent-N, which picks its VM itself), first come first served (keep_catalog_agents in backend/issues_api.py).
+Catalog's order is its priority: while fewer than the board's Max agents work, the backend gives the top card of a repo
+with Take issues on to a new agent (agent-N, which picks its VM itself), first come first served (keep_catalog_agents in
+backend/issues_api.py).
 
 Each card's level of automation shows under its tags, past a line: Questions, Comments and Pull requests when on, or
 No automation. Its repo's (AutomationDialog.tsx, kept by the backend: GET /api/repos/automation) is the default; the
