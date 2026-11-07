@@ -43,6 +43,15 @@ them at once; keep_tags applies them again after every round, so an issue that m
 user moved to Catalog stay too. Each time
 anything goes it is one undo step on the Issues page.
 
+The same robot's max_agents is how many agents work on the board's issues at once: agents with a job queued or working
+on an issue in the Issues list, or on a follow-up on a pull request. keep_catalog_agents() looks every
+CATALOG_AGENTS_SECONDS, and while there is room it gives Catalog's cards to new agents from the top, first come first
+served (the board's order; ones not placed yet after, in the order they were added), each to its own new agent with the
+first free agent-N name and no target VM, so the agent picks the VM that suits the job itself (Agents.assign). Only
+cards that are Catalog's own: no job (or only cancelled ones), not paused, open on GitHub, and, like Assign, with its
+Merge in and not fixed, out of scope or can't validate (the others wait there). A card taken leaves Catalog's list, so
+its job keeps it on the board, and a job cancelled later sends it back to Open, not to the next agent.
+
 When an issue goes from free to assigned either way, Agents.issue_taken tells the agent with a job on it who has it
 (the assignees from its facts, or the tags' reason), and the agent decides itself whether to keep working or stop.
 """
@@ -51,6 +60,7 @@ import asyncio
 import json
 import re
 import time
+import traceback
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException
@@ -85,7 +95,11 @@ AUTO_REMOVE_OFF = {
     "refresh_open_minutes": 30,
     "refresh_catalog_minutes": 15,
     "refresh_ongoing_minutes": 5,
+    # Agents working on the board's issues at once, the next from the top of Catalog (keep_catalog_agents).
+    "max_agents": 3,
 }
+# How often keep_catalog_agents looks for room for another agent on the board.
+CATALOG_AGENTS_SECONDS = 30
 LEVELS = ["easy", "medium", "hard"]
 
 
@@ -119,6 +133,7 @@ class AutoRemoveRequest(BaseModel):
     refresh_open_minutes: int
     refresh_catalog_minutes: int
     refresh_ongoing_minutes: int
+    max_agents: int
 
 
 def auto_remove_issues() -> list[str]:
@@ -175,6 +190,8 @@ def put_auto_remove(body: AutoRemoveRequest) -> dict:
     for minutes in [body.refresh_open_minutes, body.refresh_catalog_minutes, body.refresh_ongoing_minutes]:
         if minutes < 1 or minutes > 1440:
             raise HTTPException(status_code=400, detail="Refresh every 1 to 1440 minutes.")
+    if body.max_agents < 1 or body.max_agents > 100:
+        raise HTTPException(status_code=400, detail="Max agents is 1 to 100.")
     rules = body.model_dump()
     AUTO_REMOVE_FILE.write_text(json.dumps(rules, indent=2))
     return {**rules, "removed": auto_remove_issues()}
@@ -526,3 +543,66 @@ async def keep_tags() -> None:
         except Exception:
             pass
         await asyncio.sleep(TAGS_CHECK_SECONDS)
+
+
+async def keep_catalog_agents() -> None:
+    """Runs as long as the backend: gives Catalog's cards to new agents from the top while fewer than max_agents work on
+    the board's issues (see the top of this file)."""
+    while True:
+        try:
+            take_from_catalog()
+        except Exception:
+            # A file or an agent failed: the next round tries again.
+            traceback.print_exc()
+        await asyncio.sleep(CATALOG_AGENTS_SECONDS)
+
+
+def take_from_catalog() -> None:
+    rules = dict(AUTO_REMOVE_OFF)
+    if AUTO_REMOVE_FILE.is_file():
+        rules.update(json.loads(AUTO_REMOVE_FILE.read_text()))
+    items = issues.items()
+    ids = [item["id"] for item in items]
+    all_jobs = jobs.list()
+
+    # The agents working on the board's issues now.
+    working = []
+    for job in all_jobs:
+        if job["status"] not in ("queued", "working"):
+            continue
+        if (job["issue"] in ids or job["thread"] is not None) and job["agent"] not in working:
+            working.append(job["agent"])
+    room = rules["max_agents"] - len(working)
+    if room <= 0:
+        return
+
+    # Each issue's latest job: Catalog's own cards have none, or a cancelled one.
+    latest = {}
+    for job in all_jobs:
+        if job["issue"] is not None and (job["issue"] not in latest or job["created_at"] > latest[job["issue"]]["created_at"]):
+            latest[job["issue"]] = job
+    board = issues.board()
+    facts = issue_facts.all()
+    tags = issue_tags.all()
+    waiting = []
+    for item in items:
+        if item["id"] not in board["catalog"] or item["id"] in board["held"]:
+            continue
+        if item["id"] in latest and latest[item["id"]]["status"] != "cancelled":
+            continue
+        fact = facts.get(item["id"])
+        state = fact["state"] if fact else item["state"]
+        if state == "CLOSED":
+            continue
+        # Like Assign (assign_issue): once its Merge is in, and not when that says it can't be done.
+        tag = tags.get(item["id"])
+        if tag is None or tag.get("merge") in (None, "fixed", "out of scope", "can't validate"):
+            continue
+        waiting.append(item["id"])
+    # From the top: the board's order, ones not placed yet after (sorted keeps them in the order they were added).
+    waiting.sort(key=lambda issue_id: board["order"].index(issue_id) if issue_id in board["order"] else len(board["order"]))
+
+    for issue_id in waiting[:room]:
+        agents.assign(issue_id, None, None)
+        board = issues.board()
+        issues.set_board([each for each in board["catalog"] if each != issue_id], board["order"], board["held"])
