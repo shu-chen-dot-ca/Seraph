@@ -7,9 +7,15 @@ The settings, by repo, in SETTINGS_FILE (a repo not in it has DEFAULTS):
     {"owner/name": {"take_issues", "questions", "comments", "pull_requests": bool, "levels": ["easy", ...],
                     "instructions": str}, ...}
 
+and an issue's own level (the robot on its card on the Issues board: frontend/src/IssueAutomationDialog.tsx), which goes
+over its repo's for the drafts of the jobs on that issue, in ISSUE_SETTINGS_FILE:
+
+    {"owner/name#n": {"questions", "comments", "pull_requests": bool}, ...}
+
 GET /api/repos/automation gives them all with the defaults; PUT /api/repos/automation gives the picked repos the same
-ones (the dialog's Save, for one repo or many). Questions, Comments and Pull requests are only kept so far. How many
-agents work at once is the Issues board's (max_agents in backend/issues_api.py), not a repo's.
+ones (the dialog's Save, for one repo or many); PUT /api/issues/automation sets one issue's own, or drops it (level
+null: its repo's counts again). Questions, Comments and Pull requests are only kept so far. How many agents work at
+once is the Issues board's (max_agents in backend/issues_api.py), not a repo's.
 
 keep_catalog() runs in the background, every CATALOG_CHECK_SECONDS. For each repo with Take issues on, its issues on the
 board's Open column (not of an archived repo) that the rules allow: no job (or only cancelled ones), not in Catalog, open, tagged free with merge
@@ -29,11 +35,13 @@ from pydantic import BaseModel
 
 from backend.shared import issue_tags, issues, jobs, repos
 from github_searcher.claude_judge import judge
+from github_searcher.inbox import AUTOMATION_FILE, ISSUE_AUTOMATION_FILE
 from github_searcher.issue_tags import DATA_DIR
 
 router = APIRouter(prefix="/api")
 
-SETTINGS_FILE = DATA_DIR / "repo_automation.json"
+SETTINGS_FILE = AUTOMATION_FILE
+ISSUE_SETTINGS_FILE = ISSUE_AUTOMATION_FILE
 PICKED_FILE = DATA_DIR / "catalog_picks.json"
 DEFAULTS = {
     "take_issues": False,
@@ -78,12 +86,40 @@ class AutomationRequest(BaseModel):
     instructions: str
 
 
+class IssueLevel(BaseModel):
+    questions: bool
+    comments: bool
+    pull_requests: bool
+
+
+class IssueAutomationRequest(BaseModel):
+    id: str  # owner/name#n
+    level: IssueLevel | None  # None: its repo's counts again
+
+
 @router.get("/repos/automation")
 def get_automation() -> dict:
     settings = {}
     if SETTINGS_FILE.is_file():
         settings = json.loads(SETTINGS_FILE.read_text())
-    return {"defaults": DEFAULTS, "repos": settings}
+    own = {}
+    if ISSUE_SETTINGS_FILE.is_file():
+        own = json.loads(ISSUE_SETTINGS_FILE.read_text())
+    return {"defaults": DEFAULTS, "repos": settings, "issues": own}
+
+
+@router.put("/issues/automation")
+def put_issue_automation(body: IssueAutomationRequest) -> dict:
+    """Set one issue's own level, or drop it (level None); returns every issue's."""
+    own = {}
+    if ISSUE_SETTINGS_FILE.is_file():
+        own = json.loads(ISSUE_SETTINGS_FILE.read_text())
+    if body.level is None:
+        own.pop(body.id, None)
+    else:
+        own[body.id] = body.level.model_dump()
+    ISSUE_SETTINGS_FILE.write_text(json.dumps(own, indent=2))
+    return {"issues": own}
 
 
 @router.put("/repos/automation")

@@ -128,6 +128,11 @@ DECISIONS = ["approved", "rejected", "replied"]
 # with the agent's recommendation, and the kinds of question that always wait for the user (all of them until the
 # user switches some off). Read from the file each time it is needed; these are the defaults.
 ASK_SETTINGS_FILE = DATA_DIR / "ask_settings.json"
+# What goes without the user, by repo: {"owner/name": {"take_issues", "questions", "comments", "pull_requests": bool,
+# "levels", "instructions"}}; and by issue, over its repo's: {"owner/name#n": {"questions", "comments",
+# "pull_requests": bool}}. Read from the files each time they are needed.
+AUTOMATION_FILE = DATA_DIR / "repo_automation.json"
+ISSUE_AUTOMATION_FILE = DATA_DIR / "issue_automation.json"
 ACTIONS_FILE = DATA_DIR / "actions.json"
 TIMER_MINUTES = 10
 MUST_WAIT = ["money", "sensitive", "github", "delete"]
