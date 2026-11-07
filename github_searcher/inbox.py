@@ -23,7 +23,7 @@ Approve on a PR or comment also sends it to GitHub as them, first; "sent" then s
      "rebase_of": "sha" | null (update_of only: the new version replaces the PR's commits, see below),
      "edited": bool (the user changed the title or text before deciding),
      "review": null | {"state": "waiting" | "passed" | "changes", "agent", "job", "notes", "at"} (pr only, see below),
-     "replaces": "owner/name#n" | null (pr only: the project PR this one is made again of, see below),
+     "replaces": "owner/name#n" | null (pr only: the older PR this one is made again of, see below),
      "previous": {"title", "body"} | null (edit only, see below),
      "options": ["what the user can pick", ...] (question only: [] when they answer in their own words),
      "recommended": "one of options" | null, "answer_by": ISO time | null, "must_wait": "money" | "sensitive" |
@@ -65,8 +65,9 @@ repositories agents develop all the time) by the project's reviewer, any other b
 waiting until the reviewer's verdict (Agents.give_review, review_finished). Drafts from before every PR was reviewed
 have none (null). passed: it shows in the Inbox, with the reviewer's notes. changes: it went back to its author and is
 rejected with the reviewer's notes, so it never shows. The Inbox only lists drafts with no review or a passed one.
-"replaces" is the project's open PR that conflicted with main and was made again on the new main (Agents.redo_pr): once
-this one is on GitHub, backend/projects_api.py closes that one.
+"replaces" is an older PR this one is made again of: a project's that conflicted with main (Agents.redo_pr), or one of
+the agent's own that stalled, made again fresh with a clean history (Agents.remake_pr, or the agent's own call: draft_pr
+replaces). Once this one is on GitHub, the old one is closed (github_account.py; backend/projects_api.py for a project's).
 
 "edit" is a new title and description for one of the user's own PRs or issues (a follow-up: a maintainer asked for
 it, or the text no longer matches the PR; work_tools.py draft_edit): "target" is it, "title" and "body" the new text,

@@ -79,6 +79,8 @@ of your PRs, delete a closed PR's branch from your fork, or delete one of your c
 issue's conversation in the thread pop-up). An agent's update_branch (work_tools.py, where the repo's Level of
 automation has Pull requests) is one too: GitHub's Update branch on your open PR, which merges its base in. It
 checks first that the PR is yours and the branch is in your fork.
+A PR draft with "replaces" (an older PR of yours made again fresh, inbox.py) closes that one once the new one is open;
+"sent" then has "closed": the old one's owner/name#n.
 open_issue(repo, title, body) opens an issue as you, assigned to you: an agent's open_issue (work_tools.py, where the
 repo's Level of automation has Open issues). GitHub keeps the assignee only when you may assign on that repo. Following your PRs is pr_tracking.py.
 
@@ -287,6 +289,19 @@ class GithubAccount:
                         sent = self.send_update(client, account, draft)
                     elif draft["kind"] == "pr":
                         sent = self.send_pr(client, account, draft)
+                        # Made again fresh in place of an older PR of yours: that one is closed now that this one is open.
+                        # The new PR is out either way, so a failure here only leaves the old one open.
+                        if draft["replaces"] is not None:
+                            old_repo, _, old_number = draft["replaces"].rpartition("#")
+                            self.step = f"closing {draft['replaces']}"
+                            try:
+                                response = client.get(f"/repos/{old_repo}/pulls/{old_number}")
+                                old = response.json() if response.is_success else None
+                                if old is not None and old["state"] == "open" and old["user"]["login"].lower() == account["login"].lower():
+                                    response = client.patch(f"/repos/{old_repo}/pulls/{old_number}", json={"state": "closed"})
+                                    sent["closed"] = draft["replaces"] if response.is_success else None
+                            except httpx.HTTPError:
+                                pass
                     elif draft["kind"] == "edit":
                         sent = self.send_edit(client, account, draft)
                     else:

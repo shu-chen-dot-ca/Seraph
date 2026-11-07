@@ -1388,6 +1388,42 @@ class Agents:
             text += f"\nIt is for {vm_name}: queue_for_vm when ready."
         self.notify(agent.id, text)
 
+    def remake_pr(self, pr: dict, days: int) -> dict | None:
+        """One of the user's PRs that an agent owns had no update on GitHub for days (backend/issues_api.py
+        keep_stale_prs): its agent makes it again as a fresh PR, all its changes on the newest base with a clean history
+        and a fresh description, as a fix_issue job whose thread is that PR. Its draft replaces the PR, which is closed
+        once the new one is on GitHub. pr is pr_tracking's entry. Returns the job, or None when its agent is gone."""
+        agent = self.agents.get(pr["agent"])
+        if agent is None:
+            return None
+        self.unarchive(agent.id)
+        issue_id = None
+        if pr["job"] is not None:
+            try:
+                issue_id = self.jobs.get(pr["job"])["issue"]
+            except KeyError:
+                pass
+        if issue_id is None and pr["issues"]:
+            issue_id = f"{pr['repo']}#{pr['issues'][0]['number']}"
+        title = f"Remake #{pr['number']} fresh: {pr['title']}"
+        vm_name = agent.record["target_vm"]
+        job = self.jobs.create("fix_issue", title, agent.id, "user", issue=issue_id, repo=pr["repo"], vm=vm_name, thread=pr["id"], agent_name=agent.name)
+        text = (
+            f"New job {job['id']}: {title}\n"
+            f"Your PR {pr['id']} ({pr['url']}) has had no update on GitHub for {days} days: it stalled. Make it again as a "
+            "fresh PR with a clean history. read_issue on it first: every review point and comment there must be done in "
+            "the new one. Then sync_code, a new branch from the newest default branch, all of its changes on top again "
+            "(squashed into one commit, or a few clean ones the way the project's rules want), with every point the "
+            "reviewers made done. Then as for any fix: the tests on the newest code (when: before) and with your change "
+            "(when: after), the before and after pictures again, and draft_pr: a fresh title and description written to "
+            f"the project's rules, with 'Supersedes #{pr['number']}' in it. Its draft replaces {pr['id']}: once the new PR is "
+            "on GitHub, the old one is closed."
+        )
+        if vm_name is not None:
+            text += f"\nIt is for {vm_name}: queue_for_vm when ready."
+        self.notify(agent.id, text)
+        return job
+
     def give_crashes(self, repo: str, items: list[dict]) -> None:
         """The app's new errors (crashes.py) for the chat agent of the app's own repo (backend/projects_api.py), to turn
         into issues with crash_report."""

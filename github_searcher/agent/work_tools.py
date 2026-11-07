@@ -61,6 +61,8 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   job whose issue turns out invalid before anything was claimed or made (fixed already, a duplicate, someone else's
   open PR, a maintainer said no): the job is cancelled with why, a pending draft of it withdrawn, and the issue is taken
   off the Issues board for good (nothing on GitHub changes).
+- A stalled PR of its own is made again as a fresh one: draft_pr with replaces (and every remake job,
+  Agents.remake_pr, does it by itself); once the new one is on GitHub the old one is closed (github_account.py).
 - Questions: draft_question is only for what matters to the user; small choices the agent makes itself and says so in
   its progress. A question with options names the one the agent recommends, and is timed: when the user doesn't answer
   within the timer of their Settings, the app answers it with that recommendation (Agents.answer_questions). One about
@@ -768,6 +770,14 @@ class WorkTools:
                         "body": {"type": "string"},
                         "pr": {"type": "string", "description": "owner/name#number of the user's open PR this is the next version of; leave it out for a new PR."},
                         "rebase": {"type": "boolean", "description": "With pr: your commits replace the PR's (a rebase, squash, reword or sign-off) and approving force-pushes them."},
+                        "replaces": {
+                            "type": "string",
+                            "description": (
+                                "owner/name#number of a PR of yours this new PR replaces: a fresh one with all its changes and a clean "
+                                "history in place of one that stalled (long quiet, or buried in rounds of comments). The old one is "
+                                "closed once this one is on GitHub. A remake job's draft replaces its PR by itself."
+                            ),
+                        },
                         "project": {"type": "string", "description": "One line: what the project is, e.g. 'matplotlib: a Python library that draws charts'."},
                         "problem": {
                             "type": "string",
@@ -2707,6 +2717,22 @@ class WorkTools:
         rebase = args.get("rebase") is True
         if rebase and pr is None:
             return {"content": [{"type": "text", "text": "rebase is only for a new version of the user's open PR: give pr too."}], "is_error": True}
+        # A fresh PR in place of one of its own that stalled: the old one is closed once this one is on GitHub. A remake
+        # job's (Agents.remake_pr: a fix_issue job whose thread is that PR) does it by itself.
+        replaces = (args.get("replaces") or "").strip() or None
+        if replaces is None and job["kind"] == "fix_issue" and job["thread"] is not None:
+            replaces = job["thread"]
+        if replaces is not None and pr is not None:
+            return {"content": [{"type": "text", "text": "replaces is for a new PR in place of an old one: leave pr and rebase out."}], "is_error": True}
+        if replaces is not None:
+            owned = []
+            for each in self.agents.inbox.list():
+                sent = each["sent"]
+                if each["agent"] == self.agent_id and each["kind"] == "pr" and sent is not None and not sent.get("update"):
+                    owned.append(f"{sent['repo']}#{sent['number']}".lower())
+            if replaces.lower() not in owned and not (job["kind"] == "fix_issue" and job["thread"] == replaces):
+                text = f"{replaces} isn't a PR of yours (one the app opened from your draft): only your own is made again fresh."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
         # One of the Workflow tab's repositories (github_searcher/workflow.py), from its own worker: the pull request goes
         # there, to its review agent, not to the Inbox. Every change there is a new pull request.
         workflow = None
@@ -3178,7 +3204,6 @@ class WorkTools:
         # Every PR draft goes to a reviewer first, and reaches the Inbox only when the review passes (Agents.give_review). A
         # project's one made again on the new main replaces the PR its job is about (Agents.redo_pr).
         review = {"state": "waiting", "agent": None, "job": None, "notes": "", "at": datetime.now(UTC).isoformat()}
-        replaces = None
         if project is not None:
             replaces = job["thread"]
         draft = self.agents.inbox.create(
