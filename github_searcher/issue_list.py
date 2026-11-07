@@ -39,7 +39,7 @@ UNDO_LIMIT = 100
 # Only the last few undo/redo steps go into the file: with a long list, all UNDO_LIMIT copies
 # make it tens of MB, written on every change. The others last until the backend restarts.
 SAVED_STEPS = 10
-WORKING = ["queued", "working", "waiting_on_user", "waiting_on_maintainers"]
+WORKING = ["queued", "working", "waiting_on_user", "waiting_on_maintainers", "paused"]
 
 
 class IssueList:

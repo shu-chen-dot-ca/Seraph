@@ -1402,6 +1402,9 @@ class WorkTools:
         if job["status"] in CLOSED_STATUSES:
             text = f"{job['id']} is {job['status']} (the user may have cancelled it); it can't change anymore. Move on."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if job["status"] == "paused":
+            text = f"The user paused {job['id']}. Leave it as it is until they resume it; you will be told."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
         fields = {}
         if args.get("status"):
             fields["status"] = args["status"]
@@ -1440,6 +1443,9 @@ class WorkTools:
             return {"content": [{"type": "text", "text": f"{job['id']} is not your job."}], "is_error": True}
         if job["status"] in CLOSED_STATUSES:
             text = f"{job['id']} is {job['status']} (the user may have cancelled it); it can't change anymore. Move on."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if job["status"] == "paused":
+            text = f"The user paused {job['id']}. Leave it as it is until they resume it; you will be told."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         headline = args["headline"].strip()
         if not headline:

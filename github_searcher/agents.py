@@ -796,6 +796,39 @@ class Agents:
     async def interrupt(self, agent_id: str) -> None:
         await self.agents[agent_id].interrupt()
 
+    async def pause_job(self, job_id: str) -> None:
+        """The user paused the issue the job is for (Pause on the Dashboard's Issues board): the job stops as it is
+        (paused, with paused_from), and when its agent was working on it, so does the agent: its turn, its desktop lock
+        and what it runs in the VM. The agent hears it with its next turn; this doesn't wake it."""
+        job = self.jobs.get(job_id)
+        if job["status"] not in ("queued", "working", "waiting_on_user"):
+            return
+        self.jobs.update(job_id, status="paused", paused_from=job["status"])
+        self.jobs.add_timeline(job_id, "status", "Paused by you")
+        agent_id = job["agent"]
+        if agent_id not in self.agents:
+            return
+        text = f"The user paused {job_id} ({job['title']}). Don't work on it at all until they resume it; you will be told."
+        self.pending[agent_id].append({"from": "System", "text": text, "shown": False})
+        if job["status"] == "working":
+            agent = self.agents[agent_id]
+            await agent.interrupt()
+            agent.computer_tools.end_turn()
+            await self.stop_runs(agent_id)
+            vm_name, place = self.queue.place(agent_id)
+            if vm_name is not None:
+                await asyncio.to_thread(agent.computer_tools.cancel, vm_name)
+        self.version += 1
+
+    def resume_job(self, job_id: str) -> None:
+        """Resume on the board: the paused job gets its status back, and its agent is woken to go on with it."""
+        job = self.jobs.get(job_id)
+        if job["status"] != "paused":
+            return
+        self.jobs.update(job_id, status=job.get("paused_from") or "queued", paused_from=None)
+        self.jobs.add_timeline(job_id, "status", "Resumed by you")
+        self.notify(job["agent"], f"The user resumed {job_id} ({job['title']}): go on with it where you left off.")
+
     def set_target_vm(self, agent_id: str, vm_name: str | None, by_agent: bool = False) -> None:
         """The VM the agent works in. Its unfinished jobs move along. Not while it waits for or holds a VM.
 

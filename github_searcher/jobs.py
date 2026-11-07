@@ -15,7 +15,8 @@ Each job is one JSON file, DATA_DIR/jobs/<id>.json:
     {"id": "job_a1b2c3", "kind": "fix_issue" | "set_up_repo" | "task" | "follow_up" | "reproduce_paper" | ..., "title",
      "agent": "<agent id>", "issue": "owner/name#n" | null, "thread": "owner/name#n" (follow_up) | null,
      "paper": "papers/name.pdf" (reproduce_paper) | null, "repo": "owner/name" | null, "vm": "vm1" | null,
-     "status": "queued" | "working" | "waiting_on_user" | "waiting_on_maintainers" | "done" | "cancelled",
+     "status": "queued" | "working" | "waiting_on_user" | "waiting_on_maintainers" | "paused" | "done" | "cancelled",
+     "paused_from": the status it had before it was paused | null,
      "instructions": "extra text from the user", "notes": "the agent's progress notes",
      "drafts": ["draft_..."], "evidence": [Evidence, ...], "created_by": "user" | "<agent id>",
      "timeline": [Entry, ...], "created_at", "updated_at"}
@@ -23,6 +24,9 @@ Each job is one JSON file, DATA_DIR/jobs/<id>.json:
 "kind" is open-ended: a kind not in STEPS gets the "task" steps, so new kinds need no change.
 waiting_on_maintainers: not set anymore. It was a fix_issue job held up after its claim comment until GitHub showed the
 user assigned; now a claim holds nothing up (agents.py), as nobody's answer is waited for.
+paused: the user paused the issue it is for (Pause on the Dashboard's Issues board, Agents.pause_job). It is not open:
+its agent doesn't work on it, nothing reminds or wakes it for it, and its tools refuse to change it, until Resume puts
+paused_from back (Agents.resume_job).
 Jobs are never deleted: when an agent is deleted, its open jobs become "cancelled".
 
 Progress, which the agent sets with job_progress so the user can follow along without knowing the code:
@@ -97,9 +101,9 @@ load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 DATA_DIR = PROJECT_ROOT / os.environ["DATA_DIR"]
 EVIDENCE_DIR = DATA_DIR / "evidence"
-STATUSES = ["queued", "working", "waiting_on_user", "waiting_on_maintainers", "done", "cancelled"]
+STATUSES = ["queued", "working", "waiting_on_user", "waiting_on_maintainers", "paused", "done", "cancelled"]
 # The fields update() may change. The others are set once, by create().
-UPDATABLE = ["status", "notes", "vm", "drafts", "title", "instructions", "step", "about", "headline", "detail", "tests"]
+UPDATABLE = ["status", "notes", "vm", "drafts", "title", "instructions", "step", "about", "headline", "detail", "tests", "paused_from"]
 # The steps each kind of job goes through, in order. Kinds not listed use "task".
 STEPS = {
     "fix_issue": ["understand", "set_up", "reproduce", "fix", "test", "draft"],

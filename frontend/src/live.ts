@@ -353,7 +353,8 @@ export type EvidenceItem = {
   created_at: string;
 };
 
-export type JobStatus = "queued" | "working" | "waiting_on_user" | "waiting_on_maintainers" | "done" | "cancelled";
+// paused: the user paused its issue on the Dashboard's Issues board; paused_from is the status it goes back to on Resume.
+export type JobStatus = "queued" | "working" | "waiting_on_user" | "waiting_on_maintainers" | "paused" | "done" | "cancelled";
 
 export type Job = {
   id: string;
@@ -378,6 +379,7 @@ export type Job = {
   step: string | null;
   step_at: string | null; // when it got to that step
   started_at: string | null; // when the job first became "working"
+  paused_from?: JobStatus | null; // paused: the status Resume puts back
   about: string; // what the job is about, in everyday words
   headline: string; // where it stands now, in everyday words
   detail: string; // the same, technical
