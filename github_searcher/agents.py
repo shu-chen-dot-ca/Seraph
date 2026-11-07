@@ -1506,8 +1506,9 @@ class Agents:
             self.notify(job["agent"], text)
 
     def stop_job(self, job_id: str, why: str) -> None:
-        """The app no longer wants this job done (backend/issues_api.py: its issue was deleted on GitHub, or its repo
-        left Repos). Its agent is told to stop and cancel it itself, once: the notice on its timeline says so."""
+        """The app no longer wants this job done (backend/issues_api.py: its issue was deleted on GitHub, its repo left
+        Repos, or its repo doesn't take AI-made contributions). Its agent is told to stop and cancel it itself, once:
+        the notice on its timeline says so."""
         job = self.jobs.get(job_id)
         told = [entry for entry in job["timeline"] if entry["kind"] == "notice" and entry["text"].endswith("told the agent to stop")]
         if told or job["agent"] not in self.agents or job["status"] in ["done", "cancelled"]:

@@ -46,7 +46,8 @@ What each does:
   are on it), where the project's rules allow it (open_issue, work_tools.py); each goes to the top of the Issues
   board's Catalog, before every other card, where an agent takes it first when the repo's Take issues is on.
 
-keep_adding() runs in the background, every ADD_CHECK_SECONDS. For each repo in Repos (not archived) with Add issues on,
+keep_adding() runs in the background, every ADD_CHECK_SECONDS. For each repo in Repos (not archived, and not one that
+doesn't take AI-made contributions: AI policy no_ai, repo_signals.py) with Add issues on,
 it reads all its open issues from GitHub, every ADD_REFRESH_SECONDS (at once after Add issues is turned on, or the
 backend starts). Each issue only once: one it added, or that was in the Issues list when it looked, is kept in
 ADDED_FILE and never added again, so one you take off stays off (Add in the repo's pop-up on the Repository page still
@@ -81,7 +82,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.issues_api import AUTO_REMOVE_FILE, AUTO_REMOVE_OFF
-from backend.shared import agents, github_account, inbox, issue_facts, issue_tags, issues, jobs, pr_tracking, repos
+from backend.shared import agents, github_account, inbox, issue_facts, issue_tags, issues, jobs, pr_tracking, repo_signals, repos
 from github_searcher.claude_judge import judge
 from github_searcher.github_account import SendError
 from github_searcher.inbox import AUTOMATION_FILE, ISSUE_AUTOMATION_FILE
@@ -319,8 +320,10 @@ async def add_issues() -> None:
     added = []
     if ADDED_FILE.is_file():
         added = json.loads(ADDED_FILE.read_text())["added"]
-    archived = [name.lower() for name in repos.archived()]
-    names = [item["full_name"] for item in repos.items() if item["full_name"].lower() not in archived]
+    # Not an archived repo, nor one that doesn't take AI-made contributions (its AI policy, repo_signals.py).
+    skipped = [name.lower() for name in repos.archived()]
+    skipped += [name.lower() for name, each in repo_signals.all().items() if (each.get("ai_policy") or {}).get("tag") == "no_ai"]
+    names = [item["full_name"] for item in repos.items() if item["full_name"].lower() not in skipped]
     # How many of your PRs each repo merged (lower case): until one is, its levels_first are the levels.
     merged = {}
     for pr in pr_tracking.summary()["items"]:

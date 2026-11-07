@@ -71,8 +71,9 @@ every STALE_CHECK_SECONDS. Once per PR: not while a job on it is open, and never
 
 An open job on a board issue the app no longer wants done is stopped by its agent (Agents.stop_job tells it, once):
 the issue was deleted on GitHub or moved away (keep_facts finds it gone, drop_gone_issue: it then leaves the list for
-good, so nothing tags, queues or takes it again), or its repo was deleted from Repos (stop_unwanted_jobs, every
-CATALOG_AGENTS_SECONDS).
+good, so nothing tags, queues or takes it again), its repo was deleted from Repos, or the repo doesn't take AI-made
+contributions (AI policy no_ai, repo_signals.py; stop_unwanted_jobs, every CATALOG_AGENTS_SECONDS). Catalog and Assign
+never give an agent an issue of a no_ai repo.
 
 When an issue goes from free to assigned either way, Agents.issue_taken tells the agent with a job on it who has it
 (the assignees from its facts, or the tags' reason), and the agent decides itself whether to keep working or stop.
@@ -88,7 +89,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.shared import agents, issue_facts, issue_tags, issues, jobs, pr_tracking, repos, tracked, tracked_issues
+from backend.shared import agents, issue_facts, issue_tags, issues, jobs, pr_tracking, repo_signals, repos, tracked, tracked_issues
 from github_searcher.inbox import AUTOMATION_FILE
 from github_searcher.issue_tags import CHECKS, DATA_DIR, NAME_VERSION, RULES_VERSION
 from github_searcher.search import CACHE, get_thread
@@ -428,6 +429,9 @@ async def assign_issue(body: AssignRequest) -> dict:
         raise HTTPException(status_code=409, detail=f"{body.issue} is being tagged: it can be assigned once its Merge is in, in a minute.")
     if tags["merge"] in ("fixed", "out of scope", "can't validate"):
         raise HTTPException(status_code=409, detail=f"{body.issue}'s Merge is {tags['merge']}, so it can't be assigned.")
+    no_ai = [name.lower() for name, each in repo_signals.all().items() if (each.get("ai_policy") or {}).get("tag") == "no_ai"]
+    if body.issue.split("#")[0].lower() in no_ai:
+        raise HTTPException(status_code=409, detail=f"{body.issue.split('#')[0]} doesn't take AI-made contributions (its AI policy), so no agent works there.")
     try:
         return agents.assign(body.issue, body.agent, body.vm, body.instructions)
     except KeyError as error:
@@ -675,16 +679,21 @@ async def keep_catalog_agents() -> None:
 
 
 def stop_unwanted_jobs() -> None:
-    """Open jobs on the board's issues that the app no longer wants done: their repo was deleted from Repos. Each one's
-    agent is told to stop and cancel it (Agents.stop_job), once. An archived repo stays in Repos: its jobs go on."""
+    """Open jobs on the board's issues that the app no longer wants done: their repo was deleted from Repos, or it
+    doesn't take AI-made contributions (AI policy no_ai). Each one's agent is told to stop and cancel it (Agents.stop_job),
+    once. An archived repo stays in Repos: its jobs go on."""
     ids = [item["id"] for item in issues.items()]
     in_repos = [item["full_name"].lower() for item in repos.items()]
+    signals = repo_signals.all()
+    no_ai = [name.lower() for name, each in signals.items() if (each.get("ai_policy") or {}).get("tag") == "no_ai"]
     for job in jobs.list():
         if job["kind"] != "fix_issue" or job["issue"] not in ids or job["status"] in ["done", "cancelled"]:
             continue
         repo = job["issue"].split("#")[0]
         if repo.lower() not in in_repos:
             agents.stop_job(job["id"], f"{repo} was deleted from Repos: the user doesn't want work there anymore.")
+        elif repo.lower() in no_ai:
+            agents.stop_job(job["id"], f"{repo} doesn't take AI-made contributions (its AI policy), and we only work as an AI agent.")
 
 
 def take_from_catalog() -> None:
@@ -719,9 +728,13 @@ def take_from_catalog() -> None:
     if AUTOMATION_FILE.is_file():
         settings = json.loads(AUTOMATION_FILE.read_text())
     taking = [repo.lower() for repo, each in settings.items() if each.get("take_issues")]
+    no_ai = [name.lower() for name, each in repo_signals.all().items() if (each.get("ai_policy") or {}).get("tag") == "no_ai"]
     waiting = []
     for item in items:
         if item["id"] not in board["catalog"] or item["id"] in board["held"] or item["repo"].lower() not in taking:
+            continue
+        # Never a repo that doesn't take AI-made contributions (its AI policy, repo_signals.py).
+        if item["repo"].lower() in no_ai:
             continue
         if item["id"] in latest and latest[item["id"]]["status"] != "cancelled":
             continue
