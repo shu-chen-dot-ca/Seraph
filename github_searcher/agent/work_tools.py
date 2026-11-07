@@ -56,8 +56,11 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   the Dashboard's Actions (Inbox.add_action), like every sent draft.
 - Reading first: read_issue reads an issue or PR in full, right then (never cached): every comment, where it was
   mentioned (issues, PRs, commits), the PRs linked to it or that would close it with their checks and newest comments,
-  assignments and labels, and the checks on the default branch. draft_comment on a thread and a fix_issue job going
-  past understand (taking it) refuse until it was read so within READ_SECONDS.
+  assignments and labels, and the checks on the default branch. draft_comment on a thread, a fix_issue job going past
+  understand (taking it) and close_issue refuse until it was read so within READ_SECONDS. close_issue ends a fix_issue
+  job whose issue turns out invalid before anything was claimed or made (fixed already, a duplicate, someone else's
+  open PR, a maintainer said no): the job is cancelled with why, a pending draft of it withdrawn, and the issue is taken
+  off the Issues board for good (nothing on GitHub changes).
 - Questions: draft_question is only for what matters to the user; small choices the agent makes itself and says so in
   its progress. A question with options names the one the agent recommends, and is timed: when the user doesn't answer
   within the timer of their Settings, the app answers it with that recommendation (Agents.answer_questions). One about
@@ -177,8 +180,8 @@ TAIL_CHARS = 2000
 TEST_TIMEOUT = long_runs.RUN_LIMIT_SECONDS
 # A fix_issue job can't go past set_up until its tests passed on the unchanged code.
 STEPS_AFTER_SETUP = ["reproduce", "fix", "test", "draft"]
-# How long ago read_issue may have read an issue or PR for a comment on it, or for taking it (a fix_issue job
-# going past understand): newer comments, PRs and checks may have come since.
+# How long ago read_issue may have read an issue or PR for a comment on it, for taking it (a fix_issue job going past
+# understand), or for closing it: newer comments, PRs and checks may have come since.
 READ_SECONDS = 60 * 60
 # What a test run covers: focused, the basic checks (the tests that cover the change: the default), or full, the
 # project's official checks (what its rules ask to run before a PR, e.g. the whole suite and its lint script).
@@ -545,12 +548,26 @@ class WorkTools:
                 "Read an issue or PR (owner/name#number) in full, as it is right now: its text, every comment, where it was "
                 "mentioned (other issues, PRs and commits), the PRs linked to it or that would close it with their state, "
                 "review, checks and newest comments, who was assigned and when, its labels, and the checks on the repo's "
-                "default branch (and a PR's own reviews and checks). Read it before you take an issue, claim it or comment on it: "
-                "draft_comment and a fix_issue job going past understand refuse until you read it "
+                "default branch (and a PR's own reviews and checks). Read it before you take an issue, claim it, comment on it "
+                "or close it: draft_comment, close_issue and a fix_issue job going past understand refuse until you read it "
                 "within the hour. Read all of it, and every related PR it shows: someone may be on it, it may be fixed "
                 "already or a duplicate, or a maintainer may have said how (or whether) they want it done.",
                 {"type": "object", "properties": {"thread": {"type": "string"}}, "required": ["thread"]},
             )(self.read_issue),
+            tool(
+                "close_issue",
+                "Close a fix_issue job's issue for us when reading it in full (read_issue) shows it is invalid, before you claim "
+                "or make anything: fixed already (a merged PR, a commit, the newest code), a duplicate, someone else's open "
+                "PR for it, a maintainer said it won't be done or wants it done another way, or it can't be what it says. The "
+                "job is cancelled with your reason, a pending draft of it is withdrawn, and the issue leaves the Issues board "
+                "for good, so no agent takes it again. Nothing on GitHub changes. reason: one or two plain sentences, with "
+                "the link that shows it (the PR, the comment).",
+                {
+                    "type": "object",
+                    "properties": {"job_id": {"type": "string"}, "reason": {"type": "string"}},
+                    "required": ["job_id", "reason"],
+                },
+            )(self.close_issue),
             tool(
                 "draft_question",
                 "Ask the user a question through their Inbox, only when the answer matters. Small choices are yours (how to "
@@ -968,6 +985,8 @@ class WorkTools:
             return f"Updating the branch of {args.get('pr')}"
         if name == "read_issue":
             return f"Reading {args.get('thread')} in full"
+        if name == "close_issue":
+            return f"Closing the issue of {args.get('job_id')}: {args.get('reason')}"
         if name == "paper_read":
             return f"Reading the paper, pages {args.get('pages')}"
         if name == "draft_report":
@@ -1530,7 +1549,10 @@ class WorkTools:
         if job["kind"] == "fix_issue" and job["issue"] is not None and step not in [None, "understand"] and job["step"] in [None, "understand"]:
             read_at = self.threads_read.get(job["issue"].lower())
             if read_at is None or time.time() - read_at > READ_SECONDS:
-                text = f"First read {job['issue']} in full with read_issue: every comment, mention, related PR and check."
+                text = (
+                    f"First read {job['issue']} in full with read_issue: every comment, mention, related PR and check. If it "
+                    "turns out invalid (fixed already, a duplicate, someone else's PR, a maintainer said no), close_issue instead."
+                )
                 return {"content": [{"type": "text", "text": text}], "is_error": True}
         # The tests have to work on the unchanged code before any change is made. When another job on the same repo
         # already got the official checks passing on this VM, the project is set up there: that run counts for this job too.
@@ -1991,6 +2013,44 @@ class WorkTools:
 
         self.threads_read[thread.lower()] = time.time()
         return {"content": [{"type": "text", "text": json.dumps(result)}]}
+
+    async def close_issue(self, args: dict) -> dict:
+        try:
+            job = self.agents.jobs.get(args["job_id"])
+        except KeyError:
+            return {"content": [{"type": "text", "text": f"No job {args['job_id']}."}], "is_error": True}
+        if job["agent"] != self.agent_id:
+            return {"content": [{"type": "text", "text": f"{job['id']} is not your job."}], "is_error": True}
+        if job["kind"] != "fix_issue" or job["issue"] is None:
+            return {"content": [{"type": "text", "text": "close_issue is for a fix_issue job's issue."}], "is_error": True}
+        if job["status"] in CLOSED_STATUSES:
+            text = f"{job['id']} is {job['status']} already; nothing to close."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        reason = args["reason"].strip()
+        if not reason:
+            return {"content": [{"type": "text", "text": "Say why, with the link that shows it."}], "is_error": True}
+        read_at = self.threads_read.get(job["issue"].lower())
+        if read_at is None or time.time() - read_at > READ_SECONDS:
+            text = f"First read {job['issue']} in full with read_issue, then decide."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        for draft_id in job["drafts"]:
+            try:
+                draft = self.agents.inbox.get(draft_id)
+            except KeyError:
+                continue
+            if draft["status"] == "pending":
+                self.agents.inbox.decide(draft_id, "rejected", f"Withdrawn by {self.record['name']}: {reason}")
+        self.agents.jobs.add_timeline(job["id"], "status", f"Closed by {self.record['name']}: {reason}")
+        self.agents.jobs.update(job["id"], status="cancelled", notes=reason)
+        result = await asyncio.to_thread(self.agents.issues.dismiss, [job["issue"]])
+        text = f"Closed: {job['id']} is cancelled, and {job['issue']} is off the Issues board for good. Nothing on GitHub changed."
+        if result["working"]:
+            text = f"{job['id']} is cancelled. {job['issue']} stays on the Issues board: another job on it is still open."
+        vm_name, place = self.agents.queue.place(self.agent_id)
+        left = [other for other in self.agents.jobs.for_agent(self.agent_id) if other["status"] in OPEN_STATUSES and other["vm"] == vm_name]
+        if place == 0 and not left:
+            text += f" You have no open jobs left for {vm_name}: call release_vm now."
+        return {"content": [{"type": "text", "text": text}]}
 
     async def draft_question(self, args: dict) -> dict:
         question = args["question"].strip()
