@@ -60,6 +60,12 @@ you), and only cards that are Catalog's own: no job (or only cancelled ones), no
 Merge in and not fixed, out of scope or can't validate (the others wait there). A card taken leaves Catalog's list, so
 its job keeps it on the board, and a job cancelled later sends it back to Open, not to the next agent.
 
+The same robot's stale_pr_days (14 at first, None: off) closes PRs that stalled: an open PR of yours that an agent owns
+(opened from its draft, never one you opened by hand) with no update on GitHub for that many days is made again by its
+agent as a fresh PR, all its changes on the newest code with a clean history and every review point done
+(Agents.remake_pr); once the new one is on GitHub the old one is closed (github_account.py). keep_stale_prs() looks
+every STALE_CHECK_SECONDS. Once per PR: not while a job on it is open, and never again after its remake job.
+
 When an issue goes from free to assigned either way, Agents.issue_taken tells the agent with a job on it who has it
 (the assignees from its facts, or the tags' reason), and the agent decides itself whether to keep working or stop.
 """
@@ -74,7 +80,7 @@ from datetime import UTC, datetime, timedelta
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.shared import agents, issue_facts, issue_tags, issues, jobs, repos, tracked, tracked_issues
+from backend.shared import agents, issue_facts, issue_tags, issues, jobs, pr_tracking, repos, tracked, tracked_issues
 from github_searcher.inbox import AUTOMATION_FILE
 from github_searcher.issue_tags import CHECKS, DATA_DIR, NAME_VERSION, RULES_VERSION
 from github_searcher.search import CACHE, get_thread
@@ -106,9 +112,13 @@ AUTO_REMOVE_OFF = {
     "refresh_ongoing_minutes": 5,
     # Agents working on the board's issues at once, the next from the top of Catalog (keep_catalog_agents).
     "max_agents": 3,
+    # An open PR an agent owns with no update on GitHub for this many days is made again fresh (keep_stale_prs); None: off.
+    "stale_pr_days": 14,
 }
 # How often keep_catalog_agents looks for room for another agent on the board.
 CATALOG_AGENTS_SECONDS = 30
+# How often keep_stale_prs looks for PRs with no update for stale_pr_days.
+STALE_CHECK_SECONDS = 10 * 60
 LEVELS = ["easy", "medium", "hard"]
 
 
@@ -152,6 +162,7 @@ class AutoRemoveRequest(BaseModel):
     refresh_catalog_minutes: int
     refresh_ongoing_minutes: int
     max_agents: int
+    stale_pr_days: int | None = 14  # None: off
 
 
 def auto_remove_issues() -> list[str]:
@@ -223,6 +234,8 @@ def put_auto_remove(body: AutoRemoveRequest) -> dict:
             raise HTTPException(status_code=400, detail="Refresh every 1 to 1440 minutes.")
     if body.max_agents < 1 or body.max_agents > 100:
         raise HTTPException(status_code=400, detail="Max agents is 1 to 100.")
+    if body.stale_pr_days is not None and (body.stale_pr_days < 1 or body.stale_pr_days > 365):
+        raise HTTPException(status_code=400, detail="Close inactive PRs after 1 to 365 days.")
     rules = body.model_dump()
     AUTO_REMOVE_FILE.write_text(json.dumps(rules, indent=2))
     return {**rules, "removed": auto_remove_issues()}
@@ -693,3 +706,38 @@ def take_from_catalog() -> None:
         agents.assign(issue_id, None, None)
         board = issues.board()
         issues.set_board([each for each in board["catalog"] if each != issue_id], board["order"], board["held"])
+
+
+async def keep_stale_prs() -> None:
+    """Runs as long as the backend: has the PRs that stalled made again fresh (see the top of this file)."""
+    while True:
+        try:
+            remake_stale_prs()
+        except Exception:
+            # A file or an agent failed: the next round tries again.
+            traceback.print_exc()
+        await asyncio.sleep(STALE_CHECK_SECONDS)
+
+
+def remake_stale_prs() -> None:
+    rules = dict(AUTO_REMOVE_OFF)
+    if AUTO_REMOVE_FILE.is_file():
+        rules.update(json.loads(AUTO_REMOVE_FILE.read_text()))
+    if rules["stale_pr_days"] is None:
+        return
+    # GitHub's own format, so it compares as text with the PRs' updated_at.
+    cutoff = (datetime.now(UTC) - timedelta(days=rules["stale_pr_days"])).strftime("%Y-%m-%dT%H:%M:%SZ")
+    all_jobs = jobs.list()
+    for pr in pr_tracking.summary()["items"]:
+        # Only an open PR of yours an agent owns: never one you opened by hand.
+        if pr["relation"] != "author" or pr["state"] != "open" or pr["agent"] is None or pr["draft_id"] is None:
+            continue
+        if pr["updated_at"] > cutoff:
+            continue
+        # Once: not while a job on it is open, and never again after its remake job.
+        taken = False
+        for job in all_jobs:
+            if job["thread"] == pr["id"] and (job["kind"] == "fix_issue" or job["status"] in ["queued", "working", "waiting_on_user"]):
+                taken = True
+        if not taken:
+            agents.remake_pr(pr, rules["stale_pr_days"])

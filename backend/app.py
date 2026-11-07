@@ -118,6 +118,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(repo_automation_api.keep_catalog()),
         asyncio.create_task(repo_automation_api.keep_drafts()),
         asyncio.create_task(issues_api.keep_catalog_agents()),
+        asyncio.create_task(issues_api.keep_stale_prs()),
         asyncio.create_task(repos_api.keep_signals()),
         asyncio.create_task(tracked_api.keep_tracked()),
         asyncio.create_task(github_api.keep_prs()),
