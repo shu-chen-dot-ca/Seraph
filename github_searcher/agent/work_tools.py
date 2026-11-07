@@ -61,7 +61,10 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   job whose issue turns out invalid before anything was claimed or made (fixed already, a duplicate, someone else's
   open PR, a maintainer said no): the job is cancelled with why, a pending draft of it withdrawn, and the issue is taken
   off the Issues board for good (nothing on GitHub changes).
-- A stalled PR of its own is made again as a fresh one: draft_pr with replaces (and every remake job,
+- Taking back, only what the agent itself sent and where the repo's Level of automation allows it (Comments, Pull
+  requests): delete_comment (a comment posted from its draft), close_pr (a PR opened from its draft) and drop_commits
+  (its newest pushes on a PR of its own: the branch goes back to a commit it had before one of them, only while nobody
+  pushed since). A stalled PR of its own is made again as a fresh one: draft_pr with replaces (and every remake job,
   Agents.remake_pr, does it by itself); once the new one is on GitHub the old one is closed (github_account.py).
 - Questions: draft_question is only for what matters to the user; small choices the agent makes itself and says so in
   its progress. A question with options names the one the agent recommends, and is timed: when the user doesn't answer
@@ -571,6 +574,34 @@ class WorkTools:
                 },
             )(self.close_issue),
             tool(
+                "delete_comment",
+                "Take back a comment of yours: one the app posted on GitHub from your draft (comment: its link, as your "
+                "decision message gave it). Only where the user lets agents post comments there (the repo's Level of "
+                "automation: Comments). For a comment that is wrong or no longer needed (a claim on an issue you closed, a "
+                "reply that missed the point).",
+                {"type": "object", "properties": {"comment": {"type": "string"}}, "required": ["comment"]},
+            )(self.delete_comment),
+            tool(
+                "close_pr",
+                "Take back a PR of yours (pr: owner/name#number): one the app opened from your draft. Only where the user lets "
+                "agents send PRs there (the repo's Level of automation: Pull requests). For one that shouldn't be there "
+                "anymore (the issue turned out invalid, it was a mistake). A stalled one is made again instead: draft_pr with "
+                "replaces.",
+                {"type": "object", "properties": {"pr": {"type": "string"}}, "required": ["pr"]},
+            )(self.close_pr),
+            tool(
+                "drop_commits",
+                "Take back your newest commits on a PR of yours (pr: owner/name#number): its branch goes back to back_to, a "
+                "commit it had before one of your pushes (the commit your earlier push ended on, or the PR's newest commit "
+                "before your push or rebase), force-pushed. Only your own pushes, only while nobody pushed after your last one, "
+                "and only where the user lets agents send PRs there (the repo's Level of automation: Pull requests).",
+                {
+                    "type": "object",
+                    "properties": {"pr": {"type": "string"}, "back_to": {"type": "string"}},
+                    "required": ["pr", "back_to"],
+                },
+            )(self.drop_commits),
+            tool(
                 "draft_question",
                 "Ask the user a question through their Inbox, only when the answer matters. Small choices are yours (how to "
                 "test, names, which of two reasonable ways): decide, say what you chose and why with job_progress, and go on; "
@@ -997,6 +1028,12 @@ class WorkTools:
             return f"Reading {args.get('thread')} in full"
         if name == "close_issue":
             return f"Closing the issue of {args.get('job_id')}: {args.get('reason')}"
+        if name == "delete_comment":
+            return f"Taking back the comment {args.get('comment')}"
+        if name == "close_pr":
+            return f"Taking back {args.get('pr')}"
+        if name == "drop_commits":
+            return f"Taking back the commits of {args.get('pr')} after {(args.get('back_to') or '')[:10]}"
         if name == "paper_read":
             return f"Reading the paper, pages {args.get('pages')}"
         if name == "draft_report":
@@ -2061,6 +2098,105 @@ class WorkTools:
         if place == 0 and not left:
             text += f" You have no open jobs left for {vm_name}: call release_vm now."
         return {"content": [{"type": "text", "text": text}]}
+
+    async def delete_comment(self, args: dict) -> dict:
+        url = args["comment"].strip()
+        mine = None
+        for draft in self.agents.inbox.list():
+            sent = draft["sent"]
+            if draft["agent"] == self.agent_id and draft["kind"] == "comment" and sent is not None and sent.get("url") == url:
+                mine = draft
+        if mine is None:
+            text = "Only a comment of yours: one the app posted from your draft. Give its link as your decision message gave it."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        sent = mine["sent"]
+        if sent.get("deleted_at"):
+            return {"content": [{"type": "text", "text": "It was deleted already."}], "is_error": True}
+        settings = {}
+        if AUTOMATION_FILE.is_file():
+            settings = json.loads(AUTOMATION_FILE.read_text())
+        allowed = [name.lower() for name, rules in settings.items() if rules.get("comments")]
+        if sent["repo"].lower() not in allowed:
+            text = f"The user doesn't let agents post comments on {sent['repo']} (its Level of automation: Comments is off), so you can't take one back there either."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        try:
+            result = await asyncio.to_thread(self.agents.your_repositories.github_account.manage, "delete_comment", sent["repo"], sent["id"])
+        except SendError as error:
+            return {"content": [{"type": "text", "text": f"It wasn't deleted. {error}"}], "is_error": True}
+        self.agents.inbox.mark_sent(mine["id"], {**sent, "deleted_at": datetime.now(UTC).isoformat()})
+        return {"content": [{"type": "text", "text": result}]}
+
+    async def close_pr(self, args: dict) -> dict:
+        pr = args["pr"].strip()
+        repo, _, number = pr.rpartition("#")
+        if repo.count("/") != 1 or not number.isdigit():
+            return {"content": [{"type": "text", "text": "pr must be owner/name#number."}], "is_error": True}
+        owned = []
+        for draft in self.agents.inbox.list():
+            sent = draft["sent"]
+            if draft["agent"] == self.agent_id and draft["kind"] == "pr" and sent is not None and not sent.get("update"):
+                owned.append(f"{sent['repo']}#{sent['number']}".lower())
+        if pr.lower() not in owned:
+            return {"content": [{"type": "text", "text": f"{pr} isn't a PR of yours (one the app opened from your draft)."}], "is_error": True}
+        settings = {}
+        if AUTOMATION_FILE.is_file():
+            settings = json.loads(AUTOMATION_FILE.read_text())
+        allowed = [name.lower() for name, rules in settings.items() if rules.get("pull_requests")]
+        if repo.lower() not in allowed:
+            text = f"The user doesn't let agents send PRs on {repo} (its Level of automation: Pull requests is off), so you can't close one there either."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        try:
+            result = await asyncio.to_thread(self.agents.your_repositories.github_account.manage, "close", repo, int(number))
+        except SendError as error:
+            return {"content": [{"type": "text", "text": f"It wasn't closed. {error}"}], "is_error": True}
+        return {"content": [{"type": "text", "text": f"{pr}: {result}"}]}
+
+    async def drop_commits(self, args: dict) -> dict:
+        pr = args["pr"].strip()
+        back_to = args["back_to"].strip().lower()
+        repo, _, number = pr.rpartition("#")
+        if repo.count("/") != 1 or not number.isdigit():
+            return {"content": [{"type": "text", "text": "pr must be owner/name#number."}], "is_error": True}
+        if len(back_to) < 7:
+            return {"content": [{"type": "text", "text": "back_to is a commit's sha, at least its first 7 characters."}], "is_error": True}
+        # Its own pushes on this PR, oldest first: where each ended, and where the PR was before each update or rebase.
+        pushes = []
+        for draft in self.agents.inbox.list():
+            sent = draft["sent"]
+            if draft["agent"] == self.agent_id and draft["kind"] == "pr" and sent is not None and f"{sent['repo']}#{sent['number']}".lower() == pr.lower():
+                pushes.append(sent)
+        pushes.sort(key=lambda sent: sent["at"])
+        if not pushes:
+            return {"content": [{"type": "text", "text": f"You pushed nothing to {pr}: only your own commits can be taken back."}], "is_error": True}
+        points = []
+        for sent in pushes:
+            points.append(sent["commit"])
+            if sent.get("update") and sent.get("rebase_of"):
+                points.append(sent["rebase_of"])
+            elif sent.get("update"):
+                points.append(sent["base_sha"])
+        head = pushes[-1]["commit"]
+        matches = [sha for sha in points if sha.startswith(back_to) and sha != head]
+        if not matches:
+            text = (
+                f"back_to must be where {pr} was before one of your pushes: {', '.join(sorted(set(sha[:10] for sha in points if sha != head)))}. "
+                "To take back the whole PR, close_pr."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        settings = {}
+        if AUTOMATION_FILE.is_file():
+            settings = json.loads(AUTOMATION_FILE.read_text())
+        allowed = [name.lower() for name, rules in settings.items() if rules.get("pull_requests")]
+        if repo.lower() not in allowed:
+            text = f"The user doesn't let agents send PRs on {repo} (its Level of automation: Pull requests is off), so you can't take commits back there either."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        try:
+            result = await asyncio.to_thread(
+                self.agents.your_repositories.github_account.manage, "reset_branch", repo, int(number), sha=matches[0], expected_head=head
+            )
+        except SendError as error:
+            return {"content": [{"type": "text", "text": f"Nothing was taken back. {error}"}], "is_error": True}
+        return {"content": [{"type": "text", "text": f"{pr}: {result}"}]}
 
     async def draft_question(self, args: dict) -> dict:
         question = args["question"].strip()

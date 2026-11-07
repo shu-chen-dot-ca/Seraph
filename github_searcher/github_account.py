@@ -916,11 +916,12 @@ class GithubAccount:
             "assigned": any(each["login"].lower() == account["login"].lower() for each in issue["assignees"]),
         }
 
-    def manage(self, action: str, repo: str, number: int) -> str:
+    def manage(self, action: str, repo: str, number: int, sha: str = "", expected_head: str = "") -> str:
         """One change on GitHub from the GitHub tab, as you. action: "close" or "reopen" your PR repo#number,
-        "update_branch" (your open PR: GitHub merges its base in), "delete_branch" (a closed or merged PR's branch,
-        from your fork), or "delete_comment" (number is the comment's id on GitHub). Returns what happened, in words;
-        SendError says why it didn't. Runs in a thread."""
+        "update_branch" (your open PR: GitHub merges its base in), "reset_branch" (your open PR's branch in your fork goes
+        back to sha, force-pushed, only while its newest commit is still expected_head), "delete_branch" (a closed or
+        merged PR's branch, from your fork), or "delete_comment" (number is the comment's id on GitHub). Returns what
+        happened, in words; SendError says why it didn't. Runs in a thread."""
         account = self.load()
         if account is None:
             raise SendError("Sign in with GitHub first: the GitHub tab, Account.")
@@ -950,6 +951,17 @@ class GithubAccount:
                     if action == "reopen":
                         return "Reopened it."
                     return "Closed it."
+                if action == "reset_branch":
+                    if pull["state"] != "open":
+                        raise SendError("It isn't open.")
+                    head = pull["head"]
+                    if head["repo"] is None or head["repo"]["owner"]["login"].lower() != account["login"].lower():
+                        raise SendError("Its branch isn't in your fork.")
+                    if head["sha"] != expected_head:
+                        raise SendError("Its branch moved since the last push from here (someone else pushed): nothing was taken back.")
+                    response = client.patch(f"/repos/{head['repo']['full_name']}/git/refs/heads/{head['ref']}", json={"sha": sha, "force": True})
+                    response.raise_for_status()
+                    return f"Its branch {head['ref']} is back at {sha[:10]}: the commits after it are off the PR."
                 if action == "update_branch":
                     if pull["state"] != "open":
                         raise SendError("It isn't open.")
