@@ -4085,9 +4085,20 @@ class WorkTools:
                 "when it's yours."
             )
             return {"content": [{"type": "text", "text": text}]}
+        # Something on an open PR of the user's needs acting on (a follow_up job: a comment, a review, failing checks, a
+        # conflict): it goes before new work, to the front of the line.
+        following = [job for job in self.agents.jobs.for_agent(self.agent_id) if job["kind"] == "follow_up" and job["status"] in ["queued", "working"]]
+        if place > 1 and following:
+            try:
+                self.agents.queue.move_to_front(vm_name, self.agent_id)
+                place = 1
+            except ValueError:
+                pass
         if place > 0:
             which = f"desktop {desktop}" if desktop is not None else "the first desktop that frees up"
             text = f"You are number {place} in {vm_name}'s queue, for {which}. End your turn; you'll get a message when it's yours."
+            if following:
+                text += " You are at the front: a follow-up on an open PR goes before new work."
             return {"content": [{"type": "text", "text": text}]}
         jobs = [job for job in self.agents.jobs.for_agent(self.agent_id) if job["status"] in OPEN_STATUSES and job["vm"] == vm_name]
         titles = ", ".join(f"{job['id']} ({job['title']})" for job in jobs) or "none"
