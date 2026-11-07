@@ -1635,6 +1635,11 @@ class WorkTools:
             if self.threads_taken.get(job["issue"].lower()):
                 text = f"{self.threads_taken[job['issue'].lower()]}: someone else is on it. Don't start a second fix: close_issue with that link."
                 return {"content": [{"type": "text", "text": text}], "is_error": True}
+            # A repo that doesn't take AI-made contributions: we don't work there at all.
+            no_ai = [name.lower() for name, each in self.agents.repo_signals.all().items() if (each.get("ai_policy") or {}).get("tag") == "no_ai"]
+            if job["issue"].split("#")[0].lower() in no_ai:
+                text = f"{job['issue'].split('#')[0]} doesn't take AI-made contributions (its AI policy), and we only work as an AI agent. Abandon {job['id']}: job_update cancelled, with that note."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
         # The tests have to work on the unchanged code before any change is made. When another job on the same repo
         # already got the official checks passing on this VM, the project is set up there: that run counts for this job too.
         before = job["tests"]["before"]
@@ -1742,6 +1747,11 @@ class WorkTools:
         # No claim on an issue someone else's open PR closes: its maintainers don't want a second fix.
         if job["kind"] == "fix_issue" and self.threads_taken.get(target.lower()):
             text = f"{self.threads_taken[target.lower()]}: someone else is on it. Don't claim it: close_issue with that link."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        # Nor on a repo that doesn't take AI-made contributions.
+        no_ai = [name.lower() for name, each in self.agents.repo_signals.all().items() if (each.get("ai_policy") or {}).get("tag") == "no_ai"]
+        if job["kind"] == "fix_issue" and name.lower() in no_ai:
+            text = f"{name} doesn't take AI-made contributions (its AI policy), and we only work as an AI agent. Don't claim anything there: abandon {job['id']} with job_update cancelled."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         draft = self.agents.inbox.create(
             "comment", self.agent_id, title, args["body"], job=job["id"], repo=name, target=target, evidence=job["evidence"], overview=overview,
@@ -1876,6 +1886,9 @@ class WorkTools:
         if repo.lower() not in self.guides_read:
             text = f"First read {repo}'s rules for contributors (contributing_guide): open an issue only if they allow it, the way they say."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
+        no_ai = [name.lower() for name, each in self.agents.repo_signals.all().items() if (each.get("ai_policy") or {}).get("tag") == "no_ai"]
+        if repo.lower() in no_ai:
+            return {"content": [{"type": "text", "text": f"{repo} doesn't take AI-made contributions (its AI policy), and we only work as an AI agent: don't open issues there."}], "is_error": True}
         try:
             opened = await asyncio.to_thread(self.agents.your_repositories.github_account.open_issue, repo, title, args["body"])
         except SendError as error:
@@ -2921,6 +2934,11 @@ class WorkTools:
             return {"content": [{"type": "text", "text": "pr must be owner/name#number: the user's open PR this is the next version of."}], "is_error": True}
         if pr is not None:
             repo = pr.split("#")[0]
+        # No new PR on a repo that doesn't take AI-made contributions.
+        no_ai = [name.lower() for name, each in self.agents.repo_signals.all().items() if (each.get("ai_policy") or {}).get("tag") == "no_ai"]
+        if pr is None and job["kind"] == "fix_issue" and repo is not None and repo.lower() in no_ai:
+            text = f"{repo} doesn't take AI-made contributions (its AI policy), and we only work as an AI agent. Don't draft a PR there: abandon {job['id']} with job_update cancelled."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
         # A rebase of that PR: its commits replace the PR's (rebased onto the newer main, or squashed, reworded or signed
         # off), and approving force-pushes them.
         rebase = args.get("rebase") is True
