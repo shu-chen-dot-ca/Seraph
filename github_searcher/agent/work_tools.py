@@ -55,7 +55,9 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   the project's rules allow, claimed for the user (assigned, else the user's comment saying they are on it), which
   goes in the Issues list at the top of the board's Catalog, before every other card, where another agent takes it
   whatever the repo's Take issues says) and update_branch (Pull requests: GitHub's Update branch on the user's
-  open PR). open_issue refuses until the agent read the repo's rules (contributing_guide). What they did is kept for
+  open PR). open_issue refuses until the agent read the repo's rules (contributing_guide), and refuses one that is out
+  of scope (issue_tags.py CHECKS: belongs, linux, apolitical; Claude is asked before it goes out), since one claimed
+  for the user must be fixed. What they did is kept for
   the Dashboard's Actions (Inbox.add_action), like every sent draft.
 - Reading first: read_issue reads an issue or PR in full, right then (never cached): every comment, where it was
   mentioned (issues, PRs, commits), the PRs linked to it or that would close it with their checks and newest comments,
@@ -156,9 +158,10 @@ import httpx
 from claude_agent_sdk import tool
 
 from github_searcher.artifacts import ArtifactsError
+from github_searcher.claude_judge import JudgeError, judge
 from github_searcher.github_account import SendError
 from github_searcher.inbox import ASK_SETTINGS_FILE, AUTOMATION_FILE, MUST_WAIT, TIMER_MINUTES
-from github_searcher.issue_tags import TAKEN_PR_DAYS
+from github_searcher.issue_tags import CHECKS, TAKEN_PR_DAYS
 from github_searcher.jobs import EVIDENCE_DIR
 from github_searcher.projects import TITLE, TITLE_CHARS
 from github_searcher.search import get_contents, get_issue_in_full, get_issue_status, get_merged_prs, get_pr_status, get_readme, get_repository, get_thread, get_tree
@@ -534,8 +537,12 @@ class WorkTools:
                 "read them first (contributing_guide), and don't open one when they ask outside people to start a discussion "
                 "first, or don't take issues from them. Only for a real problem you saw yourself while working on the repo, "
                 "that is not your job's own issue and isn't reported already (search its issues first): never a question, "
-                "and never a request for someone else to do something. Write it the way the project's issue template and its "
-                "rules ask (title and body as on GitHub), with how to make it happen and what you saw. It is opened at once, "
+                "and never a request for someone else to do something. Only one we would fix ourselves: never out of scope "
+                "(nothing political, politically sensitive or activist, nothing against another country's laws, such as "
+                "China's; nothing only seen on Windows, macOS, a phone or other hardware; nothing that isn't for the repo's "
+                "own users). It is checked first and refused when it is. Write it the way the project's issue template and "
+                "its rules ask (title and body as on GitHub), with how to make it happen and what you saw, and say the user "
+                "will fix it: where the template asks whether the author will submit a PR, yes. It is opened at once, "
                 "is claimed for the user (assigned, or their comment saying they are on it where GitHub doesn't let them assign), and "
                 "goes in the Issues list at the top of the board's Catalog: an issue we open comes before every other one, "
                 "and another agent takes it whatever the repo's Take issues says.",
@@ -1890,6 +1897,29 @@ class WorkTools:
         no_ai = [name.lower() for name, each in self.agents.repo_signals.all().items() if (each.get("ai_policy") or {}).get("tag") == "no_ai"]
         if repo.lower() in no_ai:
             return {"content": [{"type": "text", "text": f"{repo} doesn't take AI-made contributions (its AI policy), and we only work as an AI agent: don't open issues there."}], "is_error": True}
+        # Claimed for the user once it is out, so never one we wouldn't take: out of scope by the issue tags' own checks
+        # (issue_tags.py CHECKS: belongs, linux, apolitical), asked before it goes to GitHub.
+        questions = "\n".join(f"- {key}: {question}" for key, question in CHECKS if key in ["belongs", "linux", "apolitical"])
+        prompt = (
+            f"An issue is about to be opened on the GitHub repo {repo}, and we would fix it ourselves. Answer each "
+            f"question about it with true or false, and in reason say why in one plain sentence.\n{questions}\n\n"
+            f"Title: {title}\n\n{args['body']}"
+        )
+        schema = {
+            "type": "object",
+            "properties": {"belongs": {"type": "boolean"}, "linux": {"type": "boolean"}, "apolitical": {"type": "boolean"}, "reason": {"type": "string"}},
+            "required": ["belongs", "linux", "apolitical", "reason"],
+        }
+        try:
+            scope = await judge(prompt, schema, "low")
+        except JudgeError as error:
+            return {"content": [{"type": "text", "text": f"It wasn't opened: it couldn't be checked ({error}). Try again later."}], "is_error": True}
+        if not (scope["belongs"] and scope["linux"] and scope["apolitical"]):
+            text = (
+                f"It wasn't opened: it is out of scope ({scope['reason']}), so we wouldn't fix it, and an issue claimed for the "
+                "user must be fixed. Don't open it; put what you found in your job's notes instead."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
         try:
             opened = await asyncio.to_thread(self.agents.your_repositories.github_account.open_issue, repo, title, args["body"])
         except SendError as error:
