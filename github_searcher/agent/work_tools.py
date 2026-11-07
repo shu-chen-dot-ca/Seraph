@@ -50,8 +50,9 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
 - The repo's Level of automation (set by the user on the Dashboard, inbox.py AUTOMATION_FILE) lets some drafts go
   without the user: the app sends them or answers them (backend/repo_automation_api.py). Two tools act on GitHub
   themselves, as the user, and only where it allows them; elsewhere they refuse: open_issue (Open issues: a new issue
-  the project's rules allow, assigned to the user, which goes in the Issues list and to the end of the board's
-  Catalog, where an agent takes it when the repo's Take issues is on) and update_branch (Pull requests: GitHub's Update branch on the user's
+  the project's rules allow, claimed for the user (assigned, else the user's comment saying they are on it), which
+  goes in the Issues list at the top of the board's Catalog, before every other card, where an agent takes it when the
+  repo's Take issues is on) and update_branch (Pull requests: GitHub's Update branch on the user's
   open PR). open_issue refuses until the agent read the repo's rules (contributing_guide). What they did is kept for
   the Dashboard's Actions (Inbox.add_action), like every sent draft.
 - Reading first: read_issue reads an issue or PR in full, right then (never cached): every comment, where it was
@@ -523,8 +524,8 @@ class WorkTools:
                 "that is not your job's own issue and isn't reported already (search its issues first): never a question, "
                 "and never a request for someone else to do something. Write it the way the project's issue template and its "
                 "rules ask (title and body as on GitHub), with how to make it happen and what you saw. It is opened at once, "
-                "goes in the Issues list and to the end of the board's Catalog, where an agent takes it when the user lets agents take "
-                "the repo's issues.",
+                "is claimed for the user (assigned, or their comment saying they are on it where GitHub doesn't let them assign), and "
+                "goes in the Issues list at the top of the board's Catalog: an issue we open comes before every other one.",
                 {
                     "type": "object",
                     "properties": {
@@ -1850,8 +1851,14 @@ class WorkTools:
         action = {"draft": None, "kind": "issue", "agent": self.agent_id, "job": job_id, "title": opened["title"], "sent": sent}
         await asyncio.to_thread(self.agents.inbox.add_action, action)
 
-        # In the Issues list, and at the end of the board's Catalog, where an agent takes it (the repo's Take issues).
+        # In the Issues list, and at the top of the board's Catalog: an issue we opened goes before every other card, so
+        # an agent takes it first (the repo's Take issues).
         issue_id = f"{opened['repo']}#{opened['number']}"
+        claimed = "assigned to the user"
+        if opened["claimed"] == "comment":
+            claimed = "claimed for the user with a comment (GitHub only lets the repo's own people assign there)"
+        if opened["claimed"] == "none":
+            claimed = "not claimed: GitHub let the user neither be assigned nor comment"
         item = {
             "id": issue_id,
             "repo": opened["repo"],
@@ -1861,20 +1868,18 @@ class WorkTools:
             "state": "OPEN",
             "comments": 0,
             "html_url": opened["url"],
-            "note": "",
+            "note": f"Opened by {self.record['name']} as you, {claimed}. No claim is needed on it.",
             "added_by": self.agent_id,
             "added_at": datetime.now(UTC).isoformat(),
         }
         await asyncio.to_thread(self.agents.issues.add, [item])
         board = await asyncio.to_thread(self.agents.issues.board)
-        if issue_id not in board["catalog"]:
-            await asyncio.to_thread(self.agents.issues.set_board, board["catalog"] + [issue_id], board["order"], board["held"])
-        assigned = "assigned to the user"
-        if not opened["assigned"]:
-            assigned = "not assigned: GitHub only lets the repo's own people assign there"
+        catalog = [issue_id] + [each for each in board["catalog"] if each != issue_id]
+        order = [issue_id] + [each for each in board["order"] if each != issue_id]
+        await asyncio.to_thread(self.agents.issues.set_board, catalog, order, board["held"])
         text = (
-            f"Opened {issue_id} as the user ({opened['url']}), {assigned}. It is in the Issues list, at the end of the "
-            "board's Catalog, where an agent takes it when the user lets agents take the repo's issues. Go on with your own job."
+            f"Opened {issue_id} as the user ({opened['url']}), {claimed}. It is in the Issues list, at the top of the "
+            "board's Catalog, so an agent takes it first when the user lets agents take the repo's issues. Go on with your own job."
         )
         return {"content": [{"type": "text", "text": text}]}
 

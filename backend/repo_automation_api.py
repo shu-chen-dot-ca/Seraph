@@ -41,9 +41,9 @@ What each does:
   open PRs are at it; the ones over it wait in the Inbox (the board's Review) until one is merged or closed. New
   versions of open PRs, and a PR made again in place of an old one, always go. You can still send one by hand: Approve
   in the Inbox, or Publish on the Pull requests page.
-- Open issues: agents may open new issues on the repo as you, assigned to you, where the project's rules allow it
-  (open_issue, work_tools.py); each goes to the end of the Issues board's Catalog, where an agent takes it when the
-  repo's Take issues is on.
+- Open issues: agents may open new issues on the repo as you, claimed for you (assigned, else your comment saying you
+  are on it), where the project's rules allow it (open_issue, work_tools.py); each goes to the top of the Issues
+  board's Catalog, before every other card, where an agent takes it first when the repo's Take issues is on.
 
 keep_adding() runs in the background, every ADD_CHECK_SECONDS. For each repo in Repos (not archived) with Add issues on,
 it reads all its open issues from GitHub, every ADD_REFRESH_SECONDS (at once after Add issues is turned on, or the

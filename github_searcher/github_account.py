@@ -81,8 +81,9 @@ automation has Pull requests) is one too: GitHub's Update branch on your open PR
 checks first that the PR is yours and the branch is in your fork.
 A PR draft with "replaces" (an older PR of yours made again fresh, inbox.py) closes that one once the new one is open;
 "sent" then has "closed": the old one's owner/name#n.
-open_issue(repo, title, body) opens an issue as you, assigned to you: an agent's open_issue (work_tools.py, where the
-repo's Level of automation has Open issues). GitHub keeps the assignee only when you may assign on that repo. Following your PRs is pr_tracking.py.
+open_issue(repo, title, body) opens an issue as you, claimed for you: an agent's open_issue (work_tools.py, where the
+repo's Level of automation has Open issues). It is assigned to you; GitHub keeps the assignee only when you may assign
+on that repo, so where it doesn't, your comment CLAIM_TEXT says you are on it. Following your PRs is pr_tracking.py.
 
 Sends go one at a time (a second click waits, then finds the draft sent). A failure raises SendError
 with what GitHub said and at which step; nothing is kept on the draft then. While one goes, sending_draft and step say
@@ -116,6 +117,8 @@ API = "https://api.github.com"
 # What signing in asks GitHub for (module docstring).
 SCOPES = "repo workflow read:org gist notifications user"
 PICTURES_BRANCH = "pr-pictures"
+# The comment that claims an issue opened as you where GitHub doesn't let you assign yourself (open_issue).
+CLAIM_TEXT = "I'm working on a fix for this and will open a PR."
 # Seconds a new fork may take before its branches can be used.
 FORK_WAIT = 120
 # A text file up to this size goes inside the tree it is in (tree()); a bigger one is uploaded on its own.
@@ -875,9 +878,10 @@ class GithubAccount:
         return {"url": comment["html_url"], "id": comment["id"]}
 
     def open_issue(self, repo: str, title: str, body: str) -> dict:
-        """Opens an issue on repo ("owner/name") as you, assigned to you. Returns {"repo" (GitHub's spelling), "number",
-        "url", "title", "assigned": whether GitHub kept you as its assignee}; SendError says why it didn't. Runs in a
-        thread."""
+        """Opens an issue on repo ("owner/name") as you, claimed for you. Returns {"repo" (GitHub's spelling), "number",
+        "url", "title", "claimed": "assigned" (GitHub kept you as its assignee), "comment" (it didn't, so your comment
+        CLAIM_TEXT says you are on it) or "none" (that comment failed too)}; SendError says why it didn't open. Runs in
+        a thread."""
         account = self.load()
         if account is None:
             raise SendError("Sign in with GitHub first: the GitHub tab, Account.")
@@ -908,12 +912,25 @@ class GithubAccount:
             raise SendError(f"GitHub refused: {message}") from None
         except httpx.HTTPError as error:
             raise SendError(f"Could not reach GitHub: {error}") from None
+        repo_name = issue["repository_url"].removeprefix(f"{API}/repos/")
+        # Claimed for you: assigned, or where GitHub doesn't let you assign (not one of the repo's own people), your
+        # comment saying you are on it. The issue is open either way, so a failed comment doesn't fail it.
+        claimed = "assigned"
+        if not any(each["login"].lower() == account["login"].lower() for each in issue["assignees"]):
+            claimed = "none"
+            try:
+                with httpx.Client(base_url=API, headers=headers, timeout=60) as client:
+                    response = client.post(f"/repos/{repo_name}/issues/{issue['number']}/comments", json={"body": CLAIM_TEXT})
+                    if response.is_success:
+                        claimed = "comment"
+            except httpx.HTTPError:
+                pass
         return {
-            "repo": issue["repository_url"].removeprefix(f"{API}/repos/"),
+            "repo": repo_name,
             "number": issue["number"],
             "url": issue["html_url"],
             "title": issue["title"],
-            "assigned": any(each["login"].lower() == account["login"].lower() for each in issue["assignees"]),
+            "claimed": claimed,
         }
 
     def manage(self, action: str, repo: str, number: int, sha: str = "", expected_head: str = "") -> str:
