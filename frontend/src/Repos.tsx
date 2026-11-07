@@ -51,7 +51,7 @@ picked repos not tracked yet, Untrack stops tracking the tracked ones (each one 
 deletes them at once, as one undo step (it asks first; Enter confirms), and stops tracking them too (an undo step
 on the Tracked page). When they have issues in the Issues list, it asks whether those go too: Delete repos only (what
 Enter does) or Delete repos and issues (an undo step on the Issues page; one an agent is working on stays, and a toast
-says so). Delete only takes a repo off the lists; Explore may find it again. Clearing the selection
+says so). The ones on the Issues board's Open and Catalog go either way (backend/issues_api.py auto_remove_issues). Delete only takes a repo off the lists; Explore may find it again. Clearing the selection
 (Escape, the bar's x) ends select mode too.
 
 Tag groups repos for the user, nothing more: it opens the Tag pop-up (TagDialog.tsx: pick a tag, create one or delete
