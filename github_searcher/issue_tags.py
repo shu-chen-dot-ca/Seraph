@@ -15,8 +15,9 @@ each issue instead and gives it tags we define. One JSON file, DATA_DIR/issue_ta
 
 status weighs everything about who may take it: assignees, open pull requests that would close it, the labels
 (good first issue, help wanted and the like invite outside contributors), what the issue template says about the
-author fixing it themselves ("Are you willing to submit a PR?"), claims in the comments, and whether the maintainers
-want it done. A fix posted in a comment, even with no pull request (a branch in someone's fork, a patch, "my account
+author fixing it themselves ("Are you willing to submit a PR?"), the author saying they will send the PR (also once a
+maintainer confirms), claims in the comments, and whether the maintainers want it done. A fix posted in the issue or
+a comment, even with no pull request (a branch in someone's fork, a patch, the whole change or its test, "my account
 can't open PRs, a maintainer can open one from it"), counts as someone on it: we don't build on or race another
 person's fix. free: the user can take it up now. assigned: someone else is on it. The user's own claims, assignment
 and pull requests (and our agents', made as the user) never count: status is about other people, so the user's own work
@@ -202,8 +203,9 @@ NAME_EXAMPLES = [
 ]
 # Goes up when the naming rules change: every name from before is made again, once.
 NAME_VERSION = 3
-# Goes up when the status rules change: every issue is read again, once.
-RULES_VERSION = 2
+# Goes up when the status rules change: every issue is read again, once (3: an author who says they will send the PR, or
+# a fix posted in the issue's description, is someone on it; mcp-memory-service#1910).
+RULES_VERSION = 3
 EFFORT = "high"
 # A line where an issue template asks whether the author will fix it themselves: "Are you willing to submit a PR?",
 # "Would you like to work on this?", "I'm interested in implementing this", ... The line and the next few (the answer) are kept.
@@ -511,13 +513,14 @@ class IssueTags:
                 "means to do it); what the comments say (someone asking to take it or saying they are on it, a maintainer handing "
                 "it out or turning people down, a pull request mentioned, a maintainer saying it isn't wanted); and the "
                 "pull requests tied to it, listed under the issue with their state and last comment.\n"
-                "- assigned: someone else is on it: the author said they will fix it, a commenter claimed it and was not turned down, "
-                "a maintainer gave it to someone, or one of its pull requests is open and alive. A claim in the comments holds for "
+                "- assigned: someone else is on it: the author said they will fix it or send the pull request themselves (also when "
+                "they wait for a maintainer to confirm first, or say they will /claim it then), a commenter claimed it and was not "
+                "turned down, a maintainer gave it to someone, or one of its pull requests is open and alive. A claim in the comments holds for "
                 "about two months even with no pull request yet, unless that person gave up or a maintainer opened it to others; "
                 "an open pull request untouched for months doesn't count.\n"
-                "  A fix posted in a comment counts too, even with no pull request of theirs tied to the issue: a branch or "
-                "commit in someone's fork, a patch or the whole change pasted ('my account is blocked', 'happy for a maintainer "
-                "to open a PR from it'). Someone did the work, and a newcomer shouldn't build on it or race it: assigned, like a "
+                "  A fix posted in the issue's description or in a comment counts too, even with no pull request of theirs tied "
+                "to the issue: a branch or commit in someone's fork, a patch, the whole change or its test pasted ('my account is "
+                "blocked', 'happy for a maintainer to open a PR from it'). Someone did the work, and a newcomer shouldn't build on it or race it: assigned, like a "
                 "claim, unless a maintainer turned that fix down.\n"
                 "  A pull request closed without merging ends its author's claim: read its last comment for why (for example "
                 "closed under the project's AI policy, or the approach was turned down) and say so in the reason when it matters. "
