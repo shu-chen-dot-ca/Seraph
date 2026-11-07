@@ -33,7 +33,8 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   gathers the rules wherever they are (CONTRIBUTING in any folder, developer guides in the docs, the
   PR template, AGENTS.md, and the guides the README and CONTRIBUTING link to, on GitHub or on the
   project's website), pr_examples shows its main contributors' latest merged PRs and some outside ones,
-  and draft_pr refuses until the agent read both for that repo. The job's before and
+  and draft_pr refuses until the agent read both for that repo. Which repos it read is kept in its record, so a backend
+  restart doesn't ask for them again. The job's before and
   after pictures go in the PR body as ![before](evidence:ev_...): the Inbox shows them in place,
   and sending uploads them to the user's fork (or the user does, sending by hand).
   draft_pr with pr ("owner/name#n") is the next version of the user's own open PR instead: base must be that PR's
@@ -289,10 +290,12 @@ class WorkTools:
         # The agent's record (the same dict), so the target VM is always the current one.
         self.record = record
         self.agent_id = record["id"]
-        # The repos (owner/name, lower case) whose PRs it looked at with pr_examples since the backend started.
-        self.pr_examples_read = set()
-        # The repos (owner/name, lower case) whose rules for contributors it read with contributing_guide.
-        self.guides_read = set()
+        # The repos (owner/name, lower case) whose PRs it looked at with pr_examples. Kept in the record too, so a backend
+        # restart doesn't make it read them again.
+        self.pr_examples_read = set(record.get("pr_examples_read", []))
+        # The repos (owner/name, lower case) whose rules for contributors it read with contributing_guide (every part).
+        # Kept in the record too, like pr_examples_read.
+        self.guides_read = set(record.get("guides_read", []))
         # When it last read each issue or PR in full with read_issue (owner/name#n, lower case): time.time().
         self.threads_read = {}
         # What read_issue found someone else on it with (owner/name#n, lower case): their open PR that closes it, as a
@@ -793,7 +796,8 @@ class WorkTools:
                 "developer guides in its docs, its PR template, AGENTS.md and the like, and the guides its README and those "
                 "files link to, in the repo or on the project's website. Read all of it before you set up, and follow every "
                 "rule (setup, what to run before a PR and how, commit and PR style), however long its checks take. name: "
-                "owner/name. run_tests and draft_pr refuse until you read it for the job's repo.",
+                "owner/name. run_tests and draft_pr refuse until you read it for the job's repo; that stays read after a "
+                "backend restart.",
                 {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
             )(self.contributing_guide),
             tool(
@@ -2760,6 +2764,7 @@ class WorkTools:
             chosen.extend(theirs[:PR_EXAMPLES_EACH])
         chosen.extend(outside[:PR_EXAMPLES_OUTSIDE])
         self.pr_examples_read.add(name.lower())
+        self.record["pr_examples_read"] = sorted(self.pr_examples_read)
 
         lines = [f"Of the last {len(pulls)} merged PRs, {len(people)} are by people (not bots), {len(outside)} of those by outside contributors."]
         if main:
@@ -2911,6 +2916,7 @@ class WorkTools:
             documents.append((f"{url} (web page)", text))
 
         self.guides_read.add(name.lower())
+        self.record["guides_read"] = sorted(self.guides_read)
         if not documents and not folder_rules:
             text = (
                 f"{name} has no rules for contributors that could be found: no CONTRIBUTING, developer guide, PR template or "
