@@ -16,20 +16,43 @@ A row, like GitHub's list: the state (open, draft, merged, closed), the repo (a 
 labels; under it the number, who opened it and when (or when it was merged or closed), checks and review while open,
 and when it last changed; on the right how many comments. A click opens it in the thread pop-up (ThreadDialog.tsx,
 open=owner/name%23n); closing it reads the list again.
+The Dashboard's Pull requests (#/dashboard/pulls) is this page too, plain: only Created by me, with Open and Closed and
+Refresh, no filter, Visibility, Repository or Sort (base is where it is, plain says so). Each row starts with its
+repo's logo (the owner's picture, square), like the Repository page's cards, and next to it two lines as tall as the
+logo: the title on top, the repo and the PR's number at the bottom, a link to it on GitHub (a local one: only the
+repo, linked to it on GitHub, since it has no number yet). Rows go by repo, A to Z, the newest
+first within a repo (on Closed, the merged ones first and the closed ones always at the bottom), and say when they were opened in days ("opened 5 days ago"; merged and closed ones also when that
+happened). Its Open tab also lists, under
+the open ones and in gray, the local pull requests: PR drafts not sent to GitHub yet (waiting in the Inbox, or approved
+before you signed in; new PRs, not new versions of open ones), under Not published with Publish all. Each has Publish
+on its right. Publish asks first (Enter confirms), then opens each on GitHub as you, all at once, the same as
+Approve in the Inbox (a waiting one) or Send to GitHub (an approved one): a toast each, with Open. A sent one leaves
+the list, and the open list is read again when all are done.
 PRs in archived repos are left out, like on GitHub. At most the 500 most recently updated open ones and closed ones are
 read; a line says so when GitHub has more.
 */
 
 import { GitMerge, GitPullRequest, GitPullRequestClosed, GitPullRequestDraft, Loader2, Lock, MessageSquare, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
 
 import ThreadDialog from "@/ThreadDialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api, useLive, useLoaded } from "@/live";
+import { api, useLive, useLoaded, type Draft } from "@/live";
 import { cn, timeAgo } from "@/lib/utils";
 
 // What GET /api/pull_requests gives (github_searcher/pull_requests.py).
@@ -69,8 +92,22 @@ const CHECKS_COLOR: Record<string, string> = { passed: "text-ok", failed: "text-
 const REVIEW_TEXT: Record<string, string> = { approved: "Approved", changes_requested: "Changes asked for", review_required: "Waiting for a review", none: "" };
 const REVIEW_COLOR: Record<string, string> = { approved: "text-ok", changes_requested: "text-warn", review_required: "", none: "" };
 
-export default function PullRequests(props: { state: string; view: string; visibility: string; repo: string | null; sort: string; open: string | null }) {
+export default function PullRequests(props: {
+  state: string;
+  view: string;
+  visibility: string;
+  repo: string | null;
+  sort: string;
+  open: string | null;
+  base: string;
+  plain: boolean;
+}) {
   const yourRepos = useLive("your_repos");
+  const inbox = useLive("inbox");
+  // Local pull requests being published, and the ones Publish asks about (they stay set while the dialog fades out).
+  const [publishing, setPublishing] = useState<string[]>([]);
+  const [toPublish, setToPublish] = useState<Draft[]>([]);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const reposLoaded = useLoaded("your_repos");
   // This view's last answer, kept in this browser, so the page shows at once.
   const [list, setList] = useState<PullRequestList | null>(() => {
@@ -135,7 +172,7 @@ export default function PullRequests(props: { state: string; view: string; visib
   if (props.sort !== "created-desc") {
     params.set("sort", props.sort);
   }
-  const listHash = params.toString() !== "" ? `#/pulls?${params}` : "#/pulls";
+  const listHash = params.toString() !== "" ? `${props.base}?${params}` : props.base;
 
   function go(name: string, value: string | null) {
     const next = new URLSearchParams(params);
@@ -144,7 +181,7 @@ export default function PullRequests(props: { state: string; view: string; visib
     } else {
       next.set(name, value);
     }
-    window.location.hash = next.toString() !== "" ? `#/pulls?${next}` : "#/pulls";
+    window.location.hash = next.toString() !== "" ? `${props.base}?${next}` : props.base;
   }
 
   const items = list?.items ?? [];
@@ -186,6 +223,24 @@ export default function PullRequests(props: { state: string; view: string; visib
     }
     return b.created_at.localeCompare(a.created_at);
   });
+  // The Dashboard's: merged ones first and closed ones always at the bottom, then by repo, A to Z, the newest first
+  // within a repo.
+  if (props.plain) {
+    rows.sort((a, b) => {
+      const aClosed = a.state === "closed" ? 1 : 0;
+      const bClosed = b.state === "closed" ? 1 : 0;
+      return aClosed - bClosed || a.repo.toLowerCase().localeCompare(b.repo.toLowerCase()) || b.created_at.localeCompare(a.created_at);
+    });
+  }
+
+  // The Dashboard's times: whole days ago.
+  function daysAgo(iso: string) {
+    const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+    if (days < 1) {
+      return "today";
+    }
+    return days === 1 ? "1 day ago" : `${days} days ago`;
+  }
 
   // How many of this tab GitHub has that weren't read (more than 500).
   const readOpen = items.filter((pr) => pr.state === "open").length;
@@ -194,22 +249,79 @@ export default function PullRequests(props: { state: string; view: string; visib
     unread = props.state === "open" ? list.open - readOpen : list.closed - (items.length - readOpen);
   }
 
+  // Local pull requests: PR drafts not sent to GitHub yet. New PRs only, not new versions of ones already open.
+  const localPRs = inbox.filter(
+    (draft) => draft.kind === "pr" && draft.update_of === null && draft.sent === null && (draft.status === "pending" || draft.status === "approved"),
+  );
+  const unpublished = localPRs.filter((draft) => !publishing.includes(draft.id));
+
+  function askPublish(drafts: Draft[]) {
+    setToPublish(drafts);
+    setConfirmOpen(true);
+  }
+
+  // A waiting draft is approved and sent, like Approve in the Inbox; an approved one is sent, like Send to GitHub.
+  async function publishOne(draft: Draft) {
+    setPublishing((current) => [...current, draft.id]);
+    try {
+      let result: Draft;
+      if (draft.status === "pending") {
+        result = await api<Draft>(`/api/inbox/${draft.id}/approve`, { method: "POST", body: { text: "", send: true } });
+      } else {
+        result = await api<Draft>(`/api/inbox/${draft.id}/send`, { method: "POST" });
+      }
+      const sent = result.sent;
+      if (sent !== null) {
+        toast.success(`PR opened: ${sent.repo}#${sent.number}`, {
+          action: { label: "Open", onClick: () => window.open(sent.url, "_blank", "noopener,noreferrer") },
+        });
+      }
+    } catch (err) {
+      toast.error(`Could not publish ${draft.title}: ${err instanceof Error ? err.message : err}`);
+    }
+    setPublishing((current) => current.filter((id) => id !== draft.id));
+  }
+
+  async function publish() {
+    await Promise.all(toPublish.map(publishOne));
+    setReload((count) => count + 1);
+  }
+
+  // Open and Closed: in the second bar, or alone in the first one when plain.
+  const stateTabs = (
+    <Tabs value={props.state} onValueChange={(value) => go("state", value === "closed" ? "closed" : null)}>
+      <TabsList>
+        <TabsTrigger value="open" className="px-2.5">
+          Open <span className="text-xs text-muted-foreground tabular-nums">{list !== null ? openCount : ""}</span>
+        </TabsTrigger>
+        <TabsTrigger value="closed" className="px-2.5">
+          Closed <span className="text-xs text-muted-foreground tabular-nums">{list !== null ? closedCount : ""}</span>
+        </TabsTrigger>
+      </TabsList>
+    </Tabs>
+  );
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex min-h-9 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1">
-        <Select value={props.view} onValueChange={(value) => go("view", value === "created" ? null : value)}>
-          <SelectTrigger size="sm">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent position="popper">
-            {Object.keys(VIEWS).map((key) => (
-              <SelectItem key={key} value={key}>
-                {VIEWS[key]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Input className="w-52 max-md:w-auto max-md:min-w-0 max-md:flex-1" placeholder="Filter pull requests" value={filter} onChange={(event) => setFilter(event.target.value)} />
+        {props.plain && stateTabs}
+        {!props.plain && (
+          <Select value={props.view} onValueChange={(value) => go("view", value === "created" ? null : value)}>
+            <SelectTrigger size="sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent position="popper">
+              {Object.keys(VIEWS).map((key) => (
+                <SelectItem key={key} value={key}>
+                  {VIEWS[key]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        {!props.plain && (
+          <Input className="w-52 max-md:w-auto max-md:min-w-0 max-md:flex-1" placeholder="Filter pull requests" value={filter} onChange={(event) => setFilter(event.target.value)} />
+        )}
         <div className="ml-auto flex items-center gap-1.5">
           {list !== null && <span className="mr-1 text-xs text-muted-foreground max-md:hidden">Updated {timeAgo(list.at)}</span>}
           <Button size="sm" variant="outline" disabled={loading} onClick={() => setReload((count) => count + 1)}>
@@ -218,56 +330,49 @@ export default function PullRequests(props: { state: string; view: string; visib
         </div>
       </div>
 
-      <div className="flex min-h-9 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1">
-        <Tabs value={props.state} onValueChange={(value) => go("state", value === "closed" ? "closed" : null)}>
-          <TabsList>
-            <TabsTrigger value="open" className="px-2.5">
-              Open <span className="text-xs text-muted-foreground tabular-nums">{list !== null ? openCount : ""}</span>
-            </TabsTrigger>
-            <TabsTrigger value="closed" className="px-2.5">
-              Closed <span className="text-xs text-muted-foreground tabular-nums">{list !== null ? closedCount : ""}</span>
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-        <div className="ml-auto flex flex-wrap items-center gap-1.5">
-          <Select value={props.visibility === "all" ? "" : props.visibility} onValueChange={(value) => go("visibility", value === "all" ? null : value)}>
-            <SelectTrigger size="sm">
-              <SelectValue placeholder="Visibility" />
-            </SelectTrigger>
-            <SelectContent position="popper" align="end">
-              <SelectItem value="all">All</SelectItem>
-              <SelectItem value="public">Public</SelectItem>
-              <SelectItem value="private">Private</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={props.repo ?? ""} onValueChange={(value) => go("repo", value === "all" ? null : value)}>
-            <SelectTrigger size="sm" className="max-w-56">
-              <SelectValue placeholder="Repository" />
-            </SelectTrigger>
-            <SelectContent position="popper" align="end">
-              <SelectItem value="all">All repositories</SelectItem>
-              {repoNames.map((name) => (
-                <SelectItem key={name} value={name}>
-                  {name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={props.sort} onValueChange={(value) => go("sort", value === "created-desc" ? null : value)}>
-            <SelectTrigger size="sm">
-              <span className="text-muted-foreground">Sort:</span>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent position="popper" align="end">
-              {Object.keys(SORTS).map((key) => (
-                <SelectItem key={key} value={key}>
-                  {SORTS[key]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+      {!props.plain && (
+        <div className="flex min-h-9 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-1">
+          {stateTabs}
+          <div className="ml-auto flex flex-wrap items-center gap-1.5">
+            <Select value={props.visibility === "all" ? "" : props.visibility} onValueChange={(value) => go("visibility", value === "all" ? null : value)}>
+              <SelectTrigger size="sm">
+                <SelectValue placeholder="Visibility" />
+              </SelectTrigger>
+              <SelectContent position="popper" align="end">
+                <SelectItem value="all">All</SelectItem>
+                <SelectItem value="public">Public</SelectItem>
+                <SelectItem value="private">Private</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={props.repo ?? ""} onValueChange={(value) => go("repo", value === "all" ? null : value)}>
+              <SelectTrigger size="sm" className="max-w-56">
+                <SelectValue placeholder="Repository" />
+              </SelectTrigger>
+              <SelectContent position="popper" align="end">
+                <SelectItem value="all">All repositories</SelectItem>
+                {repoNames.map((name) => (
+                  <SelectItem key={name} value={name}>
+                    {name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={props.sort} onValueChange={(value) => go("sort", value === "created-desc" ? null : value)}>
+              <SelectTrigger size="sm">
+                <span className="text-muted-foreground">Sort:</span>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent position="popper" align="end">
+                {Object.keys(SORTS).map((key) => (
+                  <SelectItem key={key} value={key}>
+                    {SORTS[key]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
-      </div>
+      )}
 
       {error !== "" && !signedOut && <div className="shrink-0 border-b bg-destructive/10 px-3 py-1.5 text-destructive">Could not read them from GitHub: {error}</div>}
       {unread > 0 && (
@@ -304,6 +409,55 @@ export default function PullRequests(props: { state: string; view: string; visib
               icon = <GitPullRequestClosed className="size-4 shrink-0 text-destructive" />;
               when = `#${pr.number} by ${pr.author} was closed ${timeAgo(pr.closed_at ?? pr.updated_at)}`;
             }
+            // The Dashboard's: when it was opened, in days, and when it was merged or closed.
+            if (props.plain) {
+              when = `opened ${daysAgo(pr.created_at)}`;
+            }
+            if (props.plain && pr.state === "merged") {
+              when += `, merged ${daysAgo(pr.closed_at ?? pr.updated_at)}`;
+            }
+            if (props.plain && pr.state === "closed") {
+              when += `, closed ${daysAgo(pr.closed_at ?? pr.updated_at)}`;
+            }
+            // The Dashboard's row: the logo, and next to it two lines as tall as it, the title on top and the repo with
+            // the PR's number at the bottom.
+            if (props.plain) {
+              return (
+                <div
+                  key={pr.id}
+                  className={cn("flex cursor-pointer items-center gap-3 border-b px-3 py-2 hover:bg-accent/50", pr.id === props.open && "bg-selected hover:bg-selected")}
+                  onClick={() => go("open", pr.id)}
+                >
+                  <img src={`https://github.com/${pr.repo.split("/")[0]}.png?size=72`} alt="" className="size-9 shrink-0 rounded-md" />
+                  <div className="flex h-9 min-w-0 flex-1 flex-col justify-between">
+                    <div className="flex min-w-0 items-center gap-2 leading-tight">
+                      <span className="truncate font-medium">{pr.title}</span>
+                      {pr.labels.map((label) => (
+                        <Badge key={label.name} variant="outline" className="shrink-0 py-0">
+                          {label.name}
+                        </Badge>
+                      ))}
+                    </div>
+                    <div className="flex min-w-0 items-center gap-1.5 text-xs leading-tight whitespace-nowrap text-muted-foreground [&>svg]:size-3.5">
+                      {icon}
+                      {pr.private && <Lock className="size-3 shrink-0" />}
+                      <a href={pr.url} target="_blank" rel="noreferrer" className="truncate hover:text-foreground hover:underline" onClick={(event) => event.stopPropagation()}>
+                        {pr.repo} #{pr.number}
+                      </a>
+                      <span>· {when}</span>
+                      {pr.state === "open" && pr.draft && <span>· Draft</span>}
+                      {pr.state === "open" && CHECKS_TEXT[pr.checks] !== "" && <span className={CHECKS_COLOR[pr.checks]}>· {CHECKS_TEXT[pr.checks]}</span>}
+                      {pr.state === "open" && REVIEW_TEXT[pr.review] !== "" && <span className={REVIEW_COLOR[pr.review]}>· {REVIEW_TEXT[pr.review]}</span>}
+                    </div>
+                  </div>
+                  {pr.comments > 0 && (
+                    <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
+                      <MessageSquare className="size-3" /> {pr.comments}
+                    </span>
+                  )}
+                </div>
+              );
+            }
             return (
               <div
                 key={pr.id}
@@ -329,7 +483,7 @@ export default function PullRequests(props: { state: string; view: string; visib
                     {pr.state === "open" && pr.draft && <span>Draft</span>}
                     {pr.state === "open" && CHECKS_TEXT[pr.checks] !== "" && <span className={CHECKS_COLOR[pr.checks]}>{CHECKS_TEXT[pr.checks]}</span>}
                     {pr.state === "open" && REVIEW_TEXT[pr.review] !== "" && <span className={REVIEW_COLOR[pr.review]}>{REVIEW_TEXT[pr.review]}</span>}
-                    <span>updated {timeAgo(pr.updated_at)}</span>
+                    {!props.plain && <span>updated {timeAgo(pr.updated_at)}</span>}
                   </div>
                 </div>
                 {pr.comments > 0 && (
@@ -340,7 +494,58 @@ export default function PullRequests(props: { state: string; view: string; visib
               </div>
             );
           })}
+
+        {props.plain && props.state === "open" && localPRs.length > 0 && (
+          <div className="flex min-h-9 items-center gap-2 border-b bg-muted/40 px-3 py-1 text-xs font-medium text-muted-foreground">
+            Not published <span className="tabular-nums">{localPRs.length}</span>
+            {unpublished.length > 0 && (
+              <Button size="xs" variant="outline" className="ml-auto" onClick={() => askPublish(unpublished)}>
+                Publish all
+              </Button>
+            )}
+          </div>
+        )}
+        {props.plain &&
+          props.state === "open" &&
+          localPRs.map((draft) => (
+            <div key={draft.id} className="flex items-center gap-3 border-b px-3 py-2 text-muted-foreground">
+              {draft.repo !== null && <img src={`https://github.com/${draft.repo.split("/")[0]}.png?size=72`} alt="" className="size-9 shrink-0 rounded-md opacity-60" />}
+              <div className="flex h-9 min-w-0 flex-1 flex-col justify-between">
+                <div className="truncate leading-tight font-medium">{draft.title}</div>
+                <div className="flex min-w-0 items-center gap-1.5 text-xs leading-tight whitespace-nowrap">
+                  <GitPullRequest className="size-3.5 shrink-0" />
+                  <a href={`https://github.com/${draft.repo}`} target="_blank" rel="noreferrer" className="truncate hover:text-foreground hover:underline">
+                    {draft.repo}
+                  </a>
+                  <span>· Not published, drafted {daysAgo(draft.created_at)}</span>
+                </div>
+              </div>
+              {publishing.includes(draft.id) && (
+                <span className="flex shrink-0 items-center gap-1.5 text-xs">
+                  <Loader2 className="size-3.5 animate-spin" /> Publishing…
+                </span>
+              )}
+              {!publishing.includes(draft.id) && (
+                <Button size="xs" variant="outline" className="shrink-0" onClick={() => askPublish([draft])}>
+                  Publish
+                </Button>
+              )}
+            </div>
+          ))}
       </div>
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Publish {toPublish.length === 1 ? toPublish[0].title : `${toPublish.length} pull requests`}?</AlertDialogTitle>
+            <AlertDialogDescription>{toPublish.length === 1 ? "It opens on GitHub as you." : "Each opens on GitHub as you."}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={publish}>Publish</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <ThreadDialog
         id={props.open}

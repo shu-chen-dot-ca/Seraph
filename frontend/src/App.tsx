@@ -449,6 +449,8 @@ export default function App() {
                 repo={query.get("repo")}
                 sort={query.get("sort") ?? "created-desc"}
                 open={query.get("open")}
+                base="#/pulls"
+                plain={false}
               />
             )}
             {page === "papers" && <Papers />}
