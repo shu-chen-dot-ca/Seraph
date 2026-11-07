@@ -4,7 +4,8 @@ the Issues board: frontend/src/AutomationDialog.tsx): what agents do there witho
 The settings, by repo, in SETTINGS_FILE (a repo not in it has DEFAULTS):
 
     {"owner/name": {"add_issues", "queue_issues", "take_issues", "questions", "comments", "pull_requests",
-                    "open_issues": bool, "levels": ["easy", ...], "instructions": str}, ...}
+                    "open_issues": bool, "max_prs_first", "max_prs": int, "levels": ["easy", ...],
+                    "instructions": str}, ...}
 
 and an issue's own level (the robot on its card on the Issues board: frontend/src/IssueAutomationDialog.tsx), which goes
 over its repo's for the drafts of the jobs on that issue, in ISSUE_SETTINGS_FILE:
@@ -29,6 +30,13 @@ What each does:
   Send does (github_account.py), then approved, so its agent hears it the same way. One GitHub refuses (or that has to
   wait, like a PR whose claim isn't decided yet) stays in the Inbox for you, and is tried again after SEND_RETRY_SECONDS.
   Pull requests also lets agents update the branch of your open PRs there (update_branch, work_tools.py).
+- Open PRs at once: how many of your PRs may be open on the repo at the same time, max_prs_first until one of yours
+  there is merged (1 at first), max_prs after (5). Two places hold to it. Catalog to In progress: agents take no more
+  of the repo's Catalog cards while its open PRs and its issues with an open job (from queued to waiting on you) add up
+  to it (keep_catalog_agents in backend/issues_api.py). Review to Open PR: keep_drafts sends no new PR there while its
+  open PRs are at it; the ones over it wait in the Inbox (the board's Review) until one is merged or closed. New
+  versions of open PRs, and a PR made again in place of an old one, always go. You can still send one by hand: Approve
+  in the Inbox, or Publish on the Pull requests page.
 - Open issues: agents may open new issues on the repo as you, assigned to you, where the project's rules allow it
   (open_issue, work_tools.py); each goes to the end of the Issues board's Catalog, where an agent takes it when the
   repo's Take issues is on.
@@ -68,7 +76,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.issues_api import AUTO_REMOVE_FILE, AUTO_REMOVE_OFF
-from backend.shared import agents, github_account, inbox, issue_facts, issue_tags, issues, jobs, repos
+from backend.shared import agents, github_account, inbox, issue_facts, issue_tags, issues, jobs, pr_tracking, repos
 from github_searcher.claude_judge import judge
 from github_searcher.github_account import SendError
 from github_searcher.inbox import AUTOMATION_FILE, ISSUE_AUTOMATION_FILE
@@ -89,6 +97,9 @@ DEFAULTS = {
     "comments": False,
     "pull_requests": False,
     "open_issues": False,
+    # How many of your PRs may be open on the repo at once: until one of yours there is merged, and after.
+    "max_prs_first": 1,
+    "max_prs": 5,
     "levels": ["easy"],
     "instructions": "",
 }
@@ -132,6 +143,8 @@ class AutomationRequest(BaseModel):
     comments: bool
     pull_requests: bool
     open_issues: bool = False
+    max_prs_first: int = 1
+    max_prs: int = 5
     levels: list[str]
     instructions: str
 
@@ -179,6 +192,8 @@ def put_automation(body: AutomationRequest) -> dict:
         raise HTTPException(status_code=400, detail="No repository picked.")
     if any(level not in LEVELS for level in body.levels):
         raise HTTPException(status_code=400, detail="The levels are easy, medium and hard.")
+    if body.max_prs_first < 1 or body.max_prs_first > 50 or body.max_prs < 1 or body.max_prs > 50:
+        raise HTTPException(status_code=400, detail="Open PRs at once is 1 to 50.")
     settings = {}
     if SETTINGS_FILE.is_file():
         settings = json.loads(SETTINGS_FILE.read_text())
@@ -214,6 +229,15 @@ async def act_on_drafts() -> None:
     if ISSUE_SETTINGS_FILE.is_file():
         own = json.loads(ISSUE_SETTINGS_FILE.read_text())
     issue_of_job = {job["id"]: job["issue"] for job in jobs.list()}
+    # Your PRs open on each repo, and how many of yours it merged (lower case): a new PR waits while the repo has its
+    # Open PRs at once.
+    open_prs = {}
+    merged = {}
+    for pr in pr_tracking.summary()["items"]:
+        if pr["relation"] == "author" and pr["state"] == "open":
+            open_prs[pr["repo"].lower()] = open_prs.get(pr["repo"].lower(), 0) + 1
+        if pr["relation"] == "author" and pr["state"] == "merged":
+            merged[pr["repo"].lower()] = merged.get(pr["repo"].lower(), 0) + 1
 
     for draft in inbox.list():
         if draft["status"] != "pending" or draft["repo"] is None:
@@ -241,11 +265,23 @@ async def act_on_drafts() -> None:
         review = draft.get("review")
         if draft["kind"] == "pr" and review is not None and review["state"] != "passed":
             send = False
+        # A new PR (not a new version of an open one, nor one made again in place of one) only while the repo has room:
+        # the others wait in Review until one of yours there is merged or closed. Publish on the Pull requests page still
+        # sends one by hand.
+        name = draft["repo"].lower()
+        new_pr = draft["kind"] == "pr" and draft["update_of"] is None and draft["replaces"] is None
+        limit = rules.get("max_prs_first", 1)
+        if merged.get(name, 0) > 0:
+            limit = rules.get("max_prs", 5)
+        if send and new_pr and open_prs.get(name, 0) >= limit:
+            send = False
         if not send or time.time() - failed_at.get(draft["id"], 0) < SEND_RETRY_SECONDS:
             continue
         try:
             await asyncio.to_thread(github_account.send, draft["id"])
             agents.decide(draft["id"], "approved")
+            if new_pr:
+                open_prs[name] = open_prs.get(name, 0) + 1
         except (SendError, KeyError, ValueError):
             failed_at[draft["id"]] = time.time()
 
