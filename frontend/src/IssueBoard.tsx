@@ -25,11 +25,14 @@ the pull request is read again).
 A card: the repo owner's picture as its logo, and next to it two lines as tall as the logo: on top the issue's short
 name, which Claude gives with its tags (github_searcher/issue_tags.py): what the agent has to do, in a few words, one
 line ("Fix SQL query logic"); until then, and for one assigned on GitHub (not asked), the GitHub title. At the bottom
-the repo and the issue's number. Under them its tags, from the same read (none until then): Free, Claimed (someone
+the repo and the issue's number. Under them its tags, from the same read (none until then; and none for one tagged
+before it came into the Issues list, in its repo's pop-up or by Add issues, until the board reads it again a moment
+later: a card only shows tags read since it came in): Free, Claimed (someone
 else is on it: never you or your agents) or Fixed (already done, it only needs closing), the complexity (Easy, Medium, Hard, or Out of scope when we don't take it), about
 how many lines the fix changes, and Scope clear or Scope not clear. Good is green, bad is red: Free, Scope clear
 and Easy green; Claimed, Scope not clear and Out of scope red; Medium yellow and Hard orange, between them; the lines
-gray. Then when it was opened (hover for the date) and how many comments it has, and on an Open card, at the bottom
+gray. Then when it was opened (hover for the date), how many comments it has, and when its tags were last refreshed
+("Refreshed 4m ago", hover for the time; it counts up by itself), and on an Open card, at the bottom
 right, Add: it moves to the end of Catalog. A click opens it in a pop-up: the short name,
 then its real name (#number and GitHub title, opens the issue on GitHub), the repository (opens it on GitHub), the
 agent (its chat; none before a job), the VM its job is on (its page) and who opened it (their GitHub profile). Not the issue's text: that is on GitHub.
@@ -94,7 +97,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { StatusDot } from "@/components/ui/status-dot";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { api, useLive, type IssueItem, type Job } from "@/live";
+import { useNow } from "@/components/ui/job-progress";
+import { api, useLive, type IssueItem, type IssueTags, type Job } from "@/live";
 import { cn, timeAgo } from "@/lib/utils";
 
 // Finished ones (board.finished) aren't shown.
@@ -136,6 +140,8 @@ type Card = {
   job: Job | null;
   shortName: string;
   tags: Tag[];
+  // When its tags were last read, since it came into the Issues list; null when they weren't yet.
+  refreshed: string | null;
   column: string;
   // No job decides its column (none, or only cancelled ones): it can move between Open and Catalog.
   movable: boolean;
@@ -160,6 +166,8 @@ const LEVEL_NAMES: Record<string, string> = {
 };
 
 export default function IssueBoard() {
+  // Ticks every 30 seconds, so "Refreshed 4m ago" counts up by itself.
+  useNow();
   const issues = useLive("issues");
   const jobs = useLive("jobs");
   const prs = useLive("prs");
@@ -425,7 +433,12 @@ export default function IssueBoard() {
     // Its tags, in this order: free or claimed, complexity, lines, scope.
     // And how it sorts: not read yet is last each time.
     const tags: Tag[] = [];
-    const read = issue.tags;
+    // Only tags read since it came into the Issues list: ones from before (its repo's pop-up, Add issues) wait for the
+    // board's own read, a moment later (keep_new_tags in backend/issues_api.py).
+    let read: IssueTags | null = issue.tags ?? null;
+    if (read !== null && new Date(read.judged_at).getTime() < new Date(issue.added_at).getTime()) {
+      read = null;
+    }
     let freeRank = 3;
     let scopeRank = 2;
     let complexityRank = 4;
@@ -526,6 +539,7 @@ export default function IssueBoard() {
       blocker: blocker,
       prWorking: prWorking,
       rank: [freeRank, scopeRank, complexityRank, linesRank],
+      refreshed: read?.judged_at ?? null,
     });
   }
 
@@ -833,6 +847,9 @@ export default function IssueBoard() {
                     <span className="flex items-center gap-3 text-xs text-muted-foreground">
                       {card.issue.facts && (
                         <span title={new Date(card.issue.facts.created_at).toLocaleString()}>Opened {timeAgo(card.issue.facts.created_at)}</span>
+                      )}
+                      {card.refreshed !== null && (
+                        <span title={new Date(card.refreshed).toLocaleString()}>Refreshed {timeAgo(card.refreshed)}</span>
                       )}
                       <span className="flex items-center gap-1" title="Comments">
                         <MessageSquare className="size-3" />
