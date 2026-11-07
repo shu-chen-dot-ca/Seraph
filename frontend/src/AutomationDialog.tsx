@@ -18,12 +18,16 @@ issues from Catalog, from the top, as many at once as the board's Max agents), Q
 recommendation, unless one must wait for you), Comments (posted on GitHub), Pull requests (sent once their review
 passed, with new titles and descriptions; agents may also update your open pull requests' branches there) and Open
 issues (agents open new issues there, assigned to you, where the project's rules allow it; each goes to the end of
-Catalog). Under it Issue level (Easy, Medium, Hard; Easy only at first): which issues may be taken. How many agents work at
+Catalog). Under it Issue level (Easy, Medium, Hard; Easy only at first): which issues may be taken. Then Open PRs at
+once, two numbers: how many of your pull requests may be open there at the same time until one of yours there is
+merged (1 at first), and after (5). Agents take no more of its Catalog cards while its open pull requests and its issues
+being worked on reach it, and a new pull request over it waits in Review until one is merged or closed (you can still
+send it by hand: Approve in the Inbox, or Publish on the Pull requests page). How many agents work at
 once is the Issues board's (BoardAutomationDialog.tsx), not a repo's.
 Right, Instructions: optional, added on top of the default instructions, e.g. which issues to take or skip even when
 their level is picked. The default instructions always skip issues that are political or politically sensitive,
 against another country's laws, unethical or NSFW.
-Save checks the number (a whole number, at least 1) and keeps it all; Cancel, Esc or the X drop the changes.
+Save checks the numbers (whole numbers, 1 to 50) and keeps it all; Cancel, Esc or the X drop the changes.
 */
 
 import { useEffect, useState } from "react";
@@ -31,6 +35,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { SelectBox } from "@/components/ui/row-selection";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/live";
@@ -43,6 +48,8 @@ export type Automation = {
   comments: boolean;
   pull_requests: boolean;
   open_issues?: boolean; // missing on settings from before it
+  max_prs_first?: number; // open PRs at once until one is merged there; missing on settings from before it (1)
+  max_prs?: number; // and after (5)
   levels: string[]; // "easy", "medium", "hard"
   instructions: string;
 };
@@ -55,6 +62,8 @@ const DEFAULTS: Automation = {
   comments: false,
   pull_requests: false,
   open_issues: false,
+  max_prs_first: 1,
+  max_prs: 5,
   levels: ["easy"],
   instructions: "",
 };
@@ -72,6 +81,9 @@ export default function AutomationDialog(props: { repos: string[]; onClose: () =
   const [comments, setComments] = useState(DEFAULTS.comments);
   const [pullRequests, setPullRequests] = useState(DEFAULTS.pull_requests);
   const [openIssues, setOpenIssues] = useState(false);
+  // As typed (digits only); Save checks them.
+  const [maxFirst, setMaxFirst] = useState("1");
+  const [maxAfter, setMaxAfter] = useState("5");
   const [levels, setLevels] = useState(DEFAULTS.levels);
   const [instructions, setInstructions] = useState(DEFAULTS.instructions);
   const [error, setError] = useState("");
@@ -97,6 +109,8 @@ export default function AutomationDialog(props: { repos: string[]; onClose: () =
         setComments(start.comments);
         setPullRequests(start.pull_requests);
         setOpenIssues(start.open_issues === true);
+        setMaxFirst(String(start.max_prs_first ?? 1));
+        setMaxAfter(String(start.max_prs ?? 5));
         setLevels(start.levels);
         setInstructions(start.instructions);
         setLoaded(true);
@@ -113,6 +127,12 @@ export default function AutomationDialog(props: { repos: string[]; onClose: () =
   }
 
   async function save() {
+    for (const value of [maxFirst, maxAfter]) {
+      if (value === "" || Number(value) < 1 || Number(value) > 50) {
+        setError("Open PRs at once is 1 to 50.");
+        return;
+      }
+    }
     const next: Automation = {
       add_issues: addIssues,
       queue_issues: queueIssues,
@@ -121,6 +141,8 @@ export default function AutomationDialog(props: { repos: string[]; onClose: () =
       comments: comments,
       pull_requests: pullRequests,
       open_issues: openIssues,
+      max_prs_first: Number(maxFirst),
+      max_prs: Number(maxAfter),
       levels: levels,
       instructions: instructions.trim(),
     };
@@ -204,6 +226,18 @@ export default function AutomationDialog(props: { repos: string[]; onClose: () =
                   </button>
                 ))}
               </div>
+            </div>
+
+            <div>
+              <div className={heading}>Open PRs at once</div>
+              <label className="flex items-center justify-between gap-2 px-2 py-1">
+                Until one is merged
+                <Input className="h-7 w-20" inputMode="numeric" value={maxFirst} onChange={(event) => setMaxFirst(event.target.value.replace(/\D/g, ""))} />
+              </label>
+              <label className="flex items-center justify-between gap-2 px-2 py-1">
+                After one is merged
+                <Input className="h-7 w-20" inputMode="numeric" value={maxAfter} onChange={(event) => setMaxAfter(event.target.value.replace(/\D/g, ""))} />
+              </label>
             </div>
           </div>
 
