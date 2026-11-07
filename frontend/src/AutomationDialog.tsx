@@ -17,8 +17,8 @@ are refreshed and they pass the filter, the issue levels and the instructions), 
 issues from Catalog, from the top, as many at once as the board's Max agents), Questions (their questions to you are answered for them with their
 recommendation, unless one must wait for you), Comments (posted on GitHub), Pull requests (sent once their review
 passed, with new titles and descriptions; agents may also update your open pull requests' branches there) and Open
-issues (agents open new issues there, assigned to you, where the project's rules allow it; each goes to the end of
-Catalog). Under it two columns: Until one is merged (on the left) and Once one is merged (on the right, once you are a
+issues (agents open new issues there, claimed for you, where the project's rules allow it; each goes to the top of
+Catalog, before every other card). Under it two columns: Until one is merged (on the left) and Once one is merged (on the right, once you are a
 contributor there). Each has the issue levels (Easy, Medium, Hard): which issues may be taken, Easy only on the left
 and all three on the right at first; and Open PRs at once: how many of your pull requests may be open there at the same
 time, 1 on the left and 5 on the right at first. Agents take no more of its Catalog cards while its open pull requests and its issues
