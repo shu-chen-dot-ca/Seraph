@@ -114,6 +114,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(issues_api.keep_facts()),
         asyncio.create_task(issues_api.keep_tags()),
         asyncio.create_task(issues_api.keep_new_tags()),
+        asyncio.create_task(repo_automation_api.keep_adding()),
         asyncio.create_task(repo_automation_api.keep_catalog()),
         asyncio.create_task(issues_api.keep_catalog_agents()),
         asyncio.create_task(repos_api.keep_signals()),

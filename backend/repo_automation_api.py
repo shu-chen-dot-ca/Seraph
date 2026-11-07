@@ -1,11 +1,10 @@
 """A repo's automation (the robot on its card on the Dashboard's Repository page, and a click on an issue card's logo on
-the Issues board: frontend/src/AutomationDialog.tsx), and the part of it that acts so far: Take issues puts the repo's
-issues in the Issues board's Catalog by themselves, as an agent picks them.
+the Issues board: frontend/src/AutomationDialog.tsx): what agents do there without asking you, as you.
 
 The settings, by repo, in SETTINGS_FILE (a repo not in it has DEFAULTS):
 
-    {"owner/name": {"take_issues", "questions", "comments", "pull_requests": bool, "levels": ["easy", ...],
-                    "instructions": str}, ...}
+    {"owner/name": {"add_issues", "take_issues", "questions", "comments", "pull_requests": bool,
+                    "levels": ["easy", ...], "instructions": str}, ...}
 
 and an issue's own level (the robot on its card on the Issues board: frontend/src/IssueAutomationDialog.tsx), which goes
 over its repo's for the drafts of the jobs on that issue, in ISSUE_SETTINGS_FILE:
@@ -16,6 +15,21 @@ GET /api/repos/automation gives them all with the defaults; PUT /api/repos/autom
 ones (the dialog's Save, for one repo or many); PUT /api/issues/automation sets one issue's own, or drops it (level
 null: its repo's counts again). Questions, Comments and Pull requests are only kept so far. How many agents work at
 once is the Issues board's (max_agents in backend/issues_api.py), not a repo's.
+
+What each does:
+- Add issues: keep_adding() below puts the repo's open issues whose level is among its Issue levels in the Issues list.
+- Take issues: keep_catalog() below puts the repo's issues that the rules allow in the Issues board's Catalog.
+
+keep_adding() runs in the background, every ADD_CHECK_SECONDS. For each repo in Repos (not archived) with Add issues on,
+it reads all its open issues from GitHub, every ADD_REFRESH_SECONDS (at once after Add issues is turned on, or the
+backend starts). Each issue only once: one it added, or that was in the Issues list when it looked, is kept in
+ADDED_FILE and never added again, so one you take off stays off (Add in the repo's pop-up on the Repository page still
+puts it in Catalog: backend/issues_api.py add_to_catalog); one taken off with the x is skipped too. The rest are tagged
+first (issue_tags.py) when they have no tags yet or changed on GitHub since, and the ones whose complexity is among the
+repo's Issue levels (one out of scope has none) go into the Issues list, on the board's Open column. Nothing else is
+asked here: the Issues board reads each one again from fresh as it comes in, and its own rules (Remove automatically)
+decide on it (keep_new_tags in backend/issues_api.py). One that didn't match is looked at again when it changes on
+GitHub, or the levels change.
 
 keep_catalog() runs in the background, every CATALOG_CHECK_SECONDS. For each repo with Take issues on, its issues on the
 board's Open column (not of an archived repo) that the rules allow: no job (or only cancelled ones), not in Catalog, open, tagged free with merge
@@ -29,7 +43,11 @@ run is tried again next round.
 import asyncio
 import hashlib
 import json
+import time
+import traceback
+from datetime import UTC, datetime
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -37,13 +55,16 @@ from backend.shared import issue_tags, issues, jobs, repos
 from github_searcher.claude_judge import judge
 from github_searcher.inbox import AUTOMATION_FILE, ISSUE_AUTOMATION_FILE
 from github_searcher.issue_tags import DATA_DIR
+from github_searcher.search import get_open_issues
 
 router = APIRouter(prefix="/api")
 
 SETTINGS_FILE = AUTOMATION_FILE
 ISSUE_SETTINGS_FILE = ISSUE_AUTOMATION_FILE
 PICKED_FILE = DATA_DIR / "catalog_picks.json"
+ADDED_FILE = DATA_DIR / "added_issues.json"
 DEFAULTS = {
+    "add_issues": False,
     "take_issues": False,
     "questions": False,
     "comments": False,
@@ -53,6 +74,9 @@ DEFAULTS = {
 }
 LEVELS = ["easy", "medium", "hard"]
 CATALOG_CHECK_SECONDS = 60
+ADD_CHECK_SECONDS = 60
+# How often Add issues reads a repo's open issues from GitHub again.
+ADD_REFRESH_SECONDS = 10 * 60
 # Issues of one repo in one Claude run.
 PER_RUN = 40
 # Always, under any repo's instructions.
@@ -78,6 +102,7 @@ SCHEMA = {
 
 class AutomationRequest(BaseModel):
     repos: list[str]
+    add_issues: bool = False
     take_issues: bool
     questions: bool
     comments: bool
@@ -137,6 +162,90 @@ def put_automation(body: AutomationRequest) -> dict:
         settings[repo]["instructions"] = body.instructions.strip()
     SETTINGS_FILE.write_text(json.dumps(settings, indent=2))
     return {"defaults": DEFAULTS, "repos": settings}
+
+
+# When Add issues last read each repo's open issues, by name (only in memory: a restart reads them all again).
+read_at = {}
+
+
+async def keep_adding() -> None:
+    """Runs as long as the backend: puts the repos' open issues that match their Issue levels in the Issues list, each
+    once (see the top of this file)."""
+    while True:
+        try:
+            await add_issues()
+        except Exception:
+            # Claude or a file failed: the next round tries again.
+            traceback.print_exc()
+        await asyncio.sleep(ADD_CHECK_SECONDS)
+
+
+async def add_issues() -> None:
+    settings = {}
+    if SETTINGS_FILE.is_file():
+        settings = json.loads(SETTINGS_FILE.read_text())
+    # By repo name in lower case: the settings may spell a name their own way.
+    by_name = {repo.lower(): rules for repo, rules in settings.items()}
+    added = []
+    if ADDED_FILE.is_file():
+        added = json.loads(ADDED_FILE.read_text())["added"]
+    archived = [name.lower() for name in repos.archived()]
+    names = [item["full_name"] for item in repos.items() if item["full_name"].lower() not in archived]
+
+    for name in names:
+        rules = by_name.get(name.lower())
+        if rules is None or not rules.get("add_issues") or time.time() - read_at.get(name, 0) < ADD_REFRESH_SECONDS:
+            continue
+        # Set first: a repo GitHub fails on is tried again after ADD_REFRESH_SECONDS, not every round.
+        read_at[name] = time.time()
+        try:
+            nodes = await asyncio.to_thread(get_open_issues, name.split("/")[0], name.split("/")[1])
+        except (httpx.HTTPError, ValueError):
+            continue
+        listed = [item["id"] for item in issues.items()]
+        dismissed = issues.dismissed()
+        tags = issue_tags.all()
+
+        # Not added before, and tagged first when it has no tags yet or changed on GitHub since.
+        waiting = []
+        todo = []
+        for node in nodes:
+            issue_id = f"{name}#{node['number']}"
+            if issue_id in listed and issue_id not in added:
+                added.append(issue_id)
+            if issue_id in added or issue_id in dismissed:
+                continue
+            waiting.append(node)
+            tag = tags.get(issue_id)
+            if tag is None or tag["updated_at"] != node["updatedAt"]:
+                todo.append(issue_id)
+        if todo:
+            await issue_tags.tag(todo)
+        tags = issue_tags.all()
+
+        items = []
+        for node in waiting:
+            issue_id = f"{name}#{node['number']}"
+            tag = tags.get(issue_id)
+            if tag is None or tag.get("merge") == "out of scope" or tag.get("complexity") not in rules["levels"]:
+                continue
+            items.append(
+                {
+                    "id": issue_id,
+                    "repo": name,
+                    "number": node["number"],
+                    "title": node["title"],
+                    "labels": [label["name"] for label in node["labels"]["nodes"]],
+                    "state": "OPEN",
+                    "comments": node["comments"]["totalCount"],
+                    "html_url": node["url"],
+                    "note": "",
+                    "added_by": "user",
+                    "added_at": datetime.now(UTC).isoformat(),
+                }
+            )
+        added += issues.add(items)
+        ADDED_FILE.write_text(json.dumps({"added": added}, indent=2))
 
 
 async def keep_catalog() -> None:

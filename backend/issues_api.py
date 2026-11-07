@@ -23,7 +23,7 @@ again. Opening a row and the Refresh button fetch them at once.
 Each issue's tags (free / assigned / waiting, its merge: likely or what stands in the way, its kind:
 github_searcher/issue_tags.py) are made by keep_tags(), also in the background, except an issue in the Issues list
 with none yet or none read since it was added: keep_new_tags() tags those on its own, from fresh (an issue tagged before
-it came in, on the Tracked page, is read again, and the new tags show on every page), every
+it came in, by Add issues or on the Tracked page, is read again, and the new tags show on every page), every
 NEW_TAGS_SECONDS and again right after a failure, so a new one never waits behind keep_tags' long rounds or
 TAGS_RETRY_SECONDS. Remove automatically decides on an issue only once it has those. keep_tags,
 for the Issues list and the tracked repos' issues alike: new issues get theirs
@@ -488,7 +488,7 @@ async def keep_facts() -> None:
 
 async def keep_new_tags() -> None:
     """Runs as long as the backend: tags the Issues list's issues that have no tags yet or none read since they were
-    added, at once and from fresh, apart from keep_tags: one tagged before it came in (on the Tracked page,
+    added, at once and from fresh, apart from keep_tags: one tagged before it came in (by Add issues, on the Tracked page,
     ...) is read again, and its new tags are the ones every page shows. Then Remove automatically's rules decide on them.
     A failed one is tried again on the next round instead of waiting TAGS_RETRY_SECONDS."""
     while True:
