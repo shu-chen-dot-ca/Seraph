@@ -103,8 +103,9 @@ def report_error(body: ErrorReport) -> dict:
 
 @router.post("/projects/{owner}/{name}")
 async def start(owner: str, name: str) -> dict:
-    """Start: a VM for the project (named after the repo, from the default image, PROJECT_CPUS, the most memory and
-    desktops allowed; the default memory when this computer hasn't that much free), the project, then its agents."""
+    """Start: a VM for the project (named after the repo, from the default image, PROJECT_CPUS, the most memory allowed
+    and the default max desktops; the default memory when this computer hasn't that much free), the project, then its
+    agents."""
     if re.fullmatch(NAME, owner) is None or re.fullmatch(NAME, name) is None:
         raise HTTPException(status_code=400, detail="That isn't a GitHub repo.")
     repo = f"{owner}/{name}"
@@ -135,12 +136,12 @@ async def start(owner: str, name: str) -> dict:
     except ImagesError as error:
         raise HTTPException(status_code=400, detail=str(error))
     try:
-        await asyncio.to_thread(vms.create, vm_name, image, cpus, max(options["memory_gb"]), disk, max(options["desktops"]))
+        await asyncio.to_thread(vms.create, vm_name, image, cpus, max(options["memory_gb"]), disk)
     except VMsError as error:
         if not str(error).startswith("Not enough free memory"):
             raise HTTPException(status_code=400, detail=str(error))
         try:
-            await asyncio.to_thread(vms.create, vm_name, image, cpus, options["memory_gb_default"], disk, max(options["desktops"]))
+            await asyncio.to_thread(vms.create, vm_name, image, cpus, options["memory_gb_default"], disk)
         except VMsError as error:
             raise HTTPException(status_code=400, detail=str(error))
 

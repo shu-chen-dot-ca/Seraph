@@ -95,8 +95,8 @@ class RejectRequest(BaseModel):
 @router.post("/workflow")
 async def add(body: AddRequest) -> dict:
     """Add: the repository from its GitHub link (one you can push to), a VM for it (named after it, from the default
-    image, VM_CPUS, the most memory and desktops allowed, the default memory when this computer hasn't that much free),
-    then its agents."""
+    image, VM_CPUS, the most memory allowed and the default max desktops, the default memory when this computer hasn't
+    that much free), then its agents."""
     text = body.url.strip()
     match = re.fullmatch(r"(?:https?://)?(?:www\.)?github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?(?:[?#].*)?", text)
     if match is None:
@@ -153,12 +153,12 @@ async def add(body: AddRequest) -> dict:
     if image is None:
         raise HTTPException(status_code=400, detail=f"There is no image {images.get_default()}: pick a default image on the VMs page (Images).")
     try:
-        await asyncio.to_thread(vms.create, vm_name, image, cpus, max(options["memory_gb"]), disk, max(options["desktops"]))
+        await asyncio.to_thread(vms.create, vm_name, image, cpus, max(options["memory_gb"]), disk)
     except VMsError as error:
         if not str(error).startswith("Not enough free memory"):
             raise HTTPException(status_code=400, detail=str(error))
         try:
-            await asyncio.to_thread(vms.create, vm_name, image, cpus, options["memory_gb_default"], disk, max(options["desktops"]))
+            await asyncio.to_thread(vms.create, vm_name, image, cpus, options["memory_gb_default"], disk)
         except VMsError as error:
             raise HTTPException(status_code=400, detail=str(error))
 

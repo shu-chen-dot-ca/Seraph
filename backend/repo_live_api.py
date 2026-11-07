@@ -60,7 +60,7 @@ async def set_up(owner: str, name: str) -> dict:
         options = vms.options()
         try:
             image = images.find(images.get_default())["name"]
-            await asyncio.to_thread(vms.create, vm_name, image, options["cpus_default"], options["memory_gb_default"], options["disk_gb_default"], 1)
+            await asyncio.to_thread(vms.create, vm_name, image, options["cpus_default"], options["memory_gb_default"], options["disk_gb_default"])
         except (ImagesError, VMsError) as error:
             raise HTTPException(status_code=400, detail=str(error))
 

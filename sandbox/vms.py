@@ -5,8 +5,8 @@ A VM is a resource, not tied to a repo or an agent. Each one is an Incus VM name
 
     DATA_DIR/vms/<name>.json   {"name", "incus_name", "image", "image_fingerprint", "cpus", "memory_gb",
                                 "disk_gb", "internet", "env", "secrets_in_vm", "autostart", "status",
-                                "created_at", "forked_from", "desktops", "queue", "wants", "runs", "traffic",
-                                "notes"}
+                                "created_at", "forked_from", "max_desktops", "desktops", "queue", "wants", "runs",
+                                "traffic", "notes"}
 
 "desktops" has one entry per desktop, each {"number", "holder", "priority"}: its number (1 to MAX_DESKTOPS,
 sandbox/vm.py), who uses it, and the agents that stepped aside from it. In the record it is {number: {"holder",
@@ -14,10 +14,10 @@ sandbox/vm.py), who uses it, and the agents that stepped aside from it. In the r
 takes the lowest number free (with 2 and 3 left, the next is 1). "queue" is the agents waiting for a desktop of the
 VM, and "wants" the desktop some of them asked for ({agent id: desktop number}); the others take the first one that
 frees up. Each desktop has its own user, home folder, screen, mouse and keyboard, so an agent on one never gets in
-the way of an agent on another; desktop_vm(n) runs commands as desktop n's user. How many desktops a VM has is set
-like its CPUs and memory: when it is made, or later while it is stopped (set_resources). One can also be added or
-any one removed at any time, also while it runs (add_desktop: the user's + or an agent's desktop_add;
-remove_desktop), as long as one is left. Every start sets them up in the VM (VM.set_up_desktops) and gives each its
+the way of an agent on another; desktop_vm(n) runs commands as desktop n's user. A VM starts with one desktop.
+"max_desktops" is the most it may have, set by the user when it is made and changed at any time (set_max_desktops),
+never below how many it has. One can be added up to that or any one removed at any time, also while it runs
+(add_desktop: the user's + or an agent's desktop_add; remove_desktop), as long as one is left. Every start sets them up in the VM (VM.set_up_desktops) and gives each its
 own agents' browser.
 
 "image" is the name of the image it was made from (sandbox/images.py) and "image_fingerprint" the exact
@@ -112,8 +112,8 @@ MEMORY_GB_ALLOWED = [int(gb) for gb in os.environ["SANDBOX_MEMORY_GB_ALLOWED"].s
 DISK_GB_DEFAULT = int(os.environ["SANDBOX_DISK_GB_DEFAULT"])
 DISK_GB_MIN = int(os.environ["SANDBOX_DISK_GB_MIN"])
 DISK_GB_MAX = int(os.environ["SANDBOX_DISK_GB_MAX"])
+MAX_DESKTOPS_DEFAULT = int(os.environ["SANDBOX_MAX_DESKTOPS_DEFAULT"])
 MIN_FREE_RAM_GB = int(os.environ["SANDBOX_MIN_FREE_RAM_GB"])
-DESKTOPS_ALLOWED = list(range(1, MAX_DESKTOPS + 1))
 NAME_PATTERN = r"[a-z][a-z0-9-]{0,30}"
 SCAN_SECONDS = 10
 SAMPLES_KEPT = 60
@@ -164,6 +164,8 @@ class VMRecord:
         self.autostart = record["autostart"]
         self.status = record["status"]
         self.created_at = record["created_at"]
+        # The most desktops it may have. Records from before this was kept get the default.
+        self.max_desktops = record.get("max_desktops", MAX_DESKTOPS_DEFAULT)
         # Per desktop, by its number: who uses it ("user", an agent id or None) and the agents that stepped aside from it
         # (checked first for its next turn). Then the agents waiting for a desktop, and the desktop some of them asked
         # for. Changed by VMQueue only. Records from before desktops had one desktop, from before numbers were kept are
@@ -245,6 +247,7 @@ class VMRecord:
             "autostart": self.autostart,
             "status": self.status,
             "created_at": self.created_at,
+            "max_desktops": self.max_desktops,
             "desktops": [
                 {"number": number, "holder": line["holder"], "priority": list(line["priority"])}
                 for number, line in self.desktops.items()
@@ -646,42 +649,21 @@ class VMRecord:
         self.autostart = enabled
         self.save()
 
-    def set_resources(self, cpus: int, memory_gb: int, desktops: int) -> None:
-        """Change CPU, memory and the number of desktops. Only while the VM is off; they apply when it starts.
-        Fewer desktops: the highest numbers go. More: the lowest numbers free come. A desktop someone holds, stepped
-        aside from, asked for or has a run on can't go. The caller holds VMQueue's lock, so nobody joins a desktop
-        while it goes."""
+    def set_resources(self, cpus: int, memory_gb: int) -> None:
+        """Change CPU and memory. Only while the VM is off; they apply when it starts."""
         if cpus not in CPUS_ALLOWED:
             raise VMsError(f"cpus must be one of {CPUS_ALLOWED}")
         if memory_gb not in MEMORY_GB_ALLOWED:
             raise VMsError(f"memory_gb must be one of {MEMORY_GB_ALLOWED}")
-        if desktops not in DESKTOPS_ALLOWED:
-            raise VMsError(f"desktops must be one of {DESKTOPS_ALLOWED}")
-        going = sorted(self.desktops)[desktops:]
-        for number in going:
-            line = self.desktops[number]
-            runs = [run for run in self.runs if run.get("desktop", 1) == number]
-            if line["holder"] is not None or line["priority"] or number in self.wants.values() or runs:
-                raise VMsError(f"Desktop {number} is in use (held, waited for, or a run is going on it), so it can't go.")
         if not self.lock.acquire(blocking=False):
             raise VMsError(f"{self.name} is busy")
         try:
             if self.vm.status() == "Running":
-                raise VMsError("Stop the VM first; CPU, memory and desktops change while it is off.")
+                raise VMsError("Stop the VM first; CPU and memory change while it is off.")
             self.vm.set_config("limits.cpu", str(cpus))
             self.vm.set_config("limits.memory", f"{memory_gb}GiB")
             self.cpus = cpus
             self.memory_gb = memory_gb
-            kept = {}
-            for number, line in self.desktops.items():
-                if number not in going:
-                    kept[number] = line
-            number = 1
-            while len(kept) < desktops:
-                if number not in kept:
-                    kept[number] = {"holder": None, "priority": []}
-                number += 1
-            self.desktops = dict(sorted(kept.items()))
             self.save()
         except VMsError:
             raise
@@ -689,6 +671,15 @@ class VMRecord:
             raise VMsError(str(error))
         finally:
             self.lock.release()
+
+    def set_max_desktops(self, max_desktops: int) -> None:
+        """The most desktops it may have, running or not. Never below how many it has: remove some first."""
+        if max_desktops < 1 or max_desktops > MAX_DESKTOPS:
+            raise VMsError(f"Max desktops must be 1 to {MAX_DESKTOPS}")
+        if max_desktops < len(self.desktops):
+            raise VMsError(f"{self.name} has {len(self.desktops)} desktops now. Remove some first, then lower its max desktops.")
+        self.max_desktops = max_desktops
+        self.save()
 
     def add_desktop(self, queue_lock: threading.Lock) -> int:
         """One more desktop, running or not (the desktop bar's +, or an agent's desktop_add); returns its number, the
@@ -698,12 +689,12 @@ class VMRecord:
         if not self.lock.acquire(blocking=False):
             raise VMsError(f"{self.name} is busy")
         try:
+            if len(self.desktops) >= self.max_desktops:
+                raise VMsError(f"{self.name} already has {self.max_desktops} desktops, its max desktops (in its Settings).")
             number = None
             for each in range(1, MAX_DESKTOPS + 1):
                 if number is None and each not in self.desktops:
                     number = each
-            if number is None:
-                raise VMsError(f"{self.name} already has {MAX_DESKTOPS} desktops, the most a VM can have.")
             numbers = sorted(list(self.desktops) + [number])
             running = self.vm.status() == "Running"
             if running:
@@ -905,7 +896,8 @@ class VMs:
             "disk_gb_min": DISK_GB_MIN,
             "disk_gb_max": DISK_GB_MAX,
             "disk_gb_default": DISK_GB_DEFAULT,
-            "desktops": DESKTOPS_ALLOWED,
+            "max_desktops_default": MAX_DESKTOPS_DEFAULT,
+            "max_desktops_max": MAX_DESKTOPS,
             "next_name": f"vm{number}",
         }
 
@@ -970,8 +962,9 @@ class VMs:
             raise VMsError(f"There is no VM {name}")
         return record
 
-    def create(self, name: str, image: str, cpus: int, memory_gb: int, disk_gb: int, desktops: int = 1) -> VMRecord:
-        """Make a VM from an image (its name). Returns at once with status "creating"; launching takes about a minute in a thread."""
+    def create(self, name: str, image: str, cpus: int, memory_gb: int, disk_gb: int, max_desktops: int = MAX_DESKTOPS_DEFAULT) -> VMRecord:
+        """Make a VM from an image (its name), with one desktop and room for max_desktops. Returns at once with status
+        "creating"; launching takes about a minute in a thread."""
         if not re.fullmatch(NAME_PATTERN, name):
             raise VMsError("The name must start with a letter and have only a-z, 0-9 and -, at most 31 characters")
         if cpus not in CPUS_ALLOWED:
@@ -980,8 +973,8 @@ class VMs:
             raise VMsError(f"memory_gb must be one of {MEMORY_GB_ALLOWED}")
         if disk_gb < DISK_GB_MIN or disk_gb > DISK_GB_MAX:
             raise VMsError(f"The disk must be {DISK_GB_MIN} to {DISK_GB_MAX} GB")
-        if desktops not in DESKTOPS_ALLOWED:
-            raise VMsError(f"desktops must be one of {DESKTOPS_ALLOWED}")
+        if max_desktops < 1 or max_desktops > MAX_DESKTOPS:
+            raise VMsError(f"Max desktops must be 1 to {MAX_DESKTOPS}")
 
         with self.lock:
             if name in self.records:
@@ -1018,7 +1011,8 @@ class VMs:
                     "autostart": False,
                     "status": "creating",
                     "created_at": datetime.now(UTC).isoformat(),
-                    "desktops": [{"number": number, "holder": None, "priority": []} for number in range(1, desktops + 1)],
+                    "max_desktops": max_desktops,
+                    "desktops": [{"number": 1, "holder": None, "priority": []}],
                 },
                 self.changed,
             )
@@ -1030,7 +1024,7 @@ class VMs:
 
     def fork(self, source_name: str, name: str) -> VMRecord:
         """Copy a stopped VM into a new one: its disk (everything installed and cloned in it), CPU, memory, disk size,
-        desktops, internet setting and env variables. Returns at once with status "creating"; the copy starts by itself."""
+        desktops and max desktops, internet setting and env variables. Returns at once with status "creating"; the copy starts by itself."""
         if not re.fullmatch(NAME_PATTERN, name):
             raise VMsError("The name must start with a letter and have only a-z, 0-9 and -, at most 31 characters")
         source = self.get(source_name)
@@ -1073,6 +1067,7 @@ class VMs:
                     "status": "creating",
                     "created_at": datetime.now(UTC).isoformat(),
                     "forked_from": source_name,
+                    "max_desktops": source.max_desktops,
                     # The same desktops as the source; nobody holds or waits for them.
                     "desktops": [{"number": number, "holder": None, "priority": []} for number in source.desktops],
                     # Its disk is a copy, so what was set up in the source is set up in it too.

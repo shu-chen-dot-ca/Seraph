@@ -5,9 +5,9 @@ desktop user with the image's environment (/etc/environment).
 The VM's address comes from the host's DHCP leases, never from what the VM
 itself reports.
 
-A VM has 1 to MAX_DESKTOPS desktops, each with its own user, home folder, screen, mouse and keyboard, so agents on
-different desktops work at the same time without getting in each other's way. Each has a fixed number, 1 to
-MAX_DESKTOPS, and a VM may have any of them (e.g. 2 and 3). VM(name, desktop) runs commands as that desktop's user,
+A VM has 1 to its max desktops (the user sets it per VM, at most MAX_DESKTOPS), each with its own user, home folder,
+screen, mouse and keyboard, so agents on different desktops work at the same time without getting in each other's
+way. Each has a fixed number, 1 to MAX_DESKTOPS, and a VM may have any of them (e.g. 2 and 3). VM(name, desktop) runs commands as that desktop's user,
 and they get SANDBOX_DESKTOP (its number):
 - Desktop 1 is the image's own: the uid 1000 user, logged in by the display manager on display :0, its VNC server
   (x11vnc) on VNC_PORT and noVNC on NOVNC_PORT, the demo service `demo`. That session always runs (the VM's start
@@ -46,8 +46,9 @@ TERMINAL_PORT = int(os.environ["SANDBOX_VM_TERMINAL_PORT"])
 NO_DESKTOP_FILE = "/etc/sandbox-no-desktop"
 # A VM whose agent doesn't answer this long after it was started hung while booting (wait_agent).
 HUNG_BOOT_SECONDS = 180
-# The most desktops a VM can have, and the screen size of desktops 2 and up (desktop 1's comes with the image).
-MAX_DESKTOPS = 3
+# The most desktops any VM can have (each VM's own max desktops is set up to this), and the screen size of desktops 2
+# and up (desktop 1's comes with the image). Desktop n's ports and screens (above) don't run into each other up to here.
+MAX_DESKTOPS = 32
 DESKTOP_SIZE = "1280x800"
 # Desktops 2 and up, as root at every start (set_up_desktops), with numbers (the VM's desktops, e.g. "1 3") and size
 # set before it. TigerVNC comes from the system's own packages, the first time. A terminal-only image gets only the

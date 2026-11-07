@@ -4,7 +4,7 @@ Agents never run code on your computer. Everything they build, install or run ha
 
 ![Sharing a VM](vm-queue.svg)
 
-- **Desktops.** A VM has 1 to 3 desktops.
+- **Desktops.** A VM starts with 1 desktop. Agents add more as they need them, up to its **Max desktops** (5 by default), which you set when you make the VM and can change any time in its Settings.
   - Each desktop has its own Linux user, home folder, screen, browser and demo service.
   - You can watch any desktop in the page, or take it over.
   - Desktops keep their numbers. A new one takes the lowest free number.

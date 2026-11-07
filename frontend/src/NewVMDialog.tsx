@@ -1,7 +1,8 @@
 /*
-The New VM dialog: a name, the image it starts from, CPUs, memory, disk and desktops (1 by default). Each desktop has
-its own screen, mouse, keyboard and home folder, so that many agents can work in the VM at the same time; each one
-also takes some memory (about 1 GB with its browser).
+The New VM dialog: a name, the image it starts from, CPUs, memory, disk and max desktops, a number. The VM starts
+with one desktop, and agents (or you, with the + above it) add more up to max desktops; it can be changed at any time
+in the VM's Settings. Each desktop has its own screen, mouse, keyboard and home folder, so that many agents can work
+in the VM at the same time; each one also takes some memory (about 1 GB with its browser).
 
 The choices and defaults come from GET /api/vms/options (they live in .env), including the first free
 name (vm1, vm2, ...). POST /api/vms answers at once with status "creating"; the VM shows up in the list
@@ -29,7 +30,7 @@ export default function NewVMDialog(props: { open: boolean; onOpenChange: (open:
   const [cpus, setCpus] = useState("");
   const [memory, setMemory] = useState("");
   const [disk, setDisk] = useState("");
-  const [desktops, setDesktops] = useState("1");
+  const [maxDesktops, setMaxDesktops] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -53,7 +54,7 @@ export default function NewVMDialog(props: { open: boolean; onOpenChange: (open:
         setCpus(String(answer.cpus_default));
         setMemory(String(answer.memory_gb_default));
         setDisk(String(answer.disk_gb_default));
-        setDesktops("1");
+        setMaxDesktops(String(answer.max_desktops_default));
       })
       .catch((err) => {
         if (!stopped) {
@@ -67,12 +68,14 @@ export default function NewVMDialog(props: { open: boolean; onOpenChange: (open:
 
   const diskNumber = Number(disk);
   const diskValid = options !== null && Number.isInteger(diskNumber) && diskNumber >= options.disk_gb_min && diskNumber <= options.disk_gb_max;
+  const maxDesktopsNumber = Number(maxDesktops);
+  const maxDesktopsValid = options !== null && Number.isInteger(maxDesktopsNumber) && maxDesktopsNumber >= 1 && maxDesktopsNumber <= options.max_desktops_max;
   const nameValid = /^[a-z][a-z0-9-]{0,30}$/.test(name);
   const shownImage = image === "" ? imagesData.default : image;
   const imageValid = imagesData.images.some((each) => each.name === shownImage);
 
   async function submit() {
-    if (options === null || !nameValid || !diskValid || !imageValid || busy) {
+    if (options === null || !nameValid || !diskValid || !maxDesktopsValid || !imageValid || busy) {
       return;
     }
     setBusy(true);
@@ -80,7 +83,7 @@ export default function NewVMDialog(props: { open: boolean; onOpenChange: (open:
     try {
       await api("/api/vms", {
         method: "POST",
-        body: { name: name, image: shownImage, cpus: Number(cpus), memory_gb: Number(memory), disk_gb: diskNumber, desktops: Number(desktops) },
+        body: { name: name, image: shownImage, cpus: Number(cpus), memory_gb: Number(memory), disk_gb: diskNumber, max_desktops: maxDesktopsNumber },
       });
       toast.success(`Creating ${name}. It takes about a minute.`);
       props.onOpenChange(false);
@@ -109,7 +112,7 @@ export default function NewVMDialog(props: { open: boolean; onOpenChange: (open:
 
         {options !== null && (
           <form
-            className="grid grid-cols-[72px_minmax(0,1fr)] items-center gap-x-3 gap-y-2"
+            className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-3 gap-y-2"
             onSubmit={(event) => {
               event.preventDefault();
               submit();
@@ -195,19 +198,22 @@ export default function NewVMDialog(props: { open: boolean; onOpenChange: (open:
               </span>
             </div>
 
-            <label className="text-muted-foreground">Desktops</label>
-            <Select value={desktops} onValueChange={setDesktops}>
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent position="popper">
-                {options.desktops.map((number) => (
-                  <SelectItem key={number} value={String(number)}>
-                    {number === 1 ? "1 desktop" : `${number} desktops (${number} agents at once)`}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <label htmlFor="new-vm-max-desktops" className="text-muted-foreground">
+              Max desktops
+            </label>
+            <div className="flex items-center gap-2">
+              <Input
+                id="new-vm-max-desktops"
+                type="number"
+                className="w-28"
+                min={1}
+                max={options.max_desktops_max}
+                value={maxDesktops}
+                aria-invalid={!maxDesktopsValid}
+                onChange={(event) => setMaxDesktops(event.target.value)}
+              />
+              <span className="text-muted-foreground">agents at once (1 to {options.max_desktops_max})</span>
+            </div>
             {/* Lets Enter in a field submit the form. */}
             <button type="submit" className="hidden" />
           </form>
@@ -219,7 +225,7 @@ export default function NewVMDialog(props: { open: boolean; onOpenChange: (open:
           <Button variant="outline" onClick={() => props.onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={options === null || !nameValid || !diskValid || !imageValid || busy}>
+          <Button onClick={submit} disabled={options === null || !nameValid || !diskValid || !maxDesktopsValid || !imageValid || busy}>
             {busy && <Loader2 className="animate-spin" />}
             Create
           </Button>

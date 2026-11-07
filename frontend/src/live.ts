@@ -788,6 +788,7 @@ export type VMSummary = {
   autostart: boolean;
   status: VMStatus;
   created_at: string;
+  max_desktops: number; // the most desktops it may have (the user sets it)
   desktops: VMDesktop[]; // lowest number first; agents on different desktops work at the same time
   queue: string[]; // agent ids waiting for a desktop, first = next
   wants: Record<string, number>; // the desktop some of them asked for (the others take the first that frees up)
@@ -904,7 +905,8 @@ export type VMOptions = {
   disk_gb_min: number;
   disk_gb_max: number;
   disk_gb_default: number;
-  desktops: number[]; // 1, 2, 3: how many desktops (agents at the same time) a VM can have
+  max_desktops_default: number; // the most desktops (agents at the same time) a new VM may have
+  max_desktops_max: number; // the highest max desktops can be set to
   next_name: string;
 };
 

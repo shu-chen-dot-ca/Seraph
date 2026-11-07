@@ -10,7 +10,8 @@ A project has agents of its own (agents.py, start_project):
   real, new issue worth doing and reproduces it, then fixes it (a fix_issue job), or denies it (deny_issue: closed as
   not planned, with why). Their PR drafts go to review first.
 - its reviewer (role "reviewer"): reviews each PR draft before it reaches your Inbox.
-They work in the project's VM ("vm"), made for it with 3 desktops, so they work at the same time.
+They work in the project's VM ("vm"), made for it with one desktop; each adds one of its own (up to the VM's max
+desktops) when none is free, so they work at the same time.
 
 Kept in DATA_DIR/projects.json, a list:
 

@@ -14,7 +14,7 @@ The header's ⋯ menu has Archive (or Unarchive) and Delete, both asking first. 
 jobs and takes it out of every VM queue, but keeps this conversation; an archived agent's page says so, and sending it
 a message brings it back. An agent that made PRs can't be deleted, only archived, so it keeps its context for updates.
 
-The Desktop is the live screen of the agent's own desktop of the VM it holds or waits for (a VM has one to three, each
+The Desktop is the live screen of the agent's own desktop of the VM it holds or waits for (a VM has one or more, each
 with its own screen), else of desktop 1 of its target VM: only the screen, like the VMs page's
 picture, without noVNC's page and buttons around it (noVNC's own client draws it straight from the VM's VNC
 connection; LiveDesktop.tsx, through the backend when the page came through the remote access domain), so it moves as

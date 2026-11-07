@@ -1,7 +1,7 @@
 """Who uses each VM: one holder and a priority line per desktop, and one line of agents waiting for a desktop.
 
-A VM has one to three desktops (sandbox/vm.py), each with its own screen, mouse, keyboard and home folder, so agents
-on different desktops work at the same time. Each has a fixed number (record.desktops is {number: line}), so a VM may
+A VM has one desktop or more, up to its max desktops (sandbox/vm.py), each with its own screen, mouse, keyboard and
+home folder, so agents on different desktops work at the same time. Each has a fixed number (record.desktops is {number: line}), so a VM may
 have desktops 2 and 3 only. An agent joins its target VM (queue_for_vm), maybe asking for one
 desktop (where its project is set up). If a desktop nobody holds is there (the one it asked for, or any), it holds
 it at once; otherwise it waits in the VM's line, even while the VM is off. When a holder releases, the desktop goes

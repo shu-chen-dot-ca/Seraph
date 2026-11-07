@@ -3,13 +3,13 @@ screen (the VMs overview's Desktop card), each VM's queue, the user's side of it
 Notes tab, see sandbox/vms.py), and copying files between this computer and a VM (the
 Resources tab, desktop 1's home; only the user can, see sandbox/file_transfer.py).
 
-A VM has one to three desktops (sandbox/vm.py), each with a fixed number, its own holder and priority line, and one
-waiting line for them all: the viewer, the screen picture, the lock, Take over, Release and Give name the desktop by
-its number (the viewer and the screen picture take the VM's first desktop when left out, the others 1); Front, Skip
-and Remove name an agent. The number of desktops is set with CPU and memory (Resources, only while the VM is
-stopped), or one at a time at any time (the desktop bar's + and ×: add one, which takes the lowest number free, or
-remove any one but the last left; the others keep their numbers); a desktop in use can't go, and new ones go to the
-agents waiting.
+A VM has one desktop or more, up to its max desktops (sandbox/vm.py), each with a fixed number, its own holder and
+priority line, and one waiting line for them all: the viewer, the screen picture, the lock, Take over, Release and
+Give name the desktop by its number (the viewer and the screen picture take the VM's first desktop when left out, the
+others 1); Front, Skip and Remove name an agent. Max desktops is set when the VM is made and changed at any time (the
+Settings tab); desktops are added or removed one at a time at any time (the desktop bar's + and ×: add one, up to
+the max, which takes the lowest number free, or remove any one but the last left; the others keep their numbers); a
+desktop in use can't go, and new ones go to the agents waiting.
 
 Create, start, stop and restart run in background threads inside
 sandbox/vms.py and answer at once; the browser follows the state through
@@ -43,7 +43,7 @@ from sandbox.agent.computer_use import Computer, ComputerError
 from sandbox.file_transfer import FileTransferError
 from sandbox.images import ImagesError
 from sandbox.vm import VMError
-from sandbox.vms import VMRecord, VMsError
+from sandbox.vms import MAX_DESKTOPS_DEFAULT, VMRecord, VMsError
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=True)
 
@@ -61,7 +61,7 @@ class CreateRequest(BaseModel):
     cpus: int
     memory_gb: int
     disk_gb: int
-    desktops: int = 1
+    max_desktops: int = MAX_DESKTOPS_DEFAULT
 
 
 class LockRequest(BaseModel):
@@ -80,7 +80,10 @@ class ToggleRequest(BaseModel):
 class ResourcesRequest(BaseModel):
     cpus: int
     memory_gb: int
-    desktops: int = 1
+
+
+class MaxDesktopsRequest(BaseModel):
+    max_desktops: int
 
 
 class EnvRequest(BaseModel):
@@ -98,7 +101,7 @@ class NoteRequest(BaseModel):
 
 @router.get("/vms/options")
 def vm_options() -> dict:
-    """CPU, memory, disk and desktops choices for the New VM dialog (from .env), and the first free name."""
+    """CPU, memory, disk and max desktops choices for the New VM dialog (from .env), and the first free name."""
     return vms.options()
 
 
@@ -108,7 +111,7 @@ def create_vm(body: CreateRequest) -> dict:
     image = body.image.strip() or images.get_default()
     try:
         image = images.find(image)["name"]
-        record = vms.create(body.name.strip(), image, body.cpus, body.memory_gb, body.disk_gb, body.desktops)
+        record = vms.create(body.name.strip(), image, body.cpus, body.memory_gb, body.disk_gb, body.max_desktops)
     except (ImagesError, VMsError) as error:
         raise HTTPException(status_code=400, detail=str(error))
     return vms.summary(record)
@@ -381,6 +384,7 @@ def vm_settings(name: str) -> dict:
         "cpus": record.cpus,
         "memory_gb": record.memory_gb,
         "desktops": len(record.desktops),
+        "max_desktops": record.max_desktops,
         "disk_gb": record.disk_gb,
         "internet": record.internet,
         "autostart": record.autostart,
@@ -420,21 +424,31 @@ def set_autostart(name: str, body: ToggleRequest) -> dict:
 
 @router.put("/vms/{name}/resources")
 def set_resources(name: str, body: ResourcesRequest) -> dict:
-    """CPU, memory and desktops; they only change while the VM is stopped. A desktop in use can't go."""
+    """CPU and memory; they only change while the VM is stopped."""
     try:
         record = vms.get(name)
     except VMsError as error:
         raise HTTPException(status_code=404, detail=str(error))
     try:
-        # The queue's lock: nobody joins a desktop while it goes.
-        with queue.lock:
-            record.set_resources(body.cpus, body.memory_gb, body.desktops)
-        # New desktops go to the agents waiting.
-        queue.fill(name)
+        record.set_resources(body.cpus, body.memory_gb)
     except VMsError as error:
         raise HTTPException(status_code=409, detail=str(error))
     except VMError as error:
         raise HTTPException(status_code=500, detail=str(error))
+    return {}
+
+
+@router.put("/vms/{name}/max_desktops")
+def set_max_desktops(name: str, body: MaxDesktopsRequest) -> dict:
+    """The most desktops the VM may have, running or not. Not below how many it has."""
+    try:
+        record = vms.get(name)
+    except VMsError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    try:
+        record.set_max_desktops(body.max_desktops)
+    except VMsError as error:
+        raise HTTPException(status_code=409, detail=str(error))
     return {}
 
 

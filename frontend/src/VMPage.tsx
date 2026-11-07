@@ -8,14 +8,15 @@ Overview is three areas with draggable dividers:
 In phone mode (App.tsx, a screen under 768px wide) the queue is under the desktop instead, and stats and jobs take
 half the width each.
 
-A VM has one to three desktops. Each has its own screen, mouse, keyboard and home folder, so agents on different
+A VM has one desktop or more, up to its max desktops (Settings). Each has its own screen, mouse, keyboard and home folder, so agents on different
 desktops work at the same time without getting in each other's way. Each keeps its number: removing desktop 1 leaves
 desktops 2 and 3 as they are, and the next new one is desktop 1 again (the lowest number free). With more than one,
 buttons Desktop 1, Desktop 2, ... above the desktop pick which one the desktop area, its Lock, and the queue panel (its
 holder, Priority and Runs) are about; each button's tooltip says who holds it. × removes the desktop shown (it asks
 first). + after them adds a desktop and shows it once it is up
-(while the VM runs it is set up right away: under a minute the first time), and × after the last one removes that
-one (it asks first; its home folder stays). Both work running or not; Settings > Resources sets the number too. Waiting
+(while the VM runs it is set up right away: under a minute the first time; it is gone once the VM has its max
+desktops), and × after the last one removes that one (it asks first; its home folder stays). Both work running or
+not. Waiting
 is one line for the whole VM: the next agent gets the first desktop that frees up, unless it asked for one ("for
 desktop 2"); Give hands the desktop shown to that agent. A desktop's iframe stays mounted once opened, so switching
 back is instant.
@@ -113,9 +114,6 @@ function formatBytes(bytes: number): string {
 
 // The internet chart never scales below this, so an idle VM's few packets don't look like a busy line.
 const INTERNET_CHART_MIN = 100_000;
-
-// The most desktops a VM can have (MAX_DESKTOPS in sandbox/vm.py).
-const MAX_DESKTOPS = 3;
 
 export default function VMPage(props: { name: string; active: boolean; tab: string | null }) {
   const vms = useLive("vms");
@@ -534,7 +532,7 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                         {busy === "remove_desktop" ? <Loader2 className="animate-spin" /> : <X />}
                       </Button>
                     )}
-                    {!terminalOnly && count < MAX_DESKTOPS && (
+                    {!terminalOnly && count < vm.max_desktops && (
                       <Button
                         variant="ghost"
                         size="icon-xs"

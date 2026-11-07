@@ -1,5 +1,6 @@
 /*
-The Settings tab of a VM page: its name, CPU, memory and desktops, internet, autostart, env vars, its image, and Delete.
+The Settings tab of a VM page: its name, CPU and memory, max desktops, internet, autostart, env vars, its image, and
+Delete.
 
 Most of it reads the live "vms" topic, so a change shows up as soon as the backend has made it.
 The env values are the one thing the live feed leaves out (it only carries the names, so agents and
@@ -7,10 +8,10 @@ other views never see secrets): they come from GET /api/vms/{name}/settings, fet
 the names change (an agent can add or remove empty ones) unless you have unsaved edits. Once you save a value for an
 empty one, the agent that added it is told and carries on.
 
-CPU, memory and desktops only change here while the VM is stopped; they apply on the next start (the + and × above
-the desktop on the Overview add or remove one at any time). Desktops is how many
-agents can work in the VM at the same time, each on its own desktop (screen, mouse, keyboard and home folder). A
-desktop someone holds or waits for can't go; one that goes keeps its home folder, and comes back with it.
+CPU and memory only change here while the VM is stopped; they apply on the next start. Max desktops changes at any
+time: it is how many agents can work in the VM at the same time at most, each on its own desktop (screen, mouse,
+keyboard and home folder). Agents add desktops up to it, and the + and × above the desktop on the Overview add or
+remove one at any time. It can't go below how many the VM has; remove some first.
 Rename works running or not; the page moves to the new name (#/vms/<new name>).
 */
 
@@ -44,12 +45,13 @@ export default function VMSettings(props: { name: string }) {
   // "" = not touched, so the select follows the live value.
   const [cpus, setCpus] = useState("");
   const [memory, setMemory] = useState("");
-  const [desktops, setDesktops] = useState("");
+  // null = not touched, so the box follows the live value ("" is a cleared box).
+  const [maxDesktops, setMaxDesktops] = useState<string | null>(null);
   const [newName, setNewName] = useState(props.name);
   const [rows, setRows] = useState<EnvRow[]>([]);
   const [envLoaded, setEnvLoaded] = useState(false);
   const [envEdited, setEnvEdited] = useState(false);
-  // Which change is on its way: "rename", "resources", "internet", "autostart", "env" or "delete".
+  // Which change is on its way: "rename", "resources", "max_desktops", "internet", "autostart", "env" or "delete".
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -96,11 +98,12 @@ export default function VMSettings(props: { name: string }) {
   const stopped = vm.status === "stopped";
   const shownCpus = cpus === "" ? String(vm.cpus) : cpus;
   const shownMemory = memory === "" ? String(vm.memory_gb) : memory;
-  const shownDesktops = desktops === "" ? String(vm.desktops.length) : desktops;
-  const resourcesChanged = shownCpus !== String(vm.cpus) || shownMemory !== String(vm.memory_gb) || shownDesktops !== String(vm.desktops.length);
+  const resourcesChanged = shownCpus !== String(vm.cpus) || shownMemory !== String(vm.memory_gb);
   const cpuChoices = options === null ? [vm.cpus] : options.cpus;
   const memoryChoices = options === null ? [vm.memory_gb] : options.memory_gb;
-  const desktopChoices = options === null ? [vm.desktops.length] : options.desktops;
+  const shownMaxDesktops = maxDesktops === null ? String(vm.max_desktops) : maxDesktops;
+  const maxDesktopsValid = Number.isInteger(Number(shownMaxDesktops)) && Number(shownMaxDesktops) >= 1;
+  const maxDesktopsChanged = shownMaxDesktops !== String(vm.max_desktops);
 
   // Each change below: the live feed shows the result, so only errors need handling here.
   async function rename() {
@@ -122,12 +125,24 @@ export default function VMSettings(props: { name: string }) {
     try {
       await api(`/api/vms/${encodeURIComponent(vmName)}/resources`, {
         method: "PUT",
-        body: { cpus: Number(shownCpus), memory_gb: Number(shownMemory), desktops: Number(shownDesktops) },
+        body: { cpus: Number(shownCpus), memory_gb: Number(shownMemory) },
       });
       setCpus("");
       setMemory("");
-      setDesktops("");
-      toast.success(`${vmName} gets ${shownCpus} CPUs, ${shownMemory} GB and ${shownDesktops} ${shownDesktops === "1" ? "desktop" : "desktops"} on its next start.`);
+      toast.success(`${vmName} gets ${shownCpus} CPUs and ${shownMemory} GB on its next start.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+    setBusy("");
+  }
+
+  async function saveMaxDesktops() {
+    setBusy("max_desktops");
+    setError("");
+    try {
+      await api(`/api/vms/${encodeURIComponent(vmName)}/max_desktops`, { method: "PUT", body: { max_desktops: Number(shownMaxDesktops) } });
+      setMaxDesktops(null);
+      toast.success(`${vmName} can have up to ${shownMaxDesktops} ${shownMaxDesktops === "1" ? "desktop" : "desktops"}.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -249,20 +264,6 @@ export default function VMSettings(props: { name: string }) {
               </SelectContent>
             </Select>
 
-            <label className="text-muted-foreground">Desktops</label>
-            <Select value={shownDesktops} onValueChange={setDesktops} disabled={!stopped}>
-              <SelectTrigger className="w-40">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent position="popper">
-                {desktopChoices.map((number) => (
-                  <SelectItem key={number} value={String(number)}>
-                    {number === 1 ? "1 desktop" : `${number} desktops`}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-
             <label className="text-muted-foreground">Disk</label>
             <span className="tabular-nums">{vm.disk_gb} GB</span>
 
@@ -272,9 +273,37 @@ export default function VMSettings(props: { name: string }) {
                 {busy === "resources" && <Loader2 className="animate-spin" />}
                 Apply
               </Button>
-              {!stopped && <span className="text-muted-foreground">Stop the VM to change CPU, memory and desktops.</span>}
+              {!stopped && <span className="text-muted-foreground">Stop the VM to change CPU and memory.</span>}
             </div>
           </div>
+        </section>
+
+        <section>
+          <h2 className="mb-1.5 border-b pb-1 font-semibold">Max desktops</h2>
+          <div className="flex items-center gap-2">
+            <Input
+              type="number"
+              className="w-28"
+              min={1}
+              max={options === null ? undefined : options.max_desktops_max}
+              value={shownMaxDesktops}
+              aria-invalid={!maxDesktopsValid}
+              onChange={(event) => setMaxDesktops(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && maxDesktopsValid && maxDesktopsChanged && busy === "") {
+                  saveMaxDesktops();
+                }
+              }}
+            />
+            <Button size="sm" onClick={saveMaxDesktops} disabled={!maxDesktopsValid || !maxDesktopsChanged || busy !== ""}>
+              {busy === "max_desktops" && <Loader2 className="animate-spin" />}
+              Save
+            </Button>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            The most agents that work in it at once, one per desktop. It has {vm.desktops.length} now; agents add more up to this. Works while it
+            runs.
+          </p>
         </section>
 
         <section>
