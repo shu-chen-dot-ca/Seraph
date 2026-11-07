@@ -9,7 +9,7 @@ images (and the images' agents), VM queue, the agents' artifacts, the issues rep
 tab's Live), agents, this computer's use (the Resource page)
 and remote access (the devices that may sign in from elsewhere), updates (the live copy's new releases), projects (your
 repositories agents develop all the time), the Workflow tab's repositories (developed one confined issue at a time,
-each pull request reviewed by an agent), the app's own errors, and Sherpa (the helper behind the round button). The order matters: the Issues list asks jobs which issues an agent
+each pull request reviewed by an agent), the app's own errors, the problems agents report, and Sherpa (the helper behind the round button). The order matters: the Issues list asks jobs which issues an agent
 is working on (those can't be removed), the queue
 keeps its state on the VM records, and Agents needs everything else (it also
 sets the queue's on_grant / on_kick callbacks). Agents only starts its worker
@@ -30,6 +30,7 @@ from github_searcher.issue_list import IssueList
 from github_searcher.jobs import Jobs
 from github_searcher.notifications import Notifications
 from github_searcher.pr_tracking import PRTracking
+from github_searcher.problems import Problems
 from github_searcher.projects import Projects
 from github_searcher.repo_list import RepoList
 from github_searcher.repo_signals import RepoSignals
@@ -73,6 +74,9 @@ agents = Agents(repos, issues, jobs, inbox, vms, queue, tracked, tracked_issues,
 # The Workflow tab's repositories; its agents' tools reach it through Agents.
 workflow = Workflow(your_repositories, github_account)
 agents.workflow = workflow
+# What went wrong in how the app made agents work, as they report it (the Dashboard's Problems page).
+problems = Problems()
+agents.problems = problems
 resource_usage = ResourceUsage()
 remote_access = RemoteAccess()
 updates = Updates(github_account, crashes)
