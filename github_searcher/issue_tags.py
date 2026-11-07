@@ -10,7 +10,7 @@ each issue instead and gives it tags we define. One JSON file, DATA_DIR/issue_ta
                                "no outside prs" | "large feature" | "big change" | "can't validate",
                       "checks": {"belongs", "linux", "apolitical", "open", "modest", "validatable": bool} | None,
                       "kind": "bug" | "feature" | "docs" | "question" | None, "lines": int | None,
-                      "name": str | None, "name_version": int, "complexity": "easy" | "medium" | "hard" | None, "scope_clear": bool | None,
+                      "name": str | None, "name_version": int, "rules_version": int, "complexity": "easy" | "medium" | "hard" | None, "scope_clear": bool | None,
                       "reason", "updated_at", "judged_at"}, ...}
 
 status weighs everything about who may take it: assignees, open pull requests that would close it, the labels
@@ -18,7 +18,10 @@ status weighs everything about who may take it: assignees, open pull requests th
 author fixing it themselves ("Are you willing to submit a PR?"), claims in the comments, and whether the maintainers
 want it done. A fix posted in a comment, even with no pull request (a branch in someone's fork, a patch, "my account
 can't open PRs, a maintainer can open one from it"), counts as someone on it: we don't build on or race another
-person's fix. free: the user can take it up now. assigned: someone is on it.
+person's fix. free: the user can take it up now. assigned: someone else is on it. The user's own claims, assignment
+and pull requests (and our agents', made as the user) never count: status is about other people, so the user's own work
+in progress stays free. rules_version is RULES_VERSION when it was read: when these rules change it goes up, and every
+issue is read again once.
 waiting: nobody is, but it isn't ready (it needs a decision, a design, more information; a feature request no
 maintainer has said yes to, by a comment or a label like help wanted, is waiting too). fixed: a merged pull request
 or a commit on the default branch already does what it asks, and it only needs closing (GitHub leaves an issue open
@@ -195,6 +198,8 @@ NAME_EXAMPLES = [
 ]
 # Goes up when the naming rules change: every name from before is made again, once.
 NAME_VERSION = 3
+# Goes up when the status rules change: every issue is read again, once.
+RULES_VERSION = 2
 EFFORT = "high"
 # A line where an issue template asks whether the author will fix it themselves: "Are you willing to submit a PR?",
 # "Would you like to work on this?", "I'm interested in implementing this", ... The line and the next few (the answer) are kept.
@@ -321,10 +326,11 @@ class IssueTags:
             if issue is None:
                 continue
             issue_id = f"{full_name}#{number}"
-            # Someone has it on GitHub: no need to ask.
+            # Someone else has it on GitHub: no need to ask. Assigned only to the user is theirs: Claude reads it.
             assignees = [user["login"] for user in issue["assignees"]["nodes"]]
-            if assignees:
-                reason = f"Assigned on GitHub to {', '.join(assignees)}."
+            others = [name for name in assignees if login is None or name.lower() != login.lower()]
+            if others:
+                reason = f"Assigned on GitHub to {', '.join(others)}."
                 found[issue_id] = {
                     "status": "assigned",
                     "merge": "claimed",
@@ -333,6 +339,7 @@ class IssueTags:
                     "lines": None,
                     "name": None,
                     "name_version": NAME_VERSION,
+                    "rules_version": RULES_VERSION,
                     "complexity": None,
                     "scope_clear": None,
                     "reason": reason,
@@ -471,19 +478,26 @@ class IssueTags:
             self.tags.update(found)
             self.save()
         language = data["primaryLanguage"]["name"] if data["primaryLanguage"] else "an unknown language"
+        # Whose work doesn't count as someone else being on it.
+        yours = ""
+        if login is not None:
+            yours = (
+                f"We work for the GitHub user {login}. Their own claims, assignment and pull requests (and ours, made as them) "
+                "never count as someone being on it: status is about other people only, so an issue only they are on is free.\n"
+            )
         for run in runs:
             prompt = (
                 f"Below are {len(run)} issues of the GitHub project {data['nameWithOwner']} ({data['stargazerCount']} stars, "
                 f"written in {language}): {data['description'] or 'no description'}\n\n"
                 "Tag each one for a capable programmer who is new to the project and is looking for an issue to fix. "
                 "Read each issue's comments to the end before deciding: they often change the answer.\n\n"
-                "status: who may take it. Weigh everything together: the labels ('good first issue', 'help wanted' and the like "
+                "status: who may take it. " + yours + "Weigh everything together: the labels ('good first issue', 'help wanted' and the like "
                 "invite outside contributors, but they are a hint, not the answer); who opened it; what the issue template says "
                 "about the author fixing it themselves (a checked 'I am willing to submit a PR' or a 'Yes' there means the author "
                 "means to do it); what the comments say (someone asking to take it or saying they are on it, a maintainer handing "
                 "it out or turning people down, a pull request mentioned, a maintainer saying it isn't wanted); and the "
                 "pull requests tied to it, listed under the issue with their state and last comment.\n"
-                "- assigned: someone is on it: the author said they will fix it, a commenter claimed it and was not turned down, "
+                "- assigned: someone else is on it: the author said they will fix it, a commenter claimed it and was not turned down, "
                 "a maintainer gave it to someone, or one of its pull requests is open and alive. A claim in the comments holds for "
                 "about two months even with no pull request yet, unless that person gave up or a maintainer opened it to others; "
                 "an open pull request untouched for months doesn't count.\n"
@@ -613,6 +627,7 @@ class IssueTags:
                     "lines": lines,
                     "name": name,
                     "name_version": NAME_VERSION,
+                    "rules_version": RULES_VERSION,
                     "complexity": complexity,
                     "scope_clear": scope_clear,
                     "reason": reason,
