@@ -8,6 +8,7 @@ them and waits out rate limits. Errors come back as httpx.HTTPStatusError, as be
 own_token for one of your repositories, which may be private: they go with your sign-in then (token_balancer.py).
 """
 
+import re
 from urllib.parse import parse_qs, quote, urlparse
 
 from github_searcher.token_balancer import BALANCER
@@ -352,6 +353,8 @@ def get_issue_facts(owner: str, repo: str, number: int) -> dict:
 # ("#123" in the PR, a cross reference) or were linked by hand, each with its last comment (why it was closed). And
 # the commits that mention it ("(#822)" in a squash merge's message), with the pull request each came from: GitHub
 # leaves an issue open when the PR said "Addresses #123" instead of "Fixes", and doesn't always list the PR itself.
+# The pull requests an issue's description mentions are looked up apart (get_issues_for_tags): GitHub ties them to it
+# only when they mention the issue back.
 TAG_ISSUE_FRAGMENT = """
 fragment TagIssue on Issue {
   number title body state createdAt updatedAt authorAssociation author { login }
@@ -380,10 +383,17 @@ fragment TagPull on PullRequest {
 """
 
 
+# "#723" in an issue's description: a pull request or issue of the same repo (not owner/name#723, not a link's #part).
+MENTION = re.compile(r"(?<![\w/#])#(\d+)\b")
+# get_issues_for_tags looks up at most this many of those for one batch.
+MENTIONED_LIMIT = 40
+
+
 def get_issues_for_tags(owner: str, repo: str, numbers: list[int], login: str | None) -> dict:
     # Never cached: an issue is tagged again because it changed. Returns the repository node: its description,
-    # stars and language, each issue as i<number>, None when it is gone or a pull request, and yourMerged: how many
-    # pull requests by login the repo merged (None without a login).
+    # stars and language, each issue as i<number>, None when it is gone or a pull request, yourMerged: how many
+    # pull requests by login the repo merged (None without a login), and mentioned: the pull requests of the repo the
+    # issues' descriptions mention (MENTION), {number: {"title", "state"}}.
     aliases = ""
     for number in numbers:
         aliases += f" i{number}: issue(number: {number}) {{ ...TagIssue }}"
@@ -415,6 +425,35 @@ def get_issues_for_tags(owner: str, repo: str, numbers: list[int], login: str | 
     repository["yourMerged"] = None
     if login is not None:
         repository["yourMerged"] = data["data"]["yourMerged"]["issueCount"]
+
+    # The mentioned pull requests, in one more call when there are any: an issue that builds on one still open (a
+    # follow-up from its review) isn't ready until it is merged.
+    repository["mentioned"] = {}
+    mentioned = []
+    for number in numbers:
+        issue = repository.get(f"i{number}")
+        if issue is None:
+            continue
+        for found in MENTION.findall(issue["body"] or ""):
+            if int(found) not in mentioned:
+                mentioned.append(int(found))
+    aliases = ""
+    for number in mentioned[:MENTIONED_LIMIT]:
+        aliases += f" p{number}: issueOrPullRequest(number: {number}) {{ ... on PullRequest {{ title state }} }}"
+    if aliases == "":
+        return repository
+    response = BALANCER.request(
+        "POST",
+        "https://api.github.com/graphql",
+        json={"query": "query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {" + aliases + " } }", "variables": {"owner": owner, "name": repo}},
+        timeout=60,
+    )
+    response.raise_for_status()
+    # An issue comes back empty, a number that doesn't exist as None.
+    found = (response.json().get("data") or {}).get("repository") or {}
+    for number in mentioned[:MENTIONED_LIMIT]:
+        if found.get(f"p{number}"):
+            repository["mentioned"][number] = found[f"p{number}"]
     return repository
 
 

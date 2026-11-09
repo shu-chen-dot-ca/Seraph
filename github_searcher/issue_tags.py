@@ -24,7 +24,8 @@ and pull requests (and our agents', made as the user) never count: status is abo
 in progress stays free. rules_version is RULES_VERSION when it was read: when these rules change it goes up, and every
 issue is read again once.
 waiting: nobody is, but it isn't ready (it needs a decision, a design, more information; a feature request no
-maintainer has said yes to, by a comment or a label like help wanted, is waiting too). A label
+maintainer has said yes to, by a comment or a label like help wanted, is waiting too; so is one that builds on a pull
+request still open, a follow-up from its review, and one whose triage note leaves questions for the maintainers). A label
 that says it still waits for the maintainers' triage or approval (TRIAGE: "status: needs triage", "needs approval",
 "untriaged") makes it waiting whatever Claude says. fixed: a merged pull request
 or a commit on the default branch already does what it asks, and it only needs closing (GitHub leaves an issue open
@@ -63,9 +64,10 @@ weighs that.
 Issues go in batches, not one Claude run each: up to BATCH issues of one repo take one GitHub call, and as many
 of them as fit in CHARS_PER_RUN take one Claude run, the repo said once; AT_ONCE batches run at the same time.
 Claude reads the comments before deciding: all of them up to 30, else the first 5 and the last 30, each cut to
-COMMENT_CHARS (a bot's to BOT_CHARS). It also sees every pull request tied to the issue, open, closed or merged:
+COMMENT_CHARS (a bot's to BOT_CHARS) by keeping its start and its end, where a conclusion often is ("Not implementing
+until a maintainer accepts the direction"). It also sees every pull request tied to the issue, open, closed or merged:
 the ones that say they close it, and the ones that only mention it or were linked by hand, each with its last
-comment (often why it was closed). Without those, a claim followed by a pull request that was then rejected
+comment (often why it was closed), and the ones its description mentions (search.py MENTION), with their state. Without those, a claim followed by a pull request that was then rejected
 looked like a claim with no pull request at all. Bodies are cut to BODY_CHARS, but the template's part about the author
 fixing it themselves (WILLING finds it) is always kept. updated_at is the issue's last change on GitHub when it
 was tagged: when that changes, the backend tags it again, and a free one every hour anyway (backend/issues_api.py).
@@ -108,7 +110,7 @@ from dotenv import load_dotenv
 
 from github_searcher.claude_judge import judge
 from github_searcher.repo_signals import MIN_SAMPLE
-from github_searcher.search import get_issues_for_tags
+from github_searcher.search import MENTION, get_issues_for_tags
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # override: the backend reloads itself on code changes, and .env changes should apply then too.
@@ -208,8 +210,10 @@ NAME_EXAMPLES = [
 NAME_VERSION = 3
 # Goes up when the status rules change: every issue is read again, once (3: an author who says they will send the PR, or
 # a fix posted in the issue's description, is someone on it; mcp-memory-service#1910. 4: waiting for triage or approval
-# is waiting, and a closed newcomer verdict is no outside prs; mastra#28528).
-RULES_VERSION = 4
+# is waiting, and a closed newcomer verdict is no outside prs; mastra#28528. 5: the pull requests its description mentions,
+# a long comment's end, a follow-up to an open pull request and a triage note's open questions are waiting;
+# runanywhere-sdks#1191, oh-my-pi#17037).
+RULES_VERSION = 5
 EFFORT = "high"
 # A line where an issue template asks whether the author will fix it themselves: "Are you willing to submit a PR?",
 # "Would you like to work on this?", "I'm interested in implementing this", ... The line and the next few (the answer) are kept.
@@ -217,7 +221,7 @@ WILLING = re.compile(
     r"willing|submit a (pr|pull request|fix)|open a (pr|pull request)|work on (this|it)|implement(ing)? (this|it)|contribut\w* a (fix|pr)",
     re.IGNORECASE,
 )
-# The <!-- hints --> issue templates are full of: they say nothing about the issue.
+# The <!-- hints --> issue templates (and bots' comments) are full of: they say nothing about the issue.
 TEMPLATE_HINT = re.compile(r"<!--.*?-->", re.DOTALL)
 # A label that says an issue still waits for the maintainers' triage or approval ("status: needs triage", "needs-approval",
 # "untriaged"): mastra's bot asks for no PR until it is removed (mastra#28528).
@@ -437,6 +441,21 @@ class IssueTags:
                     words = " ".join(comment["body"].split())
                     text += f" Its last comment, by {commenter} ({comment['authorAssociation']}): {words[:PULL_COMMENT_CHARS]}"
                 text += "\n"
+            # The pull requests its description mentions (#723) and not listed above: one still open that it builds on
+            # (a follow-up from its review, a change to code only that pull request adds) makes it waiting.
+            said = []
+            # mention, not found: found is the tags of the ones assigned on GitHub, kept below.
+            for mention in MENTION.findall(issue["body"] or ""):
+                pull = data["mentioned"].get(int(mention))
+                if pull is None or int(mention) in said or (full_name, int(mention)) in pulls:
+                    continue
+                said.append(int(mention))
+                state = "still open, not merged"
+                if pull["state"] == "MERGED":
+                    state = "merged"
+                elif pull["state"] == "CLOSED":
+                    state = "closed without merging"
+                text += f"Its description mentions pull request #{mention} (\"{pull['title']}\"): {state}.\n"
             text += "\n" + (body[:BODY_CHARS] if body else "(no description)")
             # The template's part about the author fixing it, when the cut left it out.
             if len(body) > BODY_CHARS:
@@ -467,7 +486,12 @@ class IssueTags:
                     if comment["author"]["__typename"] == "Bot":
                         commenter += ", a bot"
                         limit = BOT_CHARS
-                text += f"\n--- {commenter} ({comment['authorAssociation']}), {comment['createdAt'][:10]}:\n{comment['body'][:limit]}"
+                words = TEMPLATE_HINT.sub("", comment["body"]).strip()
+                # Too long: its start and its end, where a conclusion often is (oh-my-pi#17037's triage note ended
+                # with "Not implementing until a maintainer accepts the direction").
+                if len(words) > limit:
+                    words = words[:limit * 2 // 3] + " […] " + words[-(limit // 3):]
+                text += f"\n--- {commenter} ({comment['authorAssociation']}), {comment['createdAt'][:10]}:\n{words}"
 
             # Read before by the rules: its checks and kind stay while nothing changed on GitHub, so the merge doesn't
             # flip between reads. Only the checks still in CHECKS: the ones from before merge are gone. Not when forced.
@@ -549,7 +573,11 @@ class IssueTags:
                 "- waiting: nobody is on it, but it isn't ready to pick up: it needs a maintainer's decision or a design, more "
                 "information or a reproduction, or the maintainers keep it for themselves. So is one that still waits for "
                 "the maintainers' triage or approval (a label like 'status: needs triage', a bot or maintainer saying not to "
-                "open a pull request until then), even when a maintainer opened it. A feature request no "
+                "open a pull request until then), even when a maintainer opened it. So is one that builds on a pull request "
+                "that is still open (a follow-up from that pull request's review, or a change to code only it adds; the ones "
+                "its description mentions are listed under it with their state): it waits until that one is merged. And one "
+                "where a maintainer, a collaborator or the project's triage bot left questions for the maintainers or said to "
+                "wait for their go-ahead before anyone implements it, until a maintainer answered. A feature request no "
                 "maintainer has said yes to is waiting, however clear it is and however long it has sat.\n"
                 "- fixed: it is open, but a merged pull request or a commit on the default branch already does what it asks, "
                 "and it only needs closing. GitHub leaves an issue open when the pull request said \"Addresses #n\" or "
