@@ -94,6 +94,13 @@ query($owner: String!, $name: String!, $number: Int!) {
           totalCount
           nodes { body createdAt authorAssociation author { login __typename } }
         }
+        closedByPullRequestsReferences(first: 10, includeClosedPrs: true) { nodes { number title state author { login } } }
+        timelineItems(first: 50, itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT]) {
+          nodes {
+            ... on CrossReferencedEvent { source { __typename ... on PullRequest { number title state author { login } repository { nameWithOwner } } } }
+            ... on ConnectedEvent { subject { __typename ... on PullRequest { number title state author { login } repository { nameWithOwner } } } }
+          }
+        }
       }
       ... on PullRequest {
         title body state merged createdAt mergedAt authorAssociation author { login __typename }

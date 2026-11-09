@@ -25,7 +25,7 @@ class GithubTools:
         return [
             tool("read_readme", "Read the README of repos, by full name (owner/name). Each README is cut at 4,000 characters. Use it whenever the README would help you judge or answer, whether or not you plan to add the repo.", {"type": "object", "properties": {"names": {"type": "array", "items": {"type": "string"}}}, "required": ["names"]})(self.read_readme),
             tool("check_activity", "Check how repos treat outside contributors, by full name (owner/name), the same numbers the Repos page shows: of outside contributors' PRs in the last 90 days, the merge rate (merged / merged + closed unmerged) and median days to a first reply and to merge; their open PRs over 30 days old nobody answered (stale); how many people merged PRs and how many commits landed in the last 30 days; open good-first / beginner / help-wanted issues (with assignees and cross references: above 0 usually means taken); the AI policy from CONTRIBUTING, AI_POLICY.md or AGENTS.md (welcome, disclose, no_ai, unclear or none, with the deciding quote); how newcomers' first PRs fare (merged, reply speed, came back); PRs, issues and commits a month and how often maintainers answer new issues; and the review atmosphere (warm, neutral, strict or curt, a summary and what reviewers ask for).", {"type": "object", "properties": {"names": {"type": "array", "items": {"type": "string"}}}, "required": ["names"]})(self.check_activity),
-            tool("read_thread", "Read issues or PRs in full: the description and the comments, plus review comments for PRs, with who wrote each and their role. Each is given as owner/name#number, e.g. 'feast-dev/feast#1234'.", {"type": "object", "properties": {"threads": {"type": "array", "items": {"type": "string"}}}, "required": ["threads"]})(self.read_thread),
+            tool("read_thread", "Read issues or PRs in full: the description and the comments, plus review comments for PRs, with who wrote each and their role, and for an issue the PRs that would close it, mention it or were linked to it, with their state (an open one means someone is on it). Each is given as owner/name#number, e.g. 'feast-dev/feast#1234'.", {"type": "object", "properties": {"threads": {"type": "array", "items": {"type": "string"}}}, "required": ["threads"]})(self.read_thread),
             tool("list_files", "List the files in a repo (owner/name) on its default branch, with sizes. path limits it to one folder, e.g. 'src/'; leave it empty for the whole repo.", {"type": "object", "properties": {"name": {"type": "string"}, "path": {"type": "string"}}, "required": ["name"]})(self.list_files),
             tool("read_files", "Read source files of one repo (owner/name) on its default branch, by path, all in one call. Lines are numbered. Each file is cut at 400 lines; start_line reads further down.", {"type": "object", "properties": {"name": {"type": "string"}, "paths": {"type": "array", "items": {"type": "string"}}, "start_line": {"type": "integer"}}, "required": ["name", "paths"]})(self.read_files),
             tool("search_code", "Search code on GitHub. q is a code search query, e.g. 'retry repo:feast-dev/feast' or 'def score language:python repo:truera/trulens'. Returns up to 50 matching files with the matching lines. Only the default branch is searched.", {"q": str})(self.search_code),
@@ -136,6 +136,25 @@ class GithubTools:
             }
             if data["__typename"] == "Issue":
                 result["assignees"] = [person["login"] for person in data["assignees"]["nodes"]]
+                # The PRs tied to it: an open one means someone is on it, a merged one may have done it already
+                # (opencodex#7954 got a second PR when these weren't shown).
+                result["pull_requests"] = []
+                seen = []
+                for pull in data["closedByPullRequestsReferences"]["nodes"]:
+                    seen.append(f"{name}#{pull['number']}")
+                    author = pull["author"]["login"] if pull["author"] else "ghost"
+                    result["pull_requests"].append({"pr": f"{name}#{pull['number']}", "title": pull["title"], "state": pull["state"], "author": author, "how": "would close it"})
+                for event in data["timelineItems"]["nodes"]:
+                    pull = event.get("source") or event.get("subject") or {}
+                    if pull.get("__typename") != "PullRequest":
+                        continue
+                    which = f"{pull['repository']['nameWithOwner']}#{pull['number']}"
+                    if which in seen:
+                        continue
+                    seen.append(which)
+                    author = pull["author"]["login"] if pull["author"] else "ghost"
+                    how = "linked to it" if "subject" in event else "mentions it"
+                    result["pull_requests"].append({"pr": which, "title": pull["title"], "state": pull["state"], "author": author, "how": how})
             if data["__typename"] == "PullRequest":
                 result["merged"] = data["merged"]
                 result["merged_at"] = data["mergedAt"][:10] if data["mergedAt"] else None
