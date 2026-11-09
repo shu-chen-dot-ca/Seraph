@@ -12,8 +12,9 @@ this browser, are what it opens on for a repo the backend has none for; Save mov
 Left, Level of automation, what agents do there without asking you, as you (the backend acts on it:
 backend/repo_automation_api.py): Add issues (the repo's open issues on GitHub whose level is picked below go into the
 Issues board's Open, each once: one you take off isn't added again; the board reads each again as it comes in, and its
-own Automation decides on it), Queue issues (the repo's issues that fit go to the Issues board's Catalog: their tags
-are refreshed and they pass the filter, the issue levels and the instructions), Take issues (agents take the repo's
+own Automation decides on it), Queue issues (right after they are tagged, the repo's issues on Open that pass the
+filter, the issue levels and the instructions go to the Issues board's Catalog, and the rest leave the board; so do
+claimed ones, from Catalog too), Take issues (agents take the repo's
 issues from Catalog, from the top, as many at once as the board's Max agents), Questions (their questions to you are answered for them with their
 recommendation, unless one must wait for you), Comments (posted on GitHub), Pull requests (sent once their review
 passed, with new titles and descriptions; agents may also update your open pull requests' branches there) and Open
