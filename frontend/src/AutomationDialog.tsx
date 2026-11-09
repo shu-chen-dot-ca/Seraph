@@ -1,8 +1,11 @@
 /*
 Automation for one repo, titled with the repo's name, opened by the robot button on its card on the Dashboard's
-Repository page (RepositoryCards.tsx), and by a click on an issue card's logo on the Issues board (IssueBoard.tsx). The
-Repository page's top bar robot opens it for all the picked repos at once, titled "3 repositories": it starts from the
-first one's settings and Save gives them all the same ones. Its
+Repository page (RepositoryCards.tsx), by a click on an issue card's logo on the Issues board (IssueBoard.tsx), and by
+its robot on the Dashboard's Automation → Settings (AutomationSettings.tsx). The Repository page's top bar robot (and
+Settings' robot over the repos) opens it for many repos at once, titled "3 repositories": it starts from the first
+one's settings and Save gives them all the same ones. With newRepos (Settings' New repositories) it edits the level the
+Dashboard's Automation gives the repos it adds instead (GET /api/automation, PUT /api/automation/new_repos), titled
+New repositories. Its
 Questions, Comments and Pull requests are the default for each of the repo's issues on the board; an issue's own robot
 changes them for that issue (IssueAutomationDialog.tsx). Add issues, Queue issues, Take issues and Open issues are the
 repo's only.
@@ -40,22 +43,9 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "@/components/ui/input";
 import { SelectBox } from "@/components/ui/row-selection";
 import { Textarea } from "@/components/ui/textarea";
-import { api } from "@/live";
+import { api, type RepoAutomation } from "@/live";
 
-export type Automation = {
-  add_issues?: boolean; // missing on settings from before it
-  queue_issues?: boolean; // missing on settings from before it: Take issues said then
-  take_issues: boolean;
-  questions: boolean;
-  comments: boolean;
-  pull_requests: boolean;
-  open_issues?: boolean; // missing on settings from before it
-  max_prs_first?: number; // open PRs at once until one is merged there; missing on settings from before it (1)
-  max_prs?: number; // and after (5)
-  levels_first?: string[]; // which issues may be taken until one of yours there is merged; missing before it (Easy)
-  levels: string[]; // and once one is: "easy", "medium", "hard"
-  instructions: string;
-};
+export type Automation = RepoAutomation;
 
 const DEFAULTS: Automation = {
   add_issues: false,
@@ -74,8 +64,11 @@ const DEFAULTS: Automation = {
 
 const LEVELS: Record<string, string> = { easy: "Easy", medium: "Medium", hard: "Hard" };
 
-export default function AutomationDialog(props: { repos: string[]; onClose: () => void }) {
-  const title = props.repos.length === 1 ? props.repos[0] : `${props.repos.length} repositories`;
+export default function AutomationDialog(props: { repos: string[]; newRepos?: boolean; onClose: () => void }) {
+  let title = props.repos.length === 1 ? props.repos[0] : `${props.repos.length} repositories`;
+  if (props.newRepos) {
+    title = "New repositories";
+  }
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [addIssues, setAddIssues] = useState(false);
@@ -93,14 +86,18 @@ export default function AutomationDialog(props: { repos: string[]; onClose: () =
   const [instructions, setInstructions] = useState(DEFAULTS.instructions);
   const [error, setError] = useState("");
 
-  // The first repo's settings: the backend's, else ones from before in this browser, else the defaults. Read again only
-  // when the repos change by name: a parent re-rendering hands in a new list of the same repos, which mustn't undo edits.
+  // The first repo's settings: the backend's, else ones from before in this browser, else the defaults (or the new repos'
+  // level). Read again only when the repos change by name: a parent re-rendering hands in a new list of the same repos,
+  // which mustn't undo edits.
   const reposKey = props.repos.join(" ");
   useEffect(() => {
-    api<{ repos: Record<string, Automation> }>("/api/repos/automation")
+    api<{ repos?: Record<string, Automation>; new_repos?: Automation }>(props.newRepos ? "/api/automation" : "/api/repos/automation")
       .then((data) => {
-        let start = data.repos[props.repos[0]];
-        if (start === undefined) {
+        const saved = props.newRepos ? data.new_repos : data.repos?.[props.repos[0]];
+        let start: Automation = DEFAULTS;
+        if (saved !== undefined) {
+          start = saved;
+        } else {
           try {
             start = { ...DEFAULTS, ...JSON.parse(localStorage.getItem(`automation:${props.repos[0]}`) ?? "{}") };
           } catch {
@@ -164,7 +161,11 @@ export default function AutomationDialog(props: { repos: string[]; onClose: () =
     setBusy(true);
     setError("");
     try {
-      await api("/api/repos/automation", { method: "PUT", body: { repos: props.repos, ...next } });
+      if (props.newRepos) {
+        await api("/api/automation/new_repos", { method: "PUT", body: next });
+      } else {
+        await api("/api/repos/automation", { method: "PUT", body: { repos: props.repos, ...next } });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setBusy(false);

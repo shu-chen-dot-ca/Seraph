@@ -1,5 +1,6 @@
 /*
-Automation for the Dashboard's Issues board, opened by the robot button over it (IssueBoard.tsx), laid out like a repo's
+Automation for the Dashboard's Issues board, opened by the robot button over it (IssueBoard.tsx) and by the one on the
+Dashboard's Automation → Settings (AutomationSettings.tsx), laid out like a repo's
 Automation (AutomationDialog.tsx). Kept by the backend (backend/issues_api.py, GET and PUT /api/issues/auto_remove).
 
 Left, Remove automatically: which issues leave the Issues list by themselves. Claimed, Out of scope and Scope not clear,

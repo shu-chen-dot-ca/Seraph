@@ -1,5 +1,6 @@
 /*
-One issue's level of automation, opened by the ⋯ on its card on the Dashboard's Issues board (IssueBoard.tsx). Kept by
+One issue's level of automation, opened by the ⋯ on its card on the Dashboard's Issues board (IssueBoard.tsx), and by
+its robot on the Dashboard's Automation → Settings (AutomationSettings.tsx). Kept by
 the backend (PUT /api/issues/automation, backend/repo_automation_api.py), which acts on it for the drafts of the jobs on
 this issue, like on a repo's (AutomationDialog.tsx). Settings from before, kept in this browser (localStorage
 "automation:issue:<id>"), still show on the card; Save or Use repo default moves them to the backend.

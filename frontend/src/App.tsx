@@ -4,7 +4,8 @@ The header's left has two tabs, the open one in full color with the accent under
 - Dashboard, the first page you see, with its own left list (DashboardNav.tsx): Pull requests (your own, Open and Closed,
   and Actions, what agents put on GitHub: PullRequests.tsx, plain), Issues (the Issues list as a board, IssueBoard.tsx), Repository (the Repos page's repos as
   cards, RepositoryCards.tsx), Agents (every agent in a table, AgentList.tsx), Problems (what went wrong in how the app
-  made agents work, as they reported it: Problems.tsx) and Virtual Machine (the VMs page and each
+  made agents work, as they reported it: Problems.tsx), Automation (Seraph finds repos, works on them and archives the
+  ones that don't merge ours, by itself: Automation.tsx) and Virtual Machine (the VMs page and each
   VM's page, the same pages as Home's).
 - Home, the backup with every page, with one left list (Sidebar.tsx) in four parts: with one left list (Sidebar.tsx) in four parts:
   - the work: Explore, Repos, Tracked, Issues, Jobs, Agents, VMs and Resource;
@@ -55,7 +56,7 @@ The page lives in the URL hash, so refresh and back/forward work and switching p
   Workflow: #/workflow  #/workflow?repo=owner/name (Workflow.tsx; takes tab=pulls|issues|chat|settings (none: Overview),
          state=closed and open=<number>, that pull request or issue)
   Dashboard: #/dashboard (= #/dashboard/pulls, takes state=closed|actions and open=owner/name%23n)  #/dashboard/issues  #/dashboard/repos
-         #/dashboard/agents (takes state=closed)  #/dashboard/problems (takes state=closed)
+         #/dashboard/agents (takes state=closed)  #/dashboard/problems (takes state=closed)  #/dashboard/automation (takes tab=activity|settings)
 Anything else (also no hash at all) opens the Dashboard. Links are plain <a href="#/..."> everywhere; App only reads the hash.
 
 A VM page, once visited, stays mounted (hidden) while you are elsewhere, so its desktop iframe keeps its
@@ -69,6 +70,7 @@ import { toast } from "sonner";
 import AgentChat from "@/AgentChat";
 import AgentList from "@/AgentList";
 import Agents from "@/Agents";
+import Automation from "@/Automation";
 import DashboardNav from "@/DashboardNav";
 import IssueBoard from "@/IssueBoard";
 import Explore from "@/Explore";
@@ -244,7 +246,7 @@ export default function App() {
     pageName = id;
   }
   if (page === "dashboard") {
-    pageName = id === "repos" ? "Repository" : id === "issues" ? "Issues" : id === "agents" ? "Agents" : "Pull requests";
+    pageName = id === "repos" ? "Repository" : id === "issues" ? "Issues" : id === "agents" ? "Agents" : id === "automation" ? "Automation" : "Pull requests";
   }
 
   // Keep the address for its tab (setting state while rendering, like visitedVMs below). No hash at all is the Dashboard,
@@ -477,6 +479,7 @@ export default function App() {
             {page === "dashboard" && id === "repos" && <RepositoryCards />}
             {page === "dashboard" && id === "agents" && <AgentList state={query.get("state") === "closed" ? "closed" : "open"} />}
             {page === "dashboard" && id === "problems" && <Problems state={query.get("state") === "closed" ? "closed" : "open"} />}
+            {page === "dashboard" && id === "automation" && <Automation tab={query.get("tab") === "activity" ? "activity" : query.get("tab") === "settings" ? "settings" : "repos"} />}
             {page === "pulls" && (
               <PullRequests
                 key={query.get("view") ?? "created"}

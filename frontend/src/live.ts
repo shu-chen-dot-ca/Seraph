@@ -3,7 +3,7 @@ Live data from the backend, and the one fetch helper.
 
 One websocket to /api/live. On connect the server sends every topic, then only the topics that changed:
 {"topic": "repos" | "issues" | "tracked" | "explore" | "github" | "jobs" | "inbox" | "issue_drafts" | "prs" | "your_repos" | "notifications" | "agents"
-| "vms" | "images" | "resource" | "updates" | "projects" | "crashes" | "problems" | "workflow",
+| "vms" | "images" | "resource" | "updates" | "projects" | "crashes" | "problems" | "workflow" | "automation",
 "data": ...}.
 Each message replaces that topic in the store, and components read it with useLive(topic), so the page never
 polls and never re-fetches lists. When the socket drops it reconnects after a second, and the server sends
@@ -320,11 +320,12 @@ export type ExploreRun = {
   end_reason: string;
   count: number | null;
   minutes: number | null;
-  workers: number;
+  workers: number | null; // null: as many as GitHub's quota allows (the Dashboard's Automation runs)
   filters: Record<string, "include" | "exclude">; // the tags it keeps to or keeps out (explore.py FILTERS)
   found: number;
   looked_at: number;
-  lanes: Record<string, { label: string; share: number; found: number; in_flight: number; exhausted: boolean }>;
+  // have: the repos of that type active in Repos when the run started.
+  lanes: Record<string, { label: string; share: number; have?: number; found: number; in_flight: number; exhausted: boolean }>;
   checking: { name: string; lane: string; since: string }[];
   skipped: Record<string, number>; // why → how many
   errors: { name: string; error: string; at: string }[];
@@ -1204,6 +1205,85 @@ export type WorkflowPRParts = {
   tests?: { before: TestRun | null; after: TestRun | null };
 };
 
+// The Dashboard's Automation (backend/automation_api.py): it finds repos, works on them and archives the ones that
+// don't merge ours, by itself. Every repo in Repos has a label, worked out from our PRs there, also while it is off.
+export type AutomationLabelName = "Fast" | "Normal" | "New" | "Slow" | "No issues" | "Not merging";
+
+export type AutomationLabel = {
+  label: AutomationLabelName;
+  rank: number; // its place in the order: Fast first
+  why: string; // one line on what decided it
+  merged: number; // our PRs there: merged, closed without a merge, open
+  closed: number;
+  open: number;
+  days: number | null; // business days ours took to merge, the median; null with none merged
+  idle: number; // days since anything was worked on there
+  per_day: number | null; // PRs the repo merges a day, anyone's; null before its signals are read
+};
+
+// A repo's level of automation (backend/repo_automation_api.py; AutomationDialog.tsx edits it).
+export type RepoAutomation = {
+  add_issues?: boolean; // missing on settings from before it
+  queue_issues?: boolean; // missing on settings from before it: Take issues said then
+  take_issues: boolean;
+  questions: boolean;
+  comments: boolean;
+  pull_requests: boolean;
+  open_issues?: boolean; // missing on settings from before it
+  max_prs_first?: number; // open PRs at once until one is merged there; missing on settings from before it (1)
+  max_prs?: number; // and after (5)
+  levels_first?: string[]; // which issues may be taken until one of yours there is merged; missing before it (Easy)
+  levels: string[]; // and once one is: "easy", "medium", "hard"
+  instructions: string;
+};
+
+// An issue's own level, over its repo's (IssueAutomationDialog.tsx edits it).
+export type IssueLevel = { questions: boolean; comments: boolean; pull_requests: boolean };
+
+// The Issues board's automation (backend/issues_api.py; BoardAutomationDialog.tsx edits it).
+export type BoardRules = {
+  claimed: boolean;
+  out_of_scope: boolean;
+  levels: string[];
+  scope_not_clear: boolean;
+  older_than_days: number | null;
+  refresh_open_minutes: number;
+  refresh_catalog_minutes: number;
+  refresh_ongoing_minutes: number;
+  max_agents: number;
+  stale_pr_days: number | null;
+};
+
+// The days behind the labels (business days, but idle_days and leave_days).
+export type AutomationRules = {
+  fast_days: number;
+  normal_days: number;
+  max_open_days: number;
+  close_days: number;
+  idle_days: number;
+  leave_days: number;
+};
+
+export type AutomationData = {
+  on: boolean;
+  active_repos: number; // how many repos to keep active (in Repos, not archived)
+  take_new: boolean; // false: Pause new issues, agents take nothing new from Catalog
+  rules: AutomationRules;
+  new_repos: RepoAutomation; // the level the repos it adds get
+  archived: Record<string, string>; // the repos it archived, and when
+  closed: string[]; // our PRs it closed (owner/name#n)
+  run: string | null; // started_at of the Explore run it started
+  log: { at: string; repo: string; what: string; why: string }[]; // newest last
+  labels: Record<string, AutomationLabel>; // by owner/name, as in Repos
+  label_rules: Record<AutomationLabelName, string>; // each label's rule in words
+  // Every level of automation, the same the robot dialogs edit: each repo's (by owner/name), the defaults for one with
+  // none, each issue's own (by owner/name#n) and the Issues board's.
+  repo_levels: Record<string, RepoAutomation>;
+  defaults: RepoAutomation;
+  issue_levels: Record<string, IssueLevel>;
+  board: BoardRules;
+};
+
 // ---- The live store ----
 
 export type Topics = {
@@ -1228,6 +1308,7 @@ export type Topics = {
   crashes: Crash[]; // the newest first
   problems: Problem[]; // the newest first
   workflow: WorkflowRepo[];
+  automation: AutomationData;
 };
 
 // Empty until the first message, so components never deal with "not loaded yet".
@@ -1268,6 +1349,34 @@ const store = {
     crashes: [],
     problems: [],
     workflow: [],
+    automation: {
+      on: false,
+      active_repos: 300,
+      take_new: true,
+      rules: { fast_days: 3, normal_days: 5, max_open_days: 10, close_days: 10, idle_days: 14, leave_days: 30 },
+      new_repos: { take_issues: false, questions: false, comments: false, pull_requests: false, levels: [], instructions: "" },
+      archived: {},
+      closed: [],
+      run: null,
+      log: [],
+      labels: {},
+      label_rules: { Fast: "", Normal: "", New: "", Slow: "", "No issues": "", "Not merging": "" },
+      repo_levels: {},
+      defaults: { take_issues: false, questions: false, comments: false, pull_requests: false, levels: [], instructions: "" },
+      issue_levels: {},
+      board: {
+        claimed: false,
+        out_of_scope: false,
+        levels: [],
+        scope_not_clear: false,
+        older_than_days: null,
+        refresh_open_minutes: 30,
+        refresh_catalog_minutes: 15,
+        refresh_ongoing_minutes: 5,
+        max_agents: 3,
+        stale_pr_days: 14,
+      },
+    },
   } as Topics,
   loaded: {} as Partial<Record<keyof Topics, boolean>>,
   connected: false,
