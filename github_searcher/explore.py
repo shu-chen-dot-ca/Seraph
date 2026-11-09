@@ -28,7 +28,9 @@ repos already in the found list. Then `workers` candidates at a time (token_bala
    English (repo_signals.py readme_english: a Chinese translation besides is fine, a Chinese README isn't; Claude checks
    it again below, for languages in the Latin script). The Dashboard's Automation (backend/automation_api.py) holds every
    repo in Repos and the found list to them too. Skipped too if it is archived or a fork, nothing was committed in 30 days, no outside contributor's PR was merged
-   in 90 days, most outside PRs are closed unmerged (under MIN_MERGE_RATE), or newcomers' first PRs are turned away or left waiting (repo_signals.py's newcomers
+   in 90 days, most outside PRs are closed unmerged (under MIN_MERGE_RATE), MAX_CLOSED_SHARE or more of all its PRs
+   ever were closed without a merge (closed / all), it merges fewer than MIN_MERGED_PER_DAY PRs a day (anyone's, the
+   monthly average over 90 days), or newcomers' first PRs are turned away or left waiting (repo_signals.py's newcomers
    tag): a PR of yours would likely go nowhere there. A slow first reply alone (over a week) doesn't skip a repo;
 3. at the same time, Claude reads its AI policy and its review atmosphere (repo_signals.complete), and its
    README against the profile (claude_judge.py): is it a project people contribute code to (not a link list,
@@ -214,6 +216,11 @@ MIN_CLOSED_PRS = 400
 MIN_OPEN_ISSUES = 10
 # Outside PRs merged, of those merged or closed: under this, most are closed unmerged and Explore skips the repo.
 MIN_MERGE_RATE = 0.3
+# All its PRs ever closed without a merge, of all its PRs (open, merged and closed): at this or over, Explore skips it.
+MAX_CLOSED_SHARE = 0.4
+# PRs merged a day, anyone's: under this, a PR of ours would wait too long there (the Automation archives a repo that
+# leaves one open over 10 business days), and Explore skips it.
+MIN_MERGED_PER_DAY = 0.1
 # The tags a run can filter on, "section:value", each with its label on the page (also why a repo is skipped on the
 # page's Skipped line). The same thresholds as the tags' colors on the page: replies in 2 days are green, over a week
 # amber; one maintainer or none is amber, and so are 5 unanswered PRs or more.
@@ -711,6 +718,7 @@ class Explore:
             signals = await self.repo_signals.fetch(name, judged=False)
             filters = run["filters"]
             reply = signals["median_days_to_first_reply"]
+            total = signals["open_prs_total"] + signals["merged_prs_total"] + signals["closed_prs_total"]
             reason = ""
             if signals["stars"] <= MIN_STARS:
                 reason = "1k stars or fewer"
@@ -732,6 +740,10 @@ class Explore:
                 reason = "No outside PR merged in 90 days"
             elif signals["outside_merge_rate"] is not None and signals["outside_merge_rate"] < MIN_MERGE_RATE:
                 reason = "Most outside PRs closed unmerged"
+            elif total > 0 and signals["closed_prs_total"] / total >= MAX_CLOSED_SHARE:
+                reason = "Many PRs closed unmerged"
+            elif signals["activity"]["prs_merged_month"] / 30 < MIN_MERGED_PER_DAY:
+                reason = "Merges under 0.1 PR a day"
             elif signals["newcomers"]["tag"] == "turned_away":
                 reason = "Turns newcomers away"
             elif signals["newcomers"]["tag"] == "left_waiting":
