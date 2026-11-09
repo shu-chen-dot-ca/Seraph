@@ -96,8 +96,9 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   pairs them. Never pictures the agent drew: an image made with matplotlib is refused. It is kept on
   the job (jobs.py), and each draft gets a copy. A PR draft needs at least one before and one after (except a
   follow_up job's).
-- Tests: run_tests runs the project's tests in the VM on the unchanged code (before), then on the
-  change (after), with the same command, live in a terminal window on the VM's desktop for the user.
+- Tests: run_tests runs the project's tests in the VM on the agent's change (after), live in a terminal window on the
+  VM's desktop for the user. The project's main branch is trusted to pass: they run on the unchanged code (before) only
+  as a last resort, when the after run fails in ways the agent can't cleanly tell from its change.
   Two scopes: focused, the basic checks (the tests that cover the change, when the rules ask for no
   more), and full, the project's official checks (what its rules ask to run before a PR), run however
   long they take (up to TEST_TIMEOUT). It refuses until the agent read the rules (contributing_guide).
@@ -106,10 +107,7 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   sleep: it keeps its desktop (agents.py). When it ends, finish_tests keeps the
   result on the job (agents.py calls it for a run in the background); an after run counts only if the code is still
   the code it started on.
-  A passing before is needed to go past set_up and an after for a PR draft; an official before of
-  another job on the same repo and VM counts too (job_progress carries it over), so a project already
-  set up isn't set up again. A follow_up job's new version of a PR needs only the after: the PR's first
-  version had the before.
+  A passing after is needed for a PR draft, on exactly the code being drafted.
 - Papers: a reproduce_paper job (the Workspace tab's Papers page) has the user's PDF in the agent's artifacts. paper_read
   shows it page by page, as pictures (formulas, tables and figures as printed) with their text; it only reads a job's
   paper, which only the user puts there, so a file from a VM is never opened by a PDF reader on this computer.
@@ -196,8 +194,6 @@ TAIL_CHARS = 2000
 # A test run may take this long; then it is stopped and counts as failed. Long on purpose: the project's official
 # checks are run however long they take.
 TEST_TIMEOUT = long_runs.RUN_LIMIT_SECONDS
-# A fix_issue job can't go past set_up until its tests passed on the unchanged code.
-STEPS_AFTER_SETUP = ["reproduce", "fix", "test", "draft"]
 # How long ago read_issue may have read an issue or PR for a comment on it, for taking it (a fix_issue job going past
 # understand), or for closing it: newer comments, PRs and checks may have come since.
 READ_SECONDS = 60 * 60
@@ -466,10 +462,11 @@ class WorkTools:
                 "they take) or focused (the basic checks, when the rules ask for no more: the test files and folders that cover "
                 "the code you change, e.g. `pytest tests/test_parser.py tests/cli/`). command: what runs them "
                 "(setup belongs in bash before, not here). "
-                "path: the repo folder (e.g. ~/click); base: what you branch from (e.g. origin/main). when: before (on the "
-                "unchanged code: the folder must not differ from base; it has to pass before you change anything), or after (on "
-                "your finished change, with exactly the same command and scope; it has to pass before draft_pr). A PR draft is "
-                "refused unless the last after run passed on exactly the code being drafted. "
+                "path: the repo folder (e.g. ~/click); base: what you branch from (e.g. origin/main). when: after (on your "
+                "finished change; it has to pass before draft_pr), or before (on the unchanged code, the folder not differing "
+                "from base: only as a last resort, when the after run fails and you can't cleanly tell whether your change is "
+                "the cause; the main branch is trusted otherwise). A PR draft is refused unless the last after run passed on "
+                "exactly the code being drafted. "
                 f"Waits for the tests up to {long_runs.FOREGROUND_SECONDS // 60} minutes; still running then, they go on in the "
                 "background and you get the result in a message when they end. background: true starts them that way at once, "
                 "for a run you expect to take more than about 5 minutes (most full runs): then do what else you have in this VM "
@@ -1668,33 +1665,6 @@ class WorkTools:
             if job["issue"].split("#")[0].lower() in no_ai:
                 text = f"{job['issue'].split('#')[0]} doesn't take AI-made contributions (its AI policy), and we only work as an AI agent. Abandon {job['id']}: job_update cancelled, with that note."
                 return {"content": [{"type": "text", "text": text}], "is_error": True}
-        # The tests have to work on the unchanged code before any change is made. When another job on the same repo
-        # already got the official checks passing on this VM, the project is set up there: that run counts for this job too.
-        before = job["tests"]["before"]
-        reused = None
-        carry = job["kind"] == "fix_issue" and step in STEPS_AFTER_SETUP
-        if carry and before is None:
-            for other in self.agents.jobs.list():
-                run = other["tests"]["before"]
-                if other["id"] == job["id"] or other["repo"] != job["repo"] or other["vm"] != self.record["target_vm"]:
-                    continue
-                if run is None or not run["passed"] or run.get("scope", "full") != "full":
-                    continue
-                if reused is None or run["at"] > reused["tests"]["before"]["at"]:
-                    reused = other
-        if reused is not None:
-            before = reused["tests"]["before"]
-            self.agents.jobs.update(job["id"], tests={"before": before, "after": None})
-            for item in reused["evidence"]:
-                if item["id"] == before["evidence"]:
-                    self.agents.jobs.add_evidence(job["id"], item)
-        if job["kind"] == "fix_issue" and step in STEPS_AFTER_SETUP and (before is None or not before["passed"]):
-            text = (
-                "You are still in set_up: get the project's tests passing on the unchanged code first "
-                "(run_tests with when: before), then go on."
-            )
-            return {"content": [{"type": "text", "text": text}], "is_error": True}
-
         # A queued job (new, or back from the user's decision) is being worked on now. One waiting on the
         # user stays waiting: its draft is still in their Inbox.
         fields = {"headline": headline}
@@ -1712,11 +1682,6 @@ class WorkTools:
         if moved:
             self.agents.jobs.add_timeline(job["id"], "step", headline, step=job["step"])
         text = f"{job['id']}: {(job['step'] or 'no step yet').replace('_', ' ')}, \"{job['headline']}\"."
-        if reused is not None:
-            text += (
-                f" The project is already set up on {reused['vm']}: its official checks passed there on the unchanged code for "
-                f"{reused['id']}, so that run counts for this job too. Run when: after with exactly that command: `{before['command']}`."
-            )
         return {"content": [{"type": "text", "text": text}]}
 
     async def draft_comment(self, args: dict) -> dict:
@@ -3353,21 +3318,10 @@ class WorkTools:
             )
             return {"content": [{"type": "text", "text": text}], "is_error": True}
 
-        # Finished means the project's tests pass: before the change, and after it on exactly this code.
-        # A new version of a PR (a follow_up job) needs only the after run: the PR's first version had the before.
-        before = job["tests"]["before"]
+        # Finished means the project's tests pass with the change, on exactly this code (the main branch is trusted).
         after = job["tests"]["after"]
-        if job["kind"] != "follow_up" and (before is None or not before["passed"]):
-            text = (
-                "No PR without the project's tests: they must have passed on the unchanged code first (run_tests with when: before). "
-                "If you already changed the code, `git stash -u`, run it, then `git stash pop`."
-            )
-            return {"content": [{"type": "text", "text": text}], "is_error": True}
         if after is None or not after["passed"]:
             text = "No PR until the tests pass with your change: run_tests with when: after."
-            return {"content": [{"type": "text", "text": text}], "is_error": True}
-        if before is not None and after["command"] != before["command"]:
-            text = f"No PR until the tests pass with your change: run_tests with when: after and the command `{before['command']}`."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         if after["diff_hash"] != hashlib.sha256(diff.encode()).hexdigest():
             text = (
@@ -3834,25 +3788,6 @@ class WorkTools:
         if job["repo"] is not None and job["repo"].lower() not in self.guides_read and self.agents.projects.get(job["repo"]) is None and self.agents.workflow.get(job["repo"]) is None:
             text = f"First read {job['repo']}'s rules for contributors (contributing_guide): they say which checks to run before a PR, and how."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
-        before = job["tests"]["before"]
-        # A new version of a PR needs no run on the unchanged code: the PR's first version already had one. When it has
-        # one anyway (to compare a failing after run), the after run uses its command.
-        if when == "after" and job["kind"] != "follow_up" and (before is None or not before["passed"]):
-            text = (
-                "First get the tests passing on the unchanged code (when: before). If another job on this repo already got the "
-                "official checks passing on this VM, job_progress with the next step carries that run over instead."
-            )
-            return {"content": [{"type": "text", "text": text}], "is_error": True}
-        if when == "after" and before is not None and scope != before.get("scope", "full"):
-            text = f"Run it with the same scope as on the unchanged code: {before.get('scope', 'full')}."
-            return {"content": [{"type": "text", "text": text}], "is_error": True}
-        if when == "after" and before is not None and command != before["command"]:
-            text = (
-                f"Run it with the same command as on the unchanged code: `{before['command']}`. To use another command "
-                "(e.g. the user agreed to leave out tests that already failed), run that one on the unchanged code first: "
-                "`git stash -u`, run_tests with when: before, `git stash pop`."
-            )
-            return {"content": [{"type": "text", "text": text}], "is_error": True}
         vm_name = self.record["target_vm"]
         if vm_name is None:
             return {"content": [{"type": "text", "text": "You have no target VM."}], "is_error": True}
@@ -3895,18 +3830,19 @@ class WorkTools:
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         if when == "before" and diff.strip():
             text = (
-                f"when: before is for the unchanged code, but {args['path']} differs from {args['base']}. Run it before you change "
-                "anything; if you already did, `git stash -u`, run it, then `git stash pop`."
+                f"when: before is for the unchanged code, but {args['path']} differs from {args['base']}: `git stash -u`, run it, "
+                "then `git stash pop`."
             )
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         if when == "after" and not diff.strip():
             text = f"{args['path']} doesn't differ from {args['base']} yet: there is no change to test."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
 
-        # The step it is on shows in the user's progress view while the suite runs.
-        fields = {"step": "set_up" if when == "before" else "test"}
-        if fields["step"] not in job["steps"]:
-            fields = {}
+        # The step it is on shows in the user's progress view while the suite runs. A run on the unchanged code (the last
+        # resort) leaves the step as it is.
+        fields = {}
+        if when == "after" and "test" in job["steps"]:
+            fields["step"] = "test"
         if job["status"] == "queued":
             fields["status"] = "working"
         if fields:
@@ -4037,9 +3973,6 @@ class WorkTools:
         }
         tests = {"before": job["tests"]["before"], "after": job["tests"]["after"]}
         tests[when] = tests_run
-        # A new run on the unchanged code starts over: an after from before it may have used another command.
-        if when == "before":
-            tests["after"] = None
         self.agents.jobs.update(job["id"], tests=tests)
         # On the job's timeline in plain words, with the counts when the output ends with them ("12 passed", "2 failed":
         # pytest, jest, cargo and the like).
@@ -4056,12 +3989,15 @@ class WorkTools:
         self.agents.jobs.add_timeline(job["id"], "tests", said)
 
         if when == "before" and passed:
-            advice = "It passes on the unchanged code: now you may change the code."
+            advice = (
+                "It passes on the unchanged code: what fails with your change is your change's doing. Fix it, then run_tests "
+                "with when: after again."
+            )
         elif when == "before":
             advice = (
-                "It must pass on the unchanged code before you change anything. Fix the setup (dependencies, services, settings "
-                "the project's docs or CI ask for) and run it again. If the project's own code fails on its main branch (not your "
-                "setup), don't change the code: draft_question with the failing tests and wait for the user's decision."
+                "It fails on the unchanged code too. Compare which tests fail here with the after run: the ones failing here as "
+                "well aren't your change's doing (check your setup first: dependencies, services, settings the project's docs or "
+                "CI ask for). Ask the user with draft_question about leaving out exactly those, and wait for the decision."
             )
         elif passed:
             advice = "It passes with your change: you may draft the PR (it must be this exact code)."
