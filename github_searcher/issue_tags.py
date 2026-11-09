@@ -24,7 +24,9 @@ and pull requests (and our agents', made as the user) never count: status is abo
 in progress stays free. rules_version is RULES_VERSION when it was read: when these rules change it goes up, and every
 issue is read again once.
 waiting: nobody is, but it isn't ready (it needs a decision, a design, more information; a feature request no
-maintainer has said yes to, by a comment or a label like help wanted, is waiting too). fixed: a merged pull request
+maintainer has said yes to, by a comment or a label like help wanted, is waiting too). A label
+that says it still waits for the maintainers' triage or approval (TRIAGE: "status: needs triage", "needs approval",
+"untriaged") makes it waiting whatever Claude says. fixed: a merged pull request
 or a commit on the default branch already does what it asks, and it only needs closing (GitHub leaves an issue open
 when the PR said "Addresses #n" instead of "Fixes #n"; the commits that mention it show that, see search.py).
 
@@ -43,8 +45,9 @@ requests the repo merged. The first that holds:
     maintainers only  the maintainers keep it for themselves
     waiting           it isn't ready to pick up (status waiting)
     no outside prs    the repo doesn't merge outsiders' pull requests: its AI policy says no AI, most newcomers' first
-                      PRs are closed or left waiting, or of MIN_SAMPLE or more outside PRs that ended in 90 days none
-                      was merged
+                      PRs are closed or left waiting, of MIN_SAMPLE or more outside PRs that ended in 90 days none
+                      was merged, or the newcomer verdict (repo_signals.py) is closed: its contributing guide says so,
+                      or its people write the code (mastra: pull requests disabled for outside contributors)
     large feature     a new subsystem, integration, driver or the like the maintainers would have to keep up
     big change        over BIG_LINES lines while the user has no merged pull request in the repo yet
     can't validate    our agent can't prove the fix works in its VM (long builds and tests are fine)
@@ -204,8 +207,9 @@ NAME_EXAMPLES = [
 # Goes up when the naming rules change: every name from before is made again, once.
 NAME_VERSION = 3
 # Goes up when the status rules change: every issue is read again, once (3: an author who says they will send the PR, or
-# a fix posted in the issue's description, is someone on it; mcp-memory-service#1910).
-RULES_VERSION = 3
+# a fix posted in the issue's description, is someone on it; mcp-memory-service#1910. 4: waiting for triage or approval
+# is waiting, and a closed newcomer verdict is no outside prs; mastra#28528).
+RULES_VERSION = 4
 EFFORT = "high"
 # A line where an issue template asks whether the author will fix it themselves: "Are you willing to submit a PR?",
 # "Would you like to work on this?", "I'm interested in implementing this", ... The line and the next few (the answer) are kept.
@@ -215,6 +219,9 @@ WILLING = re.compile(
 )
 # The <!-- hints --> issue templates are full of: they say nothing about the issue.
 TEMPLATE_HINT = re.compile(r"<!--.*?-->", re.DOTALL)
+# A label that says an issue still waits for the maintainers' triage or approval ("status: needs triage", "needs-approval",
+# "untriaged"): mastra's bot asks for no PR until it is removed (mastra#28528).
+TRIAGE = re.compile(r"\b(needs?|awaiting|pending)[\s:_-]*(triage|approval)\b|\buntriaged\b|\btriage[\s:_-]*needed\b", re.IGNORECASE)
 SCHEMA = {
     "type": "object",
     "properties": {
@@ -322,11 +329,15 @@ class IssueTags:
                 closed = "most newcomers' first pull requests are closed or left waiting"
             elif signals["outside_merged_90d"] == 0 and signals["outside_closed_90d"] >= MIN_SAMPLE:
                 closed = "none of the outside pull requests that ended in the last 90 days was merged"
+            elif (signals.get("newcomer_verdict") or {}).get("verdict") == "closed":
+                closed = "the project isn't open to outside contributors' pull requests"
         found = {}
         texts = []
         updated = {}
         # {number: (checks, kind, lines)}: read before and unchanged since, so those stay.
         kept = {}
+        # {number: label}: a label that says it still waits for the maintainers' triage or approval.
+        triage = {}
         for number in numbers:
             issue = data.get(f"i{number}")
             if issue is None:
@@ -367,6 +378,9 @@ class IssueTags:
 
             author = issue["author"]["login"] if issue["author"] else "ghost"
             labels = ", ".join(label["name"] for label in issue["labels"]["nodes"]) or "none"
+            for label in issue["labels"]["nodes"]:
+                if TRIAGE.search(label["name"]):
+                    triage[number] = label["name"]
             body = TEMPLATE_HINT.sub("", issue["body"] or "").strip()
             body = re.sub(r"\n\s*\n+", "\n\n", body)
             text = f"=== #{number}: {issue['title']} ===\nOpened {issue['createdAt'][:10]} by {author} ({issue['authorAssociation']}). Labels: {labels}.\n"
@@ -533,8 +547,10 @@ class IssueTags:
                 "('feature request', 'enhancement') doesn't count, and neither do other users asking for it or thumbs up. A bug "
                 "that clearly happens needs no such yes.\n"
                 "- waiting: nobody is on it, but it isn't ready to pick up: it needs a maintainer's decision or a design, more "
-                "information or a reproduction, or the maintainers keep it for themselves. A feature request no maintainer has "
-                "said yes to is waiting, however clear it is and however long it has sat.\n"
+                "information or a reproduction, or the maintainers keep it for themselves. So is one that still waits for "
+                "the maintainers' triage or approval (a label like 'status: needs triage', a bot or maintainer saying not to "
+                "open a pull request until then), even when a maintainer opened it. A feature request no "
+                "maintainer has said yes to is waiting, however clear it is and however long it has sat.\n"
                 "- fixed: it is open, but a merged pull request or a commit on the default branch already does what it asks, "
                 "and it only needs closing. GitHub leaves an issue open when the pull request said \"Addresses #n\" or "
                 "\"Part of #n\" instead of \"Fixes #n\", so read the merged pull requests and commits listed under it and "
@@ -599,6 +615,10 @@ class IssueTags:
                     kind = kept[item["number"]][1]
                     if kept[item["number"]][2] is not None:
                         lines = kept[item["number"]][2]
+                # A label that says it still waits for the maintainers' triage or approval: waiting, whoever opened it.
+                if item["status"] == "free" and item["number"] in triage:
+                    item["status"] = "waiting"
+                    reason = f"It still waits for the maintainers' triage or approval (its label {triage[item['number']]})."
                 # The merge by the rules (see the top of this file): the first that holds.
                 merge = "likely"
                 why = "nothing stands in the way"
