@@ -7,7 +7,8 @@ left yours: how many of your pull requests it merged and how many are still open
 repo's own numbers in all: its stars, open, merged and closed (without a merge) pull requests, commits, contributors (everyone
 who ever contributed) and open issues, each once the signals have it (a repo read before they were counted gets them by itself within
 seconds, with one small read). Every card has the same three tags, from the repo's signals
-(github_searcher/repo_signals.py):
+(github_searcher/repo_signals.py), after its label from the Dashboard's Automation (Fast, Normal, New, Slow, No issues or
+Not merging: how it treats our pull requests, Automation.tsx; hover it for the rule):
 - AI policy: AI welcome, AI disclose, AI forbidden, or No AI policy (also when AI is mentioned but what's allowed isn't
   said).
 - Average merge: of outside PRs (not opened by a maintainer, nor merged by their own author) merged in the last 30
@@ -33,7 +34,8 @@ of Sort. With any picked, Refresh, Delete and the robot (Automation for all the 
 for each) show left of it; Refresh and Delete do the same for every picked card (Refresh 4 at a time, a toast says when
 all are done and which failed). Delete unpicks them; the picks are kept until then, but not across a reload.
 
-Sort, top right: PRs merged (yours there), Merge rate (of your pull requests there that were merged or closed, how
+Sort, top right: Label (the Automation's order, the one agents take issues in: by label, then the most pull requests the
+repo merges a day; the first), PRs merged (yours there), Merge rate (of your pull requests there that were merged or closed, how
 many were merged; a repo with none goes last), Open PRs (yours there, still open) and Stars. Ties go by stars.
 Your pull requests are the ones the app follows (github_searcher/pr_tracking.py: the ones Approve sent and your 50 most
 recently updated on other people's projects), from the live "prs" topic, so the numbers update themselves.
@@ -63,11 +65,11 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { SelectBox } from "@/components/ui/row-selection";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { api, useLive, useLoaded, type AIPolicyTag } from "@/live";
+import { api, useLive, useLoaded, type AIPolicyTag, type AutomationLabelName } from "@/live";
 import { cn } from "@/lib/utils";
 
-// A tag on a card: its words and its color (a Badge variant: green good, red bad, gray the rest).
-type Tag = { label: string; variant: "ok" | "bad" | "secondary" };
+// A tag on a card: its words, its color (a Badge variant: green good, red bad, gray the rest) and what it means on hover.
+type Tag = { label: string; variant: "ok" | "fine" | "warn" | "bad" | "secondary"; title?: string };
 
 const AI_TAGS: Record<AIPolicyTag, Tag> = {
   welcome: { label: "AI welcome", variant: "ok" },
@@ -77,7 +79,18 @@ const AI_TAGS: Record<AIPolicyTag, Tag> = {
   none: { label: "No AI policy", variant: "secondary" },
 };
 
+// The Automation's labels' colors (Automation.tsx has the same); their rules, in the backend's words, show on hover.
+const LABEL_VARIANTS: Record<AutomationLabelName, Tag["variant"]> = {
+  Fast: "ok",
+  Normal: "fine",
+  New: "secondary",
+  Slow: "warn",
+  "No issues": "secondary",
+  "Not merging": "bad",
+};
+
 const SORTS: Record<string, string> = {
+  label: "Label",
   merged: "PRs merged",
   rate: "Merge rate",
   open: "Open PRs",
@@ -87,8 +100,9 @@ const SORTS: Record<string, string> = {
 export default function RepositoryCards() {
   const repos = useLive("repos");
   const prs = useLive("prs");
+  const automationTopic = useLive("automation");
   const loaded = useLoaded("repos");
-  const [sort, setSort] = useState("merged");
+  const [sort, setSort] = useState("label");
   // The picked cards, by name.
   const [selected, setSelected] = useState<string[]>([]);
   // The repos whose Automation is open (one from a card's robot, the picked ones from the top bar's), or none.
@@ -119,8 +133,12 @@ export default function RepositoryCards() {
     // -1: no merged or closed pull request of yours there, so no rate.
     const rate = done > 0 ? (merged[key] ?? 0) / done : -1;
 
-    // Its tags, in this order: AI policy, average merge, newcomers.
+    // Its tags, in this order: the Automation's label, AI policy, average merge, newcomers.
     const tags: Tag[] = [];
+    const label = automationTopic.labels[repo.full_name];
+    if (label !== undefined) {
+      tags.push({ label: label.label, variant: LABEL_VARIANTS[label.label], title: automationTopic.label_rules[label.label] });
+    }
     const signals = repo.signals;
     if (signals !== null) {
       tags.push(AI_TAGS[signals.ai_policy.tag]);
@@ -141,10 +159,13 @@ export default function RepositoryCards() {
       tags.push({ label: "Closed repo", variant: "bad" });
     }
 
-    return { repo: repo, merged: merged[key] ?? 0, open: open[key] ?? 0, rate: rate, tags: tags };
+    return { repo: repo, merged: merged[key] ?? 0, open: open[key] ?? 0, rate: rate, tags: tags, rank: label?.rank ?? 99, perDay: label?.per_day ?? 0 };
   });
   cards.sort((a, b) => {
     let order = b.merged - a.merged;
+    if (sort === "label") {
+      order = a.rank !== b.rank ? a.rank - b.rank : b.perDay - a.perDay;
+    }
     if (sort === "rate") {
       order = b.rate - a.rate;
     }
@@ -356,7 +377,7 @@ export default function RepositoryCards() {
                   {card.tags.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-1">
                       {card.tags.map((tag) => (
-                        <Badge key={tag.label} variant={tag.variant}>
+                        <Badge key={tag.label} variant={tag.variant} title={tag.title}>
                           {tag.label}
                         </Badge>
                       ))}
