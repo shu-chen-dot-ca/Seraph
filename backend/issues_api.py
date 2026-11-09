@@ -61,7 +61,8 @@ CATALOG_AGENTS_SECONDS, and while there is room it gives Catalog's cards to new 
 served (the board's order; ones not placed yet after, in the order they were added), each to its own new agent with the
 first free agent-N name and no target VM, so the agent picks the VM that suits the job itself (Agents.assign). Only
 cards of repos whose Level of automation has Take issues on (backend/repo_automation_api.py; the others wait there for
-you), and only while the repo is under its Open PRs at once (its open PRs of yours and its issues with an open job before a
+you), with tags read within twice the board's Catalog refresh time (refresh_catalog_minutes), and only while the repo is
+under its Open PRs at once (its open PRs of yours and its issues with an open job before a
 PR, from queued to waiting on you; backend/repo_automation_api.py): a repo at it is skipped and the next card of
 another repo goes. Only cards that are Catalog's own: no job (or only cancelled ones), not paused, open on GitHub, and, like Assign, with its
 Merge in and not fixed, out of scope or can't validate, and unlike Assign not claimed either: someone else is on it
@@ -73,6 +74,12 @@ is claimed for you on GitHub, so an agent always takes it: whatever its repo's T
 long as nobody else has it and it isn't out of scope. Each round, one of those that is still free and no agent ever
 started goes back to the top of Catalog if it isn't there, and one someone else has now (tagged assigned) leaves
 Catalog for Open.
+
+A repo with Take issues on that is at its Open PRs at once is held (HELD, worked out by take_from_catalog every round):
+its issues on the board's Open and Catalog (no job, or only cancelled ones) can't be taken now, so keep_facts and keep_tags
+don't read them again until it has room, and Add issues doesn't read its open issues (backend/repo_automation_api.py).
+That saves GitHub's quota for the repos that can take work. Once it has room, they are read again before an agent takes
+one (the tags' age above).
 
 The same robot's stale_pr_days (14 at first, None: off) closes PRs that stalled: an open PR of yours that an agent owns
 (opened from its draft, never one you opened by hand) with no update on GitHub for that many days is made again by its
@@ -144,6 +151,9 @@ STALE_CHECK_SECONDS = 10 * 60
 # Remove automatically's rules apply right after new tags come in, and this often anyway (issues get older).
 AUTO_REMOVE_SECONDS = 15 * 60
 LEVELS = ["easy", "medium", "hard"]
+# The repos (lower case) with Take issues on that are at their Open PRs at once now (take_from_catalog): their Open and
+# Catalog issues aren't read again until they have room.
+HELD = {"repos": []}
 
 
 class AssignRequest(BaseModel):
@@ -512,7 +522,9 @@ async def keep_facts() -> None:
             last_full = time.monotonic()
             failed = []
             issue_facts.forget(ids)
-            todo = ids
+            # Not the Open and Catalog issues of a held repo: they wait until it has room.
+            started = [job["issue"] for job in jobs.list() if job["issue"] is not None and job["status"] != "cancelled"]
+            todo = [issue_id for issue_id in ids if issue_id in started or issue_id.split("#")[0].lower() not in HELD["repos"]]
         else:
             todo = [issue_id for issue_id in ids if issue_id not in known and issue_id not in failed]
             # The issues an agent is on now, every ACTIVE_REFRESH_SECONDS.
@@ -664,6 +676,9 @@ async def keep_tags() -> None:
             if tags is None and issue_id in listed:
                 # keep_new_tags tags it, at once.
                 continue
+            if issue_id in listed and (job is None or job["status"] == "cancelled") and issue_id.split("#")[0].lower() in HELD["repos"]:
+                # On Open or Catalog of a repo at its Open PRs at once: not read again until it has room.
+                continue
             if issue_id in listed and datetime.fromisoformat(tags["judged_at"]) < datetime.fromisoformat(added_at[issue_id]):
                 # Not read since it was added: keep_new_tags reads it again, at once.
                 continue
@@ -790,8 +805,6 @@ def take_from_catalog() -> None:
         if (job["issue"] in ids or job["thread"] is not None) and job["agent"] not in working:
             working.append(job["agent"])
     room = rules["max_agents"] - len(working)
-    if room <= 0:
-        return
 
     # Each issue's latest job: Catalog's own cards have none, or a cancelled one.
     latest = {}
@@ -825,6 +838,10 @@ def take_from_catalog() -> None:
         tag = tags.get(item["id"])
         if tag is None or tag.get("merge") in (None, "fixed", "out of scope", "can't validate", "claimed"):
             continue
+        # Read recently: a held repo's cards wait unread (HELD), and are read again once it has room. Ours go anyway.
+        stale = datetime.fromisoformat(tag["judged_at"]) < datetime.now(UTC) - timedelta(minutes=rules["refresh_catalog_minutes"] * 2)
+        if stale and item["id"].lower() not in opened:
+            continue
         waiting.append(item["id"])
     # From the top: the board's order, ones not placed yet after (sorted keeps them in the order they were added).
     waiting.sort(key=lambda issue_id: board["order"].index(issue_id) if issue_id in board["order"] else len(board["order"]))
@@ -844,6 +861,7 @@ def take_from_catalog() -> None:
     limits = {}
     for repo, each in settings.items():
         limits[repo.lower()] = each.get("max_prs", 5) if merged.get(repo.lower(), 0) > 0 else each.get("max_prs_first", 1)
+    HELD["repos"] = [repo for repo in taking if busy.get(repo, 0) >= limits.get(repo, 1)]
 
     for issue_id in waiting:
         if room <= 0:

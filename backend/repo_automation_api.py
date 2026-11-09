@@ -47,8 +47,9 @@ What each does:
   board's Catalog, before every other card, where another agent takes it first, whatever the repo's Take issues and
   Open PRs at once say (keep_catalog_agents in backend/issues_api.py). Never one out of scope: open_issue refuses it.
 
-keep_adding() runs in the background, every ADD_CHECK_SECONDS. For each repo in Repos (not archived, and not one that
-doesn't take AI-made contributions: AI policy no_ai, repo_signals.py) with Add issues on,
+keep_adding() runs in the background, every ADD_CHECK_SECONDS. For each repo in Repos (not archived, not one that
+doesn't take AI-made contributions: AI policy no_ai, repo_signals.py, and not one at its Open PRs at once: HELD in
+backend/issues_api.py, whose issues can't be taken now, to save GitHub's quota) with Add issues on,
 it reads all its open issues from GitHub, every ADD_REFRESH_SECONDS (at once after Add issues is turned on, or the
 backend starts). Each issue only once: one it added, or that was in the Issues list when it looked, is kept in
 ADDED_FILE and never added again, so one you take off stays off (Add in the repo's pop-up on the Repository page still
@@ -82,7 +83,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.issues_api import AUTO_REMOVE_FILE, AUTO_REMOVE_OFF
+from backend.issues_api import AUTO_REMOVE_FILE, AUTO_REMOVE_OFF, HELD
 from backend.shared import agents, github_account, inbox, issue_facts, issue_tags, issues, jobs, pr_tracking, repo_signals, repos
 from github_searcher.claude_judge import judge
 from github_searcher.github_account import SendError
@@ -324,6 +325,8 @@ async def add_issues() -> None:
     # Not an archived repo, nor one that doesn't take AI-made contributions (its AI policy, repo_signals.py).
     skipped = [name.lower() for name in repos.archived()]
     skipped += [name.lower() for name, each in repo_signals.all().items() if (each.get("ai_policy") or {}).get("tag") == "no_ai"]
+    # Nor one at its Open PRs at once: its issues can't be taken now.
+    skipped += HELD["repos"]
     names = [item["full_name"] for item in repos.items() if item["full_name"].lower() not in skipped]
     # How many of your PRs each repo merged (lower case): until one is, its levels_first are the levels.
     merged = {}
