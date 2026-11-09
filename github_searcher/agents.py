@@ -42,6 +42,12 @@ After each turn the worker enforces the VM rule: an agent never holds a VM it ha
 - Holding one with open jobs there: it is reminded to go on with them now, not to wait for an answer in chat. After
   MAX_NUDGES reminders in a row with no change to its jobs, the VM is released for it.
 - In no queue but with queued jobs for a VM: it is reminded to queue_for_vm (MAX_NUDGES times at most).
+An agent with open work never just stops: every HEARTBEAT_CHECK_SECONDS (keep_going), one with a job queued or working
+that has been out of its turn for HEARTBEAT_SECONDS is told to carry on, whatever ended it (a turn that failed,
+reminders that ran out, a VM released for it, a backend restart, a blocker it reported). Only a real wait is left alone:
+its place in a VM's line (the grant wakes it), a run of its going (watch_runs wakes it), the user (waiting_on_user, or
+the user stopped it), or being archived. How long it has been out: since the newest entry in its history with a time
+(its turn's end, an error, a message), so restarts don't put it off.
 The VM queue (sandbox/vm_queue.py: one line per desktop of each VM, and agents on different desktops work at
 the same time) tells Agents when an agent's turn comes (on_grant: a message
 that wakes it, with the VM's notes on what earlier agents set up in it, or the VM passes on at once
@@ -137,7 +143,7 @@ import shlex
 import tempfile
 import threading
 import traceback
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -166,6 +172,9 @@ DEMO_DIR = os.environ["SANDBOX_VM_DEMO_DIR"]
 SAVE_SECONDS = 5
 # How often the runs nobody waits for are checked.
 RUN_CHECK_SECONDS = 10
+# The heartbeat: an agent with open work out of its turn this long, for no reason, is told to carry on; looked this often.
+HEARTBEAT_SECONDS = 10 * 60
+HEARTBEAT_CHECK_SECONDS = 60
 # How often timed questions are checked for an answer_by that passed.
 QUESTION_CHECK_SECONDS = 10
 OPEN_STATUSES = ["queued", "working"]
@@ -233,6 +242,7 @@ class Agents:
         self.saver = None
         self.run_watcher = None
         self.question_timer = None
+        self.heartbeat = None
         queue.on_grant = self.on_grant
         queue.on_kick = self.on_kick
         # Every place in a queue shows in the agent list.
@@ -339,6 +349,7 @@ class Agents:
         self.saver = asyncio.create_task(self.autosave())
         self.run_watcher = asyncio.create_task(self.watch_runs())
         self.question_timer = asyncio.create_task(self.answer_questions())
+        self.heartbeat = asyncio.create_task(self.keep_going())
 
     async def stop(self) -> None:
         if self.saver is not None:
@@ -347,6 +358,8 @@ class Agents:
             self.run_watcher.cancel()
         if self.question_timer is not None:
             self.question_timer.cancel()
+        if self.heartbeat is not None:
+            self.heartbeat.cancel()
         for worker in self.workers.values():
             worker.cancel()
         for agent in self.agents.values():
@@ -1867,6 +1880,41 @@ class Agents:
         except (ValueError, VMsError):
             # The user took it, or deleted the VM, in the meantime.
             pass
+
+    async def keep_going(self) -> None:
+        """The heartbeat (module docstring), every HEARTBEAT_CHECK_SECONDS: an agent with a job queued or working, out of
+        its turn for HEARTBEAT_SECONDS, is woken to carry on, unless it waits in a VM's line, a run of its goes, the user
+        stopped it, or it is archived. A job waiting on the user isn't open work here: the user's answer wakes it."""
+        while True:
+            await asyncio.sleep(HEARTBEAT_CHECK_SECONDS)
+            now = datetime.now(UTC)
+            running = []
+            for vm_record in self.vms.list():
+                running += [run["agent"] for run in vm_record.runs]
+            for agent in list(self.agents.values()):
+                if agent.record["archived_at"] is not None or agent.busy or agent.stopped or self.wake[agent.id].is_set():
+                    continue
+                open_jobs = [job for job in self.jobs.for_agent(agent.id) if job["status"] in OPEN_STATUSES]
+                # A run of its goes: watch_runs wakes it when it ends.
+                if not open_jobs or agent.id in running:
+                    continue
+                # Its place in a VM's line: the grant wakes it.
+                vm_name, place = self.queue.place(agent.id)
+                if place is not None and place > 0:
+                    continue
+                # Out of its turn long enough.
+                times = [entry["time"] for entry in agent.history[-500:] if entry.get("time")]
+                if times and now - datetime.fromisoformat(times[-1]) < timedelta(seconds=HEARTBEAT_SECONDS):
+                    continue
+                titles = ", ".join(f"{job['id']} ({job['title']})" for job in open_jobs)
+                text = (
+                    f"Heartbeat: you have open jobs and nothing is running: {titles}. Carry on with them now, from where you "
+                    "left off (queue_for_vm when you need the VM). Don't stop or wait without a reason. When one is truly "
+                    "blocked on something only the user can give, ask with draft_question; when it can't be done, cancel it "
+                    "with job_update and say why. A blocker in the app you reported may be fixed by now: try again first."
+                )
+                self.pending[agent.id].append({"from": "System", "text": text, "shown": False})
+                self.wake[agent.id].set()
 
     async def answer_questions(self) -> None:
         """Every QUESTION_CHECK_SECONDS: a timed question (inbox.py) still pending after its answer_by is answered with
