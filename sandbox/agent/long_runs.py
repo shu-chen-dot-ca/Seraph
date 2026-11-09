@@ -13,7 +13,8 @@ gave it to another agent, or the app took it back from a full VM) never kills it
 desktop (VM.exec), and its output stays in that user's home, so it is checked as that user too.
 
 Runs share the VM's CPU and memory. When memory runs out, a run's processes are ended before the desktop's (VM.exec's
-OOM_SCORE_ADJ).
+OOM_SCORE_ADJ). An agent the user gave priority (agents.py) gets more of the CPU, and its runs are ended last
+(prioritize).
 
 The run shows live in a terminal window on the desktop (computer_use.WATCH). Each agent has its own window, so
 another agent's run never closes it; the agent's next run does. Its output stays in the VM, in RUNS_DIR/<id>.log,
@@ -37,6 +38,7 @@ import time
 from datetime import UTC, datetime
 
 from sandbox.agent.computer_use import DESKTOP_ENV, WATCH
+from sandbox.vm import OOM_SCORE_ADJ
 from sandbox.vms import VMRecord
 
 # Where runs keep their output and exit code, in the desktop user's home.
@@ -49,6 +51,12 @@ CHECK_SECONDS = 2
 RUN_LIMIT_SECONDS = 12 * 3600
 # check() gives back the last this many bytes of the output, where results and errors are.
 OUTPUT_LIMIT = 50_000
+# The share of the CPU (systemd's CPUWeight, default 100) of a desktop and a run, and of those of an agent the user gave
+# priority (prioritize): ten times as much. Its runs are also ended last when memory runs out, but still before the
+# desktop (VM.exec's OOM_SCORE_ADJ for the others, GNOME's own at 100 to 200).
+CPU_WEIGHT = 100
+PRIORITY_CPU_WEIGHT = 1000
+PRIORITY_OOM_SCORE_ADJ = 500
 # Math libraries (OpenMP, OpenBLAS, MKL: numpy, torch) start a thread per CPU in every process, so a test suite with 8
 # workers ran 80 threads on vm1's 16 CPUs. In a run they use one each; test workers already run side by side.
 MATH_THREADS = "OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1"
@@ -145,3 +153,47 @@ async def wait(record: VMRecord, run: dict, seconds: float) -> dict | None:
 def stop(record: VMRecord, run: dict) -> None:
     """End the run and everything it started. Blocking (an incus call)."""
     record.vm.kill_tagged(f"sandbox-{run['id']}")
+
+
+def prioritize(record: VMRecord, prioritized: set[str]) -> None:
+    """Give the agents the user gave priority (prioritized, agent ids) the VM first: their runs and the desktops they
+    hold or run on get PRIORITY_CPU_WEIGHT, the rest CPU_WEIGHT, and their runs are ended after everyone else's when
+    memory runs out (PRIORITY_OOM_SCORE_ADJ). Sets every run and desktop each time, so it also takes priority back.
+    Blocking (an incus call).
+
+    The CPU is shared per desktop first (each desktop's user has its own slice), then within it per command (each
+    started by VM.exec is a session scope of its own), so both get the weight. Until the VM restarts.
+    """
+    boosted = []
+    script = ""
+    for run in record.runs:
+        weight = CPU_WEIGHT
+        adj = OOM_SCORE_ADJ
+        if run["agent"] in prioritized:
+            weight = PRIORITY_CPU_WEIGHT
+            adj = PRIORITY_OOM_SCORE_ADJ
+            boosted.append(run.get("desktop", 1))
+        # The run's session leader is the `bash -c <command> <tag>` start() began (as in VM.kill_tagged).
+        pattern = shlex.quote(f" sandbox-{run['id']}$")
+        script += (
+            f"for sid in $(pgrep -f -- {pattern}); do "
+            f"for pid in $(pgrep -s $sid); do echo {adj} > /proc/$pid/oom_score_adj; done; "
+            "scope=$(grep -o '[^/]*[.]scope$' /proc/$sid/cgroup); "
+            f'[ -z "$scope" ] || systemctl set-property --runtime "$scope" CPUWeight={weight}; '
+            "done 2> /dev/null; "
+        )
+    for number, line in record.desktops.items():
+        if line["holder"] in prioritized:
+            boosted.append(number)
+    for number in record.desktops:
+        weight = CPU_WEIGHT
+        if number in boosted:
+            weight = PRIORITY_CPU_WEIGHT
+        # Desktop 1's user is uid 1000.
+        uid = f"$(id -u desktop{number})"
+        if number == 1:
+            uid = "1000"
+        script += f"systemctl set-property --runtime user-{uid}.slice CPUWeight={weight} 2> /dev/null; "
+    result = record.vm.exec_root(script + "true", timeout=60)
+    if result.returncode != 0:
+        raise ValueError(f"Could not set the priority in {record.name}: {result.stderr.strip()}")

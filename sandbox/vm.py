@@ -52,7 +52,7 @@ MAX_DESKTOPS = 32
 DESKTOP_SIZE = "1280x800"
 # How soon the kernel ends a process when memory runs out (-1000 never, 1000 first). Everything exec runs (the agents'
 # commands, their test suites) gets this, so a full memory ends a test worker, never the desktop (GNOME's own are at
-# 100 to 200).
+# 100 to 200). An agent the user gave priority gets less on its runs (long_runs.prioritize).
 OOM_SCORE_ADJ = 900
 # Desktops 2 and up, as root at every start (set_up_desktops), with numbers (the VM's desktops, e.g. "1 3") and size
 # set before it. TigerVNC comes from the system's own packages, the first time. A terminal-only image gets only the

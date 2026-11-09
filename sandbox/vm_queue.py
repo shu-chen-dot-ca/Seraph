@@ -16,7 +16,9 @@ A VM with no room (its CPUs or memory used up: full, set by Agents.watch_room) t
 up, or one nobody holds, doesn't go to the waiting line until there is room again. Overloaded, the app takes a desktop back from its agent (step_down): the agent goes to the front of
 the waiting line, asking for that desktop, and Agents removes the desktop; nothing the agent runs there is stopped.
 
-Who is next on a desktop (next_holder): the first in the waiting line that asked for this desktop or for none.
+Who is next on a desktop (next_holder): the first in the waiting line that asked for this desktop or for none. An
+agent the user gave priority (prioritized) joins the waiting line
+ahead of everyone without it, and goes to its front when it gets priority while it waits (move_to_front).
 
 The user can take a desktop over (the agent holding it goes back to the front of the line, asking for that desktop),
 give a desktop to a waiting agent, move an agent to the front, or remove an agent from the line or from holding. An agent that loses its place because of the user is told through on_kick (Agents interrupts it; its
@@ -45,6 +47,9 @@ class VMQueue:
         self.lock = threading.Lock()
         # Runs whose end someone is handling now (a tool call or Agents), so nobody handles one twice. Not saved.
         self.ending: set[str] = set()
+        # The agents the user gave priority, set by Agents (which saves it with each agent): they join a waiting line
+        # ahead of everyone without it.
+        self.prioritized: set[str] = set()
         # The VMs (names) with no room right now, set by Agents (watch_room): nobody new gets a desktop there.
         self.full: set[str] = set()
         # Set by Agents. on_grant(vm_name, agent_id): an agent became the holder of a desktop while it waited.
@@ -101,11 +106,17 @@ class VMQueue:
                 record.save()
                 place = 0
             else:
-                record.queue.append(agent_id)
+                # With priority: behind the others with priority, ahead of the rest.
+                place = len(record.queue)
+                if agent_id in self.prioritized:
+                    place = 0
+                    while place < len(record.queue) and record.queue[place] in self.prioritized:
+                        place += 1
+                record.queue.insert(place, agent_id)
                 if desktop is not None:
                     record.wants[agent_id] = desktop
                 record.save()
-                place = len(record.queue)
+                place += 1
         if self.on_change is not None:
             self.on_change()
         return place

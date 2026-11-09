@@ -6,7 +6,7 @@ DATA_DIR/agents/<id>.json:
     {"id": "agent_a1b2c3", "name": "agent-1", "target_vm": "vm1" | null, "claude_session_id",
      "history": [HistoryEntry, ...], "context_used", "context_max", "cost_usd", "compactions", "tokens_used", "created_at",
      "pending": [message, ...], "awake": bool, "archived_at": null | when it was archived,
-     "name_by": "auto" | "user" | "agent"}
+     "name_by": "auto" | "user" | "agent", "priority": bool}
 
 name_by says who gave the name. Every agent is called "agent-N", the first free number (auto): agents don't name
 themselves, and the app gives its own agents (reviewers, workers, chat agents) no names either. Only the user renames
@@ -54,7 +54,7 @@ it takes nobody new (VMQueue.full): agents wait in its line instead of getting a
 Overloaded (the load of the last 5 minutes at OVERLOAD_TIMES its CPUs, or less than OVERLOAD_MEMORY_PERCENT free), it
 also takes one desktop back from its agent, at most every STEP_DOWN_SECONDS, and removes that desktop
 (VMQueue.step_down): the agent goes to the front of the line asking for it, and nothing it runs is stopped (its runs,
-servers and files stay). One out of its turn first, then the highest desktop.
+servers and files stay). Never an agent the user gave priority; one out of its turn first, then the highest desktop.
 With room again, whoever waits gets a free desktop, or the desktop they wait for is added back (one that was taken
 back, or a new one for an agent that asked for none), one a check, up to the VM's max desktops.
 The VM queue (sandbox/vm_queue.py: one line per desktop of each VM, and agents on different desktops work at
@@ -132,6 +132,12 @@ There a fix_issue job's agent drafts that claim first (its one comment, WorkTool
 with the fix: neither the user's approval nor the maintainers' answer holds the job up (we assume nobody answers), so
 the user finds the claim and the PR in the Inbox, to approve in that order. issue_taken() leaves the job alone when the
 issue is assigned to the user (their claim went through); someone else assigned is taken, as for any job.
+
+The user can give an agent priority (set_priority, the Give priority button on its page) until its tasks are over: no
+open job, no run going and no turn (watch_runs then takes it back by itself). It joins a VM's waiting line ahead of
+everyone without priority (VMQueue.prioritized), and in the VM its runs and the desktops it holds or runs on get ten
+times the CPU share and its runs are ended last when memory runs out (long_runs.prioritize, set again by watch_runs
+whenever that changes).
 
 Everything here runs in the backend's event loop. notify() and the queue callbacks may be called
 from request threads, so they hand their work to the loop. version goes up on every change the
@@ -255,6 +261,9 @@ class Agents:
         # VM rule reminders in a row: {"count", "state"}; state is what the jobs and queue place
         # looked like, and a change in it starts the count again.
         self.nudges: dict[str, dict] = {}
+        # What long_runs.prioritize last set in each running VM (its runs and desktops, each with or without priority),
+        # so it runs again only when that changed. Not saved: after a restart it is set once more.
+        self.priority_set: dict[str, list] = {}
         self.loop = None
         self.loop_thread = None
         self.saver = None
@@ -320,6 +329,10 @@ class Agents:
             # And from before the Workflow tab.
             record.setdefault("workflow", None)
             record.setdefault("workflow_role", None)
+            # And from before priority.
+            record.setdefault("priority", False)
+            if record["priority"]:
+                self.queue.prioritized.add(record["id"])
             if self.pending[agent.id] and record["archived_at"] is None:
                 self.wake[agent.id].set()
             self.nudges[agent.id] = {"count": 0, "state": None}
@@ -625,6 +638,8 @@ class Agents:
                     # One of the Workflow tab's agents (workflow.py): its repository, and what it is there.
                     "workflow": agent.record["workflow"],
                     "workflow_role": agent.record["workflow_role"],
+                    # The user gave it priority until its tasks are over (set_priority).
+                    "priority": agent.record["priority"],
                 }
             )
         return summaries
@@ -666,6 +681,7 @@ class Agents:
             "role": None,
             "workflow": None,
             "workflow_role": None,
+            "priority": False,
         }
         computer_tools = ComputerTools(self.vms, self.queue, agent_id, functools.partial(record.get, "target_vm"), record["history"])
         agent = Agent(record, computer_tools, WorkTools(self, record), self.changed)
@@ -699,6 +715,39 @@ class Agents:
         self.save(agent)
         self.version += 1
 
+    def set_priority(self, agent_id: str, on: bool) -> None:
+        """The user gives the agent priority (on) or takes it back. With it, the agent goes first: to the front of the
+        VM's waiting line, and for the VM's CPU and memory (watch_runs). Only for an agent with tasks going (an open
+        job, a run or a turn): it ends by itself once they are over (watch_runs)."""
+        agent = self.agents[agent_id]
+        if agent.record["priority"] == on:
+            return
+        text = "Priority taken back by the user"
+        if on:
+            open_jobs = [job for job in self.jobs.for_agent(agent_id) if job["status"] in OPEN_STATUSES]
+            runs = []
+            for vm_record in self.vms.list():
+                runs += [run for run in vm_record.runs if run["agent"] == agent_id]
+            if not open_jobs and not runs and not agent.busy:
+                raise ValueError(f"{agent.name} has no tasks going (no open job, run or turn)")
+            text = "Given priority by the user, until its tasks are over"
+        agent.record["priority"] = on
+        if on:
+            self.queue.prioritized.add(agent_id)
+        else:
+            self.queue.prioritized.discard(agent_id)
+        # Waiting for a VM: to the front of the line now.
+        vm_name, place = self.queue.place(agent_id)
+        if on and place is not None and place > 0:
+            try:
+                self.queue.move_to_front(vm_name, agent_id)
+            except (ValueError, VMsError):
+                # It left the line meanwhile.
+                pass
+        agent.history.append({"type": "system", "text": text, "time": datetime.now(UTC).isoformat()})
+        self.save(agent)
+        self.version += 1
+
     async def delete(self, agent_id: str) -> None:
         """Stop the agent and delete it. Its open jobs become cancelled; its drafts stay in the Inbox.
         Not an agent that made PRs: it keeps its conversation for updates on them (archive it instead)."""
@@ -716,6 +765,7 @@ class Agents:
         del self.wake[agent_id]
         del self.nudges[agent_id]
         self.queue.leave_all(agent_id)
+        self.queue.prioritized.discard(agent_id)
         self.jobs.delete_for_agent(agent_id)
         self.version += 1
         await agent.stop()
@@ -1976,12 +2026,12 @@ class Agents:
                     continue
                 if len(vm_record.desktops) < 2:
                     continue
-                # Overloaded: a desktop is taken back. From one out of its turn first (nothing is cut off),
-                # then from the highest desktop.
+                # Overloaded: a desktop is taken back. Never from an agent the user gave priority; from one out of its
+                # turn first (nothing is cut off), then from the highest desktop.
                 chosen = None
                 for line in vm_record.desktops.values():
                     agent = self.agents.get(line["holder"])
-                    if agent is None:
+                    if agent is None or agent.record["priority"]:
                         continue
                     if chosen is None or chosen.busy or not agent.busy:
                         chosen = agent
@@ -2029,7 +2079,9 @@ class Agents:
                     continue
 
     async def watch_runs(self) -> None:
-        """Every RUN_CHECK_SECONDS: the runs no tool call waits for. One that ended goes to its agent (run_ended)."""
+        """Every RUN_CHECK_SECONDS: the runs no tool call waits for. One that ended goes to its agent (run_ended).
+        Then priority: it ends for an agent whose tasks are over, and each running VM gets it set again when its runs,
+        its desktops' holders or who has priority changed (long_runs.prioritize)."""
         while True:
             await asyncio.sleep(RUN_CHECK_SECONDS)
             runs = []
@@ -2053,6 +2105,37 @@ class Agents:
                 except VMsError:
                     # The VM was deleted meanwhile.
                     pass
+
+            # Tasks over: no open job, no run going and no turn.
+            running = []
+            for vm_record in self.vms.list():
+                running += [run["agent"] for run in vm_record.runs]
+            for agent in list(self.agents.values()):
+                if not agent.record["priority"] or agent.busy or agent.id in running:
+                    continue
+                if [job for job in self.jobs.for_agent(agent.id) if job["status"] in OPEN_STATUSES]:
+                    continue
+                agent.record["priority"] = False
+                self.queue.prioritized.discard(agent.id)
+                agent.history.append({"type": "system", "text": "Priority ended: its tasks are over", "time": datetime.now(UTC).isoformat()})
+                self.save(agent)
+                self.version += 1
+
+            for vm_record in self.vms.list():
+                if vm_record.status != "running":
+                    # Set again once it runs: a restart starts it over.
+                    self.priority_set.pop(vm_record.name, None)
+                    continue
+                state = [[run["id"], run["agent"] in self.queue.prioritized] for run in vm_record.runs]
+                state += [[number, line["holder"] in self.queue.prioritized] for number, line in vm_record.desktops.items()]
+                if self.priority_set.get(vm_record.name) == state:
+                    continue
+                try:
+                    await asyncio.to_thread(long_runs.prioritize, vm_record, set(self.queue.prioritized))
+                except Exception:
+                    # The VM doesn't answer right now: again next time.
+                    continue
+                self.priority_set[vm_record.name] = state
 
     async def run_ended(self, vm_record, run: dict, ended: dict) -> None:
         """A run in the background ended: its agent gets the result. One that waits in a VM's line (its desktop was taken

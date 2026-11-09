@@ -1,5 +1,5 @@
-"""The Agents and Jobs pages: create, rename, archive, unarchive and delete agents, chat with one, point it at a VM, and
-create and cancel jobs. An agent that made PRs can't be deleted (409), only archived. A cancel goes on the job's
+"""The Agents and Jobs pages: create, rename, archive, unarchive and delete agents, chat with one, point it at a VM, give
+it priority, and create and cancel jobs. An agent that made PRs can't be deleted (409), only archived. A cancel goes on the job's
 timeline as "Stopped by you" (github_searcher/jobs.py). The Workspace tab's Papers page adds a paper here too
 (/jobs/paper): a reproduce_paper job.
 
@@ -60,6 +60,22 @@ class RenameRequest(BaseModel):
 async def rename_agent(agent_id: str, body: RenameRequest) -> dict:
     try:
         agents.rename(agent_id, body.name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No agent {agent_id}")
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    return {}
+
+
+class PriorityRequest(BaseModel):
+    on: bool
+
+
+@router.post("/agents/{agent_id}/priority")
+async def set_priority(agent_id: str, body: PriorityRequest) -> dict:
+    """Gives the agent priority until its tasks are over, or takes it back. 409 for an agent with no tasks going."""
+    try:
+        agents.set_priority(agent_id, body.on)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"No agent {agent_id}")
     except ValueError as error:
