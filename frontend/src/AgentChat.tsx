@@ -862,6 +862,16 @@ export default function AgentChat(props: { agentId: string; compact?: boolean })
   const job = currentJob(summary.id, jobs);
   const stuck = stuckFor(summary, now);
 
+  // Skip checks: the job's PR may be drafted now, without passing tests or a reviewer; it still waits for your Approve.
+  async function skipChecks(id: string) {
+    try {
+      await api(`/api/jobs/${id}/skip_checks`, { method: "POST" });
+      toast.success("Checks skipped: the agent drafts the PR now. It still waits for your Approve in the Inbox.");
+    } catch (err) {
+      toast.error(`Could not skip the checks: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
   // Take a queued job off its list: it is cancelled (it moves to Finished as Cancelled), and the agent is told.
   async function removeJob(id: string) {
     try {
@@ -1246,6 +1256,18 @@ export default function AgentChat(props: { agentId: string; compact?: boolean })
               {job.title}
             </a>
             <JobSteps job={job} />
+            {job.skip_checks === true && <span className="ml-auto text-xs text-muted-foreground">Checks skipped</span>}
+            {job.skip_checks !== true && (
+              <Button
+                variant="outline"
+                size="xs"
+                className="ml-auto"
+                title="Let the agent draft the PR now, without waiting for the project's tests to pass and without a reviewer. It still waits for your Approve in the Inbox."
+                onClick={() => skipChecks(job.id)}
+              >
+                Skip checks
+              </Button>
+            )}
           </div>
           {stuck !== "" && <div className="text-xs text-warn">No activity for {stuck}: it may be stuck, or running something slow.</div>}
         </div>

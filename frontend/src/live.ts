@@ -404,6 +404,7 @@ export type Job = {
   // The project's tests: on the finished change (must pass before a PR), and on the unchanged code only as the agent's
   // last resort.
   tests: { before: TestRun | null; after: TestRun | null };
+  skip_checks?: boolean; // you pressed Skip checks: its PR may be drafted now, without passing tests or a reviewer
   // What happened, oldest first (github_searcher/jobs.py): made, each step the agent reached (its headline), status
   // changes, test runs, and what the app told the agent. [] on jobs from before it was kept.
   timeline: JobEvent[];
