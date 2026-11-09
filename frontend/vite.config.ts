@@ -41,8 +41,20 @@ export default defineConfig(({ mode }) => {
       // Forward /api/* to the backend, so the browser sees one origin (no CORS).
       // ws: true also forwards the /api/live websocket.
       // 127.0.0.1, not localhost: Node may resolve localhost to IPv6 (::1), where the backend isn't listening.
+      // When the browser's side of a websocket closes, the backend's side is closed too: the proxy only half-closes it
+      // and stops reading, so the backend's live feed got stuck sending into it, and every backend reload waited on it.
       proxy: {
-        "/api": { target: `http://127.0.0.1:${backendPort}`, ws: true },
+        "/api": {
+          target: `http://127.0.0.1:${backendPort}`,
+          ws: true,
+          configure: (proxy) => {
+            proxy.on("proxyReqWs", (proxyReq, _req, socket) => {
+              proxyReq.on("upgrade", (_res, proxySocket) => {
+                socket.on("close", () => proxySocket.destroy());
+              });
+            });
+          },
+        },
       },
     },
   };
