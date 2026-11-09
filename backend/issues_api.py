@@ -155,6 +155,11 @@ LEVELS = ["easy", "medium", "hard"]
 # The repos (lower case) with Take issues on that are at their Open PRs at once now (take_from_catalog): their Open and
 # Catalog issues aren't read again until they have room.
 HELD = {"repos": []}
+# The live "automation" topic's version (backend/app.py): up by one whenever the Dashboard's Automation
+# (backend/automation_api.py) or any level of automation changes (the board's here, a repo's or an issue's:
+# backend/repo_automation_api.py), so its Settings tab and the robot dialogs show the same at once. Here, as both those
+# files import this one.
+AUTOMATION_VERSION = {"version": 0}
 # Set whenever issues get tagged (keep_new_tags, keep_tags), so keep_catalog (backend/repo_automation_api.py) moves the
 # Open issues that fit to Catalog, and takes the rest off the board, right after.
 TAGGED = asyncio.Event()
@@ -278,6 +283,7 @@ def put_auto_remove(body: AutoRemoveRequest) -> dict:
         raise HTTPException(status_code=400, detail="Close inactive PRs after 1 to 365 days.")
     rules = body.model_dump()
     AUTO_REMOVE_FILE.write_text(json.dumps(rules, indent=2))
+    AUTOMATION_VERSION["version"] += 1
     return {**rules, "removed": auto_remove_issues()}
 
 

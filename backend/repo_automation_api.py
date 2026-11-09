@@ -16,7 +16,8 @@ over its repo's for the drafts of the jobs on that issue, in ISSUE_SETTINGS_FILE
 
     {"owner/name#n": {"questions", "comments", "pull_requests": bool}, ...}
 
-GET /api/repos/automation gives them all with the defaults; PUT /api/repos/automation gives the picked repos the same
+GET /api/repos/automation gives them all with the defaults (the live "automation" topic too: backend/automation_api.py,
+the Dashboard's Automation → Settings, which opens the same dialogs); PUT /api/repos/automation gives the picked repos the same
 ones (the dialog's Save, for one repo or many); PUT /api/issues/automation sets one issue's own, or drops it (level
 null: its repo's counts again). How many agents work at once is the Issues board's (max_agents in
 backend/issues_api.py), not a repo's.
@@ -90,7 +91,7 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.issues_api import HELD, TAGGED
+from backend.issues_api import AUTOMATION_VERSION, HELD, TAGGED
 from backend.shared import agents, github_account, inbox, issue_facts, issue_tags, issues, jobs, pr_tracking, repo_signals, repos
 from github_searcher.claude_judge import judge
 from github_searcher.github_account import SendError
@@ -200,6 +201,7 @@ def put_issue_automation(body: IssueAutomationRequest) -> dict:
     else:
         own[body.id] = body.level.model_dump()
     ISSUE_SETTINGS_FILE.write_text(json.dumps(own, indent=2))
+    AUTOMATION_VERSION["version"] += 1
     return {"issues": own}
 
 
@@ -219,6 +221,7 @@ def put_automation(body: AutomationRequest) -> dict:
         settings[repo] = body.model_dump(exclude={"repos"})
         settings[repo]["instructions"] = body.instructions.strip()
     SETTINGS_FILE.write_text(json.dumps(settings, indent=2))
+    AUTOMATION_VERSION["version"] += 1
     return {"defaults": DEFAULTS, "repos": settings}
 
 
