@@ -16,7 +16,8 @@ A row, like GitHub's list: the state (open, draft, merged, closed), the repo (a 
 labels; under it the number, who opened it and when (or when it was merged or closed), checks and review while open,
 and when it last changed; on the right how many files it changes, the lines added (green) and removed (red), and
 how many comments. A click opens it in the thread pop-up (ThreadDialog.tsx,
-open=owner/name%23n); closing it reads the list again.
+open=owner/name%23n); closing it reads the list again. So does a PR of yours the app follows (pr_tracking.py) being
+opened, merged or closed, so the list keeps up with GitHub on its own.
 The Dashboard's Pull requests (#/dashboard/pulls) is this page too, plain: only Created by me, with Open and Closed and
 Refresh, no filter, Visibility, Repository or Sort (base is where it is, plain says so). Each row starts with its
 repo's logo (the owner's picture, square), like the Repository page's cards, and next to it two lines as tall as the
@@ -154,6 +155,12 @@ export default function PullRequests(props: {
   const [filter, setFilter] = useState("");
 
   const signedOut = reposLoaded && yourRepos.login === null && yourRepos.error === null;
+  // Your PRs the app follows (pr_tracking.py, read every few minutes) and their states: when one is opened, merged or
+  // closed there, the list is read again, so it keeps up with GitHub without Refresh.
+  const followed = prs.items
+    .filter((each) => each.relation === "author")
+    .map((each) => `${each.id} ${each.state}`)
+    .join(",");
 
   // Read the view from GitHub; a late answer after leaving the page is dropped.
   useEffect(() => {
@@ -182,7 +189,7 @@ export default function PullRequests(props: {
     return () => {
       current = false;
     };
-  }, [props.view, reload]);
+  }, [props.view, reload, followed]);
 
   // The Dashboard's Actions: read with the list, on every tab change and whenever a draft changes (one was sent).
   useEffect(() => {
