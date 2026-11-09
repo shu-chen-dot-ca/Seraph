@@ -41,7 +41,7 @@ export default function NewPaperDialog(props: { onClose: () => void }) {
   const [error, setError] = useState("");
 
   const agent = agents.find((each) => each.id === agentId);
-  const locked = agent !== undefined && (agent.status === "in_queue" || agent.status === "in_priority" || agent.status === "using_vm");
+  const locked = agent !== undefined && (agent.status === "in_queue" || agent.status === "using_vm");
   const chosenVM = locked ? (agent.vm ?? agent.target_vm ?? NO_VM) : vmName;
 
   // The name a new agent gets when Agent name is left empty: the first free "agent-N".
@@ -168,7 +168,6 @@ export default function NewPaperDialog(props: { onClose: () => void }) {
                     {each.status === "idle" && "idle"}
                     {each.status === "working" && "working"}
                     {each.status === "in_queue" && `in queue #${each.place} · ${each.vm}`}
-                    {each.status === "in_priority" && `in priority #${each.place} · ${each.vm}`}
                     {each.status === "using_vm" && `using ${each.vm}`}
                   </span>
                 </SelectItem>

@@ -1,7 +1,7 @@
 /*
 The Agents overview: one row per agent with its name and id (agent_ and 6 hex digits: unique, and it never
 changes, also when the agent is renamed; jobs, drafts and VM queues know it by it), where it stands (idle, working, waiting in a VM's queue,
-in a VM's priority line (it stepped aside while its run goes there, and gets the VM back first), using a VM), its target VM, the job it is on and how far that is, how many open jobs it has, how full
+using a VM), its target VM, the job it is on and how far that is, how many open jobs it has, how full
 its context is and what it did last. Under an agent with a job: the agent's headline for it in everyday
 words, its todo count, how long it has been on this step, and a warning when it has been quiet too long.
 
@@ -346,7 +346,6 @@ export default function Agents() {
                   {agent.status === "idle" && "idle"}
                   {agent.status === "working" && "working"}
                   {agent.status === "in_queue" && `in queue #${agent.place} · ${agent.vm}`}
-                  {agent.status === "in_priority" && `in priority #${agent.place} · ${agent.vm}`}
                   {agent.status === "using_vm" && `using ${agent.vm} · desktop ${agent.desktop}`}
                   {agent.busy && agent.status !== "working" && <span className="text-muted-foreground"> · working</span>}
                 </span>

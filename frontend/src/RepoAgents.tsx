@@ -159,7 +159,6 @@ export default function RepoAgents(props: { repo: string }) {
                   {agent.status === "idle" && "idle"}
                   {agent.status === "working" && "working"}
                   {agent.status === "in_queue" && `in queue #${agent.place} · ${agent.vm}`}
-                  {agent.status === "in_priority" && `in priority #${agent.place} · ${agent.vm}`}
                   {agent.status === "using_vm" && `using ${agent.vm}`}
                   {agent.status === "using_vm" && agent.desktop !== null && ` · desktop ${agent.desktop}`}
                   {agent.busy && agent.status !== "working" && " · working"}

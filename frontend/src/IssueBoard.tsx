@@ -664,9 +664,6 @@ export default function IssueBoard() {
   if (openAgent !== undefined && openAgent.status === "in_queue") {
     openDesktop = `Waiting in line for ${openAgent.vm} (#${openAgent.place})`;
   }
-  if (openAgent !== undefined && openAgent.status === "in_priority") {
-    openDesktop = `Stepped aside on ${openAgent.vm} while its run goes (#${openAgent.place})`;
-  }
   const author = open?.issue.facts?.author ?? "";
   const link = "text-primary hover:underline";
   // The cards on the board: Finished ones aren't shown.

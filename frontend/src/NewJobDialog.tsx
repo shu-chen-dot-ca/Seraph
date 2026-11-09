@@ -54,7 +54,7 @@ export default function NewJobDialog(props: { onClose: () => void }) {
   }, []);
 
   const agent = agents.find((each) => each.id === agentId);
-  const locked = agent !== undefined && (agent.status === "in_queue" || agent.status === "in_priority" || agent.status === "using_vm");
+  const locked = agent !== undefined && (agent.status === "in_queue" || agent.status === "using_vm");
   let pickedVM = vmName;
   if (pickedVM === "") {
     pickedVM = vms.length === 0 ? NEW_VM : NO_VM;
@@ -195,7 +195,6 @@ export default function NewJobDialog(props: { onClose: () => void }) {
                     {each.status === "idle" && "idle"}
                     {each.status === "working" && "working"}
                     {each.status === "in_queue" && `in queue #${each.place} · ${each.vm}`}
-                    {each.status === "in_priority" && `in priority #${each.place} · ${each.vm}`}
                     {each.status === "using_vm" && `using ${each.vm}`}
                   </span>
                 </SelectItem>

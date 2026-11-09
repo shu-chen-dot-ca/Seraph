@@ -7,7 +7,7 @@ agent follows (also after its job is done). Closed has every other one (?state=c
 and the ones you only chat with. A row:
 its name (with its status dot), its id, the repository, issue and pull request it is on, the VM it works on (its job's,
 else the one it holds or waits for, else its target VM; its page) and its desktop there now (Desktop 2, In line #3 while
-it waits for one, Stepped aside #1 while its run goes, else –), how many times its context was
+it waits for one, else –), how many times its context was
 compacted over its whole life, how full its context is now, and the tokens it used over its whole life, in millions
 (every reply's: what it was given, cached or not, plus what it wrote).
 The repository, issue and pull request come from its job: the one that makes it open (a working one first), else the job
@@ -96,9 +96,6 @@ export default function AgentList(props: { state: "open" | "closed" }) {
     }
     if (agent.status === "in_queue") {
       desktop = `In line #${agent.place}`;
-    }
-    if (agent.status === "in_priority") {
-      desktop = `Stepped aside #${agent.place}`;
     }
     // The issue as "owner/name#n" and its page on GitHub.
     let issue: string | null = null;

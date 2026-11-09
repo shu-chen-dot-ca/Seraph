@@ -677,8 +677,7 @@ export type GithubAccountStatus = {
   connected_at?: string;
 };
 
-// in_priority: it stepped aside from its VM while its run goes, and gets the VM back first.
-export type AgentStatus = "idle" | "working" | "in_queue" | "in_priority" | "using_vm";
+export type AgentStatus = "idle" | "working" | "in_queue" | "using_vm";
 
 export type AgentSummary = {
   id: string;
@@ -687,8 +686,8 @@ export type AgentSummary = {
   status: AgentStatus;
   busy: boolean;
   vm: string | null; // the VM it is queued for or holds
-  desktop: number | null; // the desktop of that VM it holds, stepped aside from or asked for (null: any)
-  place: number | null; // 0 = holder, n = place in the queue (or in the priority line, for in_priority)
+  desktop: number | null; // the desktop of that VM it holds or asked for (null: any)
+  place: number | null; // 0 = holder, n = place in the queue
   context_used: number;
   context_max: number;
   cost_usd: number;
@@ -777,11 +776,10 @@ export type VMNote = {
   desktop?: number; // the desktop an agent wrote it on (its ~ is that desktop's home); the user's have none
 };
 
-// One desktop of a VM: who uses it, and who stepped aside from it. Each has its own screen, mouse, keyboard and home folder.
+// One desktop of a VM: who uses it. Each has its own screen, mouse, keyboard and home folder.
 export type VMDesktop = {
   number: number; // fixed: removing a desktop never renumbers the others, and a new one takes the lowest number free
   holder: string | null; // null, "user" or an agent id
-  priority: string[]; // agents that stepped aside while their run goes; they come before the queue, first = checked first
 };
 
 // A long command an agent left going in a VM (a test suite, a build): it goes on by itself until it ends.

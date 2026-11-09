@@ -1,7 +1,7 @@
 /*
 The agent's cursor over a VM desktop on the VM page (VMPage.tsx): an arrow with the agent's name under it, where the
 agent last clicked, dragged or scrolled (the VM's pointers, sandbox/vms.py). White while the agent works on the
-desktop (its turn runs), gray while it doesn't (between turns, or stepped aside while its run goes). Not shown while
+desktop (its turn runs), gray while it doesn't (between turns, or asleep while its run goes). Not shown while
 someone else holds the desktop, or before the agent's first click there.
 
 A new place glides there slowly instead of jumping, and the agent waits for that before it clicks
@@ -34,13 +34,12 @@ export default function AgentCursor(props: { vm: VMSummary; desktop: number }) {
     return () => observer.disconnect();
   }, []);
 
-  // The agent that last put the mouse there, while it is still on that desktop: it holds it, or stepped aside from
-  // it and nobody else holds it.
+  // The agent that last put the mouse there, while it still holds that desktop.
   const pointer = props.vm.pointers[props.desktop] ?? null;
   const line = props.vm.desktops.find((each) => each.number === props.desktop) ?? null;
   let agent: AgentSummary | null = null;
   if (pointer !== null && line !== null) {
-    const here = line.holder === pointer.agent || (line.holder === null && line.priority.includes(pointer.agent));
+    const here = line.holder === pointer.agent;
     for (const each of agents) {
       if (here && each.id === pointer.agent) {
         agent = each;

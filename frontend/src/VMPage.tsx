@@ -36,12 +36,8 @@ Through the remote access domain (a phone) the VM's address can't be reached: th
 isn't shown (it opens only on this computer).
 
 The queue buttons map one to one onto the backend, for the desktop shown: Take over, Release (your own hold), Give
-(the desktop goes to that agent now), Front (next in line), Skip (the holding agent steps aside: the next one gets the
-desktop, and the agent goes to the Priority line and gets it back first; it is interrupted, its runs go on) and Remove
-(out of a line, or the desktop taken away; the agent is interrupted).
-Priority lists the agents that stepped aside: an agent steps aside by itself when all it does in the VM is wait for
-its run (a test suite, a build). When the VM is free again, the first of them whose run is over (ready) gets it, before
-anyone in Waiting; one whose run still goes (run going) waits for the next turn. Runs lists the long commands agents
+(the desktop goes to that agent now), Front (next in line) and Remove (out of the line, or the desktop taken away; the
+agent is interrupted). An agent keeps its desktop while its run goes: nobody steps aside. Runs lists the long commands agents
 left going in the VM, who started each and for how long; Stop ends one (it asks first), and its agent is told. When the desktop is locked (by an agent while it works, or by you),
 a cover stops clicks and keys from reaching it, with an Unlock button. Over the desktop, the agent's cursor
 (AgentCursor.tsx) shows where the agent on it clicks, with its name: white while it works, gray while it doesn't.
@@ -720,15 +716,6 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                             variant="ghost"
                             size="xs"
                             className="ml-auto"
-                            title="Give the desktop to the next agent now. This one goes to Priority and gets it back first (it is interrupted; its runs go on)"
-                            disabled={busy !== "" || (vm.queue.length === 0 && line.priority.length === 0)}
-                            onClick={() => queueAction("skip", holder)}
-                          >
-                            Skip
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="xs"
                             title="Take the desktop away from this agent (it is interrupted)"
                             disabled={busy !== ""}
                             onClick={() => queueAction("remove", holder)}
@@ -752,44 +739,6 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                         )}
                       </div>
                     )}
-
-                    {line.priority.length > 0 && (
-                      <div className="mt-1 border-t px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground">Priority ({line.priority.length})</div>
-                    )}
-                    {line.priority.map((agentId, index) => {
-                      const agent = agentById[agentId];
-                      const runGoing = vm.runs.some((run) => run.agent === agentId);
-                      return (
-                        <div key={agentId} className="flex h-7 items-center gap-1.5 px-2 hover:bg-accent/40">
-                          <span className="w-5 shrink-0 text-xs text-muted-foreground tabular-nums">#{index + 1}</span>
-                          <a href={`#/agents/${agentId}`} className="min-w-0 truncate text-primary hover:underline">
-                            {agent?.name ?? agentId}
-                          </a>
-                          <span className="shrink-0 text-xs text-muted-foreground">{runGoing ? "run going" : "ready"}</span>
-                          <span className="ml-auto flex shrink-0 items-center">
-                            <Button
-                              variant="ghost"
-                              size="xs"
-                              title={`Give desktop ${shown} to this agent now`}
-                              disabled={busy !== ""}
-                              onClick={() => queueAction("give", agentId)}
-                            >
-                              Give
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon-xs"
-                              aria-label={`Remove ${agent?.name ?? agentId} from the priority line`}
-                              title="Remove from the priority line (the agent is interrupted; its runs go on)"
-                              disabled={busy !== ""}
-                              onClick={() => queueAction("remove", agentId)}
-                            >
-                              <X />
-                            </Button>
-                          </span>
-                        </div>
-                      );
-                    })}
 
                     <div className="mt-1 border-t px-2 pt-2 pb-1 text-xs font-medium text-muted-foreground">Waiting ({vm.queue.length})</div>
                     {vm.queue.length === 0 && <div className="flex h-7 items-center px-2 text-muted-foreground">No agent is waiting.</div>}
