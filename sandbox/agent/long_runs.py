@@ -49,6 +49,9 @@ CHECK_SECONDS = 2
 RUN_LIMIT_SECONDS = 12 * 3600
 # check() gives back the last this many bytes of the output, where results and errors are.
 OUTPUT_LIMIT = 50_000
+# Math libraries (OpenMP, OpenBLAS, MKL: numpy, torch) start a thread per CPU in every process, so a test suite with 8
+# workers ran 80 threads on vm1's 16 CPUs. In a run they use one each; test workers already run side by side.
+MATH_THREADS = "OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1"
 
 
 def start(record: VMRecord, agent_id: str, desktop: int, kind: str, command: str, label: str, folder: str = "") -> dict:
@@ -58,8 +61,9 @@ def start(record: VMRecord, agent_id: str, desktop: int, kind: str, command: str
     log = f"{RUNS_DIR}/{run_id}.log"
     exit_file = f"{RUNS_DIR}/{run_id}.exit"
     # on_desktop starts something on the desktop, as in bash (computer_use.py). Python prints as it goes instead
-    # of in chunks, so the window keeps up.
-    script = f"on_desktop() {{ ( {DESKTOP_ENV}\"$@\" ) }}; export PYTHONUNBUFFERED=1; mkdir -p {RUNS_DIR}; : > {log}; "
+    # of in chunks, so the window keeps up. Math libraries use one thread each (MATH_THREADS), unless the command says
+    # otherwise.
+    script = f"on_desktop() {{ ( {DESKTOP_ENV}\"$@\" ) }}; export PYTHONUNBUFFERED=1 {MATH_THREADS}; mkdir -p {RUNS_DIR}; : > {log}; "
     # A test suite's exit code counts even when it pipes into something (tee, tail).
     if kind == "tests":
         script = "set -o pipefail; " + script
