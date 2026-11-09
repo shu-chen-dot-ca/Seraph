@@ -257,7 +257,8 @@ OUTSIDE_ROLES = ["CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE"]
 # followed when their text or address has one of GUIDE_LINK_WORDS: a file in the repo, or a page on the web (https,
 # at most GUIDE_PAGES of them). Each document is cut at GUIDE_CHARS, all of them together at GUIDE_TOTAL_CHARS, and they
 # are shown in parts of at most GUIDE_PART_CHARS (reticle's 87,000 characters were more than one tool answer may be:
-# Claude Code put it in a file the agent has no tool to open).
+# Claude Code put it in a file the agent has no tool to open). A call without a part reads the next one it hasn't read:
+# an agent that learned the tool before it had parts knows no part argument (opencodex's agent got part 1 every time).
 GUIDE_FILES =["agents.md", "ai_policy.md", "development.md", "developing.md", "hacking.md"]
 GUIDE_TEXT_ENDINGS = (".md", ".mdx", ".rst", ".txt", ".adoc")
 GUIDE_SKIP_FOLDERS = ["node_modules/", "vendor/", "third_party/", "site-packages/", "tests/", "fixtures/", "i18n/", "locale/", "locales/", "translations/"]
@@ -298,6 +299,9 @@ class WorkTools:
         # The repos (owner/name, lower case) whose rules for contributors it read with contributing_guide (every part).
         # Kept in the record too, like pr_examples_read.
         self.guides_read = set(record.get("guides_read", []))
+        # The last part of each repo's rules for contributors it read (owner/name, lower case): a call without a part
+        # reads the next one, and part 1 again after the last.
+        self.guide_parts = {}
         # When it last read each issue or PR in full with read_issue (owner/name#n, lower case): time.time().
         self.threads_read = {}
         # What read_issue found someone else on it with (owner/name#n, lower case): their open PR that closes it, as a
@@ -808,7 +812,8 @@ class WorkTools:
                 "developer guides in its docs, its PR template, AGENTS.md and the like, and the guides its README and those "
                 "files link to, in the repo or on the project's website. Read all of it before you set up, and follow every "
                 "rule (setup, what to run before a PR and how, commit and PR style), however long its checks take. name: "
-                "owner/name. A long guide comes in parts: the answer says how many, and part (1, 2, ...) reads each one. "
+                "owner/name. A long guide comes in parts: the answer says how many, and part (1, 2, ...) reads each one; "
+                "without part, each call gives the next part. "
                 "run_tests and draft_pr refuse until you read it, to the last part, for the job's repo; that stays read "
                 "after a backend restart.",
                 {"type": "object", "properties": {"name": {"type": "string"}, "part": {"type": "integer"}}, "required": ["name"]},
@@ -2997,7 +3002,11 @@ class WorkTools:
                 size = 0
             parts[-1].append(block)
             size += len(block)
-        part = args.get("part") or 1
+        part = args.get("part")
+        if part is None:
+            part = self.guide_parts.get(name.lower(), 0) + 1
+            if part > len(parts):
+                part = 1
         if not isinstance(part, int) or part < 1 or part > len(parts):
             text = f"{name}'s rules for contributors come in {len(parts)} parts: part is 1 to {len(parts)}."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
@@ -3011,9 +3020,13 @@ class WorkTools:
         for block in parts[part - 1]:
             lines.append("")
             lines.append(block)
+        self.guide_parts[name.lower()] = part
         if part < len(parts):
             lines.append("")
-            lines.append(f"End of part {part} of {len(parts)}: read on with contributing_guide, part {part + 1}. run_tests and draft_pr wait until you read the last part.")
+            lines.append(
+                f"End of part {part} of {len(parts)}: read on with contributing_guide again (it gives the next part), or with "
+                f"part {part + 1}. run_tests and draft_pr wait until you read the last part."
+            )
             return {"content": [{"type": "text", "text": "\n".join(lines)}]}
 
         # The last part: the guide is read.
