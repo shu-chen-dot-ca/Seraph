@@ -216,6 +216,11 @@ TAKEN_ADVICE = (
     "other jobs. A new, unknown or bot-like account: keep going, and say why with job_progress. When it is someone else's "
     "open PR that closes it, stop whoever they are: close_issue with the PR's link, since nobody wants a second fix."
 )
+# The same news about an issue we opened ourselves (as the user): we never give one of those up.
+OURS_ADVICE = (
+    " It is an issue we opened ourselves, as the user, and we never give one of those up: keep going with {job} whoever "
+    "it is, and say so with job_progress. Don't cancel it or close the issue."
+)
 
 
 class Agents:
@@ -1549,7 +1554,8 @@ class Agents:
 
     def issue_taken(self, issue_id: str, reason: str, assignees: list[str]) -> None:
         """The issue went from free to assigned: someone else is on it now. The agent of every open job on it is told
-        who, and decides itself whether to stop (TAKEN_ADVICE): the user isn't asked. assignees are their GitHub logins
+        who, and decides itself whether to stop (TAKEN_ADVICE): the user isn't asked. On an issue our agents opened as the
+        user it is told to keep going instead (OURS_ADVICE): we never give one of those up. assignees are their GitHub logins
         (issue_facts.py); without any, the tags' reason says who seems to be on it. Once per job at most: a job told
         before has the notice on its timeline (the only notice the app puts there)."""
         # Inbox items from before agents decided this themselves: a job with one still pending isn't told as well.
@@ -1565,6 +1571,7 @@ class Agents:
         # reason is the tags' sentence on who has it, then one on its merge ("Merge: ..."); only the first part matters here.
         why = re.split(r"\sMerge: ", reason)[0]
         who = ", ".join(f"@{login}" for login in assignees)
+        ours = [f"{action['sent']['repo']}#{action['sent']['number']}".lower() for action in self.inbox.actions() if action["kind"] == "issue"]
         for job in self.jobs.list():
             if job["issue"] != issue_id or job["status"] in ["done", "cancelled"] or job["id"] in asked:
                 continue
@@ -1580,7 +1587,10 @@ class Agents:
             if who:
                 text = f"{issue_id} isn't free anymore on GitHub: it is assigned to {who}."
                 notice = f"Issue was assigned to {who} on GitHub; told the agent"
-            text += f" You have {job['id']} ({job['title']}) on it." + TAKEN_ADVICE.format(job=job["id"], repo=job["repo"])
+            advice = TAKEN_ADVICE.format(job=job["id"], repo=job["repo"])
+            if issue_id.lower() in ours:
+                advice = OURS_ADVICE.format(job=job["id"])
+            text += f" You have {job['id']} ({job['title']}) on it." + advice
             self.jobs.add_timeline(job["id"], "notice", notice)
             self.notify(job["agent"], text)
 

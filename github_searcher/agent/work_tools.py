@@ -2223,6 +2223,9 @@ class WorkTools:
         for pr in result["related_prs"]:
             if pr["state"] == "open" and pr["closes_it"] and pr["author"].lower() != login.lower() and pr["updated"] >= recent:
                 taken = f"{pr['pr']} by {pr['author']} ({pr['url']}) is open and closes it"
+        # An issue the user opened (ours too, opened as the user) is never given up, whoever else shows up.
+        if login != "" and result["author"].lower() == login.lower():
+            taken = ""
         self.threads_read[thread.lower()] = time.time()
         self.threads_taken[thread.lower()] = taken
         if taken:
