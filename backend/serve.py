@@ -19,4 +19,6 @@ def main() -> None:
     # The dev copy (./run.sh) reloads on every code change. The live copy (deploy/, the service sets SERAPH_HOME) only
     # changes by an update, so a save in the dev copy never restarts it.
     reload = os.environ.get("SERAPH_HOME", "") == ""
-    uvicorn.run("backend.app:app", host="127.0.0.1", port=int(os.environ["BACKEND_PORT"]), reload=reload)
+    # A restart waits at most this long for open connections: a browser that stopped reading its live feed (a dead tab
+    # behind the dev server's proxy) would otherwise hold every reload up forever.
+    uvicorn.run("backend.app:app", host="127.0.0.1", port=int(os.environ["BACKEND_PORT"]), reload=reload, timeout_graceful_shutdown=10)

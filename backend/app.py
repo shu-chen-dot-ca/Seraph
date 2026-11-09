@@ -70,6 +70,8 @@ LOCAL_HOSTS = ["localhost", "127.0.0.1"]
 # The hosts the API answers: this computer, and the remote access domain once it is set up.
 ALLOWED_HOSTS = LOCAL_HOSTS + ([REMOTE_DOMAIN] if REMOTE_DOMAIN != "" else [])
 THREADS = 64
+# The live feed ends for a browser that takes nothing for this long (feed).
+SEND_SECONDS = 30
 # A new release's check before it goes live (module docstring).
 CHECK = os.environ.get("SERAPH_CHECK", "") == "1"
 
@@ -379,9 +381,14 @@ async def feed(websocket: WebSocket, watch: dict) -> None:
             sent["workflow"] = workflow.version
             messages.append({"topic": "workflow", "data": topic_data("workflow")})
 
+        # A browser that takes nothing for SEND_SECONDS is gone (its tab or the dev server's proxy stopped reading): the
+        # feed ends, and a page still open connects again.
         try:
             for message in messages:
-                await websocket.send_json(message)
+                await asyncio.wait_for(websocket.send_json(message), timeout=SEND_SECONDS)
+        except (TimeoutError, WebSocketDisconnect, WebSocketDisconnected):
+            return
+        try:
             # Waiting for a message from the browser is the 250 ms tick; it also notices a closed tab at once.
             received = await asyncio.wait_for(websocket.receive(), timeout=0.25)
         except TimeoutError:
