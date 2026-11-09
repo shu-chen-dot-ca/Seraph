@@ -459,6 +459,7 @@ query($owner: String!, $name: String!, $since: GitTimestamp!, $prs: Int!, $issue
     aiPolicy: object(expression: "HEAD:AI_POLICY.md") { ... on Blob { text } }
     agentsFile: object(expression: "HEAD:AGENTS.md") { ... on Blob { text } }
     prTemplate: object(expression: "HEAD:.github/PULL_REQUEST_TEMPLATE.md") { ... on Blob { text } }
+    prTemplateLower: object(expression: "HEAD:.github/pull_request_template.md") { ... on Blob { text } }
   }
 }
 fragment LabelIssues on Label {

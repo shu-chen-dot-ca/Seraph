@@ -24,7 +24,7 @@ One JSON file, DATA_DIR/repo_signals.json, by repo (owner/name):
                "reviewers": {"agent", "both", "human", "tag"},
                "atmosphere": {"tone", "summary", "asks_for", "prs", "judged_at"} | None,
                "ai_policy": {"tag", "quote", "file", "basis", "version"},
-               "newcomer_verdict": {"verdict", "reason", "judged_at"} | None}
+               "newcomer_verdict": {"verdict", "reason", "version", "judged_at"} | None}
 
 Outside contributors are PR authors who aren't owners, members or collaborators, and not bots.
 - Of their PRs that ended in the last 90 days (among the repo's 100 most recently updated finished PRs, fewer
@@ -93,8 +93,11 @@ POLICY_VERSION (backend/repos_api.py keep_signals reads a disclose or unclear on
 
 newcomer_verdict: Claude decides whether the repo is open to newcomers ("welcome") or not ("closed"), from its stars
 per all-time contributor (under about 100 usually open, over about 1000 usually closed), the start of its contributing
-guide (CONTRIBUTING_CHARS), and how outside PRs and newcomers' first PRs went; reason is one sentence on what decided
-it. Asked every time the numbers are read. A failed ask keeps the one before (or None).
+guide (CONTRIBUTING_CHARS) and of its PR template (PR_TEMPLATE_CHARS), how outside PRs and newcomers' first PRs went,
+and the atmosphere's summary (maintainers may write that they stopped taking outside PRs): a rule against outside PRs
+wins over the numbers, since it may be new. reason is one sentence on what decided it. Asked every time the numbers are
+read, after the atmosphere. A failed ask keeps the one before (or None). version is NEWCOMER_VERSION when it was asked:
+when it goes up, the backend asks again once for every welcome one (backend/repos_api.py).
 
 fetch() gets the numbers from GitHub; complete() adds Claude's three judgments (policy, atmosphere and newcomer
 verdict). fetch() does
@@ -165,9 +168,11 @@ POLICY_FILES = [
     ("githubContributing", ".github/CONTRIBUTING.md"),
     ("docsContributing", "docs/CONTRIBUTING.md"),
     ("prTemplate", ".github/PULL_REQUEST_TEMPLATE.md"),
+    ("prTemplateLower", ".github/pull_request_template.md"),
     ("agentsFile", "AGENTS.md"),
 ]
 CONTRIBUTING_FILES = ["contributing", "contributingRst", "githubContributing", "docsContributing"]
+PR_TEMPLATE_FILES = ["prTemplate", "prTemplateLower"]
 POLICY_TAGS = ["welcome", "disclose", "no_ai", "unclear"]
 # Goes up when what the tags mean changes: a policy from before is asked again (2: AI only as a human's helper is no_ai).
 POLICY_VERSION = 2
@@ -192,6 +197,11 @@ CONTRIBUTING_CHARS = 6000
 # At most this many lines about AI from all files together, each cut at LINE_CHARS.
 QUOTE_LINES = 25
 LINE_CHARS = 300
+# Goes up when what the newcomer verdict reads changes: a welcome verdict from before is asked again, once (2: the PR
+# template and the reviews; DeepSeek-Reasonix's template closes outsiders' PRs).
+NEWCOMER_VERSION = 2
+# The start of the PR template the newcomer verdict reads.
+PR_TEMPLATE_CHARS = 2000
 # A rate from fewer finished PRs (or checked issues) than this says little.
 MIN_SAMPLE = 3
 MIN_ISSUES = 5
@@ -672,12 +682,18 @@ class RepoSignals:
                 files.append(path)
         policy_text = "\n\n".join(excerpts)
 
-        # The start of the contributing guide, for the newcomer verdict: the first of those files there is.
+        # The start of the contributing guide, for the newcomer verdict: the first of those files there is. Then the
+        # start of the PR template: some say there who may open one ("limited to maintainers and invited contributors").
         contributing_text = ""
         for key, path in POLICY_FILES:
             blob = data[key]
             if key in CONTRIBUTING_FILES and contributing_text == "" and blob is not None and blob.get("text"):
                 contributing_text = f"=== {path} (the start of it)\n{blob['text'][:CONTRIBUTING_CHARS]}"
+        for key, path in POLICY_FILES:
+            blob = data[key]
+            if key in PR_TEMPLATE_FILES and blob is not None and blob.get("text"):
+                contributing_text += f"\n\n=== {path} (the PR template, the start of it)\n{blob['text'][:PR_TEMPLATE_CHARS]}"
+                break
 
         signals = {
             "fetched_at": now.isoformat(),
@@ -740,8 +756,8 @@ class RepoSignals:
         return signals
 
     async def complete(self, name: str, signals: dict) -> dict:
-        """Add Claude's three judgments to what fetch() found: the AI policy, the review atmosphere and the newcomer
-        verdict, all at once.
+        """Add Claude's three judgments to what fetch() found: the AI policy and the review atmosphere at once, then the
+        newcomer verdict, which reads the atmosphere too.
 
         The policy and the atmosphere are only asked when they have to be (the policy text changed; the atmosphere is a
         week old); the newcomer verdict every time, since it reads the numbers just read.
@@ -819,7 +835,26 @@ class RepoSignals:
             }
             asks.append(("atmosphere", judge(prompt, schema, "low")))
 
-        # Open to newcomers or not: the numbers and the contributing guide, Claude weighs them.
+        results = await asyncio.gather(*[ask for _, ask in asks], return_exceptions=True)
+        for (which, _), result in zip(asks, results):
+            if which == "policy" and isinstance(result, Exception):
+                # Claude is down or gave nothing usable: say unclear for now, and ask again next time.
+                policy = {"tag": "unclear", "quote": "", "file": "", "basis": "", "version": POLICY_VERSION}
+            elif which == "policy":
+                policy = {"tag": result["tag"], "quote": result["quote"][:LINE_CHARS], "file": result["file"], "basis": basis, "version": POLICY_VERSION}
+            elif which == "atmosphere" and not isinstance(result, Exception):
+                asks_for = []
+                for item in result["asks_for"]:
+                    if item in ASKS and item not in asks_for:
+                        asks_for.append(item)
+                asks_for = asks_for[:6]
+                atmosphere = {"tone": result["tone"], "summary": result["summary"][:240], "asks_for": asks_for, "prs": prs, "judged_at": now}
+            # A failed atmosphere keeps the one before (or none); the next fetch asks again.
+        signals["ai_policy"] = policy
+        signals["atmosphere"] = atmosphere
+
+        # Open to newcomers or not: the numbers, the contributing guide and PR template, and what reviews are like there
+        # (the atmosphere, read first: maintainers may write that they stopped taking outside PRs). Claude weighs them.
         stars = signals["stars"]
         total = signals.get("contributors_total")
         newcomers = signals.get("newcomers") or {}
@@ -835,9 +870,11 @@ class RepoSignals:
             "Weigh these together:\n"
             "- Stars per all-time contributor: under about 100 usually means an open community; over about 1000 usually "
             "means a closed project with many users and few contributors. In between, the rest decides.\n"
-            "- What the contributing guide says about outside contributions (not accepted, issues only, maintainers only, "
-            "discuss first, ...).\n"
-            "- How outside PRs and newcomers' first PRs went recently.\n"
+            "- What the contributing guide and the PR template say about outside contributions (not accepted, issues only, "
+            "maintainers only, discuss first, ...). When they or the maintainers say outside PRs are no longer taken or are "
+            "closed automatically (limited to maintainers and invited contributors), it is closed however many were merged "
+            "before: the rule may be new.\n"
+            "- How outside PRs and newcomers' first PRs went recently, and what reviews of them are like.\n"
             "reason: one plain sentence, at most 160 characters, on what decided it.\n\n"
             f"Stars: {stars}\n"
             f"{contributors_line}\n"
@@ -845,7 +882,8 @@ class RepoSignals:
             f"{signals['outside_closed_90d']} closed without merging\n"
             f"Newcomers' first PRs in that time: {newcomers.get('prs', 0)}, of them {newcomers.get('merged', 0)} merged and "
             f"{newcomers.get('closed', 0)} closed without merging; median days to a maintainer's first reply: "
-            f"{newcomers.get('median_days_to_first_reply')}\n\n"
+            f"{newcomers.get('median_days_to_first_reply')}\n"
+            f"Reviews of outside PRs lately: {atmosphere['summary'] if atmosphere is not None else 'not read'}\n\n"
             f"{contributing if contributing != '' else 'It has no contributing guide.'}"
         )
         schema = {
@@ -856,25 +894,10 @@ class RepoSignals:
             },
             "required": ["verdict", "reason"],
         }
-        asks.append(("newcomers", judge(prompt, schema, "low")))
-
-        results = await asyncio.gather(*[ask for _, ask in asks], return_exceptions=True)
-        for (which, _), result in zip(asks, results):
-            if which == "policy" and isinstance(result, Exception):
-                # Claude is down or gave nothing usable: say unclear for now, and ask again next time.
-                policy = {"tag": "unclear", "quote": "", "file": "", "basis": "", "version": POLICY_VERSION}
-            elif which == "policy":
-                policy = {"tag": result["tag"], "quote": result["quote"][:LINE_CHARS], "file": result["file"], "basis": basis, "version": POLICY_VERSION}
-            elif which == "atmosphere" and not isinstance(result, Exception):
-                asks_for = []
-                for item in result["asks_for"]:
-                    if item in ASKS and item not in asks_for:
-                        asks_for.append(item)
-                asks_for = asks_for[:6]
-                atmosphere = {"tone": result["tone"], "summary": result["summary"][:240], "asks_for": asks_for, "prs": prs, "judged_at": now}
-            elif which == "newcomers" and not isinstance(result, Exception):
-                signals["newcomer_verdict"] = {"verdict": result["verdict"], "reason": result["reason"][:240], "judged_at": now}
-            # A failed atmosphere or newcomer verdict keeps the one before (or none); the next fetch asks again.
-        signals["ai_policy"] = policy
-        signals["atmosphere"] = atmosphere
+        try:
+            result = await judge(prompt, schema, "low")
+            signals["newcomer_verdict"] = {"verdict": result["verdict"], "reason": result["reason"][:240], "version": NEWCOMER_VERSION, "judged_at": now}
+        except Exception:
+            # Claude is down or gave nothing usable: the one before (or none) stays, and the next fetch asks again.
+            pass
         return signals

@@ -47,7 +47,7 @@ from pydantic import BaseModel
 from backend.issues_api import auto_remove_issues
 from backend.shared import agents, issue_tags, issues, repo_signals, repos, tracked
 from github_searcher.issue_tags import RULES_VERSION
-from github_searcher.repo_signals import POLICY_VERSION
+from github_searcher.repo_signals import NEWCOMER_VERSION, POLICY_VERSION
 from github_searcher.search import get_contents, get_open_issues, get_readme, get_repo_totals, get_repository, get_tree
 from sandbox.vms import VMsError
 
@@ -364,11 +364,22 @@ async def keep_signals() -> None:
             policy = known[name].get("ai_policy") or {}
             if policy.get("tag") in ["disclose", "unclear"] and policy.get("version") != POLICY_VERSION:
                 todo.append(name)
+                continue
+            # A welcome newcomer verdict from before it read the PR template and the reviews (NEWCOMER_VERSION): read
+            # again once. A closed one stays closed.
+            verdict = known[name].get("newcomer_verdict") or {}
+            if verdict.get("verdict") == "welcome" and verdict.get("version") != NEWCOMER_VERSION:
+                todo.append(name)
         for start in range(0, len(todo), SIGNALS_AT_ONCE):
             batch = todo[start:start + SIGNALS_AT_ONCE]
             results = await asyncio.gather(*[repo_signals.refresh(name) for name in batch], return_exceptions=True)
             for name, result in zip(batch, results):
                 if isinstance(result, Exception):
+                    failed.append(name)
+                    continue
+                # Claude didn't give the newcomer verdict (the one before stays): later, not on every round.
+                verdict = (repo_signals.get(name) or {}).get("newcomer_verdict") or {}
+                if verdict.get("verdict") == "welcome" and verdict.get("version") != NEWCOMER_VERSION:
                     failed.append(name)
         # Signals from before the totals (commits, open, merged and closed PRs, open issues) were counted get them with one
         # small read each, not a whole new read (that asks Claude again).
