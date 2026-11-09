@@ -14,7 +14,7 @@ profile of 2026-10-27: Linux desktop, AI & harness, LLM tooling and Dev tools). 
 classify repos: Explore puts each repo it finds under one, and agents give one to the repos they add (work_tools.py repos_add). In the code a type is a
 lane: when the profile is saved, Claude plans each one's GitHub repo searches (set_profile), and the finds are split
 evenly between them. The run keeps the lanes near their shares: the next candidate comes from the lane furthest below
-its share.
+its share, counting the repos of that type already active in Repos (have), so the types with the fewest fill first.
 The Dashboard's Automation (backend/automation_api.py) adds a new type before each run it starts (add_type: Claude names
 one more kind of software, unlike the ones there, and plans its searches), up to MAX_TYPES, so it looks wider each time.
 Every search gets SEARCH_SUFFIX (not archived, pushed in the last 30 days) and runs most recently updated
@@ -581,11 +581,17 @@ class Explore:
             if filters[each] not in ["include", "exclude"]:
                 raise ValueError(f"A filter is include or exclude, not {filters[each]}")
 
+        # How many repos of each type are active in Repos already: the types with the fewest fill first.
+        have = {}
+        archived = self.repos.archived()
+        for item in self.repos.items():
+            if item["full_name"] not in archived and item.get("lane"):
+                have[item["lane"]] = have.get(item["lane"], 0) + 1
         lanes = {}
         self.cursors = {}
         self.run_profile = copy.deepcopy(self.profile)
         for lane in self.run_profile["lanes"]:
-            lanes[lane["id"]] = {"label": lane["label"], "share": lane["share"], "found": 0, "in_flight": 0, "exhausted": lane["share"] == 0}
+            lanes[lane["id"]] = {"label": lane["label"], "share": lane["share"], "have": have.get(lane["id"], 0), "found": 0, "in_flight": 0, "exhausted": lane["share"] == 0}
             self.cursors[lane["id"]] = {"pending": [], "query": 0, "page": 1}
         self.seen = set()
         self.network_tries = {}
@@ -708,7 +714,7 @@ class Explore:
                     for each, state in run["lanes"].items():
                         if state["exhausted"]:
                             continue
-                        ratio = (state["found"] + state["in_flight"]) / state["share"]
+                        ratio = (state.get("have", 0) + state["found"] + state["in_flight"]) / state["share"]
                         if lowest is None or ratio < lowest:
                             lane_id = each
                             lowest = ratio
