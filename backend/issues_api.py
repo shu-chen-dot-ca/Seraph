@@ -70,10 +70,11 @@ Merge in and not fixed, out of scope or can't validate, and unlike Assign not cl
 its job keeps it on the board, and a job cancelled later sends it back to Open, not to the next agent.
 
 An issue one of our agents opened as you (open_issue in github_searcher/agent/work_tools.py, the Actions in inbox.py)
-is claimed for you on GitHub, so an agent always takes it: whatever its repo's Take issues and Open PRs at once say, as
-long as nobody else has it and it isn't out of scope. Each round, one of those that is still free and no agent ever
-started goes back to the top of Catalog if it isn't there, and one someone else has now (tagged assigned) leaves
-Catalog for Open.
+is claimed for you on GitHub, and we never give one up: an agent always takes it, whatever its repo's Take issues and
+Open PRs at once say, and whoever else shows up on it later (tagged assigned); only not one that is closed, fixed or
+out of scope. Each round, one of those no agent ever started goes back to the top of Catalog if it isn't there. Nothing
+takes one off the board (not even its repo leaving Repos or being archived), no job on one is stopped for its repo, and
+its agent is told to keep going when someone else shows up (Agents.issue_taken).
 
 A repo with Take issues on that is at its Open PRs at once is held (HELD, worked out by take_from_catalog every round):
 its issues on the board's Open and Catalog (no job, or only cancelled ones) can't be taken now, so keep_facts and keep_tags
@@ -205,7 +206,8 @@ class AutoRemoveRequest(BaseModel):
 def auto_remove_issues() -> list[str]:
     """Take out of the Issues list what Remove automatically's rules pick, from Open and Catalog alike, as one undo step;
     returns the ids taken out. Only issues no agent has started: no job on them, or only cancelled ones. Those of a repo
-    no longer in Repos (or archived there) always go, whatever the rules. One our agents opened (claimed for you) stays."""
+    no longer in Repos (or archived there) always go, whatever the rules. One our agents opened (claimed for you) always
+    stays: we never give one up."""
     # Until saved once the rules are all off: only the repo rule takes anything.
     rules = dict(AUTO_REMOVE_OFF)
     if AUTO_REMOVE_FILE.is_file():
@@ -226,18 +228,16 @@ def auto_remove_issues() -> list[str]:
         cutoff = datetime.now(UTC) - timedelta(days=rules["older_than_days"])
     picked = []
     for item in issues.items():
-        if item["id"] in started:
+        if item["id"] in started or item["id"].lower() in opened:
             continue
         if item["repo"].lower() not in in_repos:
             picked.append(item["id"])
-            continue
-        if item["id"].lower() in opened:
             continue
         # The rules decide on tags read since it was added; keep_new_tags reads it again first.
         tag = tags.get(item["id"])
         if tag is None or datetime.fromisoformat(tag["judged_at"]) < datetime.fromisoformat(item["added_at"]):
             continue
-        opened = (facts.get(item["id"]) or {}).get("created_at")
+        created = (facts.get(item["id"]) or {}).get("created_at")
         out_of_scope = tag.get("merge") == "out of scope"
         if rules["claimed"] and tag.get("status") in ("assigned", "fixed"):
             picked.append(item["id"])
@@ -247,7 +247,7 @@ def auto_remove_issues() -> list[str]:
             picked.append(item["id"])
         elif rules["scope_not_clear"] and tag.get("scope_clear") is False:
             picked.append(item["id"])
-        elif cutoff is not None and opened is not None and datetime.fromisoformat(opened) < cutoff:
+        elif cutoff is not None and created is not None and datetime.fromisoformat(created) < cutoff:
             picked.append(item["id"])
     if not picked:
         return []
@@ -751,13 +751,19 @@ async def keep_catalog_agents() -> None:
 def stop_unwanted_jobs() -> None:
     """Open jobs on the board's issues that the app no longer wants done: their repo was deleted from Repos, or it
     doesn't take AI-made contributions (AI policy no_ai). Each one's agent is told to stop and cancel it (Agents.stop_job),
-    once. An archived repo stays in Repos: its jobs go on."""
+    once. An archived repo stays in Repos: its jobs go on. Never a job on an issue our agents opened: we never give one up."""
     ids = [item["id"] for item in issues.items()]
+    opened = []
+    for action in inbox.actions():
+        if action["kind"] == "issue":
+            opened.append(f"{action['sent']['repo']}#{action['sent']['number']}".lower())
     in_repos = [item["full_name"].lower() for item in repos.items()]
     signals = repo_signals.all()
     no_ai = [name.lower() for name, each in signals.items() if (each.get("ai_policy") or {}).get("tag") == "no_ai"]
     for job in jobs.list():
         if job["kind"] != "fix_issue" or job["issue"] not in ids or job["status"] in ["done", "cancelled"]:
+            continue
+        if job["issue"].lower() in opened:
             continue
         repo = job["issue"].split("#")[0]
         if repo.lower() not in in_repos:
@@ -781,7 +787,8 @@ def take_from_catalog() -> None:
     for action in inbox.actions():
         if action["kind"] == "issue":
             opened.append(f"{action['sent']['repo']}#{action['sent']['number']}".lower())
-    # Ours still free that no agent ever started go to the top of Catalog; ours someone else has now leave it.
+    # Ours that no agent ever started go to the top of Catalog, also when someone else seems to be on them now: we never
+    # give one up. Not one that is closed, fixed or out of scope.
     started = [job["issue"] for job in all_jobs if job["issue"] is not None]
     board = issues.board()
     catalog = list(board["catalog"])
@@ -792,11 +799,9 @@ def take_from_catalog() -> None:
             continue
         fact = facts.get(item["id"])
         state = fact["state"] if fact else item["state"]
-        if item["id"] in catalog and tag["status"] == "assigned":
-            catalog.remove(item["id"])
         if item["id"] in catalog or item["id"] in started or item["id"] in board["held"]:
             continue
-        if state != "CLOSED" and tag["status"] == "free" and tag.get("merge") != "out of scope":
+        if state != "CLOSED" and tag["status"] != "fixed" and tag.get("merge") != "out of scope":
             catalog.insert(0, item["id"])
             order = [item["id"]] + [each for each in order if each != item["id"]]
     if catalog != board["catalog"]:
@@ -839,9 +844,12 @@ def take_from_catalog() -> None:
         if state == "CLOSED":
             continue
         # Like Assign (assign_issue): once its Merge is in, and not when that says it can't be done. Nor one someone else
-        # is on (claimed): assigned to them, or their open PR closes it; nobody wants a second fix.
+        # is on (claimed): assigned to them, or their open PR closes it; nobody wants a second fix. Ours go anyway.
         tag = tags.get(item["id"])
-        if tag is None or tag.get("merge") in (None, "fixed", "out of scope", "can't validate", "claimed"):
+        blocked = [None, "fixed", "out of scope", "can't validate", "claimed"]
+        if item["id"].lower() in opened:
+            blocked = [None, "fixed", "out of scope", "can't validate"]
+        if tag is None or tag.get("merge") in blocked:
             continue
         # Read recently: a held repo's cards wait unread (HELD), and are read again once it has room. Ours go anyway.
         stale = datetime.fromisoformat(tag["judged_at"]) < datetime.now(UTC) - timedelta(minutes=rules["refresh_catalog_minutes"] * 2)
