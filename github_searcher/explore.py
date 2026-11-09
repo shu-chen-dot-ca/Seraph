@@ -16,15 +16,20 @@ lane: when the profile is saved, Claude plans each one's GitHub repo searches (s
 evenly between them. The run keeps the lanes near their shares: the next candidate comes from the lane furthest below
 its share. Every search gets SEARCH_SUFFIX (not archived, pushed in the last 30 days) and runs most recently updated
 first, a page of 100 at a time: not most stars first, and no famous repos looked at first, so Explore doesn't start
-from fame. The default star range is a few hundred to 15k.
+from fame. The default star range is over 1k to 15k, and a search's stars never go to MIN_STARS or under (a lower bound
+under it is raised, a search with none gets one).
 
 What it skips before any heavy work: repos it already looked at in this run, repos in Repos or Tracked, and
 repos already in the found list. Then `workers` candidates at a time (token_balancer.py paces GitHub for all of them):
 1. its numbers (repo_signals.py: a few GitHub calls, no Claude yet);
-2. skipped if it is archived or a fork, nothing was committed in 30 days, no outside contributor's PR was merged
-   in 90 days, most outside PRs are closed unmerged (under MIN_MERGE_RATE), or newcomers' first PRs are turned away
-   or left waiting (repo_signals.py's newcomers tag): a PR of yours would likely go nowhere there. A slow first reply
-   alone (over a week) doesn't skip a repo;
+2. skipped if it falls short of the minimums, so no personal repo gets in: over MIN_STARS stars, MIN_CONTRIBUTORS
+   contributors or more (everyone who ever contributed; not known for a huge history, which passes), over
+   MIN_CLOSED_PRS closed PRs (merged or not), over MIN_OPEN_ISSUES open issues, and a README whose main language is
+   English (repo_signals.py readme_english: a Chinese translation besides is fine, a Chinese README isn't; Claude checks
+   it again below, for languages in the Latin script). The Dashboard's Automation (backend/automation_api.py) holds every
+   repo in Repos and the found list to them too. Skipped too if it is archived or a fork, nothing was committed in 30 days, no outside contributor's PR was merged
+   in 90 days, most outside PRs are closed unmerged (under MIN_MERGE_RATE), or newcomers' first PRs are turned away or left waiting (repo_signals.py's newcomers
+   tag): a PR of yours would likely go nowhere there. A slow first reply alone (over a week) doesn't skip a repo;
 3. at the same time, Claude reads its AI policy and its review atmosphere (repo_signals.complete), and its
    README against the profile (claude_judge.py): is it a project people contribute code to (not a link list,
    tutorial or course), which of the user's types it is, how well it fits (one of FIT_LEVELS, fixed so repos
@@ -111,14 +116,14 @@ DEFAULT_PROFILE = {
             ),
             "share": 25,
             "queries": [
-                "topic:gtk4 stars:300..15000",
-                "topic:gnome stars:300..15000 good-first-issues:>0",
-                "topic:libadwaita stars:300..15000",
-                "topic:kde stars:300..15000",
-                "topic:flatpak stars:300..15000",
-                "topic:linux-desktop stars:300..15000",
-                "topic:wayland language:Rust stars:300..15000",
-                "topic:fedora stars:300..15000",
+                "topic:gtk4 stars:1001..15000",
+                "topic:gnome stars:1001..15000 good-first-issues:>0",
+                "topic:libadwaita stars:1001..15000",
+                "topic:kde stars:1001..15000",
+                "topic:flatpak stars:1001..15000",
+                "topic:linux-desktop stars:1001..15000",
+                "topic:wayland language:Rust stars:1001..15000",
+                "topic:fedora stars:1001..15000",
             ],
         },
         {
@@ -131,14 +136,14 @@ DEFAULT_PROFILE = {
             ),
             "share": 25,
             "queries": [
-                "topic:mcp stars:300..15000",
-                "topic:model-context-protocol stars:300..15000",
-                "topic:mcp-server stars:300..15000 good-first-issues:>0",
-                "topic:ai-agents stars:300..15000 good-first-issues:>2",
-                "topic:agent-framework stars:300..15000",
-                "topic:guardrails stars:300..15000",
-                "topic:llm-evaluation stars:300..15000",
-                "topic:human-in-the-loop stars:300..15000",
+                "topic:mcp stars:1001..15000",
+                "topic:model-context-protocol stars:1001..15000",
+                "topic:mcp-server stars:1001..15000 good-first-issues:>0",
+                "topic:ai-agents stars:1001..15000 good-first-issues:>2",
+                "topic:agent-framework stars:1001..15000",
+                "topic:guardrails stars:1001..15000",
+                "topic:llm-evaluation stars:1001..15000",
+                "topic:human-in-the-loop stars:1001..15000",
             ],
         },
         {
@@ -151,14 +156,14 @@ DEFAULT_PROFILE = {
             ),
             "share": 25,
             "queries": [
-                "topic:llm language:Python stars:300..15000 good-first-issues:>2",
-                "topic:llm language:TypeScript stars:300..15000 good-first-issues:>2",
-                "topic:chatgpt stars:300..15000 help-wanted-issues:>2",
-                "topic:structured-output stars:300..15000",
-                "topic:llm-cli stars:300..15000",
-                "topic:openai language:TypeScript stars:300..15000",
-                "topic:ollama stars:300..15000",
-                "topic:prompt-engineering stars:300..15000 language:Python",
+                "topic:llm language:Python stars:1001..15000 good-first-issues:>2",
+                "topic:llm language:TypeScript stars:1001..15000 good-first-issues:>2",
+                "topic:chatgpt stars:1001..15000 help-wanted-issues:>2",
+                "topic:structured-output stars:1001..15000",
+                "topic:llm-cli stars:1001..15000",
+                "topic:openai language:TypeScript stars:1001..15000",
+                "topic:ollama stars:1001..15000",
+                "topic:prompt-engineering stars:1001..15000 language:Python",
             ],
         },
         {
@@ -170,14 +175,14 @@ DEFAULT_PROFILE = {
             ),
             "share": 25,
             "queries": [
-                "topic:cli language:Rust stars:300..15000 good-first-issues:>2",
-                "topic:cli language:Python stars:300..15000 good-first-issues:>2",
-                "topic:linter stars:300..15000",
-                "topic:formatter stars:300..15000",
-                "topic:terminal language:Rust stars:300..15000",
-                "topic:developer-tools language:TypeScript stars:300..15000 good-first-issues:>0",
-                "topic:vscode-extension stars:300..15000 help-wanted-issues:>0",
-                "topic:testing language:Python stars:300..15000 good-first-issues:>0",
+                "topic:cli language:Rust stars:1001..15000 good-first-issues:>2",
+                "topic:cli language:Python stars:1001..15000 good-first-issues:>2",
+                "topic:linter stars:1001..15000",
+                "topic:formatter stars:1001..15000",
+                "topic:terminal language:Rust stars:1001..15000",
+                "topic:developer-tools language:TypeScript stars:1001..15000 good-first-issues:>0",
+                "topic:vscode-extension stars:1001..15000 help-wanted-issues:>0",
+                "topic:testing language:Python stars:1001..15000 good-first-issues:>0",
             ],
         },
     ],
@@ -201,6 +206,12 @@ UNREACHABLE = (httpx.ConnectError, httpx.ConnectTimeout)
 # level again: the frontend's FIT_LEVELS has the same steps).
 FIT_LEVELS = {"strong": 1.0, "good": 0.75, "some": 0.5, "weak": 0.25}
 MAX_TYPES = 6
+# The minimums, so no personal repo gets in: stars (over), contributors (at least), closed PRs, merged or not (over), open
+# issues (over).
+MIN_STARS = 1000
+MIN_CONTRIBUTORS = 40
+MIN_CLOSED_PRS = 400
+MIN_OPEN_ISSUES = 10
 # Outside PRs merged, of those merged or closed: under this, most are closed unmerged and Explore skips the repo.
 MIN_MERGE_RATE = 0.3
 # The tags a run can filter on, "section:value", each with its label on the page (also why a repo is skipped on the
@@ -420,11 +431,12 @@ class Explore:
             f"The types of project they want, by name:\n{type_lines}\n\n"
             "For each type, by its name:\n"
             "- queries: 3 to 8 GitHub repository searches (the q of GET /search/repositories), most promising first, "
-            'like "topic:mcp stars:300..15000" or "stars:300..15000 good-first-issues:>2 language:Python". Use '
+            'like "topic:mcp stars:1001..15000" or "stars:1001..15000 good-first-issues:>2 language:Python". Use '
             "qualifiers (topic:, language:, stars:, good-first-issues:, help-wanted-issues:, in:description); more than "
             "a few words of plain text finds little. Each returns up to 1000 repos, most recently updated first. Keep "
-            "to the star range they give; with none, a few hundred to 15k stars: mid-size projects where an outside "
-            'PR gets noticed, not the famous ones. "archived:false pushed:>(30 days ago)" is added to each, so leave '
+            "to the star range they give; with none, over 1k to 15k stars (never 1k or fewer): mid-size projects where an "
+            'outside PR gets noticed, not the famous ones or personal ones. "archived:false pushed:>(30 days ago)" is added to '
+            'each, so leave '
             "those out."
         )
         try:
@@ -652,6 +664,12 @@ class Explore:
                 return None
             since = (datetime.now(UTC) - timedelta(days=30)).strftime("%Y-%m-%d")
             q = f"{queries[cursor['query']]} {SEARCH_SUFFIX.format(since=since)}"
+            # Never MIN_STARS stars or fewer: a lower bound under it is raised, a search with none gets one.
+            bounds = re.search(r"stars:(\d+)\.\.(\d+)", q)
+            if bounds is not None and int(bounds.group(1)) <= MIN_STARS:
+                q = q.replace(bounds.group(0), f"stars:{MIN_STARS + 1}..{bounds.group(2)}")
+            if "stars:" not in q:
+                q += f" stars:>{MIN_STARS}"
             try:
                 result = await asyncio.to_thread(search_repositories, q, cursor["page"])
             except Exception as error:
@@ -694,7 +712,17 @@ class Explore:
             filters = run["filters"]
             reply = signals["median_days_to_first_reply"]
             reason = ""
-            if signals["archived"]:
+            if signals["stars"] <= MIN_STARS:
+                reason = "1k stars or fewer"
+            elif signals["contributors_total"] is not None and signals["contributors_total"] < MIN_CONTRIBUTORS:
+                reason = "Under 40 contributors"
+            elif signals["merged_prs_total"] + signals["closed_prs_total"] <= MIN_CLOSED_PRS:
+                reason = "400 closed PRs or fewer"
+            elif signals["open_issues_total"] <= MIN_OPEN_ISSUES:
+                reason = "10 open issues or fewer"
+            elif signals["readme_english"] is False:
+                reason = "README not in English"
+            elif signals["archived"]:
                 reason = "Archived"
             elif signals["fork"]:
                 reason = "A fork"
