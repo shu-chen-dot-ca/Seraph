@@ -50,6 +50,10 @@ HUNG_BOOT_SECONDS = 180
 # and up (desktop 1's comes with the image). Desktop n's ports and screens (above) don't run into each other up to here.
 MAX_DESKTOPS = 32
 DESKTOP_SIZE = "1280x800"
+# How soon the kernel ends a process when memory runs out (-1000 never, 1000 first). Everything exec runs (the agents'
+# commands, their test suites) gets this, so a full memory ends a test worker, never the desktop (GNOME's own are at
+# 100 to 200).
+OOM_SCORE_ADJ = 900
 # Desktops 2 and up, as root at every start (set_up_desktops), with numbers (the VM's desktops, e.g. "1 3") and size
 # set before it. TigerVNC comes from the system's own packages, the first time. A terminal-only image gets only the
 # users and demo services.
@@ -365,7 +369,8 @@ class VM:
         user = '"$(id -nu 1000)"'
         if self.desktop != 1:
             user = f"desktop{self.desktop}"
-        as_user = f"exec runuser -l {user} -c {shlex.quote(script)}"
+        # Set as root, before runuser: everything the command starts gets it too.
+        as_user = f"echo {OOM_SCORE_ADJ} > /proc/self/oom_score_adj; exec runuser -l {user} -c {shlex.quote(script)}"
         if input is None:
             return subprocess.run(
                 ["incus", "exec", self.name, "--", "bash", "-c", as_user],
@@ -588,7 +593,11 @@ class VM:
         - A 4 GiB swap file (when the disk has room) takes spikes, so they slow down instead of failing.
         - user.slice (the desktop, its terminals, the agent's commands) and system.slice
           (the browser terminals, Docker containers) may each use at most 80% of memory
-          and 2 GiB of swap. Going over kills the biggest process in that group only.
+          and 2 GiB of swap. Going over kills a process in that group only: an agent's
+          command first (OOM_SCORE_ADJ), the biggest of them.
+        - Ubuntu's systemd-oomd doesn't watch the desktops (user@.service): under memory
+          pressure it killed parts of GNOME, or a desktop's whole session, never the test
+          suites that filled the memory (they run outside user@.service).
         - systemd itself, the Incus agent (how this machine reaches the VM) and the
           journal keep some memory that nothing else can take.
         """
@@ -610,6 +619,9 @@ systemctl set-property system.slice MemoryMax=80% MemorySwapMax=2G
 systemctl set-property init.scope MemoryMin=128M
 systemctl set-property incus-agent.service MemoryMin=128M
 systemctl set-property systemd-journald.service MemoryMin=64M
+mkdir -p /etc/systemd/system/user@.service.d
+printf '[Service]\\nManagedOOMMemoryPressure=auto\\n' > /etc/systemd/system/user@.service.d/90-sandbox-no-oomd.conf
+systemctl daemon-reload
 """
         result = self.exec_root(script, timeout=120)
         if result.returncode != 0:

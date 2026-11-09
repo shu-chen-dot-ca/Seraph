@@ -12,6 +12,9 @@ Every run is tagged with its own id (VM.exec's tag), not with its agent's, so lo
 gave it to another agent or skipped the agent) never kills it. It runs as the user of its agent's desktop (VM.exec),
 and its output stays in that user's home, so it is checked as that user too.
 
+Runs share the VM's CPU and memory. When memory runs out, a run's processes are ended before the desktop's (VM.exec's
+OOM_SCORE_ADJ).
+
 The run shows live in a terminal window on the desktop (computer_use.WATCH). Each agent has its own window, so
 another agent's run never closes it; the agent's next run does. Its output stays in the VM, in RUNS_DIR/<id>.log,
 and check() reads the end of it. Hiding the user's secrets in it is up to the caller, as for bash.
