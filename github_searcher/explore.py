@@ -34,7 +34,10 @@ repos already in the found list. Then `workers` candidates at a time (token_bala
    tag): a PR of yours would likely go nowhere there. A slow first reply alone (over a week) doesn't skip a repo;
 3. at the same time, Claude reads its AI policy and its review atmosphere (repo_signals.complete), and its
    README against the profile (claude_judge.py): is it a project people contribute code to (not a link list,
-   tutorial or course), which of the user's types it is, how well it fits (one of FIT_LEVELS, fixed so repos
+   tutorial or course), can an AI agent alone work on it (build, run and test it in a Linux VM, and prove a fix there:
+   no special hardware or other OS, no paid keys, no agreement a person must sign), is it harmless (nothing political
+   or against another country's laws, nothing made to harm people or systems, and it takes outside contributions),
+   which of the user's types it is, how well it fits (one of FIT_LEVELS, fixed so repos
    rank the same way every time; kept as its number), one line for its note. A quick look: one answer, no tools;
 4. the closer look, only for a repo the quick look didn't find a weak fit (and that the fit filters keep), so no time
    goes into one that clearly doesn't match: Claude reads its open issues, the comments on them and its recent
@@ -809,11 +812,22 @@ class Explore:
                 f"The types of project they want, by name:\n{type_lines}\n\n"
                 f"This project came up in the searches for {lane['label']}.\n\n"
                 f"Project: {name}, {signals['stars']} stars, language {signals['language'] or 'unknown'}, topics {topics}.\n"
-                f"Description: {signals['description'] or 'none'}\n\n"
+                f"Description: {signals['description'] or 'none'}\n"
+                f"Contributing guide: {'yes' if signals['community']['contributing'] else 'none found'}.\n\n"
                 f"README (the start of it):\n{readme[:README_CHARS]}\n\n"
                 "is_project: true when people contribute code to it (a library, app, framework or tool); false for lists of "
                 "links (awesome lists), tutorials, courses, books, interview prep, personal dotfiles or configs, and "
                 "collections of data or prompts.\n"
+                "english: true when the README is written mainly in English (a translation into another language besides, "
+                "linked or further down, is fine); false when its main text is in another language.\n"
+                "agent_can_do: true when an AI agent alone could work on it in a Linux VM (one NVIDIA GPU at most): build it, "
+                "run it and its tests, and show there that a fix works, with a clear way to develop and check a change (the "
+                "README or contributing guide says how to build and test, or the project makes it plain). False when it "
+                "needs special hardware, devices, a phone or another operating system, paid accounts, keys or services it "
+                "can't mock, or a contributor agreement a person has to sign (a DCO sign-off is fine).\n"
+                "harmless: false when it is political, politically sensitive or activist, goes against another country's "
+                "laws, such as China's, is made to harm or trouble people or systems, or says it doesn't take outside "
+                "contributions; true otherwise.\n"
                 "type: the name of the type it is (the closest one, also when it came up in another type's searches).\n"
                 "fit: how well it matches what they like and that type: strong (exactly what they want), good (clearly in "
                 "their interests), some (related, but not what they're after), weak (hardly matches).\n"
@@ -824,11 +838,14 @@ class Explore:
                 "type": "object",
                 "properties": {
                     "is_project": {"type": "boolean"},
+                    "english": {"type": "boolean"},
+                    "agent_can_do": {"type": "boolean"},
+                    "harmless": {"type": "boolean"},
                     "type": {"type": "string", "enum": [each["label"] for each in profile["lanes"]]},
                     "fit": {"type": "string", "enum": list(FIT_LEVELS)},
                     "note": {"type": "string"},
                 },
-                "required": ["is_project", "type", "fit", "note"],
+                "required": ["is_project", "english", "agent_can_do", "harmless", "type", "fit", "note"],
             }
             # The fit, and the repo's AI policy and review atmosphere (unless a filter read them already), all at once.
             if judged:
@@ -836,7 +853,15 @@ class Explore:
             else:
                 verdict, signals = await asyncio.gather(judge(prompt, schema, "medium"), self.repo_signals.complete(name, signals))
             if not verdict["is_project"]:
-                run["skipped"]["Not a code project"] = run["skipped"].get("Not a code project", 0) + 1
+                reason = "Not a code project"
+            elif not verdict["english"]:
+                reason = "README not in English"
+            elif not verdict["agent_can_do"]:
+                reason = "An agent can't do it alone"
+            elif not verdict["harmless"]:
+                reason = "Out of scope"
+            if reason:
+                run["skipped"][reason] = run["skipped"].get(reason, 0) + 1
                 return
             fit_tag = "fit:" + verdict["fit"]
             wanted = [key for key in filters if filters[key] == "include" and key.split(":")[0] == "fit"]
