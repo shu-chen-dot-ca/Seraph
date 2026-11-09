@@ -61,16 +61,22 @@ asked here: the Issues board reads each one again from fresh as it comes in, and
 decide on it (keep_new_tags in backend/issues_api.py). One that didn't match is looked at again when it changes on
 GitHub, or the levels change.
 
-keep_catalog() runs in the background, every CATALOG_CHECK_SECONDS. For each repo with Queue issues on, its issues on
-the board's Open column (not of an archived repo) that fit: no job (or only cancelled ones), not in Catalog, open, with
-refreshed tags (read after the issue's last change on GitHub that the app knows of, within the board's Open refresh
-time, refresh_open_minutes in backend/issues_api.py, by the current rules, and since it came in), and passing the filter: tagged free
-with merge likely (issue_tags.py), and a complexity among the repo's issue levels. One whose tags are old waits for
-keep_tags to read it again. Claude reads them, up to PER_RUN of one repo in
-one run with no tools (claude_judge.py), with DEFAULT_RULES and the repo's instructions on top, and picks which to take;
-the picked ones go to the end of Catalog. Each issue is asked about once per basis (the instructions, the levels and its
-last change on GitHub), kept in PICKED_FILE: one you take out of Catalog stays out until one of those changes. A failed
-run is tried again next round.
+keep_catalog() runs in the background right after issues get tagged (TAGGED in backend/issues_api.py, which keep_new_tags
+and keep_tags set), and every CATALOG_CHECK_SECONDS anyway, so Open is only where an issue waits for its tags. For each
+repo with Queue issues on (not an archived one), its issues on the board with no job (or only cancelled ones), open,
+not one our agents opened, once their tags are read: after the issue's last change on GitHub that the app knows of, by
+the current rules and since it came in, however long ago (an agent reads them again before it takes one:
+take_from_catalog in backend/issues_api.py).
+- Claimed: someone else is on it, or it is already fixed (status assigned or fixed, issue_tags.py). It leaves the Issues
+  list at once, from Open and Catalog alike.
+- Filtered out: on Open, not tagged free with merge likely, or its complexity isn't among the repo's issue levels. It
+  leaves the Issues list at once.
+- The rest on Open: Claude reads them, up to PER_RUN of one repo in one run with no tools (claude_judge.py), with
+  DEFAULT_RULES and the repo's instructions on top, and picks which to take. The picked ones go to the end of Catalog,
+  the others leave the Issues list. Each issue is asked about once per basis (the instructions, the levels and its last
+  change on GitHub), kept in PICKED_FILE: one you move back from Catalog to Open stays there until one of those changes.
+What leaves goes as one undo step on the Issues page; Add issues never adds it again (Add in the repo's pop-up on the
+Repository page still does). A failed run is tried again next round.
 """
 
 import asyncio
@@ -78,13 +84,13 @@ import hashlib
 import json
 import time
 import traceback
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from backend.issues_api import AUTO_REMOVE_FILE, AUTO_REMOVE_OFF, HELD
+from backend.issues_api import HELD, TAGGED
 from backend.shared import agents, github_account, inbox, issue_facts, issue_tags, issues, jobs, pr_tracking, repo_signals, repos
 from github_searcher.claude_judge import judge
 from github_searcher.github_account import SendError
@@ -395,13 +401,19 @@ async def add_issues() -> None:
 
 
 async def keep_catalog() -> None:
-    """Runs as long as the backend: puts the issues an agent picks into Catalog (see the top of this file)."""
+    """Runs as long as the backend: puts the issues an agent picks into Catalog and takes the claimed and filtered ones
+    off the board, right after issues get tagged (see the top of this file)."""
     while True:
+        # Cleared first: issues tagged while this round runs bring the next one at once.
+        TAGGED.clear()
         try:
             await pick_for_catalog()
         except Exception:
             pass  # Claude or a file failed: the next round tries again.
-        await asyncio.sleep(CATALOG_CHECK_SECONDS)
+        try:
+            await asyncio.wait_for(TAGGED.wait(), CATALOG_CHECK_SECONDS)
+        except TimeoutError:
+            pass
 
 
 async def pick_for_catalog() -> None:
@@ -418,19 +430,20 @@ async def pick_for_catalog() -> None:
     facts = issue_facts.all()
     catalog = issues.board()["catalog"]
     started = [job["issue"] for job in jobs.list() if job["issue"] is not None and job["status"] != "cancelled"]
-    # How old an Open issue's tags may be: the board's Open refresh time.
-    board_rules = dict(AUTO_REMOVE_OFF)
-    if AUTO_REMOVE_FILE.is_file():
-        board_rules.update(json.loads(AUTO_REMOVE_FILE.read_text()))
-    oldest = datetime.now(UTC) - timedelta(minutes=board_rules["refresh_open_minutes"])
+    # The issues our agents opened as you (lower case): claimed for you, never taken off here.
+    opened = []
+    for action in inbox.actions():
+        if action["kind"] == "issue":
+            opened.append(f"{action['sent']['repo']}#{action['sent']['number']}".lower())
     # How many of your PRs each repo merged (lower case): until one is, its levels_first are the levels.
     merged = {}
     for pr in pr_tracking.summary()["items"]:
         if pr["relation"] == "author" and pr["state"] == "merged":
             merged[pr["repo"].lower()] = merged.get(pr["repo"].lower(), 0) + 1
 
-    # What fits, by repo: (item, tag, basis).
+    # What fits, by repo: (item, tag, basis); and what leaves the Issues list.
     candidates = {}
+    drop = []
     for item in issues.items():
         rules = by_name.get(item["repo"].lower())
         tag = tags.get(item["id"])
@@ -439,25 +452,35 @@ async def pick_for_catalog() -> None:
         # Settings from before Queue issues: their Take issues put issues in Catalog then.
         if not rules.get("queue_issues", rules["take_issues"]):
             continue
-        if item["id"] in catalog or item["id"] in started or item["state"] == "CLOSED":
+        if item["id"] in started or item["state"] == "CLOSED" or item["id"].lower() in opened:
             continue
-        # Refreshed tags: read after its last change on GitHub, recently enough, by the current rules.
+        # Its tags read: after its last change on GitHub, by the current rules.
         fact = facts.get(item["id"])
         if fact and fact.get("updated_at") is not None and fact["updated_at"] > tag["updated_at"]:
             continue
         judged = tag.get("judged_at")
-        if judged is None or datetime.fromisoformat(judged) < oldest or tag.get("rules_version") != RULES_VERSION:
+        if judged is None or tag.get("rules_version") != RULES_VERSION:
             continue
         # Not read again since it came in: keep_new_tags (backend/issues_api.py) does that first.
         if datetime.fromisoformat(judged) < datetime.fromisoformat(item["added_at"]):
             continue
+        # Claimed (someone else is on it, or it is fixed): off the board, from Catalog too.
+        if tag["status"] in ["assigned", "fixed"]:
+            drop.append(item["id"])
+            continue
+        if item["id"] in catalog:
+            continue
+        # Filtered out: off the board.
         levels = rules["levels"] if merged.get(item["repo"].lower(), 0) > 0 else rules.get("levels_first", ["easy"])
         if tag["status"] != "free" or tag.get("merge") != "likely" or tag.get("complexity") not in levels:
+            drop.append(item["id"])
             continue
         basis = hashlib.sha256(json.dumps([rules["instructions"], sorted(levels), tag["updated_at"]]).encode()).hexdigest()[:16]
         if picked.get(item["id"]) == basis:
             continue
         candidates.setdefault(item["repo"], []).append((item, tag, basis))
+    if drop:
+        issues.remove(drop)
 
     for repo, entries in candidates.items():
         rules = by_name[repo.lower()]
@@ -482,14 +505,21 @@ async def pick_for_catalog() -> None:
             take = [each["number"] for each in answer["issues"] if each["take"]]
             answered = [each["number"] for each in answer["issues"]]
             new = []
+            declined = []
             for item, tag, basis in run:
                 if item["number"] in answered:
                     picked[item["id"]] = basis
                 if item["number"] in take:
                     new.append(item["id"])
+                if item["number"] in answered and item["number"] not in take:
+                    declined.append(item["id"])
             PICKED_FILE.write_text(json.dumps(picked, indent=2))
             # The board as it is now: the user may have moved cards while Claude read.
             board = issues.board()
             added = [issue_id for issue_id in new if issue_id not in board["catalog"]]
             if added:
                 issues.set_board(board["catalog"] + added, board["order"], board["held"])
+            # The ones it didn't pick leave the board, unless the user moved one to Catalog meanwhile.
+            declined = [issue_id for issue_id in declined if issue_id not in board["catalog"]]
+            if declined:
+                issues.remove(declined)

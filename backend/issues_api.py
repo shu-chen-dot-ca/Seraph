@@ -154,6 +154,9 @@ LEVELS = ["easy", "medium", "hard"]
 # The repos (lower case) with Take issues on that are at their Open PRs at once now (take_from_catalog): their Open and
 # Catalog issues aren't read again until they have room.
 HELD = {"repos": []}
+# Set whenever issues get tagged (keep_new_tags, keep_tags), so keep_catalog (backend/repo_automation_api.py) moves the
+# Open issues that fit to Catalog, and takes the rest off the board, right after.
+TAGGED = asyncio.Event()
 
 
 class AssignRequest(BaseModel):
@@ -575,6 +578,7 @@ async def keep_new_tags() -> None:
                 await issue_tags.tag(todo, force=True)
             except Exception:
                 pass
+            TAGGED.set()
             try:
                 auto_remove_issues()
             except Exception:
@@ -708,6 +712,7 @@ async def keep_tags() -> None:
 
         if todo:
             tagged = await issue_tags.tag(todo)
+            TAGGED.set()
             # Someone else is on it now: an agent working on it decides whether to go on.
             after = issue_tags.all()
             for issue_id in tagged:
