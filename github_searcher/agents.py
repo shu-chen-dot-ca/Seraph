@@ -31,8 +31,8 @@ course. Only interrupting with nothing queued stops the agent until the user wri
 When the user fills in empty env variables an agent added for a secret (env_var_add), that agent is told
 (secrets_filled, from the env endpoints in backend/vms_api.py), so it never asks for them in the Inbox.
 Waiting messages are saved with the record, so a backend restart (it reloads on every code
-change) doesn't lose them. An agent that was in a turn or about to start one (awake) is woken
-with them after the restart; one cut off in the middle of a turn gets one more saying so.
+change) doesn't lose them. An agent with messages waiting is woken with them after the restart (not an archived one);
+one cut off in the middle of a turn gets one more saying so.
 
 After each turn the worker enforces the VM rule: an agent never holds a VM it has nothing to do in.
 - Holding a VM with no queued or working job for it: the VM is released for it.
@@ -284,8 +284,9 @@ class Agents:
             computer_tools = ComputerTools(self.vms, self.queue, record["id"], functools.partial(record.get, "target_vm"), record["history"])
             agent = Agent(record, computer_tools, WorkTools(self, record), self.changed)
             self.agents[agent.id] = agent
-            # Messages that waited when the backend stopped. Only an agent that had a turn to run
-            # wakes for them; the others (e.g. interrupted by the user) keep waiting for a message.
+            # Messages that waited when the backend stopped: it wakes for them, as it would have without the restart (a
+            # message always wakes an agent that isn't archived). Not by "awake": a turn that failed while the backend
+            # stopped saved it as False, and the agent never woke again (agent-89).
             self.pending[agent.id] = record.get("pending", [])
             self.wake[agent.id] = asyncio.Event()
             # Agents from before archiving, and from before name_by (an "agent-N" name was the automatic one).
@@ -300,7 +301,7 @@ class Agents:
             # And from before the Workflow tab.
             record.setdefault("workflow", None)
             record.setdefault("workflow_role", None)
-            if record.get("awake") and self.pending[agent.id] and record["archived_at"] is None:
+            if self.pending[agent.id] and record["archived_at"] is None:
                 self.wake[agent.id].set()
             self.nudges[agent.id] = {"count": 0, "state": None}
             self.workers[agent.id] = asyncio.create_task(self.work(agent))
