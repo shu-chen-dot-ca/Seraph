@@ -64,7 +64,9 @@ cards of repos whose Level of automation has Take issues on (backend/repo_automa
 you), with tags read within twice the board's Catalog refresh time (refresh_catalog_minutes), and only while the repo is
 under its Open PRs at once (its open PRs of yours and its issues with an open job before a
 PR, from queued to waiting on you; backend/repo_automation_api.py): a repo at it is skipped and the next card of
-another repo goes. Only cards that are Catalog's own: no job (or only cancelled ones), not paused, open on GitHub, and, like Assign, with its
+another repo goes. With the Dashboard's Automation on, the cards of the repos it ranks first go first (its labels: Fast,
+Normal, New, Slow, ...; then the most PRs merged a day: backend/automation_api.py), each in the board's order. Only
+cards that are Catalog's own: no job (or only cancelled ones), not paused, open on GitHub, and, like Assign, with its
 Merge in and not fixed, out of scope or can't validate, and unlike Assign not claimed either: someone else is on it
 (assigned, or their open pull request closes it), so a second fix isn't wanted (the others wait there). A card taken leaves Catalog's list, so
 its job keeps it on the board, and a job cancelled later sends it back to Open, not to the next agent.
@@ -152,6 +154,8 @@ STALE_CHECK_SECONDS = 10 * 60
 # Remove automatically's rules apply right after new tags come in, and this often anyway (issues get older).
 AUTO_REMOVE_SECONDS = 15 * 60
 LEVELS = ["easy", "medium", "hard"]
+# The Dashboard's Automation (backend/automation_api.py, which imports this file): its labels rank the repos.
+DASHBOARD_AUTOMATION_FILE = DATA_DIR / "automation.json"
 # The repos (lower case) with Take issues on that are at their Open PRs at once now (take_from_catalog): their Open and
 # Catalog issues aren't read again until they have room.
 HELD = {"repos": []}
@@ -864,6 +868,14 @@ def take_from_catalog() -> None:
         waiting.append(item["id"])
     # From the top: the board's order, ones not placed yet after (sorted keeps them in the order they were added).
     waiting.sort(key=lambda issue_id: board["order"].index(issue_id) if issue_id in board["order"] else len(board["order"]))
+    # With the Automation on, its best repos first (its rank, then the most PRs merged a day), each in that order; ours
+    # stay first.
+    automation = {"on": False, "labels": {}}
+    if DASHBOARD_AUTOMATION_FILE.is_file():
+        automation = json.loads(DASHBOARD_AUTOMATION_FILE.read_text())
+    ranks = {name.lower(): (each["rank"], -(each.get("per_day") or 0)) for name, each in automation["labels"].items()}
+    if automation["on"]:
+        waiting.sort(key=lambda issue_id: (-1, 0) if issue_id.lower() in opened else ranks.get(issue_id.split("#")[0].lower(), (len(ranks), 0)))
 
     # Each repo's Open PRs at once (backend/repo_automation_api.py): its open PRs of yours and its issues with an open
     # job before a PR (queued to waiting on you) count, by repo in lower case; while they reach it, its cards wait.
