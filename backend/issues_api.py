@@ -78,6 +78,9 @@ out of scope. Each round, one of those no agent ever started goes back to the to
 takes one off the board (not even its repo leaving Repos or being archived), no job on one is stopped for its repo, and
 its agent is told to keep going when someone else shows up (Agents.issue_taken).
 
+Pause new issues on the Dashboard's Automation page (take_new in its file, backend/automation_api.py) stops
+keep_catalog_agents from giving out any of Catalog's cards, ours too, until Resume new issues; the rest goes on.
+
 A repo with Take issues on that is at its Open PRs at once is held (HELD, worked out by take_from_catalog every round):
 its issues on the board's Open and Catalog (no job, or only cancelled ones) can't be taken now, so keep_facts and keep_tags
 don't read them again until it has room, and Add issues doesn't read its open issues (backend/repo_automation_api.py).
@@ -893,6 +896,10 @@ def take_from_catalog() -> None:
     for repo, each in settings.items():
         limits[repo.lower()] = each.get("max_prs", 5) if merged.get(repo.lower(), 0) > 0 else each.get("max_prs_first", 1)
     HELD["repos"] = [repo for repo in taking if busy.get(repo, 0) >= limits.get(repo, 1)]
+
+    # Pause new issues on the Dashboard's Automation page: Catalog's cards wait there, ours too; everything else goes on.
+    if not automation.get("take_new", True):
+        return
 
     for issue_id in waiting:
         if room <= 0:
