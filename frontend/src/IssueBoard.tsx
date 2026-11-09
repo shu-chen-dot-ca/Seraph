@@ -54,13 +54,15 @@ backend/issues_api.py).
 
 Each card's level of automation shows under its tags, past a line: Questions, Comments and Pull requests when on, or
 No automation. Its repo's (AutomationDialog.tsx, kept by the backend: GET /api/repos/automation) is the default; the
-issue's own, from the robot at its top right (IssueAutomationDialog.tsx, also kept by the backend), goes over it. Add
+issue's own, from the robot at its top right (IssueAutomationDialog.tsx, also kept by the backend), goes over it. Both
+come from the live "automation" topic, so a change made here, on the Repository page or on the Dashboard's
+Automation → Settings shows on the cards at once. Add
 issues, Queue issues, Take issues and Open issues are the repo's only, so cards don't show them: with Add issues on, the
 repo's open issues of its levels come into Open by themselves (each once), with Queue issues on, the repo's
 issues that fit go to Catalog by themselves, and with Take issues on, agents take its Catalog cards. A click on the card's logo opens its repo's automation right here. The backend acts on all of it
 (backend/repo_automation_api.py): Questions are answered, Comments posted and Pull requests sent without you. Repo and
-issue settings from before, kept in this browser, are handed to the backend when the board reads the settings (unless
-it has its own for them already), so what the backend acts on is what the cards show.
+issue settings from before, kept in this browser, are handed to the backend when the board opens (unless it has its own
+for them already), so what the backend acts on is what the cards show.
 
 Over the board, the robot button opens its Automation (BoardAutomationDialog.tsx): which issues leave the list by
 themselves (claimed, out of scope, a complexity, scope not clear, opened too long ago), how often each column's
@@ -175,6 +177,7 @@ export default function IssueBoard() {
   const repos = useLive("repos");
   const agents = useLive("agents");
   const inbox = useLive("inbox");
+  const automationTopic = useLive("automation");
   // The issue whose pop-up is open, by id.
   const [openId, setOpenId] = useState<string | null>(null);
   const [automation, setAutomation] = useState(false);
@@ -189,13 +192,15 @@ export default function IssueBoard() {
   // The card Delete asks about. It stays set while the dialog fades out, so the title doesn't blank.
   const [deleting, setDeleting] = useState<Card | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  // Goes up when one of those closes, so the cards read the settings again.
-  const [saved, setSaved] = useState(0);
-  // Every repo's automation from the backend, by repo name in lower case, and every issue's own level, by issue id; read
-  // again when a dialog closes.
-  const [repoSettings, setRepoSettings] = useState<Record<string, Automation>>({});
-  const [issueSettings, setIssueSettings] = useState<Record<string, Level>>({});
+  // Every repo's automation, by repo name in lower case, and every issue's own level, by issue id.
+  const repoSettings: Record<string, Automation> = {};
+  for (const repo of Object.keys(automationTopic.repo_levels)) {
+    repoSettings[repo.toLowerCase()] = automationTopic.repo_levels[repo];
+  }
+  const issueSettings: Record<string, Level> = automationTopic.issue_levels;
 
+  // Once, when the board opens: settings from before, kept in this browser, go to the backend, which acts on them (and
+  // the live topic brings them back to the cards).
   useEffect(() => {
     api<{ repos: Record<string, Automation>; issues: Record<string, Level> }>("/api/repos/automation")
       .then(async (data) => {
@@ -203,7 +208,6 @@ export default function IssueBoard() {
         for (const repo of Object.keys(data.repos)) {
           byName[repo.toLowerCase()] = data.repos[repo];
         }
-        // Settings from before, kept in this browser, go to the backend, which acts on them.
         let keys: string[] = [];
         try {
           keys = Object.keys(localStorage).filter((key) => key.startsWith("automation:"));
@@ -233,7 +237,6 @@ export default function IssueBoard() {
             // Kept for the next read.
           }
         }
-        setRepoSettings(byName);
         const issueLevels = { ...data.issues };
         for (const key of keys.filter((each) => each.startsWith("automation:issue:"))) {
           const id = key.slice("automation:issue:".length);
@@ -249,12 +252,11 @@ export default function IssueBoard() {
             // Kept for the next read.
           }
         }
-        setIssueSettings(issueLevels);
       })
       .catch(() => {
-        // The cards show No automation until it reads.
+        // The next time the board opens tries again.
       });
-  }, [saved]);
+  }, []);
 
   // Delete on the ⋯: its open jobs are cancelled, then it is off the board for good.
   async function remove() {
@@ -946,7 +948,6 @@ export default function IssueBoard() {
           repos={[repoAutomation]}
           onClose={() => {
             setRepoAutomation(null);
-            setSaved((count) => count + 1);
           }}
         />
       )}
@@ -958,7 +959,6 @@ export default function IssueBoard() {
           own={issueAutomation.ownLevel}
           onClose={() => {
             setIssueAutomation(null);
-            setSaved((count) => count + 1);
           }}
         />
       )}
