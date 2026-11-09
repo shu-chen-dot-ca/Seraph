@@ -90,7 +90,9 @@ open_issue(repo, title, body) opens an issue as you, claimed for you: an agent's
 repo's Level of automation has Open issues). It is assigned to you; GitHub keeps the assignee only when you may assign
 on that repo, so where it doesn't, your comment CLAIM_TEXT says you are on it. Following your PRs is pr_tracking.py.
 
-Sends go one at a time (a second click waits, then finds the draft sent). A failure raises SendError
+Sends go one at a time (a second click waits, then finds the draft sent). A send cut off after GitHub opened the PR
+(a backend restart in between) doesn't open a second one when it goes again: an open PR of yours from the draft's
+branch, with its title and opened after the draft was made, is kept as the draft's PR. A failure raises SendError
 with what GitHub said and at which step; nothing is kept on the draft then. While one goes, sending_draft and step say
 which draft it is and where it is ("replaying commit 3 of 6"), for the Inbox to show.
 """
@@ -637,25 +639,47 @@ class GithubAccount:
             number = (draft["target"] or "").rpartition("#")[2]
             name = f"fix-{number}" if number.isdigit() else f"fix-{draft['id'].removeprefix('draft_')}"
         branch = name
-        # 422: a branch of that name is there already.
+        # An open PR of yours from this draft already, from a send cut off after GitHub opened it and before it was kept
+        # (a backend restart in between): that one is kept, never a second PR.
+        kept = None
+        # 422: a branch of that name is there already. An open PR of yours from it with this draft's title, opened after
+        # the draft was made, is this draft's.
         for attempt in range(2, 12):
             response = client.post(f"/repos/{fork}/git/refs", json={"ref": f"refs/heads/{branch}", "sha": commit})
             if response.status_code != 422:
                 break
+            self.step = "looking for a PR this draft opened already"
+            found = client.get(f"/repos/{repo}/pulls", params={"head": f"{fork.split('/')[0]}:{branch}", "state": "open"})
+            found.raise_for_status()
+            mine = [
+                pull
+                for pull in found.json()
+                if pull["user"]["login"].lower() == account["login"].lower()
+                and pull["title"] == draft["title"]
+                and datetime.fromisoformat(pull["created_at"]) >= datetime.fromisoformat(draft["created_at"])
+            ]
+            if mine:
+                kept = mine[0]
+                break
+            self.step = "making the branch in your fork"
             branch = f"{name}-{attempt}"
-        response.raise_for_status()
 
-        self.step = "opening the PR"
-        head = branch
-        if fork != repo:
-            head = f"{fork.split('/')[0]}:{branch}"
-        payload = {"title": draft["title"], "body": body, "head": head, "base": base_branch, "maintainer_can_modify": True}
-        response = client.post(f"/repos/{repo}/pulls", json=payload)
-        if response.status_code >= 400:
-            # No PR, no branch left behind: trying again starts clean.
-            client.delete(f"/repos/{fork}/git/refs/heads/{branch}")
-        response.raise_for_status()
-        pull = response.json()
+        if kept is not None:
+            pull = kept
+            commit = kept["head"]["sha"]
+        else:
+            response.raise_for_status()
+            self.step = "opening the PR"
+            head = branch
+            if fork != repo:
+                head = f"{fork.split('/')[0]}:{branch}"
+            payload = {"title": draft["title"], "body": body, "head": head, "base": base_branch, "maintainer_can_modify": True}
+            response = client.post(f"/repos/{repo}/pulls", json=payload)
+            if response.status_code >= 400:
+                # No PR, no branch left behind: trying again starts clean.
+                client.delete(f"/repos/{fork}/git/refs/heads/{branch}")
+            response.raise_for_status()
+            pull = response.json()
         return {
             "kind": "pr",
             "url": pull["html_url"],
