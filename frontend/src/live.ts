@@ -401,7 +401,8 @@ export type Job = {
   about: string; // what the job is about, in everyday words
   headline: string; // where it stands now, in everyday words
   detail: string; // the same, technical
-  // The project's tests: on the unchanged code (must pass before any change) and on the finished change.
+  // The project's tests: on the finished change (must pass before a PR), and on the unchanged code only as the agent's
+  // last resort.
   tests: { before: TestRun | null; after: TestRun | null };
   // What happened, oldest first (github_searcher/jobs.py): made, each step the agent reached (its headline), status
   // changes, test runs, and what the app told the agent. [] on jobs from before it was kept.

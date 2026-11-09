@@ -190,24 +190,25 @@ function JobSteps(props: { job: Job; className?: string }) {
   )
 }
 
-// The project's tests for a job, in plain words: on the code as it was, then with the change.
-// Both must pass: the first before the agent may change anything, the second before it may draft a PR.
-// The basic checks (the tests that cover the change), or the project's official checks (what its rules ask to run
-// before a PR); it says which.
+// The project's tests for a job, in plain words: with the change, which must pass before the agent may draft a PR, and
+// on the code as it was only when the agent ran them there too (its last resort, when a failure with the change wasn't
+// clearly its own). The basic checks (the tests that cover the change), or the project's official checks (what its rules
+// ask to run before a PR); it says which.
 function JobTests(props: { job: Job; className?: string }) {
   const before = props.job.tests?.before ?? null
   const after = props.job.tests?.after ?? null
   if (before === null && after === null) {
     return <div className={cn("text-xs text-muted-foreground", props.className)}>Project's tests: not run yet.</div>
   }
-  const runs = [
-    { label: "on the code as it was", run: before },
-    { label: "with the change", run: after },
-  ]
+  const runs = [{ label: "with the change", run: after }]
+  if (before !== null) {
+    runs.push({ label: "on the code as it was", run: before })
+  }
+  const shown = after ?? before
   return (
     <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-1 text-xs", props.className)}>
       <span className="text-muted-foreground">
-        {before !== null && before.scope === "focused" ? "Basic checks (the project's tests that cover the change):" : "Project's official checks:"}
+        {shown !== null && shown.scope === "focused" ? "Basic checks (the project's tests that cover the change):" : "Project's official checks:"}
       </span>
       {runs.map((item) => (
         <span key={item.label} className="flex items-center gap-1">
@@ -224,7 +225,7 @@ function JobTests(props: { job: Job; className?: string }) {
           )}
         </span>
       ))}
-      {before !== null && <code className="truncate font-mono text-muted-foreground" title={before.command}>{before.command}</code>}
+      {shown !== null && <code className="truncate font-mono text-muted-foreground" title={shown.command}>{shown.command}</code>}
     </div>
   )
 }
