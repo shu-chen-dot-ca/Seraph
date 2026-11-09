@@ -14,7 +14,10 @@ profile of 2026-10-27: Linux desktop, AI & harness, LLM tooling and Dev tools). 
 classify repos: Explore puts each repo it finds under one, and agents give one to the repos they add (work_tools.py repos_add). In the code a type is a
 lane: when the profile is saved, Claude plans each one's GitHub repo searches (set_profile), and the finds are split
 evenly between them. The run keeps the lanes near their shares: the next candidate comes from the lane furthest below
-its share. Every search gets SEARCH_SUFFIX (not archived, pushed in the last 30 days) and runs most recently updated
+its share.
+The Dashboard's Automation (backend/automation_api.py) adds a new type before each run it starts (add_type: Claude names
+one more kind of software, unlike the ones there, and plans its searches), up to MAX_TYPES, so it looks wider each time.
+Every search gets SEARCH_SUFFIX (not archived, pushed in the last 30 days) and runs most recently updated
 first, a page of 100 at a time: not most stars first, and no famous repos looked at first, so Explore doesn't start
 from fame. The default star range is over 1k to 15k, and a search's stars never go to MIN_STARS or under (a lower bound
 under it is raised, a search with none gets one).
@@ -213,7 +216,7 @@ UNREACHABLE = (httpx.ConnectError, httpx.ConnectTimeout)
 # How well a repo fits the profile: Claude picks a level, and the repo keeps its number (the Repos page shows the
 # level again: the frontend's FIT_LEVELS has the same steps).
 FIT_LEVELS = {"strong": 1.0, "good": 0.75, "some": 0.5, "weak": 0.25}
-MAX_TYPES = 6
+MAX_TYPES = 30
 # The minimums, so no personal repo gets in: stars (over), contributors (at least), closed PRs, merged or not (over), open
 # issues (over).
 MIN_STARS = 1000
@@ -324,6 +327,16 @@ LOOK_SCHEMA = {
         "note": {"type": "string"},
     },
     "required": ["fit", "note"],
+}
+# What Claude answers when it names a new type of repo (add_type).
+TYPE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "about": {"type": "string"},
+        "queries": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["name", "about", "queries"],
 }
 
 
@@ -500,6 +513,55 @@ class Explore:
         temporary.write_text(json.dumps(self.profile, indent=2))
         temporary.replace(self.path)
         self.changed()
+
+    async def add_type(self) -> str | None:
+        """One more type of repo in the profile, unlike the ones there, with its searches planned: how the Dashboard's
+        Automation (backend/automation_api.py) looks wider each run. The types share the finds evenly again. Returns its
+        name, or None when the profile has MAX_TYPES already or Claude names one it has. JudgeError when Claude fails."""
+        lanes = self.profile["lanes"]
+        if len(lanes) >= MAX_TYPES:
+            return None
+        type_lines = "\n".join(f"- {lane['label']}: {lane['about']}" for lane in lanes)
+        prompt = (
+            "A developer contributes to open-source projects with AI agents that do all the work: each fixes an issue in a "
+            "Linux VM (one NVIDIA GPU at most), proves the fix there (build, run, tests) and sends the pull request.\n\n"
+            f"About the developer:\n{self.profile['about'] or 'Nothing written.'}\n\n"
+            f"The types of project they look in already:\n{type_lines}\n\n"
+            "Name one more type of software, unlike all of these, so they contribute to a wider range of projects. Any "
+            "kind of software or code is fine (apps, libraries, frameworks, tools, games, data, science, web, systems, "
+            "...) as long as an AI agent alone can build it, run it and check a fix in that VM: no special hardware, "
+            "phones or other operating systems, no paid accounts or keys it can't mock. Nothing political, politically "
+            "sensitive or activist, nothing against another country's laws, such as China's, and nothing made to harm "
+            "people or systems.\n\n"
+            "name: a short plain name (2 or 3 words).\n"
+            "about: one or two sentences on what it is and how a fix there is seen and checked.\n"
+            "queries: 3 to 8 GitHub repository searches (the q of GET /search/repositories), most promising first, "
+            'like "topic:mcp stars:1001..15000" or "stars:1001..15000 good-first-issues:>2 language:Python". Use '
+            "qualifiers (topic:, language:, stars:, good-first-issues:, help-wanted-issues:, in:description); more than "
+            "a few words of plain text finds little. Each returns up to 1000 repos, most recently updated first. Keep to "
+            "over 1k to 15k stars (never 1k or fewer): mid-size projects where an outside PR gets noticed, not the famous "
+            "ones or personal ones. "
+            '"archived:false pushed:>(30 days ago)" is added to each, so leave those out.'
+        )
+        answer = await judge(prompt, TYPE_SCHEMA, "medium")
+        label = answer["name"].strip()
+        queries = [each.strip() for each in answer["queries"] if each.strip() != ""][:8]
+        if label == "" or not queries or label.lower() in [lane["label"].lower() for lane in lanes]:
+            return None
+        lane_id = re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-") or "type"
+        while lane_id in [lane["id"] for lane in lanes]:
+            lane_id += "-2"
+        lanes = lanes + [{"id": lane_id, "label": label, "about": answer["about"].strip(), "share": 0, "queries": queries}]
+        # An even split again; the first types get what doesn't divide.
+        for index, lane in enumerate(lanes):
+            lane["share"] = 100 // len(lanes) + (1 if index < 100 % len(lanes) else 0)
+        self.profile = {"about": self.profile["about"], "lanes": lanes}
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_name(self.path.name + ".tmp")
+        temporary.write_text(json.dumps(self.profile, indent=2))
+        temporary.replace(self.path)
+        self.changed()
+        return label
 
     def start(self, count: int | None, minutes: int | None, workers: int, filters: dict[str, str]) -> None:
         """Start a run on the running event loop. ValueError when one is running or the limits are off."""
