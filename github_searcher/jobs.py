@@ -18,7 +18,7 @@ Each job is one JSON file, DATA_DIR/jobs/<id>.json:
      "status": "queued" | "working" | "waiting_on_user" | "waiting_on_maintainers" | "paused" | "done" | "cancelled",
      "paused_from": the status it had before it was paused | null,
      "instructions": "extra text from the user", "notes": "the agent's progress notes",
-     "drafts": ["draft_..."], "evidence": [Evidence, ...], "created_by": "user" | "<agent id>",
+     "drafts": ["draft_..."], "evidence": [Evidence, ...], "created_by": "user" | "<agent id>", "skip_checks": bool,
      "timeline": [Entry, ...], "created_at", "updated_at"}
 
 "kind" is open-ended: a kind not in STEPS gets the "task" steps, so new kinds need no change.
@@ -56,6 +56,8 @@ The project's tests, run by the agent with run_tests: on the finished change (af
 drafted), and on the unchanged code (before) only as the agent's last resort, when a failure with the change isn't
 clearly its own; the main branch is trusted otherwise. The scope is focused, the basic checks (the tests that cover
 the change: the default), or full, the project's official checks (what its rules ask to run before a PR).
+skip_checks: the user pressed Skip checks (backend/agents_api.py): its PR may be drafted now, without passing tests,
+and goes straight to the Inbox without a reviewer (work_tools.py draft_pr). It still waits for the user's Approve.
 
     "tests": {"before": Run | null, "after": Run | null}
     Run: {"command", "scope": "full" | "focused" (missing on old runs: full), "base", "exit_code",
@@ -101,7 +103,7 @@ DATA_DIR = PROJECT_ROOT / os.environ["DATA_DIR"]
 EVIDENCE_DIR = DATA_DIR / "evidence"
 STATUSES = ["queued", "working", "waiting_on_user", "waiting_on_maintainers", "paused", "done", "cancelled"]
 # The fields update() may change. The others are set once, by create().
-UPDATABLE = ["status", "notes", "vm", "drafts", "title", "instructions", "step", "about", "headline", "detail", "tests", "paused_from"]
+UPDATABLE = ["status", "notes", "vm", "drafts", "title", "instructions", "step", "about", "headline", "detail", "tests", "paused_from", "skip_checks"]
 # The steps each kind of job goes through, in order. Kinds not listed use "task".
 STEPS = {
     "fix_issue": ["understand", "set_up", "reproduce", "fix", "test", "draft"],
@@ -150,6 +152,8 @@ class Jobs:
             job.setdefault("paper", None)
             # And from before the timeline.
             job.setdefault("timeline", [])
+            # And from before Skip checks.
+            job.setdefault("skip_checks", False)
             self.jobs[job["id"]] = job
 
     def save(self, job: dict) -> None:
@@ -228,6 +232,7 @@ class Jobs:
                 "detail": "",
                 "tests": {"before": None, "after": None},
                 "timeline": [{"at": now, "kind": "created", "text": created}],
+                "skip_checks": False,
             }
             self.jobs[job_id] = job
             self.save(job)

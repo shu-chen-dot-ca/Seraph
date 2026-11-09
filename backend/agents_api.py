@@ -1,5 +1,5 @@
 """The Agents and Jobs pages: create, rename, archive, unarchive and delete agents, chat with one, point it at a VM, give
-it priority, and create and cancel jobs. An agent that made PRs can't be deleted (409), only archived. A cancel goes on the job's
+it priority, and create and cancel jobs, or skip a job's checks (its PR drafted now, without passing tests or a reviewer). An agent that made PRs can't be deleted (409), only archived. A cancel goes on the job's
 timeline as "Stopped by you" (github_searcher/jobs.py). The Workspace tab's Papers page adds a paper here too
 (/jobs/paper): a reproduce_paper job.
 
@@ -242,6 +242,27 @@ async def reproduce_paper(body: PaperRequest) -> dict:
     except ValueError as error:
         # Not a PDF, an unknown VM, a new agent's name already taken, or a different VM for an agent that is already queued for or holding its target VM.
         raise HTTPException(status_code=409, detail=str(error))
+
+
+@router.post("/jobs/{job_id}/skip_checks")
+async def skip_checks(job_id: str) -> dict:
+    """The user lets the job's PR be drafted now: without its tests passing and without a reviewer (work_tools.py
+    draft_pr). The draft still waits for their Approve in the Inbox. Its agent is told, so it drafts at once."""
+    try:
+        job = jobs.get(job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No job {job_id}")
+    if job["status"] in ("done", "cancelled"):
+        raise HTTPException(status_code=409, detail=f"{job_id} is already {job['status']}.")
+    jobs.add_timeline(job_id, "status", "Checks skipped by you")
+    job = jobs.update(job_id, skip_checks=True)
+    agents.notify(
+        job["agent"],
+        f"The user skipped the checks for {job_id} ({job['title']}): draft its PR now with draft_pr, without waiting for "
+        "the tests (stop a test run of it you no longer need with run_stop). It goes straight to the user's Inbox, without a "
+        "reviewer, and still waits for their Approve.",
+    )
+    return job
 
 
 @router.post("/jobs/{job_id}/cancel")

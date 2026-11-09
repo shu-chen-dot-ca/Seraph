@@ -3318,12 +3318,13 @@ class WorkTools:
             )
             return {"content": [{"type": "text", "text": text}], "is_error": True}
 
-        # Finished means the project's tests pass with the change, on exactly this code (the main branch is trusted).
+        # Finished means the project's tests pass with the change, on exactly this code (the main branch is trusted),
+        # unless the user skipped the checks (Skip checks: backend/agents_api.py).
         after = job["tests"]["after"]
-        if after is None or not after["passed"]:
+        if not job["skip_checks"] and (after is None or not after["passed"]):
             text = "No PR until the tests pass with your change: run_tests with when: after."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
-        if after["diff_hash"] != hashlib.sha256(diff.encode()).hexdigest():
+        if not job["skip_checks"] and after["diff_hash"] != hashlib.sha256(diff.encode()).hexdigest():
             text = (
                 "The code changed since the tests last passed (or the test run left new files behind: add those to "
                 ".git/info/exclude). Run run_tests with when: after again on the code as it is now, then draft."
@@ -3565,6 +3566,16 @@ class WorkTools:
             what = f"a new version of {pr}, on top of its newest commit"
         if rebase:
             what = f"a rebase of {pr} on {base_sha[:10]}, replacing its commits when it is sent"
+        # The user skipped the checks: no reviewer, it is in their Inbox at once.
+        if job["skip_checks"]:
+            notes = "You skipped the checks, so nobody reviewed it, and its tests may not have passed."
+            self.agents.inbox.set_review(draft["id"], {"state": "passed", "agent": None, "job": None, "notes": notes, "at": datetime.now(UTC).isoformat()})
+            text = (
+                f"{draft['id']} is in the user's Inbox now: {files} files, +{added} -{removed}, {what}. They skipped the checks, "
+                f"so no reviewer looks at it first. Nothing was pushed or sent: it waits for their Approve. {job['id']} waits "
+                "meanwhile."
+            )
+            return {"content": [{"type": "text", "text": text}]}
         self.agents.give_review(draft, desktop)
         text = (
             f"{draft['id']} goes to {repo}'s reviewer first: {files} files, +{added} -{removed}, {what}, with "
