@@ -90,8 +90,8 @@ one (the tags' age above).
 The same robot's stale_pr_days (14 at first, None: off) closes PRs that stalled: an open PR of yours that an agent owns
 (opened from its draft, never one you opened by hand) with no update on GitHub for that many days is made again by its
 agent as a fresh PR, all its changes on the newest code with a clean history and every review point done
-(Agents.remake_pr); once the new one is on GitHub the old one is closed (github_account.py). keep_stale_prs() looks
-every STALE_CHECK_SECONDS. Once per PR: not while a job on it is open, and never again after its remake job.
+(Agents.remake_pr); once the new one is on GitHub the old one is closed (github_account.py). Never one on an archived
+repo: it waits there as it is. keep_stale_prs() looks every STALE_CHECK_SECONDS. Once per PR: not while a job on it is open, and never again after its remake job.
 
 An open job on a board issue the app no longer wants done is stopped by its agent (Agents.stop_job tells it, once):
 the issue was deleted on GitHub or moved away (keep_facts finds it gone, drop_gone_issue: it then leaves the list for
@@ -935,9 +935,12 @@ def remake_stale_prs() -> None:
     # GitHub's own format, so it compares as text with the PRs' updated_at.
     cutoff = (datetime.now(UTC) - timedelta(days=rules["stale_pr_days"])).strftime("%Y-%m-%dT%H:%M:%SZ")
     all_jobs = jobs.list()
+    archived = [name.lower() for name in repos.archived()]
     for pr in pr_tracking.summary()["items"]:
-        # Only an open PR of yours an agent owns: never one you opened by hand.
+        # Only an open PR of yours an agent owns: never one you opened by hand, nor one on an archived repo.
         if pr["relation"] != "author" or pr["state"] != "open" or pr["agent"] is None or pr["draft_id"] is None:
+            continue
+        if pr["repo"].lower() in archived:
             continue
         if pr["updated_at"] > cutoff:
             continue
