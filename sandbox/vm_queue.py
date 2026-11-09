@@ -1,4 +1,4 @@
-"""Who uses each VM: one holder and a priority line per desktop, and one line of agents waiting for a desktop.
+"""Who uses each VM: one holder per desktop, and one line of agents waiting for a desktop.
 
 A VM has one desktop or more, up to its max desktops (sandbox/vm.py), each with its own screen, mouse, keyboard and
 home folder, so agents on different desktops work at the same time. Each has a fixed number (record.desktops is {number: line}), so a VM may
@@ -6,23 +6,20 @@ have desktops 2 and 3 only. An agent joins its target VM (queue_for_vm), maybe a
 desktop (where its project is set up). If a desktop nobody holds is there (the one it asked for, or any), it holds
 it at once; otherwise it waits in the VM's line, even while the VM is off. When a holder releases, the desktop goes
 to the next one (next_holder) and Agents hears about it (on_grant), which wakes that agent. An agent is in at most
-one VM's lines (holding, in priority or waiting) at a time.
+one VM's line (holding or waiting) at a time.
 
 Runs (sandbox/agent/long_runs.py) are long commands agents left going in the VM: a test suite, a big build. They
-are kept here with the VM, from add_run until finish_run, each with its desktop. An agent that holds a desktop while
-only its run goes steps aside after its turn (step_aside, agents.py), and the user can make the holder step aside
-too (Skip): the next one gets the desktop, and the agent goes to the end of that desktop's priority line. So it
-gets its own desktop back, where its run and its folders are.
+are kept here with the VM, from add_run until finish_run, each with its desktop. An agent keeps its desktop while its
+run goes: nobody steps aside.
 
-Who is next on a desktop (next_holder): its priority line comes first. Its first agent is checked: if no run of its
-own still goes in the VM, it is its turn and the desktop is its; otherwise it goes to the end of the priority line
-and the next one is checked. When none of them is ready, the first in the waiting line that asked for this desktop
-or for none gets it. When a run ends on a desktop nobody holds, the next one is picked then, so an agent whose run
-ends gets its desktop back at once if it is free.
+A VM with no room (its CPUs or memory used up: full, set by Agents.watch_room) takes nobody new: a desktop that frees
+up, or one nobody holds, doesn't go to the waiting line until there is room again. Overloaded, the app takes a desktop back from its agent (step_down): the agent goes to the front of
+the waiting line, asking for that desktop, and Agents removes the desktop; nothing the agent runs there is stopped.
+
+Who is next on a desktop (next_holder): the first in the waiting line that asked for this desktop or for none.
 
 The user can take a desktop over (the agent holding it goes back to the front of the line, asking for that desktop),
-give a desktop to a waiting agent, move an agent to the front, skip the holder, or remove an agent from a line or
-from holding. An agent that loses its place because of the user is told through on_kick (Agents interrupts it; its
+give a desktop to a waiting agent, move an agent to the front, or remove an agent from the line or from holding. An agent that loses its place because of the user is told through on_kick (Agents interrupts it; its
 runs go on). on_change runs after every change, so the agent list (which shows each agent's place) is sent again.
 
 The state lives in each VMRecord (desktops, queue, wants, runs) and is saved with it, so it survives a restart.
@@ -37,6 +34,7 @@ run after it is released (they may call back into this queue).
 """
 
 import threading
+from datetime import UTC, datetime
 
 from sandbox.vms import VMs
 
@@ -47,6 +45,8 @@ class VMQueue:
         self.lock = threading.Lock()
         # Runs whose end someone is handling now (a tool call or Agents), so nobody handles one twice. Not saved.
         self.ending: set[str] = set()
+        # The VMs (names) with no room right now, set by Agents (watch_room): nobody new gets a desktop there.
+        self.full: set[str] = set()
         # Set by Agents. on_grant(vm_name, agent_id): an agent became the holder of a desktop while it waited.
         # on_kick(vm_name, agent_id, reason): the user took the desktop or its place away.
         # on_change(): any holder, line or run changed.
@@ -56,15 +56,11 @@ class VMQueue:
 
     def next_holder(self, record, desktop: int) -> str | None:
         """Only with the lock held, on a desktop nobody holds: makes the next one its holder, and returns it (None when
-        nobody can take it). Its priority line first, in turn: an agent whose run still goes goes to the end of that
-        line. Then the first in the waiting line that asked for this desktop or for none."""
+        nobody can take it): the first in the waiting line that asked for this desktop or for none, unless the VM is
+        full."""
         line = record.desktops[desktop]
-        for _ in range(len(line["priority"])):
-            agent_id = line["priority"].pop(0)
-            if not [run for run in record.runs if run["agent"] == agent_id]:
-                line["holder"] = agent_id
-                return agent_id
-            line["priority"].append(agent_id)
+        if record.name in self.full:
+            return None
         for agent_id in record.queue:
             if record.wants.get(agent_id, desktop) == desktop:
                 record.queue.remove(agent_id)
@@ -75,7 +71,7 @@ class VMQueue:
 
     def join(self, vm_name: str, agent_id: str, desktop: int | None = None) -> int:
         """0 if the agent holds a desktop of the VM now, else its place in line (1 is next). Joining again gives the same
-        answer. An agent in a priority line gets its place there. desktop: the one it wants (where its folders are);
+        answer. desktop: the one it wants (where its folders are);
         None takes any. Which one it got: record.desktop_of(agent_id).
 
         A desktop granted right here is not reported through on_grant: the caller learns it from the 0.
@@ -85,8 +81,6 @@ class VMQueue:
             for line in record.desktops.values():
                 if line["holder"] == agent_id:
                     return 0
-                if agent_id in line["priority"]:
-                    return line["priority"].index(agent_id) + 1
             if agent_id in record.queue:
                 return record.queue.index(agent_id) + 1
             for other in self.vms.list():
@@ -95,11 +89,13 @@ class VMQueue:
             if desktop is not None and desktop not in record.desktops:
                 numbers = ", ".join([str(number) for number in record.desktops])
                 raise ValueError(f"{vm_name} has no desktop {desktop}; its desktops are {numbers}")
-            # A desktop nobody holds: the one asked for, or the first such one.
+            # A desktop nobody holds: the one asked for, or the first such one. A full VM takes nobody new.
             free = None
             for number, line in record.desktops.items():
                 if line["holder"] is None and free is None and desktop in [None, number]:
                     free = number
+            if vm_name in self.full:
+                free = None
             if free is not None:
                 record.desktops[free]["holder"] = agent_id
                 record.save()
@@ -130,38 +126,22 @@ class VMQueue:
         if granted is not None and self.on_grant is not None:
             self.on_grant(vm_name, granted)
 
-    def step_aside(self, vm_name: str, agent_id: str, by_user: bool = False) -> None:
-        """The holder waits on its run (or the user skipped it): the next one gets its desktop, and the agent goes to
-        the end of that desktop's priority line, so it gets it back before anyone in the waiting line once its run is over.
-
-        by_user (Skip): refused when nobody else could take the desktop, and the agent is told (on_kick).
-        """
+    def step_down(self, vm_name: str, agent_id: str) -> int:
+        """The VM is overloaded (Agents.watch_room): the agent gives its desktop back and goes to the front of the waiting
+        line, asking for that desktop again. Returns the desktop's number, for Agents to remove it. No on_kick: Agents tells the agent, and nothing it runs is stopped."""
         with self.lock:
             record = self.vms.get(vm_name)
-            desktop = record.holding(agent_id)
-            if desktop is None:
-                raise ValueError(f"{agent_id} doesn't hold {vm_name}")
-            line = record.desktops[desktop]
-            line["holder"] = None
-            granted = self.next_holder(record, desktop)
-            if granted is None and by_user:
-                line["holder"] = agent_id
-                raise ValueError(f"No other agent waits for desktop {desktop} of {vm_name}")
-            line["priority"].append(agent_id)
-            # Nobody else could take it, and the agent's run ended meanwhile: it is its own again.
-            if line["holder"] is None:
-                granted = self.next_holder(record, desktop)
+            number = record.holding(agent_id)
+            if number is None:
+                raise ValueError(f"{agent_id} doesn't hold a desktop of {vm_name}")
+            record.desktops[number]["holder"] = None
+            record.queue.insert(0, agent_id)
+            record.wants[agent_id] = number
+            record.stepped_down_at = datetime.now(UTC).isoformat()
             record.save()
         if self.on_change is not None:
             self.on_change()
-        if by_user and self.on_kick is not None:
-            reason = (
-                f"The user gave desktop {desktop} of {vm_name} to the next agent for now. You are in its priority line: you "
-                "get it back first, with a message."
-            )
-            self.on_kick(vm_name, agent_id, reason)
-        if granted is not None and self.on_grant is not None:
-            self.on_grant(vm_name, granted)
+        return number
 
     def take_over(self, vm_name: str, desktop: int) -> None:
         """The user holds the desktop now. An agent that held it goes back to the front of the line, asking for it."""
@@ -185,7 +165,7 @@ class VMQueue:
             self.on_kick(vm_name, kicked, f"The user took desktop {desktop} of {vm_name} over. You are first in its queue again.")
 
     def give_to(self, vm_name: str, agent_id: str, desktop: int) -> None:
-        """A waiting agent (in the waiting line or a priority line) holds the desktop now. An agent that held it goes
+        """A waiting agent holds the desktop now. An agent that held it goes
         back to the front of the line, asking for it; if the user held it, the user's hold just ends."""
         kicked = None
         with self.lock:
@@ -195,15 +175,9 @@ class VMQueue:
             line = record.desktops[desktop]
             if line["holder"] == agent_id:
                 return
-            waiting = agent_id in record.queue
-            for other in record.desktops.values():
-                if agent_id in other["priority"]:
-                    waiting = True
-                    other["priority"].remove(agent_id)
-            if not waiting:
+            if agent_id not in record.queue:
                 raise ValueError(f"{agent_id} is not waiting for {vm_name}")
-            if agent_id in record.queue:
-                record.queue.remove(agent_id)
+            record.queue.remove(agent_id)
             record.wants.pop(agent_id, None)
             if line["holder"] is not None and line["holder"] != "user":
                 kicked = line["holder"]
@@ -248,7 +222,7 @@ class VMQueue:
             self.on_change()
 
     def remove(self, vm_name: str, agent_id: str) -> None:
-        """The user takes an agent out of a line, or away from holding (then the next one gets the desktop). Its runs go on."""
+        """The user takes an agent out of the line, or away from holding (then the next one gets the desktop). Its runs go on."""
         granted = None
         reason = None
         with self.lock:
@@ -259,9 +233,6 @@ class VMQueue:
                     line["holder"] = None
                     # The next one gets a desktop nobody holds.
                     granted = self.next_holder(record, number)
-                if agent_id in line["priority"]:
-                    reason = f"The user removed you from {vm_name}'s priority line."
-                    line["priority"].remove(agent_id)
             if agent_id in record.queue:
                 reason = f"The user removed you from {vm_name}'s queue."
                 record.queue.remove(agent_id)
@@ -287,8 +258,6 @@ class VMQueue:
                     record.queue.remove(agent_id)
                 record.wants.pop(agent_id, None)
                 for number, line in record.desktops.items():
-                    if agent_id in line["priority"]:
-                        line["priority"].remove(agent_id)
                     if line["holder"] == agent_id:
                         line["holder"] = None
                         granted = self.next_holder(record, number)
@@ -303,15 +272,13 @@ class VMQueue:
             self.on_grant(vm_name, granted)
 
     def place(self, agent_id: str) -> tuple[str | None, int | None]:
-        """(VM name, 0 when holding a desktop or its place in its line) or (None, None) when in no line. Which desktop:
+        """(VM name, 0 when holding a desktop or its place in the line) or (None, None) when in no line. Which desktop:
         the VM record's desktop_of(agent_id)."""
         with self.lock:
             for record in self.vms.list():
                 for line in record.desktops.values():
                     if line["holder"] == agent_id:
                         return record.name, 0
-                    if agent_id in line["priority"]:
-                        return record.name, line["priority"].index(agent_id) + 1
                 if agent_id in record.queue:
                     return record.name, record.queue.index(agent_id) + 1
         return None, None
@@ -361,7 +328,7 @@ class VMQueue:
 
     def finish_run(self, vm_name: str, run_id: str) -> None:
         """The run ended and its agent has the result: it is gone from the VM. On a desktop nobody holds, the next one
-        gets it, so an agent that stepped aside for this run gets its desktop back at once."""
+        gets it."""
         granted = None
         with self.lock:
             self.ending.discard(run_id)

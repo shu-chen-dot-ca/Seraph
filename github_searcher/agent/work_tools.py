@@ -103,7 +103,7 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   long they take (up to TEST_TIMEOUT). It refuses until the agent read the rules (contributing_guide).
   The suite is a run (sandbox/agent/long_runs.py): run_tests waits for it up to long_runs.FOREGROUND_SECONDS, then
   it goes on in the background (background: true starts it that way). The agent can work on, or end its turn and
-  step aside, so another agent uses the VM meanwhile (sandbox/vm_queue.py). When it ends, finish_tests keeps the
+  sleep: it keeps its desktop (agents.py). When it ends, finish_tests keeps the
   result on the job (agents.py calls it for a run in the background); an after run counts only if the code is still
   the code it started on.
   A passing before is needed to go past set_up and an after for a PR draft; an official before of
@@ -125,7 +125,7 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
 - VMs: the agent sees every VM with what its image has (sandbox/images.py lists each image once) and
   its notes, and picks the one that suits its jobs as its target VM (the user can set it too). It can't make VMs.
   It joins its target VM's queue (sandbox/vm_queue.py) and releases the VM when its jobs there are done. While
-  only its run goes (a test suite, a build), it steps aside instead (agents.py): it is in the VM's priority line then.
+  only its run goes (a test suite, a build), it keeps its desktop and sleeps (agents.py).
   The notes (sandbox/vms.py) say what agents and the user set up in a VM since it was made, so the next
   agent knows (e.g. that a project is already cloned and built there, and what was added on top). Only the
   agent holding the VM adds or removes them (vm_note_add, vm_note_remove), never the user's own. They come
@@ -473,8 +473,8 @@ class WorkTools:
                 f"Waits for the tests up to {long_runs.FOREGROUND_SECONDS // 60} minutes; still running then, they go on in the "
                 "background and you get the result in a message when they end. background: true starts them that way at once, "
                 "for a run you expect to take more than about 5 minutes (most full runs): then do what else you have in this VM "
-                "(not in the repo folder), or end your turn, and the VM goes to whoever waits meanwhile; you get it back first "
-                f"once the run is over. Stopped after {TEST_TIMEOUT // 3600} hours.",
+                "(not in the repo folder), or end your turn: you keep your desktop meanwhile. "
+                f"Stopped after {TEST_TIMEOUT // 3600} hours.",
                 {
                     "type": "object",
                     "properties": {
@@ -3868,7 +3868,7 @@ class WorkTools:
         vm = vm_record.desktop_vm(desktop)
 
         # The diff is read with the tag of the agent's VM tools (ComputerTools), so losing the VM stops that. The suite
-        # itself is a run (long_runs.py) with a tag of its own: it goes on when the agent steps aside or loses the VM.
+        # itself is a run (long_runs.py) with a tag of its own: it goes on when the agent loses the VM.
         tag = f"sandbox-agent-{self.agent_id}"
         # Commands run in the user's home, so ~/click and click are the same folder.
         folder = shlex.quote(args["path"].strip().removeprefix("~/"))
@@ -3932,7 +3932,7 @@ class WorkTools:
         later = (
             f"you get the result in a message when it ends, and it is kept on {job['id']} then. Leave {args['path']} alone "
             f"until then: the tests run on what is in it. If you have more to do in {vm_name}, do it; otherwise end your turn: "
-            f"whoever waits gets {vm_name} meanwhile, and you get it back first once the run is over."
+            "you keep your desktop meanwhile."
         )
         if args.get("background"):
             return {"content": [{"type": "text", "text": f"Started the tests in the background as {run['id']}: " + later}]}
@@ -4165,14 +4165,14 @@ class WorkTools:
             text = "You have no target VM. Pick the VM that suits your jobs with vms_list and choose_vm, then queue again."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         # A desktop it asked for that was taken away (its notes may still name it): another one, with the project set up
-        # there again.
+        # there again. Not one the app took back from it in a full VM: it waits in line for that one.
         wanted = args.get("desktop") or None
         try:
             vm_record = self.agents.vms.get(vm_name)
         except VMsError:
             text = f"{vm_name} is gone. Pick another VM with vms_list and choose_vm, then queue again."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
-        if wanted is not None and wanted not in vm_record.desktops:
+        if wanted is not None and wanted not in vm_record.desktops and self.agent_id not in vm_record.queue:
             numbers = ", ".join(str(number) for number in vm_record.desktops)
             text = (
                 f"{vm_name} has no desktop {wanted} anymore (its desktops are {numbers}): it was taken away, with what was set "
@@ -4187,13 +4187,6 @@ class WorkTools:
             return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
         desktop = vm_record.desktop_of(self.agent_id)
 
-        if place > 0 and self.agent_id not in vm_record.queue:
-            text = (
-                f"You stepped aside from desktop {desktop} of {vm_name} and are number {place} in its priority line: you get it "
-                "back before the agents waiting in its queue, once your run there is over. End your turn; you'll get a message "
-                "when it's yours."
-            )
-            return {"content": [{"type": "text", "text": text}]}
         # Something on an open PR of the user's needs acting on (a follow_up job: a comment, a review, failing checks, a
         # conflict): it goes before new work, to the front of the line.
         following = [job for job in self.agents.jobs.for_agent(self.agent_id) if job["kind"] == "follow_up" and job["status"] in ["queued", "working"]]
@@ -4206,6 +4199,8 @@ class WorkTools:
         if place > 0:
             which = f"desktop {desktop}" if desktop is not None else "the first desktop that frees up"
             text = f"You are number {place} in {vm_name}'s queue, for {which}. End your turn; you'll get a message when it's yours."
+            if vm_name in self.agents.queue.full:
+                text += f" {vm_name} is full right now (its CPUs or memory are used up): nobody new gets a desktop until there is room."
             if following:
                 text += " You are at the front: a follow-up on an open PR goes before new work."
             return {"content": [{"type": "text", "text": text}]}
@@ -4231,6 +4226,12 @@ class WorkTools:
         vm_name = self.record["target_vm"]
         if vm_name is None:
             text = "You have no target VM. Pick the VM that suits your jobs with vms_list and choose_vm first."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if vm_name in self.agents.queue.full:
+            text = (
+                f"{vm_name} is full right now (its CPUs or memory are used up): no desktop is added until there is room. "
+                "queue_for_vm and end your turn: you get a message when a desktop is yours."
+            )
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         try:
             vm_record = self.agents.vms.get(vm_name)
@@ -4307,11 +4308,9 @@ class WorkTools:
             desktop = vm_record.desktop_of(self.agent_id)
             if desktop is not None:
                 status["you"] += f", desktop {desktop}"
-            if desktop is not None and self.agent_id in vm_record.desktops[desktop]["priority"]:
-                status["you"] = f"number {place} in the priority line of desktop {desktop} of {vm_name} (you stepped aside; you get it back first)"
             status["vm_status"] = vm_record.status
             status["desktops"] = [
-                {"desktop": number, "holder": line["holder"], "priority": list(line["priority"])}
+                {"desktop": number, "holder": line["holder"]}
                 for number, line in vm_record.desktops.items()
             ]
             status["queue"] = list(vm_record.queue)

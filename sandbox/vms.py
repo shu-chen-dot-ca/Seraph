@@ -5,12 +5,11 @@ A VM is a resource, not tied to a repo or an agent. Each one is an Incus VM name
 
     DATA_DIR/vms/<name>.json   {"name", "incus_name", "image", "image_fingerprint", "cpus", "memory_gb",
                                 "disk_gb", "internet", "env", "secrets_in_vm", "autostart", "status",
-                                "created_at", "forked_from", "max_desktops", "desktops", "queue", "wants", "runs",
+                                "created_at", "forked_from", "max_desktops", "desktops", "queue", "wants", "runs", "stepped_down_at",
                                 "traffic", "notes"}
 
-"desktops" has one entry per desktop, each {"number", "holder", "priority"}: its number (1 to MAX_DESKTOPS,
-sandbox/vm.py), who uses it, and the agents that stepped aside from it. In the record it is {number: {"holder",
-"priority"}}, lowest number first. A desktop keeps its number: removing one never renumbers the others, and a new one
+"desktops" has one entry per desktop, each {"number", "holder"}: its number (1 to MAX_DESKTOPS, sandbox/vm.py) and
+who uses it. In the record it is {number: {"holder"}}, lowest number first. A desktop keeps its number: removing one never renumbers the others, and a new one
 takes the lowest number free (with 2 and 3 left, the next is 1). "queue" is the agents waiting for a desktop of the
 VM, and "wants" the desktop some of them asked for ({agent id: desktop number}); the others take the first one that
 frees up. Each desktop has its own user, home folder, screen, mouse and keyboard, so an agent on one never gets in
@@ -166,19 +165,31 @@ class VMRecord:
         self.created_at = record["created_at"]
         # The most desktops it may have. Records from before this was kept get the default.
         self.max_desktops = record.get("max_desktops", MAX_DESKTOPS_DEFAULT)
-        # Per desktop, by its number: who uses it ("user", an agent id or None) and the agents that stepped aside from it
-        # (checked first for its next turn). Then the agents waiting for a desktop, and the desktop some of them asked
-        # for. Changed by VMQueue only. Records from before desktops had one desktop, from before numbers were kept are
-        # numbered in order, and none from before stepping aside a priority. Never changed in place, only replaced, so
-        # a thread going through it never sees it change.
+        # Per desktop, by its number: who uses it ("user", an agent id or None). Then the agents waiting for a desktop,
+        # and the desktop some of them asked for. Changed by VMQueue only. Records from before desktops had one desktop,
+        # from before numbers were kept are numbered in order. Never changed in place, only replaced, so a thread going
+        # through it never sees it change.
         self.desktops: dict[int, dict] = {}
-        lines = record.get("desktops") or [{"holder": record.get("holder"), "priority": record.get("priority", [])}]
-        for index, line in enumerate(lines, start=1):
-            self.desktops[line.get("number", index)] = {"holder": line["holder"], "priority": line["priority"]}
         self.queue = record.get("queue", [])
         self.wants = record.get("wants", {})
+        lines = record.get("desktops") or [{"holder": record.get("holder"), "priority": record.get("priority", [])}]
+        for index, line in enumerate(lines, start=1):
+            number = line.get("number", index)
+            # Records from before agents stopped stepping aside (2026-11-08) may have some that stepped aside from a
+            # desktop while their run went: the first holds it again when nobody does, the others wait first for it.
+            stepped = list(line.get("priority", []))
+            holder = line["holder"]
+            if holder is None and stepped:
+                holder = stepped.pop(0)
+            for agent_id in reversed(stepped):
+                self.queue.insert(0, agent_id)
+                self.wants[agent_id] = number
+            self.desktops[number] = {"holder": holder}
         # The long runs agents left going in the VM. Changed by VMQueue only. Records from before runs have none.
         self.runs = record.get("runs", [])
+        # When the app last took a desktop back because the VM was full (VMQueue.step_down), or None. Kept, so a
+        # backend restart doesn't take the next one back sooner.
+        self.stepped_down_at = record.get("stepped_down_at")
         # The VM this one is a copy of, or "" (records from before forks have none).
         self.forked_from = record.get("forked_from", "")
         # Records from before internet use was counted have no traffic.
@@ -249,12 +260,13 @@ class VMRecord:
             "created_at": self.created_at,
             "max_desktops": self.max_desktops,
             "desktops": [
-                {"number": number, "holder": line["holder"], "priority": list(line["priority"])}
+                {"number": number, "holder": line["holder"]}
                 for number, line in self.desktops.items()
             ],
             "queue": list(self.queue),
             "wants": dict(self.wants),
             "runs": [dict(run) for run in self.runs],
+            "stepped_down_at": self.stepped_down_at,
             "forked_from": self.forked_from,
             "traffic": dict(self.traffic),
             "notes": list(self.notes),
@@ -279,10 +291,9 @@ class VMRecord:
         return None
 
     def desktop_of(self, agent_id: str) -> int | None:
-        """The desktop the agent holds or stepped aside from (its priority line), else the one it waits for if it asked
-        for one, else None."""
+        """The desktop the agent holds, else the one it waits for if it asked for one, else None."""
         for number, line in self.desktops.items():
-            if line["holder"] == agent_id or agent_id in line["priority"]:
+            if line["holder"] == agent_id:
                 return number
         if agent_id in self.queue:
             return self.wants.get(agent_id)
@@ -681,9 +692,10 @@ class VMRecord:
         self.max_desktops = max_desktops
         self.save()
 
-    def add_desktop(self, queue_lock: threading.Lock) -> int:
+    def add_desktop(self, queue_lock: threading.Lock, number: int | None = None) -> int:
         """One more desktop, running or not (the desktop bar's +, or an agent's desktop_add); returns its number, the
-        lowest one free. While the VM runs it is set up in it first (the first time TigerVNC is installed, under a
+        lowest one free, or number (one the app took back from an agent in a full VM, added again for it once there is
+        room: Agents.watch_room). While the VM runs it is set up in it first (the first time TigerVNC is installed, under a
         minute); the other desktops and their browsers go on untouched. Only then is it in the record, under VMQueue's
         lock (queue_lock), so no agent gets it before it is up. While the VM is off it comes up with the next start."""
         if not self.lock.acquire(blocking=False):
@@ -691,7 +703,8 @@ class VMRecord:
         try:
             if len(self.desktops) >= self.max_desktops:
                 raise VMsError(f"{self.name} already has {self.max_desktops} desktops, its max desktops (in its Settings).")
-            number = None
+            if number in self.desktops:
+                raise VMsError(f"{self.name} has desktop {number} already.")
             for each in range(1, MAX_DESKTOPS + 1):
                 if number is None and each not in self.desktops:
                     number = each
@@ -702,7 +715,7 @@ class VMRecord:
                 self.vm.set_up_browser(numbers, restart=False)
             with queue_lock:
                 desktops = dict(self.desktops)
-                desktops[number] = {"holder": None, "priority": []}
+                desktops[number] = {"holder": None}
                 self.desktops = dict(sorted(desktops.items()))
                 self.save()
             # The env variables in its ~/.bashrc too.
@@ -716,10 +729,11 @@ class VMRecord:
         finally:
             self.lock.release()
 
-    def remove_desktop(self, number: int, queue_lock: threading.Lock) -> None:
+    def remove_desktop(self, number: int, queue_lock: threading.Lock, taken_back: bool = False) -> None:
         """Take a desktop away, running or not (the × on the desktop bar). The others keep their numbers, and the next
-        one added takes the lowest number free. Not the VM's only desktop, and not one someone holds, stepped aside
-        from, asked for or has a run on. It leaves the record first, under VMQueue's lock (queue_lock), so nobody joins
+        one added takes the lowest number free. Not the VM's only desktop, and not one someone holds, asked for or has a
+        run on, unless taken_back: the app took it back from its agent in a full VM
+        (VMQueue.step_down), which waits for it, and its runs go on. It leaves the record first, under VMQueue's lock (queue_lock), so nobody joins
         it meanwhile; then, while the VM runs, its session, demo and browser stop (desktop 1's session keeps running,
         unseen: see sandbox/vm.py). Its user and home stay, with everything in them, for when the VM gets that desktop
         again."""
@@ -733,7 +747,7 @@ class VMRecord:
             with queue_lock:
                 line = self.desktops[number]
                 runs = [run for run in self.runs if run.get("desktop", 1) == number]
-                if line["holder"] is not None or line["priority"] or number in self.wants.values() or runs:
+                if line["holder"] is not None or (not taken_back and (number in self.wants.values() or runs)):
                     raise VMsError(f"Desktop {number} is in use (held, waited for, or a run is going on it), so it can't go.")
                 kept = {}
                 for each, other in self.desktops.items():
@@ -835,7 +849,7 @@ class VMs:
                     "autostart": config.get("boot.autostart") == "true",
                     "status": "stopped",
                     "created_at": instance["created_at"],
-                    "desktops": [{"holder": None, "priority": []}],
+                    "desktops": [{"holder": None}],
                 },
                 self.changed,
             )
@@ -1012,7 +1026,7 @@ class VMs:
                     "status": "creating",
                     "created_at": datetime.now(UTC).isoformat(),
                     "max_desktops": max_desktops,
-                    "desktops": [{"number": 1, "holder": None, "priority": []}],
+                    "desktops": [{"number": 1, "holder": None}],
                 },
                 self.changed,
             )
@@ -1069,7 +1083,7 @@ class VMs:
                     "forked_from": source_name,
                     "max_desktops": source.max_desktops,
                     # The same desktops as the source; nobody holds or waits for them.
-                    "desktops": [{"number": number, "holder": None, "priority": []} for number in source.desktops],
+                    "desktops": [{"number": number, "holder": None} for number in source.desktops],
                     # Its disk is a copy, so what was set up in the source is set up in it too.
                     "notes": list(source.notes),
                 },

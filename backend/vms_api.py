@@ -3,10 +3,10 @@ screen (the VMs overview's Desktop card), each VM's queue, the user's side of it
 Notes tab, see sandbox/vms.py), and copying files between this computer and a VM (the
 Resources tab, desktop 1's home; only the user can, see sandbox/file_transfer.py).
 
-A VM has one desktop or more, up to its max desktops (sandbox/vm.py), each with a fixed number, its own holder and
-priority line, and one waiting line for them all: the viewer, the screen picture, the lock, Take over, Release and
-Give name the desktop by its number (the viewer and the screen picture take the VM's first desktop when left out, the
-others 1); Front, Skip and Remove name an agent. Max desktops is set when the VM is made and changed at any time (the
+A VM has one desktop or more, up to its max desktops (sandbox/vm.py), each with a fixed number and its own holder, and
+one waiting line for them all: the viewer, the screen picture, the lock, Take over, Release and Give name the desktop
+by its number (the viewer and the screen picture take the VM's first desktop when left out, the others 1); Front and
+Remove name an agent. Max desktops is set when the VM is made and changed at any time (the
 Settings tab); desktops are added or removed one at a time at any time (the desktop bar's + and ×: add one, up to
 the max, which takes the lowest number free, or remove any one but the last left; the others keep their numbers); a
 desktop in use can't go, and new ones go to the agents waiting.
@@ -18,8 +18,7 @@ they are filled in now (Agents.secrets_filled). Settings and the viewer make Inc
 endpoints are plain `def` (FastAPI runs them in a thread pool). Through the remote access domain the page draws the
 desktop itself and its VNC connection passes through here (/vms/{name}/vnc). The queue
 endpoints are `async def`: they are quick, and taking a VM from an agent
-interrupts that agent, which lives on the event loop. Skip makes the holding agent step aside (the next one gets
-the VM, and the agent waits in the VM's priority line, sandbox/vm_queue.py). Stop ends one of the long runs agents
+interrupts that agent, which lives on the event loop. Stop ends one of the long runs agents
 left going in the VM (sandbox/agent/long_runs.py); its agent is told the user stopped it.
 """
 
@@ -171,7 +170,7 @@ async def delete_vm(name: str) -> dict:
     # Read after the delete: an agent may have joined the queue while it ran.
     waiting = list(record.queue)
     for line in record.desktops.values():
-        waiting += [line["holder"]] + list(line["priority"])
+        waiting.append(line["holder"])
     affected = []
     for agent_id in waiting:
         if agent_id is None or agent_id == "user":
@@ -663,21 +662,6 @@ async def move_to_front(name: str, body: AgentRequest) -> dict:
         raise HTTPException(status_code=404, detail=str(error))
     try:
         queue.move_to_front(name, body.agent)
-    except ValueError as error:
-        raise HTTPException(status_code=409, detail=str(error))
-    return {}
-
-
-@router.post("/vms/{name}/skip")
-async def skip(name: str, body: AgentRequest) -> dict:
-    """The holding agent steps aside: the next one gets the VM, and it waits in the priority line, so it gets the VM back
-    first. It is interrupted; its runs go on."""
-    try:
-        vms.get(name)
-    except VMsError as error:
-        raise HTTPException(status_code=404, detail=str(error))
-    try:
-        queue.step_aside(name, body.agent, by_user=True)
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error))
     return {}

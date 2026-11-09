@@ -1,16 +1,16 @@
 """Long commands an agent runs in a VM (a test suite, a big install or build), apart from the call that started them.
 
 A run goes on by itself in the VM (setsid, its output in a file there), so it keeps going while its agent does
-other things, steps aside so another agent can use the VM (sandbox/vm_queue.py), or the backend restarts. Only the
-VM stopping or restarting, the user's Stop (stop) or RUN_LIMIT_SECONDS end it early.
+other things or sleeps, loses its desktop (sandbox/vm_queue.py), or the backend restarts. Only the VM stopping or
+restarting, the user's Stop (stop) or RUN_LIMIT_SECONDS end it early.
 
 Its agent either waits for it (the bash and run_tests tools wait up to FOREGROUND_SECONDS, then leave it going in
 the background), or starts it in the background at once (background: true). A run nobody waits for anymore is
 checked by the app every few seconds (agents.py, watch_runs), and the agent gets its result in a message.
 
-Every run is tagged with its own id (VM.exec's tag), not with its agent's, so losing the VM (the user took it,
-gave it to another agent or skipped the agent) never kills it. It runs as the user of its agent's desktop (VM.exec),
-and its output stays in that user's home, so it is checked as that user too.
+Every run is tagged with its own id (VM.exec's tag), not with its agent's, so losing the VM (the user took it or
+gave it to another agent, or the app took it back from a full VM) never kills it. It runs as the user of its agent's
+desktop (VM.exec), and its output stays in that user's home, so it is checked as that user too.
 
 Runs share the VM's CPU and memory. When memory runs out, a run's processes are ended before the desktop's (VM.exec's
 OOM_SCORE_ADJ).

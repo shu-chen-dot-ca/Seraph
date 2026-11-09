@@ -36,11 +36,11 @@ one cut off in the middle of a turn gets one more saying so.
 
 After each turn the worker enforces the VM rule: an agent never holds a VM it has nothing to do in.
 - Holding a VM with no queued or working job for it: the VM is released for it.
-- Holding one while only its run goes there (a test suite or build it left going, sandbox/agent/long_runs.py): it
-  steps aside (VMQueue.step_aside). The next one gets the VM, and the agent waits in the VM's priority line, which
-  comes before its waiting line: it gets the VM back as soon as its run is over and the VM is free.
+- Holding one while its run goes there (a test suite or build it left going, sandbox/agent/long_runs.py): it keeps
+  its desktop and sleeps; watch_runs wakes it when the run ends. An agent never gives up its desktop while it has work
+  there: nobody steps aside. Only the user (Take over, Give, Remove) or a full VM (watch_room, below) takes it.
 - Holding one with open jobs there: it is reminded to go on with them now, not to wait for an answer in chat. After
-  MAX_NUDGES reminders in a row with no change to its jobs, the VM is released for it.
+  MAX_NUDGES reminders in a row with no change to its jobs, the reminders stop; it keeps the desktop.
 - In no queue but with queued jobs for a VM: it is reminded to queue_for_vm (MAX_NUDGES times at most).
 An agent with open work never just stops: every HEARTBEAT_CHECK_SECONDS (keep_going), one with a job queued or working
 that has been out of its turn for HEARTBEAT_SECONDS is told to carry on, whatever ended it (a turn that failed,
@@ -48,6 +48,15 @@ reminders that ran out, a VM released for it, a backend restart, a blocker it re
 its place in a VM's line (the grant wakes it), a run of its going (watch_runs wakes it), the user (waiting_on_user, or
 the user stopped it), or being archived. How long it has been out: since the newest entry in its history with a time
 (its turn's end, an error, a message), so restarts don't put it off.
+A VM steps down when it runs out of room (watch_room, every ROOM_CHECK_SECONDS, from the VM's load and free memory).
+Full (the load of the last minute at its number of CPUs or more, or less than ROOM_MEMORY_PERCENT of its memory free),
+it takes nobody new (VMQueue.full): agents wait in its line instead of getting a free desktop or adding one.
+Overloaded (the load of the last 5 minutes at OVERLOAD_TIMES its CPUs, or less than OVERLOAD_MEMORY_PERCENT free), it
+also takes one desktop back from its agent, at most every STEP_DOWN_SECONDS, and removes that desktop
+(VMQueue.step_down): the agent goes to the front of the line asking for it, and nothing it runs is stopped (its runs,
+servers and files stay). One out of its turn first, then the highest desktop.
+With room again, whoever waits gets a free desktop, or the desktop they wait for is added back (one that was taken
+back, or a new one for an agent that asked for none), one a check, up to the VM's max desktops.
 The VM queue (sandbox/vm_queue.py: one line per desktop of each VM, and agents on different desktops work at
 the same time) tells Agents when an agent's turn comes (on_grant: a message
 that wakes it, with the VM's notes on what earlier agents set up in it, or the VM passes on at once
@@ -57,8 +66,8 @@ VM is killed, except its runs).
 
 Runs nobody waits for anymore (the agent's turn ended, or the backend restarted) are checked every
 RUN_CHECK_SECONDS (watch_runs). When one ends, its agent gets the result (bash: ComputerTools.bash_result; tests:
-WorkTools.finish_tests, which keeps it on the job). An agent in that VM's priority line gets it together with the
-message that the VM is its again; any other agent right away. Archiving or deleting an agent stops its runs.
+WorkTools.finish_tests, which keeps it on the job). An agent waiting in that VM's line (its desktop was taken back)
+gets it together with the message that a desktop is its again; any other agent right away. Archiving or deleting an agent stops its runs.
 
 The user's side: assign() turns an issue into a job for an agent, set_up_repo() a repo from the
 Repos list (its Set up button) into a set_up_repo job: the agent reads the README and docs, sets an
@@ -175,6 +184,15 @@ RUN_CHECK_SECONDS = 10
 # The heartbeat: an agent with open work out of its turn this long, for no reason, is told to carry on; looked this often.
 HEARTBEAT_SECONDS = 10 * 60
 HEARTBEAT_CHECK_SECONDS = 60
+# How often each running VM's load and free memory are read (watch_room). Full: the load of the last minute at its number
+# of CPUs or more, or less than ROOM_MEMORY_PERCENT of its memory free. Overloaded: the load of the last 5 minutes at
+# OVERLOAD_TIMES its CPUs or more, or less than OVERLOAD_MEMORY_PERCENT free; then a desktop is taken back from its agent,
+# at most every STEP_DOWN_SECONDS, so the load has time to show it.
+ROOM_CHECK_SECONDS = 60
+ROOM_MEMORY_PERCENT = 20
+OVERLOAD_TIMES = 2
+OVERLOAD_MEMORY_PERCENT = 10
+STEP_DOWN_SECONDS = 15 * 60
 # How often timed questions are checked for an answer_by that passed.
 QUESTION_CHECK_SECONDS = 10
 OPEN_STATUSES = ["queued", "working"]
@@ -243,6 +261,7 @@ class Agents:
         self.run_watcher = None
         self.question_timer = None
         self.heartbeat = None
+        self.room_watcher = None
         queue.on_grant = self.on_grant
         queue.on_kick = self.on_kick
         # Every place in a queue shows in the agent list.
@@ -327,7 +346,7 @@ class Agents:
         for vm_record in self.vms.list():
             waiting = list(vm_record.queue)
             for line in vm_record.desktops.values():
-                waiting += [line["holder"]] + list(line["priority"])
+                waiting.append(line["holder"])
             for agent_id in waiting:
                 if agent_id is None or agent_id == "user" or agent_id in self.agents:
                     continue
@@ -351,6 +370,7 @@ class Agents:
         self.run_watcher = asyncio.create_task(self.watch_runs())
         self.question_timer = asyncio.create_task(self.answer_questions())
         self.heartbeat = asyncio.create_task(self.keep_going())
+        self.room_watcher = asyncio.create_task(self.watch_room())
 
     async def stop(self) -> None:
         if self.saver is not None:
@@ -361,6 +381,8 @@ class Agents:
             self.question_timer.cancel()
         if self.heartbeat is not None:
             self.heartbeat.cancel()
+        if self.room_watcher is not None:
+            self.room_watcher.cancel()
         for worker in self.workers.values():
             worker.cancel()
         for agent in self.agents.values():
@@ -500,31 +522,15 @@ class Agents:
             if agent.stopped or self.wake[agent.id].is_set():
                 continue
 
-            # Only its run goes in the VM now: it steps aside, so whoever waits gets the VM meanwhile.
+            # Its run goes in the VM: it keeps its desktop and sleeps; watch_runs wakes it when the run ends.
             runs = []
             for vm_record in self.vms.list():
                 if place == 0 and vm_record.name == vm_name:
                     runs = [run for run in vm_record.runs if run["agent"] == agent.id]
             if runs:
-                try:
-                    self.queue.step_aside(vm_name, agent.id)
-                except (ValueError, VMsError):
-                    continue
-                text = f"Stepped aside from {vm_name} while its run goes; it gets the VM back first once the run is over"
-                agent.history.append({"type": "system", "text": text, "time": datetime.now(UTC).isoformat()})
-                self.save(agent)
-                self.version += 1
                 continue
-
+            # Reminded enough: it keeps the desktop anyway (the heartbeat wakes it later).
             if place == 0 and nudge["count"] >= MAX_NUDGES:
-                try:
-                    self.queue.release(vm_name, agent.id)
-                except (ValueError, VMsError):
-                    continue
-                text = f"Released {vm_name}: open jobs, but no progress after {MAX_NUDGES} reminders"
-                agent.history.append({"type": "system", "text": text, "time": datetime.now(UTC).isoformat()})
-                self.save(agent)
-                self.version += 1
                 continue
             if place == 0:
                 nudge["count"] += 1
@@ -555,14 +561,10 @@ class Agents:
                 status = "working"
             if place is not None and place > 0:
                 status = "in_queue"
-            # In a VM's priority line: it stepped aside while its run goes, and gets the VM back first.
             desktop = None
             for vm_record in self.vms.list():
                 if vm_record.name == vm_name:
                     desktop = vm_record.desktop_of(agent.id)
-                for line in vm_record.desktops.values():
-                    if agent.id in line["priority"]:
-                        status = "in_priority"
             if place == 0:
                 status = "using_vm"
             # The last thing it did, for the one-line activity column.
@@ -590,7 +592,7 @@ class Agents:
                     "status": status,
                     "busy": agent.busy,
                     "vm": vm_name,
-                    # The desktop of that VM it holds, stepped aside from or asked for (None: it waits for any).
+                    # The desktop of that VM it holds or asked for (None: it waits for any).
                     "desktop": desktop,
                     "place": place,
                     "context_used": agent.context_used,
@@ -1917,6 +1919,97 @@ class Agents:
                 self.pending[agent.id].append({"from": "System", "text": text, "shown": False})
                 self.wake[agent.id].set()
 
+    async def watch_room(self) -> None:
+        """A VM steps down when it runs out of room (module docstring), every ROOM_CHECK_SECONDS: each running VM's load
+        and free memory are read in it. Full: nobody new gets a desktop (VMQueue.full). Overloaded: one desktop is taken
+        back from its agent and removed. Room again: whoever waits gets a desktop, one a check."""
+        while True:
+            await asyncio.sleep(ROOM_CHECK_SECONDS)
+            for vm_record in self.vms.list():
+                if vm_record.status != "running":
+                    self.queue.full.discard(vm_record.name)
+                    continue
+                # The load of the last 1 and 5 minutes, the number of CPUs, then the memory in all and free (kB).
+                script = "cut -d ' ' -f 1,2 /proc/loadavg; nproc; awk '/^MemTotal:|^MemAvailable:/ {print $2}' /proc/meminfo"
+                try:
+                    result = await asyncio.to_thread(vm_record.vm.exec_root, script, 30)
+                    numbers = result.stdout.split()
+                    load = float(numbers[0])
+                    load_5 = float(numbers[1])
+                    cpus = int(numbers[2])
+                    free = int(numbers[4]) * 100 / int(numbers[3])
+                except Exception:
+                    # The VM doesn't answer right now: look again next time.
+                    continue
+
+                if load < cpus and free >= ROOM_MEMORY_PERCENT:
+                    self.queue.full.discard(vm_record.name)
+                    # Room: a free desktop goes to whoever waits.
+                    try:
+                        await asyncio.to_thread(self.queue.fill, vm_record.name)
+                    except VMsError:
+                        continue
+                    # Then a desktop the VM lacks is added for the first one waiting for it (taken back from it) or for
+                    # any desktop, up to the VM's max desktops.
+                    add = False
+                    number = None
+                    for agent_id in list(vm_record.queue):
+                        wanted = vm_record.wants.get(agent_id)
+                        if not add and (wanted is None or wanted not in vm_record.desktops):
+                            add = True
+                            number = wanted
+                    if not add or len(vm_record.desktops) >= vm_record.max_desktops:
+                        continue
+                    try:
+                        await asyncio.to_thread(vm_record.add_desktop, self.queue.lock, number)
+                        await asyncio.to_thread(self.queue.fill, vm_record.name)
+                    except VMsError:
+                        # The VM is busy (a start, a stop, another desktop) or gone: again next time.
+                        pass
+                    continue
+
+                self.queue.full.add(vm_record.name)
+                if load_5 < cpus * OVERLOAD_TIMES and free >= OVERLOAD_MEMORY_PERCENT:
+                    continue
+                last = vm_record.stepped_down_at
+                if last is not None and datetime.now(UTC) - datetime.fromisoformat(last) < timedelta(seconds=STEP_DOWN_SECONDS):
+                    continue
+                if len(vm_record.desktops) < 2:
+                    continue
+                # Overloaded: a desktop is taken back. From one out of its turn first (nothing is cut off),
+                # then from the highest desktop.
+                chosen = None
+                for line in vm_record.desktops.values():
+                    agent = self.agents.get(line["holder"])
+                    if agent is None:
+                        continue
+                    if chosen is None or chosen.busy or not agent.busy:
+                        chosen = agent
+                if chosen is None:
+                    continue
+                try:
+                    number = self.queue.step_down(vm_record.name, chosen.id)
+                except (ValueError, VMsError):
+                    continue
+                text = (
+                    f"{vm_record.name} ran out of room (a load of {load_5:g} on {cpus} CPUs, {free:.0f}% of its memory free), so "
+                    f"the app took desktop {number} back for now. Nothing you started there was stopped: your runs, servers and "
+                    "files are all still there. You are first in its queue and get the desktop back, with a message, once there "
+                    "is room. End your turn now."
+                )
+                chosen.history.append({"type": "system", "text": text, "time": datetime.now(UTC).isoformat()})
+                # It hears it with its next message (the one giving the desktop back), or now if it is in a turn: the turn
+                # stops, since its VM tools refuse without a desktop.
+                self.pending[chosen.id].append({"from": "System", "text": text, "shown": True})
+                self.save(chosen)
+                self.version += 1
+                await chosen.interrupt()
+                try:
+                    await asyncio.to_thread(vm_record.remove_desktop, number, self.queue.lock, True)
+                except VMsError:
+                    # The VM is busy: the desktop stays, free, until its agent gets it back.
+                    pass
+
     async def answer_questions(self) -> None:
         """Every QUESTION_CHECK_SECONDS: a timed question (inbox.py) still pending after its answer_by is answered with
         the agent's recommendation, as the reply "I pick: ..." with answered_by "timer". The deadline is in the draft,
@@ -1962,9 +2055,9 @@ class Agents:
                     pass
 
     async def run_ended(self, vm_record, run: dict, ended: dict) -> None:
-        """A run in the background ended: its agent gets the result. One that stepped aside from this VM gets it with
-        the message that the VM is its again (finish_run, right after this, may give it the VM at once), so it starts
-        one turn with both; any other agent is woken now."""
+        """A run in the background ended: its agent gets the result. One that waits in a VM's line (its desktop was taken
+        back from a full VM, or the user took it) gets it with the message that a desktop is its again (finish_run,
+        right after this, may give it one at once), so it starts one turn with both; any other agent is woken now."""
         agent = self.agents.get(run["agent"])
         if agent is None:
             return
@@ -1974,10 +2067,11 @@ class Agents:
         else:
             text = f"Your run {run['id']} in {vm_record.name} ended: `{run['label'][:200]}`, " + agent.computer_tools.bash_result(vm_record, run, ended)
         agent.history.append({"type": "system", "text": f"Its run in {vm_record.name} ended: {run['label'][:120]}", "time": datetime.now(UTC).isoformat()})
-        if not [line for line in vm_record.desktops.values() if agent.id in line["priority"]]:
+        vm_name, place = self.queue.place(agent.id)
+        if place is None or place == 0:
             self.notify(agent.id, text)
             return
-        text += f"\nYou get {vm_record.name} back first, with a message, as soon as it is free; until then end your turn."
+        text += f"\nYou get a desktop of {vm_name} back, with a message, as soon as one is yours; until then end your turn."
         self.pending[agent.id].append({"from": "System", "text": text, "shown": False})
         self.save(agent)
         self.version += 1

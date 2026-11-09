@@ -28,8 +28,9 @@ Settings dialog): any agent may list their names and add or remove empty ones
 bash can show a command live in a terminal window on the desktop (visible), and start programs
 on the desktop (on_desktop), so the user sees long runs and the app being tried, not only the agent.
 A visible command is a run (long_runs.py): it goes on in the VM by itself. bash waits for it up to
-long_runs.FOREGROUND_SECONDS, then leaves it going in the background; background: true returns at once. A run in
-the background is collected by the app (agents.py), which gives the agent its result (bash_result) in a message.
+long_runs.FOREGROUND_SECONDS, then leaves it going in the background;
+background: true returns at once. A run in the background is collected by the app (agents.py), which gives the agent
+its result (bash_result) in a message.
 While another agent's run goes in the VM, or another agent holds one of its other desktops, vm_stop and vm_restart
 are refused (they would end that work), unless the VM no longer answers.
 
@@ -150,8 +151,8 @@ class ComputerTools:
                 "builds, test runs); its output then comes back as one, stdout and stderr together. A visible command still "
                 f"running after {long_runs.FOREGROUND_SECONDS // 60} minutes goes on in the background, and you get its result in a message when it "
                 "ends. background: true starts it that way at once (shown in the window too), for anything you expect to take "
-                "more than about 5 minutes (a big install, a build): then do what else you have in this VM, or end your turn, "
-                "and the VM goes to whoever waits for it meanwhile; you get it back first once the run is over. "
+                "more than about 5 minutes (a big install, a build): then do what else you have in this VM, or end your turn: "
+                "you keep your desktop meanwhile. "
                 "To start a program or a terminal window on the desktop, prefix it with on_desktop and put it "
                 "in the background with its output in a file, e.g. `on_desktop nohup python app.py > ~/app.log 2>&1 &` or "
                 "`on_desktop gnome-terminal -- bash -c 'cd ~/proj && python demo.py; exec bash'` (konsole -e on a KDE desktop).",
@@ -499,8 +500,8 @@ class ComputerTools:
         self.queue.add_run(record.name, run)
         later = (
             f"you get its result in a message when it ends (all its output is in {run['log']} in the VM). If you have more "
-            f"to do in {record.name} that doesn't touch what it works on, do it; otherwise end your turn: whoever waits gets "
-            f"{record.name} meanwhile, and you get it back first once the run is over."
+            f"to do in {record.name} that doesn't touch what it works on, do it; otherwise end your turn: you keep your desktop "
+            "meanwhile."
         )
         if args.get("background"):
             return {"content": [{"type": "text", "text": f"Started in the background as {run['id']}: " + later}]}
