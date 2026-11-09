@@ -166,7 +166,7 @@ from github_searcher.inbox import ASK_SETTINGS_FILE, AUTOMATION_FILE, MUST_WAIT,
 from github_searcher.issue_tags import CHECKS, TAKEN_PR_DAYS
 from github_searcher.jobs import EVIDENCE_DIR
 from github_searcher.projects import TITLE, TITLE_CHARS
-from github_searcher.search import get_contents, get_issue_in_full, get_issue_status, get_merged_prs, get_pr_status, get_readme, get_repository, get_thread, get_tree
+from github_searcher.search import get_contents, get_issue_in_full, get_issue_status, get_merged_prs, get_pr_status, get_readme, get_repository, get_thread, get_tree, search_issues
 from sandbox.agent import long_runs
 from sandbox.agent.computer_use import Computer, ComputerError
 from sandbox.agent.tools import HIDE_MIN_LENGTH
@@ -590,7 +590,8 @@ class WorkTools:
                 "read_issue",
                 "Read an issue or PR (owner/name#number) in full, as it is right now: its text, every comment, where it was "
                 "mentioned (other issues, PRs and commits), the PRs linked to it or that would close it with their state, "
-                "review, checks and newest comments, who was assigned and when, its labels, and the checks on the repo's "
+                "review, checks and newest comments, the PRs that only name its number in their text (GitHub didn't link "
+                "them; read the ones that may be about it), who was assigned and when, its labels, and the checks on the repo's "
                 "default branch (and a PR's own reviews, checks and conversations on lines of code, each comment with the id "
                 "draft_comment's reply_to takes). Read it before you take an issue, claim it, comment on it "
                 "or close it: draft_comment, close_issue and a fix_issue job going past understand refuse until you read it "
@@ -2145,6 +2146,25 @@ class WorkTools:
                     ],
                 }
             )
+
+        # The PRs that name the issue's number in their title or text without GitHub linking them (opencodex#7955 fixed
+        # #7954 that way, and we opened a second PR): maybe someone is on it. Some only name the number for something
+        # else; the agent reads the ones that may be about it.
+        if data["__typename"] == "Issue":
+            result["prs_naming_its_number"] = []
+            try:
+                found = await asyncio.to_thread(search_issues, f"repo:{repo} is:pr {number}")
+            except (httpx.HTTPError, ValueError):
+                found = {"items": []}
+            for item in found["items"][:10]:
+                where = f"{repo}#{item['number']}"
+                if where.lower() in [each.lower() for each in seen]:
+                    continue
+                state = item["state"]
+                if (item.get("pull_request") or {}).get("merged_at"):
+                    state = "merged"
+                author = item["user"]["login"] if item.get("user") else "ghost"
+                result["prs_naming_its_number"].append({"pr": where, "title": item["title"], "state": state, "author": author, "opened": item["created_at"][:10]})
 
         # The checks on the default branch's newest commit: failing there is not this change's doing.
         branch = data["default_branch"]
