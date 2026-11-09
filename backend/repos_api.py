@@ -47,7 +47,7 @@ from pydantic import BaseModel
 from backend.issues_api import auto_remove_issues
 from backend.shared import agents, issue_tags, issues, repo_signals, repos, tracked
 from github_searcher.issue_tags import RULES_VERSION
-from github_searcher.repo_signals import NEWCOMER_VERSION, POLICY_VERSION
+from github_searcher.repo_signals import NEWCOMER_VERSION, NON_LATIN_SHARE, POLICY_VERSION
 from github_searcher.search import get_contents, get_open_issues, get_readme, get_repo_totals, get_repository, get_tree
 from sandbox.vms import VMsError
 
@@ -393,4 +393,25 @@ async def keep_signals() -> None:
                 failed.append(name)
                 continue
             repo_signals.update(name, totals)
+        # Signals from before the README's language was checked get it with one small read each, the README alone, as
+        # repo_signals.py does it (None without a README).
+        known = repo_signals.all()
+        for name in names:
+            if name in failed or name not in known or "readme_english" in known[name]:
+                continue
+            english = None
+            try:
+                readme = await asyncio.to_thread(get_readme, name.split("/")[0], name.split("/")[1])
+                text = re.sub(r"```.*?```|`[^`]*`|https?://\S+|<[^>]+>", " ", readme, flags=re.S)
+                letters = [char for char in text if char.isalpha()]
+                other = [char for char in letters if ord(char) > 0x24F]
+                english = len(other) <= NON_LATIN_SHARE * len(letters)
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code != 404:
+                    failed.append(name)
+                    continue
+            except (httpx.HTTPError, ValueError):
+                failed.append(name)
+                continue
+            repo_signals.update(name, {"readme_english": english})
         await asyncio.sleep(SIGNALS_CHECK_SECONDS)

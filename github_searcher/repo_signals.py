@@ -21,6 +21,7 @@ One JSON file, DATA_DIR/repo_signals.json, by repo (owner/name):
                             "issues_closed_30d", "trend", "last_release", "last_release_at",
                             "issue_reply_rate", "issues_checked"},
                "community": {"contributing", "code_of_conduct", "discussions", "channels"},
+               "readme_english": bool | None,
                "reviewers": {"agent", "both", "human", "tag"},
                "atmosphere": {"tone", "summary", "asks_for", "prs", "judged_at"} | None,
                "ai_policy": {"tag", "quote", "file", "basis", "version"},
@@ -72,6 +73,10 @@ activity: monthly averages over the last 90 days (GitHub's own counts), the last
 issues outsiders opened 7 to 90 days ago (of the 100 newest), the share a maintainer answered within a week.
 
 community: a CONTRIBUTING file, a code of conduct, GitHub Discussions on, and chat links in the README.
+
+readme_english: whether the README's main language is English: at most NON_LATIN_SHARE of its letters (code, links and
+HTML left out) are outside the Latin script. An English README that links a Chinese translation, or has a short part in
+Chinese, is; a Chinese one is not. None when the README couldn't be read. Explore keeps out a repo whose README isn't.
 
 atmosphere: Claude (claude_judge.py) reads what maintainers wrote on recent finished outside PRs and names how
 feedback feels: warm, neutral, strict or curt ("unknown" when there is too little to read), with one sentence and
@@ -204,6 +209,8 @@ NEWCOMER_VERSION = 2
 PR_TEMPLATE_CHARS = 2000
 # A rate from fewer finished PRs (or checked issues) than this says little.
 MIN_SAMPLE = 3
+# The share of a README's letters outside the Latin script over which its main language isn't English.
+NON_LATIN_SHARE = 0.2
 MIN_ISSUES = 5
 MIN_NEWCOMERS = 3
 # A newcomer's first PR still open after this many days counts as left waiting.
@@ -614,6 +621,12 @@ class RepoSignals:
         for channel, pattern in CHANNELS:
             if pattern.search(readme):
                 channels.append(channel)
+        readme_english = None
+        if isinstance(results[2], str):
+            text = re.sub(r"```.*?```|`[^`]*`|https?://\S+|<[^>]+>", " ", readme, flags=re.S)
+            letters = [char for char in text if char.isalpha()]
+            other = [char for char in letters if ord(char) > 0x24F]
+            readme_english = len(other) <= NON_LATIN_SHARE * len(letters)
         community = {
             "contributing": any(data[key] is not None for key in CONTRIBUTING_FILES),
             "code_of_conduct": repository["codeOfConduct"] is not None,
@@ -738,6 +751,7 @@ class RepoSignals:
             "reviewers": {"agent": agent_only, "both": both, "human": human_only, "tag": reviewer_tag},
             "activity": activity,
             "community": community,
+            "readme_english": readme_english,
             # Kept as they were until complete() reads them again.
             "atmosphere": previous.get("atmosphere") if previous is not None else None,
             "ai_policy": previous["ai_policy"] if previous is not None else None,
