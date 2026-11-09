@@ -70,7 +70,8 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   open PR, a maintainer said no): the job is cancelled with why, a pending draft of it withdrawn, and the issue is taken
   off the Issues board for good (nothing on GitHub changes).
 - Taking back, only what the agent itself sent and where the repo's Level of automation allows it (Comments, Pull
-  requests): delete_comment (a comment posted from its draft), close_pr (a PR opened from its draft) and drop_commits
+  requests): delete_comment (a comment posted from its draft), close_pr (a PR opened from its draft, with a comment
+  saying why posted on it first) and drop_commits
   (its newest pushes on a PR of its own: the branch goes back to a commit it had before one of them, only while nobody
   pushed since). A stalled PR of its own is made again as a fresh one: draft_pr with replaces (and every remake job,
   Agents.remake_pr, does it by itself); once the new one is on GitHub the old one is closed (github_account.py).
@@ -619,9 +620,10 @@ class WorkTools:
                 "close_pr",
                 "Take back a PR of yours (pr: owner/name#number): one the app opened from your draft. Only where the user lets "
                 "agents send PRs there (the repo's Level of automation: Pull requests). For one that shouldn't be there "
-                "anymore (the issue turned out invalid, it was a mistake). A stalled one is made again instead: draft_pr with "
-                "replaces.",
-                {"type": "object", "properties": {"pr": {"type": "string"}}, "required": ["pr"]},
+                "anymore (the issue turned out invalid, it was a mistake, another PR with the same change was merged). "
+                "comment says why, in a sentence or two, for the maintainers: it is posted on the PR as the user first, then "
+                "the PR is closed, so nobody has to ask why. A stalled one is made again instead: draft_pr with replaces.",
+                {"type": "object", "properties": {"pr": {"type": "string"}, "comment": {"type": "string"}}, "required": ["pr", "comment"]},
             )(self.close_pr),
             tool(
                 "drop_commits",
@@ -2292,11 +2294,20 @@ class WorkTools:
         if repo.lower() not in allowed:
             text = f"The user doesn't let agents send PRs on {repo} (its Level of automation: Pull requests is off), so you can't close one there either."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
+        comment = (args.get("comment") or "").strip()
+        if comment == "":
+            return {"content": [{"type": "text", "text": "comment is required: why it is closed, for the maintainers."}], "is_error": True}
+        # Why first, then the close: a PR closed without a word makes the maintainers ask.
+        github_account = self.agents.your_repositories.github_account
         try:
-            result = await asyncio.to_thread(self.agents.your_repositories.github_account.manage, "close", repo, int(number))
+            posted = await asyncio.to_thread(github_account.comment, pr, comment)
         except SendError as error:
-            return {"content": [{"type": "text", "text": f"It wasn't closed. {error}"}], "is_error": True}
-        return {"content": [{"type": "text", "text": f"{pr}: {result}"}]}
+            return {"content": [{"type": "text", "text": f"It wasn't closed: the comment didn't go. {error}"}], "is_error": True}
+        try:
+            result = await asyncio.to_thread(github_account.manage, "close", repo, int(number))
+        except SendError as error:
+            return {"content": [{"type": "text", "text": f"The comment is on it ({posted['url']}), but it wasn't closed. {error}"}], "is_error": True}
+        return {"content": [{"type": "text", "text": f"{pr}: posted why ({posted['url']}), then {result}"}]}
 
     async def drop_commits(self, args: dict) -> dict:
         pr = args["pr"].strip()
