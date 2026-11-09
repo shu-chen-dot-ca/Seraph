@@ -32,7 +32,11 @@ a free one every TAGS_FREE_SECONDS anyway (someone may have taken it), and a fre
 queued, working or waiting on the user) every ACTIVE_TAGS_SECONDS (5 minutes), so a claim on it shows soon. The Tag
 again buttons and the pages' Refresh (Issues: every open issue in the list, after
 its facts; Tracked: every free issue, after the checks) do it at once
-(refresh_tags), and say which ones that were free aren't anymore.
+(refresh_tags), and say which ones that were free aren't anymore. An issue that moves on the board (Open, Catalog,
+In progress, Open PR; a job waiting in the queue is Catalog, as on the board) is read again by keep_tags at once, whatever
+else holds (held, failed a moment ago), unless its tags are newer than MOVED_FRESH_SECONDS: so when an agent starts on a
+Catalog card, a claim made while it waited there shows, and the agent hears who has it (Agents.issue_taken) and
+decides. Not a move to finished.
 
 The robot button over the Dashboard's Issues board sets two things, kept in AUTO_REMOVE_FILE. How often the board's
 issues are read again (keep_tags): refresh_open_minutes for ones no agent has started (30 at first), _catalog_ for ones
@@ -115,6 +119,8 @@ ACTIVE_TAGS_SECONDS = 5 * 60
 TAGS_RETRY_SECONDS = 30 * 60
 # An issue in the Issues list with no tags yet is tagged within this long (keep_new_tags), and tried again as soon.
 NEW_TAGS_SECONDS = 5
+# An issue that moved on the board is read again at once, unless its tags are newer than this (keep_tags).
+MOVED_FRESH_SECONDS = 120
 # Remove automatically's rules; all off until saved once.
 AUTO_REMOVE_FILE = DATA_DIR / "issue_auto_remove.json"
 AUTO_REMOVE_OFF = {
@@ -575,6 +581,8 @@ async def keep_tags() -> None:
     failed = []
     failed_since = time.monotonic()
     removed_at = 0.0
+    # Where each issue of the Issues list was on the board last round.
+    last_columns = {}
     while True:
         if time.monotonic() - failed_since > TAGS_RETRY_SECONDS:
             failed = []
@@ -608,12 +616,38 @@ async def keep_tags() -> None:
                 if issue["assignees"] == 0:
                     candidates.append((f"{item['full_name']}#{issue['number']}", issue.get("updated_at")))
 
+        # Where each issue is on the board now, as its columns. One that moved since the last round is read again first,
+        # unless its tags are newer than MOVED_FRESH_SECONDS; not a move to finished.
+        columns = {}
+        for issue_id in listed:
+            job = latest.get(issue_id)
+            status = job["status"] if job is not None else "cancelled"
+            column = "open"
+            if issue_id in catalog or status == "queued":
+                column = "catalog"
+            if status in ("working", "waiting_on_user", "paused"):
+                column = "in progress"
+            if status == "waiting_on_maintainers":
+                column = "open pr"
+            if status == "done":
+                column = "finished"
+            columns[issue_id] = column
+        fresh = datetime.now(UTC) - timedelta(seconds=MOVED_FRESH_SECONDS)
+        moved = []
+        for issue_id, column in columns.items():
+            tag = known.get(issue_id)
+            if issue_id not in last_columns or last_columns[issue_id] == column or column == "finished" or tag is None:
+                continue
+            if datetime.fromisoformat(tag["judged_at"]) < fresh:
+                moved.append(issue_id)
+        last_columns = columns
+
         # A free one is looked at again after TAGS_FREE_SECONDS: someone may have claimed it without GitHub showing a change.
         # One an agent is on (a job queued, working or waiting on the user) after ACTIVE_TAGS_SECONDS.
         free_before = datetime.now(UTC) - timedelta(seconds=TAGS_FREE_SECONDS)
         active_before = datetime.now(UTC) - timedelta(seconds=ACTIVE_TAGS_SECONDS)
         active = [job["issue"] for job in jobs.list() if job["status"] in ("queued", "working", "waiting_on_user", "waiting_on_maintainers")]
-        todo = []
+        todo = list(moved)
         for issue_id, updated_at in candidates:
             tags = known.get(issue_id)
             if issue_id in failed or issue_id in todo:
