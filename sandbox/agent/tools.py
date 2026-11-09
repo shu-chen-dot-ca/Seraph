@@ -163,6 +163,12 @@ class ComputerTools:
                 },
             )(self.bash),
             tool(
+                "run_stop",
+                "Stop one of your own runs (a command or test run left going, by its id, e.g. run_a1b2c3) and everything it "
+                "started: one that hangs, or that you no longer need. You still get its result in a message, as stopped.",
+                {"type": "object", "properties": {"run": {"type": "string"}}, "required": ["run"]},
+            )(self.run_stop),
+            tool(
                 "vm_start",
                 "Start the VM when it is off (takes about a minute; returns when the desktop is up).",
                 {},
@@ -347,6 +353,8 @@ class ComputerTools:
             return f"Removing the empty environment variable `{args.get('name')}` for all VMs"
         if name == "env_var_remove":
             return f"Removing the empty environment variable `{args.get('name')}`"
+        if name == "run_stop":
+            return f"Stopping its run {args.get('run')}"
         if name == "vm_start":
             return "Starting the VM"
         if name == "vm_stop":
@@ -525,6 +533,8 @@ class ComputerTools:
             text = f"The user stopped it after {took}"
         if result["ended"] == "gone" and not run["stopped_by_user"]:
             text = "It ended without finishing: the VM stopped or restarted"
+        if result["ended"] == "gone" and run.get("stopped_by_agent"):
+            text = f"You stopped it after {took}"
         output = result["output"]
         if len(output.encode()) >= long_runs.OUTPUT_LIMIT:
             output = f"[cut: only the last {long_runs.OUTPUT_LIMIT} bytes; all of it is in {run['log']}]\n{output}"
@@ -593,6 +603,21 @@ class ComputerTools:
         del env[name]
         await asyncio.to_thread(record.set_env, env)
         return {"content": [{"type": "text", "text": f"Removed {name}."}]}
+
+    async def run_stop(self, args: dict) -> dict:
+        """One of the agent's own runs in its target VM ends now (long_runs.stop). It needn't hold a desktop for it."""
+        name = self.get_target_vm()
+        if name is None:
+            raise ValueError("You have no target VM.")
+        record = self.vms.get(name)
+        run_id = str(args.get("run", "")).strip()
+        runs = [run for run in record.runs if run["id"] == run_id and run["agent"] == self.agent_id]
+        if not runs:
+            raise ValueError(f"You have no run {run_id} going in {name}; it may have just ended.")
+        # Its result says who stopped it (bash_result, WorkTools.finish_tests).
+        runs[0]["stopped_by_agent"] = True
+        await asyncio.to_thread(long_runs.stop, record, runs[0])
+        return {"content": [{"type": "text", "text": f"Stopped {run_id}. Its result comes in a message, as for any run that ended."}]}
 
     async def vm_start(self, args: dict) -> dict:
         record = self.held_vm()

@@ -3956,6 +3956,8 @@ class WorkTools:
         command = run["command"]
         if ended["ended"] == "gone":
             why = "the user stopped it" if run["stopped_by_user"] else "the VM stopped or restarted"
+            if run.get("stopped_by_agent"):
+                why = "you stopped it"
             text = f"The test run ended without finishing ({why}), so it doesn't count. Run it again."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         try:
