@@ -26,7 +26,8 @@ What it skips before any heavy work: repos it already looked at in this run, rep
 too), repos already in the found list, and repos an earlier run checked and found not to fit (checked: kept in
 DATA_DIR/explore_checked.json, {"owner/name" in lower case: {"at", "reason"}}, so no worker goes over one again; only
 for the reasons in KEPT_REASONS, never a filter of one run, nor an error). Then `workers` candidates at a time
-(token_balancer.py paces GitHub for all of them):
+(token_balancer.py paces GitHub for all of them); with workers None (Automation's runs), as many as GitHub's GraphQL quota
+allows, which the signals use most: MAX_WORKERS with it full, fewer as it goes down, one when it is nearly used up:
 1. its numbers (repo_signals.py: a few GitHub calls, no Claude yet);
 2. skipped if it falls short of the minimums, so no personal repo gets in: over MIN_STARS stars, MIN_CONTRIBUTORS
    contributors or more (everyone who ever contributed; not known for a huge history, which passes), over
@@ -103,6 +104,7 @@ from dotenv import load_dotenv
 from github_searcher.agent.github_tools import GithubTools
 from github_searcher.claude_judge import AGENT_HOME, JudgeError, judge
 from github_searcher.search import get_readme, get_repository, search_repositories
+from github_searcher.token_balancer import BALANCER
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # override: the backend reloads itself on code changes, and .env changes should apply then too.
@@ -563,7 +565,7 @@ class Explore:
         self.changed()
         return label
 
-    def start(self, count: int | None, minutes: int | None, workers: int, filters: dict[str, str]) -> None:
+    def start(self, count: int | None, minutes: int | None, workers: int | None, filters: dict[str, str]) -> None:
         """Start a run on the running event loop. ValueError when one is running or the limits are off."""
         if self.run is not None and self.run["status"] == "running":
             raise ValueError("Explore is already running")
@@ -571,7 +573,7 @@ class Explore:
             raise ValueError("Find 1 to 999 repos")
         if minutes is not None and (minutes < 1 or minutes > 600):
             raise ValueError("Run 1 to 600 minutes")
-        if workers < 1 or workers > MAX_WORKERS:
+        if workers is not None and (workers < 1 or workers > MAX_WORKERS):
             raise ValueError(f"1 to {MAX_WORKERS} workers")
         for each in filters:
             if each not in FILTERS:
@@ -685,8 +687,20 @@ class Explore:
                     run["end_reason"] = f"Found {run['count']}"
                     break
 
-                # Keep `workers` checks going. The next candidate comes from the lane furthest below its share.
-                while len(tasks) < run["workers"] and not self.stopping:
+                # Keep `workers` checks going: with None, as many as what is left of GitHub's GraphQL quota allows.
+                workers = run["workers"]
+                if workers is None:
+                    left = 0
+                    limit = 0
+                    for token in BALANCER.status()["graphql"]["tokens"]:
+                        if token["limit"] is not None and token["remaining"] is not None:
+                            left += token["remaining"]
+                            limit += token["limit"]
+                    workers = MAX_WORKERS
+                    if limit > 0:
+                        workers = max(1, round(MAX_WORKERS * left / limit))
+                # The next candidate comes from the lane furthest below its share.
+                while len(tasks) < workers and not self.stopping:
                     if run["count"] is not None and run["found"] >= run["count"]:
                         break
                     lane_id = None
