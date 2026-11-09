@@ -10,7 +10,8 @@ prompt with what it does (from backend/app.py's routes), except DENIED: nothing 
 (Approve, Send, comments, PR and repo actions, creating issues, marking notifications, projects, the Workflow tab's
 changes: they make VMs, merge and act on GitHub), the GitHub sign-in, changing which questions must wait for the user
 (Settings, /api/ask_settings: that would let the app answer for them), a repo's or issue's Level of automation
-(/api/repos/automation, /api/issues/automation: that would let the app send to GitHub and answer for them), remote access, updates and the environment
+(/api/repos/automation, /api/issues/automation: that would let the app send to GitHub and answer for them), the
+Dashboard's Automation (/api/automation: the same, for every repo it adds), remote access, updates and the environment
 variables (secrets). The user approves everything that leaves for GitHub
 in the Inbox, never Sherpa. Lists it changes keep their undo, like the user's own clicks. Claude Code's own tools
 (files, shell, web) are off.
@@ -63,6 +64,7 @@ DENIED = [
     ("*", r"/api/github_account.*"),
     ("PUT", r"/api/ask_settings"),
     ("PUT", r"/api/(repos|issues)/automation"),
+    ("PUT", r"/api/automation.*"),
     ("*", r"/api/remote_access.*"),
     ("*", r"/api/updates.*"),
     ("*", r".*env.*"),
