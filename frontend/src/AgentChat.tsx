@@ -44,6 +44,9 @@ first, the queued ones too; Down (on its last line) goes forward again, and Down
 were typing before.
 Compact sends "/compact", which Claude Code runs on the conversation itself. The target VM can only
 change while the agent is not queued for or holding a VM (the backend refuses it then).
+Give priority puts the agent's work first until its tasks are over (github_searcher/agents.py, set_priority): a VM
+before agents without it, more of the VM's CPU, its runs stopped last when memory runs out. Remove priority takes it
+back; it also ends by itself. The backend refuses it for an agent with no tasks going.
 
 A repository's agent (one that belongs to one of your repositories) drafts issues (draft_issue): each shows where it was drafted as a card
 with the issue as it would be opened (its title, labels and text), Create issue (opens it on GitHub as you) and
@@ -67,6 +70,7 @@ import {
   Clock,
   ExternalLink,
   FileText,
+  Flag,
   FlaskConical,
   FolderGit2,
   Globe,
@@ -746,6 +750,14 @@ export default function AgentChat(props: { agentId: string; compact?: boolean })
     }
   }
 
+  async function setPriority(on: boolean) {
+    try {
+      await api(`/api/agents/${props.agentId}/priority`, { method: "POST", body: { on } });
+    } catch (err) {
+      toast.error(`Could not change its priority: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
   async function setTargetVM(value: string) {
     try {
       await api(`/api/agents/${props.agentId}/target_vm`, { method: "PUT", body: { vm: value === NO_VM ? null : value } });
@@ -1134,6 +1146,19 @@ export default function AgentChat(props: { agentId: string; compact?: boolean })
             </Button>
             <Button variant="outline" size="sm" onClick={compact} disabled={summary.history_length === 0} title="Summarize the conversation to free context">
               <Minimize2 /> Compact
+            </Button>
+            <Button
+              variant={summary.priority ? "secondary" : "outline"}
+              size="sm"
+              onClick={() => setPriority(!summary.priority)}
+              disabled={summary.archived_at !== null}
+              title={
+                summary.priority
+                  ? "Its work goes first until its tasks are over. Click to take that back."
+                  : "Its work goes first until its tasks are over: it gets a VM before agents without priority, more of the VM's CPU, and its runs are stopped last when memory runs out."
+              }
+            >
+              <Flag /> {summary.priority ? "Remove priority" : "Give priority"}
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

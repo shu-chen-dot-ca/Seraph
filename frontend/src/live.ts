@@ -711,6 +711,7 @@ export type AgentSummary = {
   role: "worker" | "reviewer" | null;
   workflow: string | null; // one of the Workflow tab's agents: its repository
   workflow_role: "chat" | "worker" | "reviewer" | null;
+  priority: boolean; // you gave it priority: its work goes first until its tasks are over
 };
 
 // How far a repository's agent's set-up is (github_searcher/agents.py, prepare_live): its VM coming up and the code
