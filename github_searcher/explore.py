@@ -19,8 +19,11 @@ first, a page of 100 at a time: not most stars first, and no famous repos looked
 from fame. The default star range is over 1k to 15k, and a search's stars never go to MIN_STARS or under (a lower bound
 under it is raised, a search with none gets one).
 
-What it skips before any heavy work: repos it already looked at in this run, repos in Repos or Tracked, and
-repos already in the found list. Then `workers` candidates at a time (token_balancer.py paces GitHub for all of them):
+What it skips before any heavy work: repos it already looked at in this run, repos in Repos or Tracked (archived ones
+too), repos already in the found list, and repos an earlier run checked and found not to fit (checked: kept in
+DATA_DIR/explore_checked.json, {"owner/name" in lower case: {"at", "reason"}}, so no worker goes over one again; only
+for the reasons in KEPT_REASONS, never a filter of one run, nor an error). Then `workers` candidates at a time
+(token_balancer.py paces GitHub for all of them):
 1. its numbers (repo_signals.py: a few GitHub calls, no Claude yet);
 2. skipped if it falls short of the minimums, so no personal repo gets in: over MIN_STARS stars, MIN_CONTRIBUTORS
    contributors or more (everyone who ever contributed; not known for a huge history, which passes), over
@@ -224,6 +227,27 @@ MAX_CLOSED_SHARE = 0.4
 # PRs merged a day, anyone's: under this, a PR of ours would wait too long there (the Automation archives a repo that
 # leaves one open over 10 business days), and Explore skips it.
 MIN_MERGED_PER_DAY = 0.1
+# Why a repo didn't fit that holds for every run, so it is kept as checked and never gone over again.
+KEPT_REASONS = [
+    "1k stars or fewer",
+    "Under 40 contributors",
+    "400 closed PRs or fewer",
+    "10 open issues or fewer",
+    "README not in English",
+    "Archived",
+    "A fork",
+    "No commits in 30 days",
+    "No outside PR merged in 90 days",
+    "Most outside PRs closed unmerged",
+    "Many PRs closed unmerged",
+    "Merges under 0.1 PR a day",
+    "Turns newcomers away",
+    "Leaves newcomers waiting",
+    "No AI",
+    "Not a code project",
+    "An agent can't do it alone",
+    "Out of scope",
+]
 # The tags a run can filter on, "section:value", each with its label on the page (also why a repo is skipped on the
 # page's Skipped line). The same thresholds as the tags' colors on the page: replies in 2 days are green, over a week
 # amber; one maintainer or none is amber, and so are 5 unanswered PRs or more.
@@ -335,6 +359,11 @@ class Explore:
         self.found = []
         if self.found_path.exists():
             self.found = json.loads(self.found_path.read_text())
+        # The repos runs checked and found not to fit, by name in lower case, kept across runs and restarts.
+        self.checked_path = DATA_DIR / "explore_checked.json"
+        self.checked = {}
+        if self.checked_path.exists():
+            self.checked = json.loads(self.checked_path.read_text())
 
     def changed(self) -> None:
         self.version += 1
@@ -366,6 +395,12 @@ class Explore:
         temporary.write_text(json.dumps(self.found))
         temporary.replace(self.found_path)
         self.changed()
+
+    def save_checked(self) -> None:
+        self.checked_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.checked_path.with_name(self.checked_path.name + ".tmp")
+        temporary.write_text(json.dumps(self.checked))
+        temporary.replace(self.checked_path)
 
     async def approve(self, names: list[str]) -> list[str]:
         """Move found repos into the Repos list, as one undo step, with their signals. Returns the names added
@@ -663,6 +698,8 @@ class Explore:
                     reason = "Tracked"
                 elif name.lower() in [entry["name"].lower() for entry in self.found]:
                     reason = "Found before, waiting for you"
+                elif name.lower() in self.checked:
+                    reason = "Checked before"
                 if reason:
                     run["skipped"][reason] = run["skipped"].get(reason, 0) + 1
                     self.changed()
@@ -774,6 +811,9 @@ class Explore:
             for key in tags:
                 if not reason and filters.get(key) == "exclude":
                     reason = FILTERS[key]
+            if reason in KEPT_REASONS:
+                self.checked[name.lower()] = {"at": datetime.now(UTC).isoformat(), "reason": reason}
+                self.save_checked()
             if reason:
                 run["skipped"][reason] = run["skipped"].get(reason, 0) + 1
                 return
@@ -794,6 +834,9 @@ class Explore:
                 for key in tags:
                     if not reason and filters.get(key) == "exclude":
                         reason = FILTERS[key]
+                if reason in KEPT_REASONS:
+                    self.checked[name.lower()] = {"at": datetime.now(UTC).isoformat(), "reason": reason}
+                    self.save_checked()
                 if reason:
                     run["skipped"][reason] = run["skipped"].get(reason, 0) + 1
                     return
@@ -861,6 +904,8 @@ class Explore:
             elif not verdict["harmless"]:
                 reason = "Out of scope"
             if reason:
+                self.checked[name.lower()] = {"at": datetime.now(UTC).isoformat(), "reason": reason}
+                self.save_checked()
                 run["skipped"][reason] = run["skipped"].get(reason, 0) + 1
                 return
             fit_tag = "fit:" + verdict["fit"]
