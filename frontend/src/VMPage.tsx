@@ -267,10 +267,11 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
     agentById[agent.id] = agent;
   }
   const error = vm.error;
-  // The desktop shown: who holds it, who waits for it, and the runs going on it.
+  // The desktop shown: who holds it, who waits for it, and the runs going on it. Runs on a desktop the VM no longer has
+  // (taken back while the VM was full) show on every desktop, so they can still be stopped.
   const line = vm.desktops.find((each) => each.number === shown) ?? vm.desktops[0];
   const holder = line.holder;
-  const runs = vm.runs.filter((run) => (run.desktop ?? 1) === shown);
+  const runs = vm.runs.filter((run) => (run.desktop ?? 1) === shown || !vm.desktops.some((each) => each.number === (run.desktop ?? 1)));
   const holderAgent = holder !== null && holder !== "user" ? agentById[holder] : undefined;
   // The job the holding agent is on, with its progress, for the queue panel.
   const holderJob = holderAgent !== undefined ? currentJob(holderAgent.id, jobs) : undefined;
@@ -802,6 +803,7 @@ export default function VMPage(props: { name: string; active: boolean; tab: stri
                               <a href={`#/agents/${run.agent}`} className="hover:underline">
                                 {agentById[run.agent]?.name ?? run.agent}
                               </a>
+                              {(run.desktop ?? 1) !== shown && ` · desktop ${run.desktop ?? 1}, taken back`}
                               {" · "}
                               {run.stopped_by_user ? "stopping" : took}
                             </div>
