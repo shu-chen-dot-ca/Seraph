@@ -19,6 +19,11 @@ a comment here. After every read (Check now's too), every open PR of yours witho
 checks failed, or anything else changed on your PR) goes to its agent as a follow_up job (agents.follow_up); what the
 agent drafts then waits for you in the Inbox.
 
+keep_profile_readme(), also in the background, keeps the merged pull requests table on your GitHub profile's README
+(github_searcher/profile_readme.py): at start, whenever a PR of yours shows up merged here (so within a few minutes of
+the merge), and every PROFILE_README_SECONDS for the ones not followed here. It commits as you without the Inbox: only
+that one file in your own profile repository.
+
 The buttons (each asks "are you sure?" in the browser first): post a comment as you, delete one of your comments
 (refused when it isn't yours; a draft that posted it keeps when it was deleted), close or reopen one of your PRs,
 delete a closed or merged PR's branch from your fork. After a change to a PR, the PRs are read again.
@@ -42,6 +47,7 @@ from pydantic import BaseModel
 
 from backend.shared import agents, github_account, inbox, pr_tracking, workflow, your_repositories
 from github_searcher.github_account import SendError
+from github_searcher import profile_readme
 from github_searcher.pr_tracking import AGENT_MODES, ROLLUP
 from github_searcher.search import get_action_runs, get_check_runs, get_commit_statuses, get_full_thread, get_issue_comment, get_pr_files
 
@@ -50,6 +56,7 @@ router = APIRouter(prefix="/api")
 PRS_CHECK_SECONDS = 15
 PRS_REFRESH_SECONDS = 5 * 60
 BRANCHES_CHECK_SECONDS = 10 * 60
+PROFILE_README_SECONDS = 24 * 60 * 60
 PR_ACTIONS = ["close", "reopen", "delete_branch"]
 THREAD_ID = r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)#(\d+)"
 NAME = r"[A-Za-z0-9_.-]+"
@@ -465,6 +472,28 @@ async def keep_branches_clean() -> None:
                 continue
             pr_tracking.wanted = True
         await asyncio.sleep(BRANCHES_CHECK_SECONDS)
+
+
+async def keep_profile_readme() -> None:
+    """Runs as long as the backend: brings your profile README's merged pull requests table up to date at start, when a
+    PR of yours newly shows up merged, and every PROFILE_README_SECONDS (see the top of this file). One that fails is
+    tried again on the next of those."""
+    merged = None
+    last = None
+    while True:
+        now_merged = set()
+        for pr in pr_tracking.summary()["items"]:
+            if pr["relation"] == "author" and pr["state"] == "merged":
+                now_merged.add(pr["id"])
+        if merged is None or not now_merged.issubset(merged) or time.monotonic() - last > PROFILE_README_SECONDS:
+            merged = now_merged
+            last = time.monotonic()
+            try:
+                done = await asyncio.to_thread(profile_readme.update, your_repositories)
+                print(f"[profile readme] {done}")
+            except Exception as error:
+                print(f"[profile readme] could not update: {error}")
+        await asyncio.sleep(PRS_CHECK_SECONDS)
 
 
 async def keep_prs() -> None:

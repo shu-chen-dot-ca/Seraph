@@ -124,6 +124,7 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(tracked_api.keep_tracked()),
         asyncio.create_task(github_api.keep_prs()),
         asyncio.create_task(github_api.keep_branches_clean()),
+        asyncio.create_task(github_api.keep_profile_readme()),
         asyncio.create_task(your_repositories_api.keep_your_repositories()),
         asyncio.create_task(notifications_api.keep_notifications()),
         asyncio.create_task(updates_api.keep_updates()),
