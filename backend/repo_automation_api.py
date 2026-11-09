@@ -41,8 +41,10 @@ What each does:
   of the repo's Catalog cards while its open PRs and its issues with an open job (from queued to waiting on you) add up
   to it (keep_catalog_agents in backend/issues_api.py). Review to Open PR: keep_drafts sends no new PR there while its
   open PRs are at it; the ones over it wait in the Inbox (the board's Review) until one is merged or closed. New
-  versions of open PRs, and a PR made again in place of an old one, always go. You can still send one by hand: Approve
-  in the Inbox, or Publish on the Pull requests page.
+  versions of open PRs, and a PR made again in place of an old one, always go. No new PR goes to an archived repo
+  (the Dashboard's Automation archives the ones that don't merge ours: backend/automation_api.py), but one for an issue
+  our agents opened: we never give one of those up. You can still send
+  one by hand: Approve in the Inbox, or Publish on the Pull requests page.
 - Open issues: agents may open new issues on the repo as you, claimed for you (assigned, else your comment saying you
   are on it), where the project's rules allow it (open_issue, work_tools.py); each goes to the top of the Issues
   board's Catalog, before every other card, where another agent takes it first, whatever the repo's Take issues and
@@ -250,6 +252,12 @@ async def act_on_drafts() -> None:
     if ISSUE_SETTINGS_FILE.is_file():
         own = json.loads(ISSUE_SETTINGS_FILE.read_text())
     issue_of_job = {job["id"]: job["issue"] for job in jobs.list()}
+    archived = [name.lower() for name in repos.archived()]
+    # The issues our agents opened as you (lower case): a PR for one still goes to an archived repo.
+    opened = []
+    for action in inbox.actions():
+        if action["kind"] == "issue":
+            opened.append(f"{action['sent']['repo']}#{action['sent']['number']}".lower())
     # Your PRs open on each repo, and how many of yours it merged (lower case): a new PR waits while the repo has its
     # Open PRs at once.
     open_prs = {}
@@ -295,6 +303,9 @@ async def act_on_drafts() -> None:
         if merged.get(name, 0) > 0:
             limit = rules.get("max_prs", 5)
         if send and new_pr and open_prs.get(name, 0) >= limit:
+            send = False
+        # Never a new one to an archived repo, but for an issue we opened: we never give one up.
+        if send and new_pr and name in archived and (issue_id or "").lower() not in opened:
             send = False
         if not send or time.time() - failed_at.get(draft["id"], 0) < SEND_RETRY_SECONDS:
             continue
