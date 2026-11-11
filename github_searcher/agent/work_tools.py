@@ -17,7 +17,8 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
 - Drafts: nothing goes to GitHub from here. A PR, an issue comment or a question becomes a draft
   in the user's Inbox and its job waits on the user. A comment with reply_to answers inside one of a PR's
   conversations on lines of code instead of below it, and with resolve Approve marks that conversation resolved
-  after it (some projects only merge once every conversation is). A fix_issue job takes one comment only: the claim on its issue, made
+  after it (some projects only merge once every conversation is; refused for an organization that restricts OAuth Apps,
+  once a resolve there failed for it). A fix_issue job takes one comment only: the claim on its issue, made
   first on every one, so nobody else takes the issue meanwhile ("Claim owner/name#n" in the Inbox); wait_for_assignment
   when the repo's rules want a maintainer to assign contributors before a PR. The claim holds nothing up: the job goes on
   to its PR while the claim waits for the user, and nobody waits for the maintainers to assign the user (we assume nobody
@@ -1797,6 +1798,18 @@ class WorkTools:
             author = thread["author"]["login"] if thread["author"] else "ghost"
             if resolve is not None and login and author.lower() != login.lower():
                 text = f"{target} is {author}'s PR, not the user's: they can't resolve its conversations. Leave resolve out."
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+            # An organization that restricts OAuth Apps doesn't let the app resolve anything on its repos (openchoreo): a
+            # resolve that failed for that once says so for all of them.
+            restricted = []
+            for each in self.agents.inbox.list():
+                if each["kind"] == "comment" and each["sent"] is not None and "OAuth App access restrictions" in (each["sent"].get("resolve_error") or ""):
+                    restricted.append((each.get("repo") or "").split("/")[0].lower())
+            if resolve is not None and name.split("/")[0].lower() in restricted:
+                text = (
+                    f"The {name.split('/')[0]} organization restricts what apps may do on its repos, so the app can't resolve "
+                    "conversations there (it failed before). Leave resolve out: the answer in the conversation is enough."
+                )
                 return {"content": [{"type": "text", "text": text}], "is_error": True}
             reply_to = first
             title = f"Reply in a conversation on {target}"
