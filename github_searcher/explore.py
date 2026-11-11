@@ -43,7 +43,8 @@ allows, which the signals use most: MAX_WORKERS with it full, fewer as it goes d
    README against the profile (claude_judge.py): is it a project people contribute code to (not a link list,
    tutorial or course), can an AI agent alone work on it (build, run and test it in a Linux VM, and prove a fix there:
    no special hardware or other OS, no paid keys, no agreement a person must sign), is it harmless (nothing political
-   or against another country's laws, nothing made to harm people or systems, and it takes outside contributions),
+   or against another country's laws, no games, nothing made to harm people or systems, and it takes outside
+   contributions),
    which of the user's types it is, how well it fits (one of FIT_LEVELS, fixed so repos
    rank the same way every time; kept as its number), one line for its note. A quick look: one answer, no tools;
 4. the closer look, only for a repo the quick look didn't find a weak fit (and that the fit filters keep), so no time
@@ -530,11 +531,12 @@ class Explore:
             f"About the developer:\n{self.profile['about'] or 'Nothing written.'}\n\n"
             f"The types of project they look in already:\n{type_lines}\n\n"
             "Name one more type of software, unlike all of these, so they contribute to a wider range of projects. Any "
-            "kind of software or code is fine (apps, libraries, frameworks, tools, games, data, science, web, systems, "
-            "...) as long as an AI agent alone can build it, run it and check a fix in that VM: no special hardware, "
-            "phones or other operating systems, no paid accounts or keys it can't mock. Nothing political, politically "
-            "sensitive or activist, nothing against another country's laws, such as China's, and nothing made to harm "
-            "people or systems.\n\n"
+            "kind of software or code is fine (apps, libraries, frameworks, tools, data, science, web, systems, ...) as "
+            "long as an AI agent alone can build it, run it and check a fix in that VM: no special hardware, phones or "
+            "other operating systems, no paid accounts or keys it can't mock. Nothing political, politically sensitive "
+            "or activist, nothing against another country's laws, such as China's, nothing made to harm people or "
+            "systems, and no games: no game, game engine, mod, game server or plugin, emulator or ROM manager, or tool "
+            "made for playing games.\n\n"
             "name: a short plain name (2 or 3 words).\n"
             "about: one or two sentences on what it is and how a fix there is seen and checked.\n"
             "queries: 3 to 8 GitHub repository searches (the q of GET /search/repositories), most promising first, "
@@ -951,8 +953,9 @@ class Explore:
                 "needs special hardware, devices, a phone or another operating system, paid accounts, keys or services it "
                 "can't mock, or a contributor agreement a person has to sign (a DCO sign-off is fine).\n"
                 "harmless: false when it is political, politically sensitive or activist, goes against another country's "
-                "laws, such as China's, is made to harm or trouble people or systems, or says it doesn't take outside "
-                "contributions; true otherwise.\n"
+                "laws, such as China's, is a game or made for games (a game engine, mod, game server or plugin, emulator "
+                "or ROM manager, launcher, or compatibility layer for running games), is made to harm or trouble people "
+                "or systems, or says it doesn't take outside contributions; true otherwise.\n"
                 "type: the name of the type it is (the closest one, also when it came up in another type's searches).\n"
                 "fit: how well it matches what they like and that type: strong (exactly what they want), good (clearly in "
                 "their interests), some (related, but not what they're after), weak (hardly matches).\n"
