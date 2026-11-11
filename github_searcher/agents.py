@@ -59,7 +59,8 @@ With room again, whoever waits gets a free desktop, or the desktop they wait for
 back, or a new one for an agent that asked for none), one a check, up to the VM's max desktops.
 The VM queue (sandbox/vm_queue.py: one line per desktop of each VM, and agents on different desktops work at
 the same time) tells Agents when an agent's turn comes (on_grant: a message
-that wakes it, with the VM's notes on what earlier agents set up in it, or the VM passes on at once
+that wakes it, with the VM's notes on what earlier agents set up in it and the user's GitHub name and noreply address
+to commit with, or the VM passes on at once
 if it has no open jobs there anymore) and when the
 user took the VM or its place away (on_kick: it is interrupted, and what it still ran in that
 VM is killed, except its runs).
@@ -1967,6 +1968,15 @@ class Agents:
                 notes = []
                 desktop = None
             text = f"Desktop {desktop} of {vm_name} is yours now. Your open jobs for it: {titles}. Do them all, then release_vm."
+            # Commits are made as the user, the way they go out (github_account.py): draft_pr refuses any other address.
+            account = self.your_repositories.github_account.load()
+            if account is not None:
+                text += (
+                    f"\nCommit as the user, with their GitHub name and noreply address: `git config --global user.name "
+                    f"\"{account['name']}\" && git config --global user.email \"{account['id']}+{account['login']}@users.noreply.github.com\"` "
+                    "(a repo's own git config wins over it, so fix that too where one is set). Never another address, and never "
+                    "the email address in your own context: it is private."
+                )
             if notes:
                 text += "\nIts notes (check what is really there before you rely on them):"
                 for note in notes:

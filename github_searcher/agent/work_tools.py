@@ -26,7 +26,9 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   folder in the VM, so only the agent holding the VM can make one, with the commit it starts from
   (base_sha: Approve sends exactly that diff on that commit, github_account.py) and the branch's commits since
   (commits: replayed when it is sent, all with the user's name). Every commit must be the agent's own:
-  draft_pr refuses a branch with anyone else's commits (a cherry-pick), and nothing credits a co-author. A new PR's issue is read again first
+  draft_pr refuses a branch with anyone else's commits (a cherry-pick), and nothing credits a co-author. They are made
+  as the user in the VM too, with their GitHub name and noreply address (the VM-is-yours message gives them): draft_pr
+  refuses any other git address, so the user's own email never shows in a draft. A new PR's issue is read again first
   (read_issue, within READ_SECONDS), and draft_pr refuses while someone else's open PR closes it.
   It also refuses a diff with what GitNexus writes by itself when it builds its index (its block in AGENTS.md
   and CLAUDE.md, .claude/skills/gitnexus/, .gitnexus/): running a project's required tool never puts its own
@@ -855,7 +857,8 @@ class WorkTools:
                 "onto the PR's branch (refused if the branch moved since). The PR's own commits may stay as they are (they are "
                 "the user's); title is the subject of your last commit. "
                 "A new PR for a fix_issue job waits until you read its issue again with read_issue (within the hour), and is "
-                "refused while someone else's open PR closes it.",
+                "refused while someone else's open PR closes it. Commit with the user's GitHub name and noreply address (the "
+                "message that a VM is yours gives them); other git addresses are refused.",
                 {
                     "type": "object",
                     "properties": {
@@ -3456,6 +3459,13 @@ class WorkTools:
         if rebase:
             rebase_of = newest
 
+        # Every commit goes out with the user's GitHub name and noreply address (github_account.py), so it is made with
+        # that identity in the VM too: never the user's own email, which agents see in their context (openmed's reviewer
+        # sent a draft back for it), nor a made-up one ("OpenMed contributor <contributor@users.noreply.github.com>").
+        account = self.agents.your_repositories.github_account.load()
+        noreply = ""
+        if account is not None:
+            noreply = f"{account['id']}+{account['login']}@users.noreply.github.com"
         # Every commit must be the agent's own, by the VM's git address: never someone else's fix cherry-picked in, and no
         # co-authors (the user's rule). The first line printed is that address, possibly empty; the second how many
         # Co-authored-by lines the commit messages have; then each commit.
@@ -3470,16 +3480,22 @@ class WorkTools:
         if result.returncode != 0:
             return {"content": [{"type": "text", "text": f"Could not read your branch's commits: {result.stderr.strip()}"}], "is_error": True}
         vm_email = result.stdout.split("\n")[0].strip()
+        if noreply != "" and vm_email != noreply:
+            text = (
+                f"Your git address in {args['path']} is {vm_email or 'not set'}, but commits are made as the user, with their "
+                f"GitHub name and noreply address: `git config user.name \"{account['name']}\" && git config user.email "
+                f"\"{noreply}\"` there (and --global for your next repos). Then make your branch's commits with it: `git rebase "
+                f"--exec 'git commit --amend --no-edit --reset-author' {args['base']}`, and draft again."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
         if result.stdout.split("\n")[1:2] != ["0"]:
             text = "A commit message on your branch has a Co-authored-by line. Credit no co-author: reword it (git commit --amend or a rebase), then draft again."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         # A rebase keeps the PR's own commits, which went out as the user's (their name and GitHub noreply address):
         # those are the user's too. Anyone else's still can't go out.
         own_emails = [vm_email]
-        if rebase:
-            account = self.agents.your_repositories.github_account.load()
-            if account is not None:
-                own_emails.append(f"{account['id']}+{account['login']}@users.noreply.github.com")
+        if rebase and noreply != "":
+            own_emails.append(noreply)
         others = []
         for line in result.stdout.strip().split("\n")[2:]:
             fields = line.split("\x1f", 3)
