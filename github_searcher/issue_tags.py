@@ -8,7 +8,7 @@ each issue instead and gives it tags we define. One JSON file, DATA_DIR/issue_ta
     {"owner/name#n": {"status": "free" | "assigned" | "waiting" | "fixed",
                       "merge": "likely" | "fixed" | "out of scope" | "claimed" | "maintainers only" | "waiting" |
                                "no outside prs" | "large feature" | "big change" | "can't validate",
-                      "checks": {"belongs", "linux", "apolitical", "open", "modest", "validatable": bool} | None,
+                      "checks": {"belongs", "linux", "apolitical", "not_game", "open", "modest", "validatable": bool} | None,
                       "kind": "bug" | "feature" | "docs" | "question" | None, "lines": int | None,
                       "name": str | None, "name_version": int, "rules_version": int, "complexity": "easy" | "medium" | "hard" | None, "scope_clear": bool | None,
                       "reason", "updated_at", "judged_at"}, ...}
@@ -38,8 +38,10 @@ requests the repo merged. The first that holds:
     fixed             status fixed: already done, it only needs closing
     out of scope      it touches politics (in the issue or in what the repo is for: we only do non-political work,
                       nothing politically sensitive or activist, nothing against another country's laws, such as
-                      China's), it isn't a pull request to this repo for its own users (a plugin or add-on for a
-                      third-party product's users, a separate repository the project wants), or it can't be seen on
+                      China's), it is about a game (we don't work on games: no game, game engine, mod, game server or
+                      plugin, emulator or ROM manager, or tool for playing games), it isn't a pull request to this repo
+                      for its own users (a plugin or add-on for a third-party product's users, a separate repository
+                      the project wants), or it can't be seen on
                       Linux (it is about how something looks or behaves on Windows, macOS, a phone or other hardware,
                       even when its files can be edited on Linux: we have no way to validate it)
     claimed           someone is on it (status assigned)
@@ -147,6 +149,12 @@ CHECKS = [
         "China's.",
     ),
     (
+        "not_game",
+        "Is it free of games, in the issue and in what the repo is for? We don't work on games: no game, game engine, "
+        "game mod, game server or plugin for one, emulator or ROM manager, or tool made for playing games (like a "
+        "launcher or a compatibility layer for running games).",
+    ),
+    (
         "open",
         "Is it open to an outside contributor: no sign the maintainers keep it for themselves? No when a maintainer said "
         "they or the core team will do it, it is a roadmap item one of them owns, it is labeled for maintainers or "
@@ -245,11 +253,12 @@ SCHEMA = {
                     "belongs": {"type": "boolean"},
                     "linux": {"type": "boolean"},
                     "apolitical": {"type": "boolean"},
+                    "not_game": {"type": "boolean"},
                     "open": {"type": "boolean"},
                     "modest": {"type": "boolean"},
                     "validatable": {"type": "boolean"},
                 },
-                "required": ["number", "status", "kind", "lines", "name", "complexity", "scope_clear", "reason", "belongs", "linux", "apolitical", "open", "modest", "validatable"],
+                "required": ["number", "status", "kind", "lines", "name", "complexity", "scope_clear", "reason", "belongs", "linux", "apolitical", "not_game", "open", "modest", "validatable"],
             },
         }
     },
@@ -656,6 +665,9 @@ class IssueTags:
                 elif not checks["apolitical"]:
                     merge = "out of scope"
                     why = "it touches politics, which we stay out of"
+                elif not checks["not_game"]:
+                    merge = "out of scope"
+                    why = "it is about a game, which we don't work on"
                 elif not checks["belongs"]:
                     merge = "out of scope"
                     why = "it isn't a pull request to this repo for its own users"
