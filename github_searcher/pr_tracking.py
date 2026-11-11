@@ -13,7 +13,7 @@ It keeps, in DATA_DIR/pr_tracking.json, by "owner/name#number", each PR in "prs"
      "opened_at", "updated_at", "closed_at": str | None, "merged_by": str | None,
      "labels": [name, ...],
      "checks": "waiting" | "running" | "passed" | "failed" | "none",
-     "waiting_runs": int,
+     "waiting_runs": int, "failed_checks": [name, ...], "head_at": when its newest commit was made | None,
      "review": "approved" | "changes_requested" | "commented" | "none",
      "reviewers": [{"login", "state", "at", "role"}, ...] (each reviewer's latest review),
      "comments": int, "last_comment": {"login", "role", "at", "text"} | None,
@@ -27,6 +27,7 @@ It keeps, in DATA_DIR/pr_tracking.json, by "owner/name#number", each PR in "prs"
      "signals": {"state", "draft", "title", "head", "checks", "mergeable", "labels", "bot_at"},
      "draft_id": "draft_..." | None, "job": "job_..." | None,
      "agent": "<agent id>" | None, "agent_mode": "drafts" | "off",
+     "action": {"needs", "reasons", "who", "detail", "status"} | None (your open PR only, update_actions),
      "checked_at", "error": str | None}
 
 and each issue in "issues":
@@ -59,6 +60,20 @@ of (the first read's, or the ones when its agent was picked: it hears what chang
 each record are what holds: your pick, else drafts with the agent of the first draft that went there (a PR Approve
 sent, or a comment the app posted on it), else off.
 
+action is what your open PR needs from us now (update_actions, called by backend/github_api.py every few seconds):
+needs (the Issues board's Needs action) when reasons isn't empty. Rules give some: Merge conflicts, CLA not signed (a
+failed check about a Contributor License Agreement), Not sent (a draft for it you approved without sending), Changes
+requested (a reviewer's, newer than our newest commit and comment), Draft (a GitHub draft). Until Claude reads what
+happened since our newest step, it gives New comment, New review, Bot review or Checks failing (failures on a commit
+or of checks it didn't see), also New comment for a comment on an issue it fixes that the app follows. Claude's
+judgment (set_judgment, from judge_prs in backend/github_api.py) adds its own reasons and detail (what to do) when it
+says action is needed. "judgments" keeps it by PR id: {"key", "needs", "who": "agent" | "you" | "none", "reasons",
+"detail", "judged_at", "head", "failed_checks", "version"}, where key (judgment_key) is what it was made on, so it is made again once that changes. who:
+you when part of it only you can do. status is how it waits otherwise, as GitHub says it: Ready to merge (approved,
+checks passed, no conflicts), Awaiting CI (checks running or waiting for a maintainer's OK), else Awaiting approval.
+agent_settings also keeps "action_base", "action_key" and "action_tries" (mark_action_given): what its agent was last
+given of that, and how many times on the same newest commit.
+
 needs_reply() lists the open threads in drafts mode with an agent where someone else wrote after you and after
 answered_at, or (your PR) the checks failed on a newest commit no agent was given yet, or anything else changed on
 your PR since told: merged, closed or reopened, made a draft or ready for review, a new title, a new commit nobody
@@ -75,6 +90,7 @@ with the error. error at the top is why a search failed. version goes up on ever
 import copy
 import json
 import os
+import re
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -92,6 +108,14 @@ DATA_DIR = PROJECT_ROOT / os.environ["DATA_DIR"]
 COMMENT_CHARS = 300
 ROLLUP = {"SUCCESS": "passed", "FAILURE": "failed", "ERROR": "failed", "PENDING": "running", "EXPECTED": "running"}
 AGENT_MODES = ["drafts", "off"]
+# A check that a Contributor License Agreement is signed: only the user can sign one.
+CLA = re.compile(r"\bcla\b|cla[-_]|license/cla|contributor license", re.IGNORECASE)
+# The labels of what a PR of yours needs from us (update_actions), in the order they show.
+# Judgments made by older rules are dropped when the file is read (1 told Claude about conflicts the wrong way round, 2
+# didn't keep the commit and failed checks it saw).
+JUDGMENT_VERSION = 3
+ACTION_LABELS = ["Merge conflicts", "CLA not signed", "Not sent", "Changes requested", "Checks failing", "Reply needed", "Draft",
+                 "Rebase needed", "Description out of date", "New comment", "New review", "Bot review", "Other"]
 
 
 class PRTracking:
@@ -106,12 +130,14 @@ class PRTracking:
         # Something changed on GitHub here (you commented): backend/github_api.py reads them all again soon.
         self.wanted = False
         self.version = 0
-        self.data = {"prs": {}, "issues": {}, "agent_settings": {}, "checked_at": None, "error": None}
+        self.data = {"prs": {}, "issues": {}, "agent_settings": {}, "judgments": {}, "checked_at": None, "error": None}
         if self.path.exists():
             self.data = json.loads(self.path.read_text())
-        # Files from before issues and agent settings.
+        # Files from before issues, agent settings and judgments.
         self.data.setdefault("issues", {})
         self.data.setdefault("agent_settings", {})
+        self.data.setdefault("judgments", {})
+        self.data["judgments"] = {pr_id: each for pr_id, each in self.data["judgments"].items() if each.get("version") == JUDGMENT_VERSION}
         # PRs read before these were kept have them from their next read on.
         for pr in self.data["prs"].values():
             pr.setdefault("relation", "author")
@@ -123,6 +149,9 @@ class PRTracking:
             pr.setdefault("mergeable", "unknown")
             pr.setdefault("bot_activity", None)
             pr.setdefault("signals", None)
+            pr.setdefault("failed_checks", [])
+            pr.setdefault("head_at", None)
+            pr.setdefault("action", None)
 
     def save(self) -> None:
         """Write to disk. Called with the lock held, after every change."""
@@ -312,6 +341,127 @@ class PRTracking:
                 setting["told"] = told
             self.save()
 
+    def judgment_key(self, pr: dict, jobs: list[dict]) -> str:
+        """What a judgment of the PR (set_judgment) was made on: it is made again once this changes. Its last change on
+        GitHub, its newest commit, conflicts and checks, the newest change of the issues it fixes that the app follows, and
+        when a job on it last ended."""
+        linked = [f"{pr['repo']}#{issue['number']}".lower() for issue in pr["issues"]]
+        ended = ""
+        for job in jobs:
+            if job["status"] in ["done", "cancelled"] and (job["thread"] == pr["id"] or (job["issue"] or "").lower() in linked or (job["thread"] or "").lower() in linked):
+                ended = max(ended, job["updated_at"])
+        issues = ""
+        with self.lock:
+            for issue_id, issue in self.data["issues"].items():
+                if issue_id.lower() in linked:
+                    issues = max(issues, issue["updated_at"])
+        head = pr["head"]["sha"] if pr["head"] is not None else ""
+        return "|".join([pr["updated_at"], head, pr["mergeable"], pr["checks"], ",".join(sorted(pr.get("failed_checks", []))), issues, ended])
+
+    def set_judgment(self, pr_id: str, judgment: dict) -> None:
+        """Claude's judgment of what the PR needs from us (backend/github_api.py judge_prs): {"key", "needs", "who",
+        "reasons", "detail", "judged_at", "head", "failed_checks"} (head and failed_checks: the newest commit and its
+        failed checks it saw)."""
+        with self.lock:
+            self.data["judgments"][pr_id] = {**judgment, "version": JUDGMENT_VERSION}
+            self.save()
+
+    def mark_action_given(self, pr_id: str, base: str, key: str) -> None:
+        """Its agent was given what the PR needs (backend/github_api.py): base is the newest commit, key the reasons, that
+        commit and the judgment; tries counts the gives on the same base."""
+        with self.lock:
+            empty = {"mode": None, "agent": None, "answered_at": None, "failed_sha": None, "told": None}
+            setting = self.data["agent_settings"].setdefault(pr_id, empty)
+            if setting.get("action_base") != base:
+                setting["action_tries"] = 0
+            setting["action_base"] = base
+            setting["action_key"] = key
+            setting["action_tries"] = setting.get("action_tries", 0) + 1
+            self.save()
+
+    def update_actions(self, jobs: list[dict]) -> None:
+        """What each open PR of yours needs from us now, or how it waits: its "action" (the module docstring). Saved only
+        when one changed, so the live feed isn't sent again for nothing."""
+        # Drafts for a PR of yours that you approved without sending them (Publish on the Pull requests page sends them).
+        unsent = [draft for draft in self.inbox.list() if draft["kind"] in ["pr", "comment", "edit"] and draft["status"] == "approved" and draft["sent"] is None]
+        with self.lock:
+            changed = False
+            for pr in self.data["prs"].values():
+                action = None
+                if pr["relation"] == "author" and pr["state"] == "open":
+                    action = self.action_of(pr, jobs, unsent)
+                if pr.get("action") != action:
+                    pr["action"] = action
+                    changed = True
+            if changed:
+                self.save()
+
+    def action_of(self, pr: dict, jobs: list[dict], unsent: list[dict]) -> dict:
+        """One open PR of yours, with the lock held: {"needs", "reasons", "who", "detail", "status"}. unsent: the drafts
+        you approved without sending."""
+        judgment = self.data["judgments"].get(pr["id"])
+        judged_at = judgment["judged_at"] if judgment is not None else ""
+        # Our newest step there: a comment or review of yours, or the newest commit (ours: maintainers rarely push to it).
+        ours = max(pr["your_last_at"] or "", pr.get("head_at") or "")
+        failed = pr.get("failed_checks", [])
+        reasons = []
+        # What the rules see, whatever the judgment says: GitHub won't merge it, or a reviewer waits for changes.
+        if pr["mergeable"] == "conflicts":
+            reasons.append("Merge conflicts")
+        if [name for name in failed if CLA.search(name)]:
+            reasons.append("CLA not signed")
+        for reviewer in pr["reviewers"]:
+            if reviewer["role"] != "BOT" and reviewer["state"] == "changes_requested" and reviewer["at"] > ours:
+                reasons.append("Changes requested")
+        if pr["draft"]:
+            reasons.append("Draft")
+        # A new version for it you approved but didn't send (one made on its newest commit), or a comment or new title.
+        head = pr["head"]["sha"] if pr["head"] is not None else ""
+        for draft in unsent:
+            if (draft.get("update_of") or draft.get("target")) != pr["id"]:
+                continue
+            if draft["kind"] != "pr" or draft.get("base_sha") == head:
+                reasons.append("Not sent")
+        # What happened since our newest step and since the judgment: it needs action until Claude reads it.
+        activity = pr["last_activity"]
+        if activity is not None and activity["at"] > ours and activity["at"] > judged_at:
+            states = {reviewer["login"]: reviewer["state"] for reviewer in pr["reviewers"]}
+            if activity["what"] == "comment":
+                reasons.append("New comment")
+            elif states.get(activity["login"]) != "approved":
+                reasons.append("New review")
+        bot = pr["bot_activity"]
+        if bot is not None and bot["at"] > ours and bot["at"] > judged_at:
+            reasons.append("Bot review")
+        seen = judgment is not None and judgment["head"] == head and set(failed) <= set(judgment["failed_checks"])
+        if [name for name in failed if not CLA.search(name)] and not seen:
+            reasons.append("Checks failing")
+        linked = [f"{pr['repo']}#{issue['number']}".lower() for issue in pr["issues"]]
+        for issue_id, issue in self.data["issues"].items():
+            other = issue["last_activity"]
+            if issue_id.lower() not in linked or other is None:
+                continue
+            if other["at"] > (issue["your_last_at"] or "") and other["at"] > judged_at:
+                reasons.append("New comment")
+        # Claude's judgment: what only reading the thread tells.
+        who = "agent"
+        detail = ""
+        if judgment is not None and judgment["needs"]:
+            reasons += judgment["reasons"]
+            detail = judgment["detail"]
+            if judgment["who"] == "you":
+                who = "you"
+        if "CLA not signed" in reasons or "Not sent" in reasons:
+            who = "you"
+        reasons = [label for label in ACTION_LABELS if label in reasons]
+        # How it waits otherwise, in GitHub's words.
+        status = "Awaiting approval"
+        if pr["checks"] in ["running", "waiting"]:
+            status = "Awaiting CI"
+        if pr["review"] == "approved" and pr["checks"] in ["passed", "none"] and pr["mergeable"] == "yes":
+            status = "Ready to merge"
+        return {"needs": len(reasons) > 0, "reasons": reasons, "who": who, "detail": detail, "status": status}
+
     def refresh(self) -> None:
         """Read every PR and issue to follow from GitHub again. Runs in a thread; a second call waits for the first."""
         with self.refresh_lock:
@@ -425,6 +575,18 @@ class PRTracking:
             waiting_runs = len([run for run in runs if run["conclusion"] == "action_required"])
             if waiting_runs > 0:
                 checks = "waiting"
+            # Each check of the newest commit that failed, by name, also while others wait for a maintainer's approval;
+            # and when that commit was made.
+            failed_checks = []
+            head_at = None
+            if pull["commits"]["nodes"]:
+                head_at = pull["commits"]["nodes"][0]["commit"]["committedDate"]
+            if rollup is not None:
+                for context in rollup["contexts"]["nodes"]:
+                    if context["__typename"] == "CheckRun" and context["conclusion"] in ["FAILURE", "TIMED_OUT", "STARTUP_FAILURE"]:
+                        failed_checks.append(context["name"])
+                    if context["__typename"] == "StatusContext" and context["state"] in ["FAILURE", "ERROR"]:
+                        failed_checks.append(context["context"])
 
             # Each reviewer's latest review, not the PR's author's own.
             author = pull["author"]["login"] if pull["author"] else "ghost"
@@ -552,6 +714,8 @@ class PRTracking:
                 "labels": labels,
                 "checks": checks,
                 "waiting_runs": waiting_runs,
+                "failed_checks": failed_checks,
+                "head_at": head_at,
                 "review": review,
                 "reviewers": list(latest.values()),
                 "comments": pull["comments"]["totalCount"],
@@ -576,6 +740,8 @@ class PRTracking:
                 "error": None,
             }
             with self.lock:
+                # What it needs keeps until update_actions works it out again, a moment later.
+                record["action"] = (self.data["prs"].get(pr_id) or {}).get("action")
                 self.data["prs"][pr_id] = record
                 # The first read is where its agent starts from: it only hears what changes after. A conflict it has
                 # already is still news: it has to be settled before the PR can be merged.

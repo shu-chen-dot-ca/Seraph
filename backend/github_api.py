@@ -13,11 +13,19 @@ and "failed_runs" a PR's newest commit's failed GitHub Actions runs (to run thei
 
 POST /api/github/agent sets one followed PR's or issue's agent: drafts (with an agent; none makes a new one) or off.
 Turning drafts on checks the thread at once. keep_prs(), which the app runs in the background, reads the PRs and
-issues again every PRS_REFRESH_SECONDS, at once when Approve just sent something, and soon after you comment or delete
-a comment here. After every read (Check now's too), every open PR of yours without an agent gets one that owns it
-(unless you set it to Off), and each thread pr_tracking.needs_reply() lists (someone else wrote there, your PR's
-checks failed, or anything else changed on your PR) goes to its agent as a follow_up job (agents.follow_up); what the
-agent drafts then waits for you in the Inbox.
+issues again every refresh_prs_minutes (the Issues board's robot, "Needs action and Waiting approval": 10 at first), at
+once when Approve just sent something, and soon after you comment or delete a comment here. After every read (Check
+now's too), every open PR of yours without an agent gets one that owns it (unless you set it to Off), and each thread
+pr_tracking.needs_reply() lists (someone else wrote there, your PR's checks failed, or anything else changed on your PR)
+goes to its agent as a follow_up job (agents.follow_up); what the agent drafts then waits for you in the Inbox.
+
+What each open PR of yours needs from us (the Issues board's Needs action, else Waiting approval) is worked out every
+PRS_CHECK_SECONDS (pr_tracking.update_actions): by rules, and by Claude (judge_prs), which reads a PR again, JUDGE_BATCH
+at a time, when it changed on GitHub or a job on it ended since it last did, never while a job on it is open. One that
+needs action, as Claude last read it, with no job open on it, goes to its agent as a follow_up job saying what it needs:
+ACTION_TRIES times at most on the same newest commit, each after a new judgment (once when part of
+it only you can do; never for a draft you approved and only have to send). The agents with a job queued or working on
+a PR that needs action get priority (agents.set_pr_priority): ahead in the VM's line, more CPU, stepped down last.
 
 keep_profile_readme(), also in the background, keeps the merged pull requests table on your GitHub profile's README
 (github_searcher/profile_readme.py): at start, whenever a PR of yours shows up merged here (so within a few minutes of
@@ -37,6 +45,7 @@ only PRs that aren't open; one GitHub refuses is tried again only when the branc
 """
 
 import asyncio
+import json
 import re
 import time
 from datetime import UTC, datetime
@@ -45,7 +54,9 @@ import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from backend.issues_api import AUTO_REMOVE_FILE, AUTO_REMOVE_OFF
 from backend.shared import agents, github_account, inbox, pr_tracking, workflow, your_repositories
+from github_searcher.claude_judge import judge
 from github_searcher.github_account import SendError
 from github_searcher import profile_readme
 from github_searcher.pr_tracking import AGENT_MODES, ROLLUP
@@ -54,7 +65,38 @@ from github_searcher.search import get_action_runs, get_check_runs, get_commit_s
 router = APIRouter(prefix="/api")
 
 PRS_CHECK_SECONDS = 15
-PRS_REFRESH_SECONDS = 5 * 60
+# A PR whose judgment failed (Claude or GitHub down) is tried again after this long.
+JUDGE_RETRY_SECONDS = 10 * 60
+# PRs in one judgment: Claude reads them all at once.
+JUDGE_BATCH = 4
+# How much of a PR's text goes into its judgment: the description, each comment or review, each comment on a line.
+JUDGE_BODY_CHARS = 3000
+JUDGE_COMMENT_CHARS = 1500
+JUDGE_LINE_CHARS = 600
+# How many times the same need (the same reasons on the same newest commit) goes to its agent; once when only you can do it.
+ACTION_TRIES = 3
+JUDGE_REASONS = ["Changes requested", "Reply needed", "Checks failing", "Merge conflicts", "Rebase needed", "CLA not signed",
+                 "Draft", "Description out of date", "Other"]
+JUDGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "prs": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "needs_action": {"type": "boolean"},
+                    "who": {"type": "string", "enum": ["agent", "you", "none"]},
+                    "reasons": {"type": "array", "items": {"type": "string", "enum": JUDGE_REASONS}},
+                    "detail": {"type": "string"},
+                },
+                "required": ["id", "needs_action", "who", "reasons", "detail"],
+            },
+        },
+    },
+    "required": ["prs"],
+}
 BRANCHES_CHECK_SECONDS = 10 * 60
 PROFILE_README_SECONDS = 24 * 60 * 60
 PR_ACTIONS = ["close", "reopen", "delete_branch"]
@@ -496,18 +538,165 @@ async def keep_profile_readme() -> None:
         await asyncio.sleep(PRS_CHECK_SECONDS)
 
 
+async def judge_prs(due: list[dict], jobs: list[dict], failed_at: dict) -> None:
+    """Claude reads the PRs in due, JUDGE_BATCH at a time, and says for each what it needs from us now, if anything
+    (pr_tracking.set_judgment): the thread as GitHub has it (the description, comments, reviews with their comments on
+    lines, commits, checks), the newest comments on the issues it fixes, and what our agents' jobs on it said. One that
+    fails goes in failed_at, tried again after JUDGE_RETRY_SECONDS."""
+    you = github_account.status().get("login") or "the user"
+    for start in range(0, len(due), JUDGE_BATCH):
+        batch = due[start:start + JUDGE_BATCH]
+        keys = {}
+        texts = []
+        for pr in batch:
+            keys[pr["id"]] = pr_tracking.judgment_key(pr, jobs)
+            try:
+                thread = await thread_details(pr["id"])
+            except Exception as error:
+                print(f"[github] could not read {pr['id']} to judge it: {error}")
+                failed_at[pr["id"]] = time.monotonic()
+                continue
+            text = f"## PR {pr['id']}: {thread['title']}\n{thread['url']}\n"
+            conflicts = {"yes": "no", "conflicts": "YES, it has merge conflicts", "unknown": "not known yet"}[pr["mergeable"]]
+            text += f"GitHub draft: {'yes' if thread['draft'] else 'no'}. Merge conflicts with {thread['base']}: {conflicts}. "
+            text += f"Checks of the newest commit: {pr['checks']}"
+            if pr.get("failed_checks"):
+                text += f" (failed: {', '.join(pr['failed_checks'])})"
+            if pr["waiting_runs"] > 0:
+                text += f" ({pr['waiting_runs']} GitHub Actions runs wait for a maintainer to approve them)"
+            text += f". Labels: {', '.join(pr['labels']) or 'none'}.\n"
+            head = pr["head"]["sha"][:10] if pr["head"] is not None else "gone"
+            text += f"Newest commit: {head} at {pr.get('head_at')}. Our newest comment or review: {pr['your_last_at']}.\n"
+            text += f"Description:\n{(thread['body'] or '')[:JUDGE_BODY_CHARS]}\n"
+            text += f"Timeline, oldest first ({thread['hidden']} earlier items left out):\n"
+            for item in thread["timeline"][-40:]:
+                who = item.get("login", "ghost")
+                if item.get("mine") or who == you:
+                    who += " (you)"
+                if item.get("bot"):
+                    who += " (bot)"
+                if item.get("role"):
+                    who += f" [{item['role']}]"
+                if item["type"] == "comment":
+                    text += f"- {item['at']} {who} commented: {item['body'][:JUDGE_COMMENT_CHARS]}\n"
+                if item["type"] == "review":
+                    text += f"- {item['at']} {who} reviewed ({item['state']}): {item['body'][:JUDGE_COMMENT_CHARS]}\n"
+                    for comment in item["comments"][:10]:
+                        text += f"    on {comment['path']}:{comment['line']}, {comment['login']}: {comment['body'][:JUDGE_LINE_CHARS]}\n"
+                if item["type"] == "commit":
+                    text += f"- {item['at']} commit {item['sha'][:10]} by {item['login']}: {item['message'].splitlines()[0] if item['message'] else ''}\n"
+                if item["type"] == "event":
+                    text += f"- {item['at']} {who} {item['text']}\n"
+            for issue in pr["issues"][:2]:
+                try:
+                    linked = await thread_details(f"{pr['repo']}#{issue['number']}")
+                except Exception:
+                    continue
+                comments = [item for item in linked["timeline"] if item["type"] == "comment"]
+                text += f"The issue it fixes, #{issue['number']} ({linked['state']}), its newest comments:\n"
+                for item in comments[-8:]:
+                    who = item["login"] + (" (you)" if item.get("mine") or item["login"] == you else "") + f" [{item['role']}]"
+                    text += f"- {item['at']} {who}: {item['body'][:JUDGE_COMMENT_CHARS]}\n"
+            linked_ids = [f"{pr['repo']}#{issue['number']}".lower() for issue in pr["issues"]]
+            own = [job for job in jobs if job["thread"] == pr["id"] or (job["issue"] or "").lower() in linked_ids or (job["thread"] or "").lower() in linked_ids]
+            own.sort(key=lambda job: job["updated_at"])
+            if own:
+                text += "What our agents' newest jobs on it said:\n"
+            for job in own[-3:]:
+                said = job.get("notes") or job.get("headline") or ""
+                text += f"- {job['updated_at']} {job['kind']}, {job['status']}: {said[:800]}\n"
+            texts.append(text)
+        if not texts:
+            continue
+        prompt = (
+            f"The pull requests below were opened by the GitHub user {you} (the user), with the help of our AI agents, "
+            "who write the code, replies, rebases and new versions for them. For each one, decide whether it needs "
+            "something from our side NOW to move on, or whether it waits on others: the maintainers' review, their OK "
+            "to run CI for a first-time contributor, a re-review after we answered, the merge.\n"
+            "- A request from a reviewer or maintainer (in a review, a comment, a comment on a line, or on the issue the "
+            "PR fixes) that we haven't done: compare its time with our newest commit and our replies. A reply that only "
+            "promises it, without the commit, is not done. What our agents' jobs said is no proof: check the commits.\n"
+            "- Once we pushed and/or replied to a request, it waits on the reviewer: no action, even while GitHub still "
+            "shows changes requested.\n"
+            "- Failed checks need action only when our change causes them or we must fix them (lint, tests of our code, "
+            "a DCO sign-off, a check of the PR's text). A failure of infrastructure, a flaky test, a check of other code, "
+            "or a gate that waits for a maintainer's label or approval: no action.\n"
+            "- A CLA that isn't signed: action, who you.\n"
+            "- A GitHub draft PR the project waits for us to mark ready (or a bot made it a draft until a checklist is "
+            "done): action.\n"
+            "- A bot or maintainer saying something the project requires is missing (a template field, a changelog "
+            "entry, an attachment, a rebase): action.\n"
+            "- A description that claims what the commits don't have: action.\n"
+            "- Real findings of a review bot (CodeRabbit, Codex, Copilot, ...) not yet fixed or answered: action; ones "
+            "already answered or that don't apply: no.\n"
+            "- Thank-yous, approvals with no asks, a maintainer saying they'll look later, bot notes with no findings, "
+            "coverage reports: no action.\n"
+            "who: you only when only the user can do it (sign a CLA, upload a file on GitHub's web page, a review of "
+            "every line the project asks of the human, an account or legal step); agent for code, replies, rebases, "
+            "descriptions; none when no action. reasons: the kinds of what is needed (Changes requested also for a "
+            "request made in a comment). detail: when action is needed, one to three plain sentences saying exactly what "
+            "has to be done, with who asked and when (it is handed to the agent as its task); empty otherwise.\n"
+            "Answer for every pull request, by its id.\n\n" + "\n\n".join(texts)
+        )
+        try:
+            answer = await judge(prompt, JUDGE_SCHEMA, "medium")
+        except Exception as error:
+            # Any failure (no valid answer, an API error or a usage limit ending Claude Code): tried again later.
+            print(f"[github] could not judge {', '.join(keys)}: {error}")
+            for pr_id in keys:
+                failed_at[pr_id] = time.monotonic()
+            continue
+        now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        answered = []
+        for each in answer["prs"]:
+            if each["id"] not in keys:
+                continue
+            answered.append(each["id"])
+            reasons = [reason for reason in each["reasons"] if reason in JUDGE_REASONS]
+            if each["needs_action"] and not reasons:
+                reasons = ["Other"]
+            who = each["who"]
+            if not each["needs_action"]:
+                who = "none"
+                reasons = []
+            pr = [one for one in batch if one["id"] == each["id"]][0]
+            judgment = {
+                "key": keys[each["id"]], "needs": each["needs_action"], "who": who, "reasons": reasons,
+                "detail": each["detail"] if each["needs_action"] else "", "judged_at": now,
+                "head": pr["head"]["sha"] if pr["head"] is not None else "", "failed_checks": pr.get("failed_checks", []),
+            }
+            pr_tracking.set_judgment(each["id"], judgment)
+        # One Claude left out is tried again later.
+        for pr_id in keys:
+            if pr_id not in answered:
+                failed_at[pr_id] = time.monotonic()
+
+
 async def keep_prs() -> None:
     """Runs as long as the backend. One that fails to read shows its error and is tried again next round. After every
-    read, the threads that need their agent go to it; one that fails to is tried again after the next read."""
+    read, the threads that need their agent go to it; one that fails to is tried again after the next read. Every round,
+    what each open PR of yours needs from us is worked out again (pr_tracking.update_actions), Claude judges the ones that
+    changed (judge_prs, one batch at a time), a PR that needs action with no job open on it goes to its agent, and the
+    agents working on one get priority (agents.set_pr_priority)."""
     last = None
     # The sent drafts a refresh has already seen.
     tried = set()
     # The read the follow-ups last ran after (pr_tracking's checked_at).
     followed_up = None
+    # The judgment running now, and when each PR whose judgment failed was tried.
+    judging = None
+    failed_at = {}
     while True:
+        # Every refresh_prs_minutes, the board's setting (the robot over the Issues board).
+        rules = dict(AUTO_REMOVE_OFF)
+        try:
+            rules.update(json.loads(AUTO_REMOVE_FILE.read_text()))
+        except (OSError, ValueError):
+            # Not saved yet, or broken by hand: the defaults for this round.
+            pass
         sent = [draft["id"] for draft in inbox.list() if draft["sent"] is not None]
         new = [draft_id for draft_id in sent if draft_id not in tried]
-        if new or pr_tracking.wanted or last is None or time.monotonic() - last > PRS_REFRESH_SECONDS:
+        if new or pr_tracking.wanted or last is None or time.monotonic() - last > rules["refresh_prs_minutes"] * 60:
             last = time.monotonic()
             tried.update(sent)
             pr_tracking.wanted = False
@@ -551,4 +740,87 @@ async def keep_prs() -> None:
                 print(f"[github] could not give {entry['id']} to its agent: {error}")
             if job is not None:
                 pr_tracking.mark_answered(entry["id"], entry["at"], entry["failed_sha"], entry["signals"])
+
+        try:
+            all_jobs = agents.jobs.list()
+            # What each open PR of yours needs from us now: the board's Needs action, else Waiting approval.
+            pr_tracking.update_actions(all_jobs)
+            prs = [pr for pr in pr_tracking.summary()["items"] if pr["relation"] == "author" and pr["state"] == "open"]
+            judgments = pr_tracking.data["judgments"]
+            settings = pr_tracking.data["agent_settings"]
+            # Each PR's jobs: follow-ups on it, and the jobs on the issues it fixes (follow-ups on them too).
+            own = {}
+            for pr in prs:
+                linked = [f"{pr['repo']}#{issue['number']}".lower() for issue in pr["issues"]]
+                own[pr["id"]] = [job for job in all_jobs if job["thread"] == pr["id"] or (job["issue"] or "").lower() in linked or (job["thread"] or "").lower() in linked]
+
+            # Claude judges the ones that changed since their judgment, and none with a job open: its agent is on it.
+            if judging is None or judging.done():
+                due = []
+                for pr in prs:
+                    if [job for job in own[pr["id"]] if job["status"] in ["queued", "working", "waiting_on_user"]]:
+                        continue
+                    if pr["id"] in failed_at and time.monotonic() - failed_at[pr["id"]] < JUDGE_RETRY_SECONDS:
+                        continue
+                    judgment = judgments.get(pr["id"])
+                    if judgment is None or judgment["key"] != pr_tracking.judgment_key(pr, all_jobs):
+                        due.append(pr)
+                if due:
+                    judging = asyncio.create_task(judge_prs(due, all_jobs, failed_at))
+
+            # One that needs action with no job open on it goes to its agent, ACTION_TRIES times at most on the same newest
+            # commit (once when only you can do it), each time after a new judgment. Only once
+            # Claude read it as it is now: what happened since needs_reply gives already, and may need nothing.
+            for pr in prs:
+                action = pr.get("action")
+                if action is None or not action["needs"] or pr["agent"] is None or pr["agent"] not in agents.agents:
+                    continue
+                judgment = judgments.get(pr["id"])
+                if judgment is None or judgment["key"] != pr_tracking.judgment_key(pr, all_jobs):
+                    continue
+                # A draft you approved and didn't send is yours to send: nothing for the agent.
+                if action["reasons"] == ["Not sent"]:
+                    continue
+                if pr["agent_mode"] != "drafts" or workflow.get(pr["repo"]) is not None:
+                    continue
+                if [job for job in own[pr["id"]] if job["status"] in ["queued", "working", "waiting_on_user", "paused"]]:
+                    continue
+                # Tries count per newest commit: the reasons Claude gives can change from one judgment to the next.
+                head = pr["head"]["sha"] if pr["head"] is not None else ""
+                base = head
+                judged_at = (judgments.get(pr["id"]) or {}).get("judged_at", "")
+                key = ",".join(action["reasons"]) + "|" + head + "|" + judged_at
+                setting = settings.get(pr["id"], {})
+                tries = setting.get("action_tries", 0) if setting.get("action_base") == base else 0
+                limit = 1 if action["who"] == "you" else ACTION_TRIES
+                if setting.get("action_key") == key or tries >= limit:
+                    continue
+                reason = "it needs action from us: " + ", ".join(action["reasons"])
+                if action["detail"]:
+                    reason += f" ({action['detail']})"
+                if action["who"] == "you":
+                    reason += ". Part of it only the user can do: tell them exactly what and how with draft_question, and do the rest yourself"
+                if tries > 0:
+                    reason += f". Your last job on it ended without settling this; this is try {tries + 1} of {limit}"
+                entry = {
+                    "id": pr["id"], "kind": "pr", "relation": "author", "state": "open", "title": pr["title"], "url": pr["url"],
+                    "agent": pr["agent"], "reason": reason, "at": None, "failed_sha": None, "head": pr["head"],
+                    "base": pr["base"], "signals": None,
+                }
+                if agents.follow_up(entry) is not None:
+                    pr_tracking.mark_action_given(pr["id"], base, key)
+
+            # The agents working on a PR that needs action go first in the VM's line.
+            first = set()
+            for pr in prs:
+                action = pr.get("action")
+                if action is None or not action["needs"]:
+                    continue
+                for job in own[pr["id"]]:
+                    if job["status"] in ["queued", "working"]:
+                        first.add(job["agent"])
+            agents.set_pr_priority(first)
+        except Exception as error:
+            # A file or an agent failed: the next round tries again.
+            print(f"[github] could not work out what your PRs need: {error}")
         await asyncio.sleep(PRS_CHECK_SECONDS)

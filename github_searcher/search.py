@@ -933,7 +933,8 @@ def get_open_issues(owner: str, repo: str) -> list[dict]:
 # One PR as it stands, for the GitHub tab (pr_tracking.py): its state, its branch (headRef is null once the branch is
 # deleted), the branch it goes into and whether it conflicts with it (mergeable: MERGEABLE, CONFLICTING, or UNKNOWN
 # while GitHub works it out), labels, reviews, the latest 10 comments (oldest first: the newest is the last), the issues
-# it says it fixes, its newest commit's checks, and the lines it adds and removes and the files it changes. The agents' draft_pr reads its state and newest commit too, and
+# it says it fixes, its newest commit (when it was made, its checks in all and each one: a check run's name, status and
+# conclusion, a commit status's context and state), and the lines it adds and removes and the files it changes. The agents' draft_pr reads its state and newest commit too, and
 # draft_edit its title and description (body) as they are now (agent/work_tools.py).
 PR_STATUS_QUERY = """
 query($owner: String!, $name: String!, $number: Int!) {
@@ -948,7 +949,9 @@ query($owner: String!, $name: String!, $number: Int!) {
       comments(last: 10) { totalCount nodes { createdAt authorAssociation body author { login __typename } } }
       reviews(last: 30) { nodes { state submittedAt authorAssociation author { login __typename } } }
       closingIssuesReferences(first: 5) { nodes { number title url state stateReason assignees(first: 5) { nodes { login } } } }
-      commits(last: 1) { nodes { commit { oid statusCheckRollup { state } } } }
+      commits(last: 1) { nodes { commit { oid committedDate statusCheckRollup { state contexts(first: 100) { nodes {
+        __typename ... on CheckRun { name status conclusion } ... on StatusContext { context state }
+      } } } } } }
     }
   }
 }

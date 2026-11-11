@@ -39,7 +39,7 @@ What each does:
 - Open PRs at once: how many of your PRs may be open on the repo at the same time, max_prs_first until one of yours
   there is merged (1 at first), max_prs after (5). Two places hold to it. Catalog to In progress: agents take no more
   of the repo's Catalog cards while its open PRs and its issues with an open job (from queued to waiting on you) add up
-  to it (keep_catalog_agents in backend/issues_api.py). Review to Open PR: keep_drafts sends no new PR there while its
+  to it (keep_catalog_agents in backend/issues_api.py). Review to an open PR: keep_drafts sends no new PR there while its
   open PRs are at it; the ones over it wait in the Inbox (the board's Review) until one is merged or closed. New
   versions of open PRs, and a PR made again in place of an old one, always go. No new PR goes to an archived repo
   (the Dashboard's Automation archives the ones that don't merge ours: backend/automation_api.py), but one for an issue
