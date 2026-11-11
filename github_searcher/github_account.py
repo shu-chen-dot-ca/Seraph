@@ -46,7 +46,8 @@ approved on a repo whose rules want a maintainer's confirmation before a PR (the
 GitHub shows you assigned to the claimed issue (mcp-memory-service#1912 went out 16 minutes after its claim,
 unassigned, and its claim check failed).
 A comment is posted on its issue or PR (its pictures go to your fork the same way); one with reply_to goes inside that
-conversation on lines of code of the PR instead, and with resolve that conversation is marked resolved after it.
+conversation on lines of code of the PR instead (on the PR, linking to it, when GitHub refuses that: an organization
+that restricts OAuth Apps), and with resolve that conversation is marked resolved after it.
 An edit (a new title and description for your own PR or issue) changes them on GitHub, only when it is yours and still
 has the text the agent saw ("previous"), else it refuses (the agent redrafts on the text as it is now).
 
@@ -841,6 +842,12 @@ class GithubAccount:
         self.step = "posting the comment"
         if draft["reply_to"] is not None:
             response = client.post(f"/repos/{repo}/pulls/{number}/comments/{draft['reply_to']}/replies", json={"body": body})
+            # An organization that restricts OAuth Apps (VoltAgent, openchoreo, vellum-ai) refuses an answer inside the
+            # conversation, but not a comment on the PR: it goes there, with a link to the conversation it answers.
+            # Otherwise it stayed in the Inbox for good, tried again every 10 minutes.
+            if response.status_code == 403:
+                body = f"In reply to https://github.com/{repo}/pull/{number}#discussion_r{draft['reply_to']}:\n\n{body}"
+                response = client.post(f"/repos/{repo}/issues/{number}/comments", json={"body": body})
         else:
             response = client.post(f"/repos/{repo}/issues/{number}/comments", json={"body": body})
         response.raise_for_status()
