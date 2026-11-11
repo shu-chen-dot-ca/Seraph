@@ -33,8 +33,8 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   No draft has emoji in it (EMOJI, the user's rule; a template's emoji are written as words). A PR is
   written from the project's contribution rules and its recently merged PRs: contributing_guide
   gathers the rules wherever they are (CONTRIBUTING in any folder, developer guides in the docs, the
-  PR template, AGENTS.md, and the guides the README and CONTRIBUTING link to, on GitHub or on the
-  project's website) and shows them in parts that each fit one answer, pr_examples shows its main contributors' latest
+  PR template, AGENTS.md, its AI or agent policy and its organization's, and the guides and policies the README and
+  CONTRIBUTING link to, on GitHub or on the project's website) and shows them in parts that each fit one answer, pr_examples shows its main contributors' latest
   merged PRs and some outside ones, and draft_pr refuses until the agent read both for that repo (the guide to its last
   part). Which repos it read is kept in its record, so a backend restart doesn't ask for them again. The job's before and
   after pictures go in the PR body as ![before](evidence:ev_...): the Inbox shows them in place,
@@ -259,10 +259,13 @@ OUTSIDE_ROLES = ["CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "NONE"]
 # are shown in parts of at most GUIDE_PART_CHARS (reticle's 87,000 characters were more than one tool answer may be:
 # Claude Code put it in a file the agent has no tool to open). A call without a part reads the next one it hasn't read:
 # an agent that learned the tool before it had parts knows no part argument (opencodex's agent got part 1 every time).
-GUIDE_FILES =["agents.md", "ai_policy.md", "development.md", "developing.md", "hacking.md"]
+GUIDE_FILES =["agents.md", "ai_policy.md", "agent_policy.md", "development.md", "developing.md", "hacking.md"]
 GUIDE_TEXT_ENDINGS = (".md", ".mdx", ".rst", ".txt", ".adoc")
 GUIDE_SKIP_FOLDERS = ["node_modules/", "vendor/", "third_party/", "site-packages/", "tests/", "fixtures/", "i18n/", "locale/", "locales/", "translations/"]
-GUIDE_LINK_WORDS = ["contribut", "developer guide", "developer-guide", "development guide", "hacking", "pull request", "pull-request"]
+GUIDE_LINK_WORDS = [
+    "contribut", "developer guide", "developer-guide", "development guide", "hacking", "pull request", "pull-request",
+    "ai policy", "ai-policy", "ai_policy", "agent policy", "agent-policy", "agent_policy", "llm usage", "llm-usage", "llm_usage",
+]
 GUIDE_PAGES = 5
 GUIDE_CHARS = 30_000
 GUIDE_TOTAL_CHARS = 120_000
@@ -2921,6 +2924,14 @@ class WorkTools:
                 if isinstance(data, dict) and data.get("encoding") == "base64":
                     documents.append((f"{owner}/.github: {path}", base64.b64decode(data["content"]).decode("utf-8", errors="replace")))
                     break
+        # The organization's AI policy holds for all its repos (nextcloud's, in nextcloud/.github), unless it has its own.
+        if not any("ai_policy" in path.lower() for path, text in documents):
+            try:
+                data = await asyncio.to_thread(get_contents, owner, ".github", "AI_POLICY.md")
+            except (httpx.HTTPError, ValueError):
+                data = None
+            if isinstance(data, dict) and data.get("encoding") == "base64":
+                documents.append((f"{owner}/.github: AI_POLICY.md", base64.b64decode(data["content"]).decode("utf-8", errors="replace")))
         try:
             readme = await asyncio.to_thread(get_readme, owner, repo)
         except (httpx.HTTPError, ValueError):
