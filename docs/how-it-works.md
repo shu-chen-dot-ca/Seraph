@@ -36,7 +36,7 @@ How hard the code is doesn't decide much: the agent writes hard code. What matte
 | Merge | Rule |
 |---|---|
 | **Fixed** | Still open on GitHub, but a merged PR or a commit already does what it asks (the PR said "Addresses #n" instead of "Fixes #n"). It only needs closing. |
-| **Out of scope** | It is a plugin or add-on for a third-party product's users, the project wants it as a separate repo, it can only be seen on macOS, Windows, a phone or special hardware (even when its files can be edited on Linux), or it is political. |
+| **Out of scope** | It is a plugin or add-on for a third-party product's users, the project wants it as a separate repo, it can only be seen on macOS, Windows, a phone or special hardware (even when its files can be edited on Linux), it is political, or it is about a game. |
 | **Claimed** | Someone else is on it: assigned on GitHub, or their open PR says it closes it (one untouched for 30 days counts as abandoned). Catalog never gives these to an agent |
 | **Maintainers only** | The maintainers keep it for themselves |
 | **Waiting** | It isn't ready to pick up: it needs a decision, a design or more information, or it's a feature request no maintainer has said yes to |
@@ -83,7 +83,7 @@ The robot on a repo's card (Dashboard, Repository) sets what agents do there wit
 | **Questions** | A question with a recommended answer is answered with it at once (money, sensitive, GitHub and delete questions still wait, as Settings say) |
 | **Comments** | Comments are posted |
 | **Pull requests** | PRs are sent once the reviewer passed them, and new titles and descriptions too. Agents may also update your open PR's branch with its base |
-| **Open issues** | Agents may open new issues where the project's rules allow it, claimed for you (assigned, or your comment saying you're on it), never one out of scope (political or the like). Each goes to the top of Catalog, before everything else, and another agent takes it even when **Take issues** is off |
+| **Open issues** | Agents may open new issues where the project's rules allow it, claimed for you (assigned, or your comment saying you're on it), never one out of scope (political, a game or the like). Each goes to the top of Catalog, before everything else, and another agent takes it even when **Take issues** is off |
 
 Catalog is worked from the top: while fewer agents work than the board's **Max agents**, the next card of a repo with **Take issues** on goes to a new agent, which picks its VM itself. A send GitHub refuses stays in the Inbox for you.
 
