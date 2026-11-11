@@ -36,7 +36,7 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   PR template, AGENTS.md, its AI or agent policy and its organization's, and the guides and policies the README and
   CONTRIBUTING link to, on GitHub or on the project's website) and shows them in parts that each fit one answer, pr_examples shows its main contributors' latest
   merged PRs and some outside ones, and draft_pr refuses until the agent read both for that repo (the guide to its last
-  part). Which repos it read is kept in its record, so a backend restart doesn't ask for them again. The job's before and
+  part). On a repo whose AI policy is disclose, a new PR that doesn't say AI helped is refused too. Which repos it read is kept in its record, so a backend restart doesn't ask for them again. The job's before and
   after pictures go in the PR body as ![before](evidence:ev_...): the Inbox shows them in place,
   and sending uploads them to the user's fork (or the user does, sending by hand).
   draft_pr with pr ("owner/name#n") is the next version of the user's own open PR instead: base must be that PR's
@@ -3204,6 +3204,14 @@ class WorkTools:
             text = (
                 f"{repo}'s AI policy is {policy}, not disclose: its PRs say nothing about AI helping (no AI section, no line "
                 f"that an AI or agent prepared it). Take out \"{note.group(0)}\" and what goes with it, then draft again."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        # A repo whose AI policy is disclose wants it said in every PR: one without it cost kestra's PRs a review round each.
+        if note is None and policy == "disclose" and pr is None:
+            text = (
+                f"{repo}'s AI policy is disclose: its PRs say plainly that AI tools helped. Say so in the body, the way its "
+                "rules or its PR template ask (its AI section or checkbox, else a short line such as 'AI-assisted: written "
+                "with the help of Claude Code'), then draft again."
             )
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         # One of the user's projects (github_searcher/projects.py): its rules are its own files (CLAUDE.md, README, docs),
