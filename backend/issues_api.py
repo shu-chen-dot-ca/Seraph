@@ -69,7 +69,10 @@ another repo goes. With the Dashboard's Automation on, the cards of the repos it
 Normal, New, Slow, ...; then the most PRs merged a day: backend/automation_api.py), each in the board's order. Only
 cards that are Catalog's own: no job (or only cancelled ones), not paused, open on GitHub, and, like Assign, with its
 Merge in and not fixed, out of scope or can't validate, and unlike Assign not claimed either: someone else is on it
-(assigned, or their open pull request closes it), so a second fix isn't wanted (the others wait there). A card taken leaves Catalog's list, so
+(assigned, or their open pull request closes it), so a second fix isn't wanted; nor maintainers only, waiting, no
+outside PRs or large feature, which a card picked as Likely can turn into when it is read again (DeepSeek-Reasonix
+stopped taking outside PRs, oh-my-pi#17037 waited on a maintainer): no PR of ours would be merged now. The others wait
+there, until a new read says otherwise. A card taken leaves Catalog's list, so
 its job keeps it on the board, and a job cancelled later sends it back to Open, not to the next agent.
 
 An issue one of our agents opened as you (open_issue in github_searcher/agent/work_tools.py, the Actions in inbox.py)
@@ -864,9 +867,10 @@ def take_from_catalog() -> None:
         if state == "CLOSED":
             continue
         # Like Assign (assign_issue): once its Merge is in, and not when that says it can't be done. Nor one someone else
-        # is on (claimed): assigned to them, or their open PR closes it; nobody wants a second fix. Ours go anyway.
+        # is on (claimed): assigned to them, or their open PR closes it; nobody wants a second fix. Nor one no PR of ours
+        # would be merged in now (maintainers only, waiting, no outside PRs, large feature). Ours go anyway.
         tag = tags.get(item["id"])
-        blocked = [None, "fixed", "out of scope", "can't validate", "claimed"]
+        blocked = [None, "fixed", "out of scope", "can't validate", "claimed", "maintainers only", "waiting", "no outside prs", "large feature"]
         if item["id"].lower() in opened:
             blocked = [None, "fixed", "out of scope", "can't validate"]
         if tag is None or tag.get("merge") in blocked:
