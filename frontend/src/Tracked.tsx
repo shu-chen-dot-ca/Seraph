@@ -23,7 +23,7 @@ GitHub's labels aren't shown otherwise: each issue carries the app's own tags in
 (github_searcher/issue_tags.py, made by Claude in the background): Free or Assigned, Merge (whether a pull request
 from us would get merged, by fixed rules, the same as on the Issues page: Likely in green, else the first thing in the
 way in red) or Out of scope (grey: we don't take it, like a plugin or add-on for a third-party product's users, or it
-touches politics: activist or politically sensitive, or against another country's laws), its Lines
+touches politics: activist or politically sensitive, or against another country's laws, or it is about a game), its Lines
 (a rough guess of how many lines the fix adds and removes, tests included, shown as ~40) and its kind, each in its own column, the reason on hover. Assigned on GitHub counts as Assigned at once, without waiting
 for the tags. Tag again (on the repo's row and in its pop-up) has Claude read all its unassigned issues again now.
 

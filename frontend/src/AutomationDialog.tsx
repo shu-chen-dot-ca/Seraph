@@ -31,7 +31,7 @@ send it by hand: Approve in the Inbox, or Publish on the Pull requests page). Ho
 once is the Issues board's (BoardAutomationDialog.tsx), not a repo's.
 Right, Instructions: optional, added on top of the default instructions, e.g. which issues to take or skip even when
 their level is picked. The default instructions always skip issues that are political or politically sensitive,
-against another country's laws, unethical or NSFW.
+against another country's laws, about a game, unethical or NSFW.
 Save checks the numbers (whole numbers, 1 to 50) and keeps it all; Cancel, Esc or the X drop the changes.
 */
 

@@ -50,7 +50,7 @@ scope (grey): we don't take it, whatever the rest says. Either it isn't a pull r
 on Windows, macOS, a phone or special hardware (even when its files can be edited on Linux: we can't validate it), or
 it touches politics, in the issue or in what the repo is for: the app only
 does non-political work, nothing politically sensitive or activist, and nothing that goes against another country's
-laws, such as China's. Assign is greyed out until an issue has a Merge, and for Fixed, Out of scope and Can't validate
+laws, such as China's; or it is about a game (no games, in the issue or in what the repo is for). Assign is greyed out until an issue has a Merge, and for Fixed, Out of scope and Can't validate
 (the backend refuses them too): a job we can't prove ends with nothing to show. Sorted, Likely comes first. The reason on hover ends with why. Tag
 again (in the issue's pop-up) has Claude read it again now.
 
