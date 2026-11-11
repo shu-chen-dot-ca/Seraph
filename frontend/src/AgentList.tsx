@@ -1,7 +1,7 @@
 /*
 The Dashboard's Agents page (#/dashboard/agents): the agents in one table, with tabs Open (first) and Closed with how
-many, like the Dashboard's Pull requests. Open has the agents on an issue that is in Catalog, In progress, Review or
-Open PR on the Issues board (IssueBoard.tsx): a job on the issue that waits in the queue, works, waits on you or is
+many, like the Dashboard's Pull requests. Open has the agents on an issue that is in Catalog, In progress, Review,
+Needs action or Waiting approval on the Issues board (IssueBoard.tsx): a job on the issue that waits in the queue, works, waits on you or is
 paused, or waits on maintainers while its pull request is open (or not read yet); or an open pull request of yours the
 agent follows (also after its job is done). Closed has every other one (?state=closed): finished, cancelled, archived,
 and the ones you only chat with. A row:
@@ -60,7 +60,7 @@ export default function AgentList(props: { state: "open" | "closed" }) {
       openJobs[job.agent] = job;
     }
   }
-  // Open PR also has the open pull requests of yours an agent follows, also after its job is done.
+  // Needs action and Waiting approval also have the open pull requests of yours an agent follows, also after its job is done.
   for (const pr of prs.items) {
     if (pr.relation === "author" && pr.state === "open" && pr.agent !== null && !openIds.includes(pr.agent)) {
       openIds.push(pr.agent);

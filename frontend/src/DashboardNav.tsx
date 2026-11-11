@@ -6,7 +6,7 @@ is marked:
 - Issues (#/dashboard/issues, IssueBoard.tsx): the Issues list as a board, Open to Finished, with how many issues.
 - Repository (#/dashboard/repos, RepositoryCards.tsx): the repos on the Repos page as cards, with how many are there.
 - Agents (#/dashboard/agents, AgentList.tsx): the agents in a table, Open and Closed, with how many are open (on an
-  issue in Catalog, In progress, Review or Open PR on the Issues board). Like Home's Agents line without its fold (no line per agent) and without its +. An
+  issue in Catalog, In progress, Review, Needs action or Waiting approval on the Issues board). Like Home's Agents line without its fold (no line per agent) and without its +. An
   agent's chat (#/agents/<id>) stays on this tab when opened from here (App.tsx), and keeps this line marked.
 - Problems (#/dashboard/problems, Problems.tsx): what went wrong in how the app made agents work, as they reported it,
   with how many are open.

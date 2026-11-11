@@ -1,24 +1,35 @@
 /*
-The Dashboard's Issues page (#/dashboard/issues): the issues in the Issues list as a board, one card per issue, in five
+The Dashboard's Issues page (#/dashboard/issues): the issues in the Issues list as a board, one card per issue, in six
 columns from left to right, by the issue's latest job and your pull request for it:
 - Open: no job yet, or the last one was cancelled.
 - Catalog: you moved it there (Add, here or in a repo's pop-up on the Repository page, or dragged), or a job waits in
   the queue for its agent.
 - In progress: an agent is working on it.
-- Review: its draft waits for you in the Inbox.
-- Open PR: your pull request for it is open on GitHub. A dot after the name: green while an agent works on it (a
-  follow-up on the pull request), yellow while it waits for others (maintainers, CI, ...).
+- Review: its draft waits for you in the Inbox, also any draft for its open pull request (a follow-up's, a new
+  version, a comment, a question).
+- Needs action: your pull request for it is open on GitHub and needs something from us, as the backend works it out
+  (pr_tracking.update_actions, after every read of your pull requests): it conflicts with its base branch, its CLA
+  isn't signed, a reviewer asked for changes after our last push or reply, or its checks failed, someone wrote there or
+  a bot reviewed it and no agent has finished with that yet. What it needs shows in red tags.
+- Waiting approval: your pull request for it is open and waits for others: a review, CI or a maintainer's OK to run it,
+  the merge. A tag says how it stands, as on GitHub: Ready to merge (green), Awaiting CI or Awaiting approval.
+A dot after the name on In progress, Review, Needs action and Waiting approval cards: green while an agent acts on it
+(a job on the issue or a follow-up on its pull request is working, and its agent is in its turn or on a VM's desktop),
+yellow while it waits for action.
+A red dot after the name, in any column: its job waits for your decision on a draft in the Inbox (one its level of
+automation doesn't send by itself, or a question that must wait for a person).
 Finished ones are left off the board, so the others have more room: the job is done and its pull request merged or
 closed (or there is none), or the issue was closed. They are still sorted into board.finished, only not shown, and the
 count on top leaves them out.
-Open PR is every pull request of yours open on GitHub: one with no job (or a cancelled one) goes there too, one merged
-or closed leaves it even while its job waits, and one whose issue isn't on the list (taken off, or it links none) gets
-a card of its own, made from the pull request (its job's issue, else the one it links, else the pull request).
+Needs action and Waiting approval have every pull request of yours open on GitHub: one with no job (or a cancelled one)
+goes there too, one merged or closed leaves them even while its job waits, and one whose issue isn't on the list (taken
+off, or it links none) gets a card of its own, made from the pull request (its job's issue, else the one it links, else
+the pull request).
 Only Open cards have the ×. At a card's bottom right, filled buttons, side by side: Add on Open cards (to the end of
 Catalog), Cancel on Catalog cards you put there (back to Open), and Pause / Resume on Catalog and In progress cards.
 Finished cards have none.
 Your pull request for an issue is the one sent from its job, or one of yours that links the issue; an open one first.
-Review, Open PR and Finished cards end with the change's size: the lines it adds and removes (+12 −3) and the files it
+Review, Needs action, Waiting approval and Finished cards end with the change's size: the lines it adds and removes (+12 −3) and the files it
 changes, from the draft waiting in the Inbox on Review and from the pull request after (GitHub's numbers, missing until
 the pull request is read again).
 
@@ -40,7 +51,7 @@ else its target VM; its page), the desktop it is on now (or its place in that VM
 
 Open goes by repo like the Repository page (RepositoryCards.tsx): the repos where most of your pull requests were
 merged first, ties by stars, then A to Z; within a repo by when the issue was opened on GitHub, newest first. In
-progress, Review, Open PR and Finished go by repo,
+progress, Review, Needs action, Waiting approval and Finished go by repo,
 A to Z, then Free first (then Claimed, Fixed), Scope clear before Scope not clear, Easy to Hard (then Out of scope), and
 the fewest lines first; ones not read yet go last each time. Catalog is in your order (dragged).
 Cards drag: up and down within Catalog, and between Open and Catalog (not one with a job: its job decides its
@@ -105,14 +116,15 @@ import { api, useLive, type IssueItem, type IssueTags, type Job } from "@/live";
 import { cn, timeAgo } from "@/lib/utils";
 
 // Finished ones (board.finished) aren't shown.
-const COLUMNS = ["open", "catalog", "in_progress", "review", "open_pr"];
+const COLUMNS = ["open", "catalog", "in_progress", "review", "needs_action", "waiting_approval"];
 
 const COLUMN_NAMES: Record<string, string> = {
   open: "Open",
   catalog: "Catalog",
   in_progress: "In progress",
   review: "Review",
-  open_pr: "Open PR",
+  needs_action: "Needs action",
+  waiting_approval: "Waiting approval",
   finished: "Finished",
 };
 
@@ -122,6 +134,8 @@ type Tag = {
   label: string;
   variant: "ok" | "bad" | "secondary";
   className?: string;
+  // Shown on hover.
+  title?: string;
 };
 
 const COMPLEXITY_TAGS: Record<string, Tag> = {
@@ -156,8 +170,8 @@ type Card = {
   done: boolean;
   // Why only you can move it on ("" when nothing): the red dot.
   blocker: string;
-  // In Open PR: an agent works on its pull request (the green dot), else it waits for others (yellow).
-  prWorking: boolean;
+  // An agent acts on it now (the green dot), else it waits for action (yellow); on In progress to Waiting approval.
+  acting: boolean;
   // How it sorts after its repo, lowest first: free, scope, complexity, lines.
   rank: number[];
 };
@@ -299,10 +313,11 @@ export default function IssueBoard() {
     }
   }
 
-  // Each issue's latest job.
+  // Each issue's latest job. Not a reviewer's: it is on the issue only as its draft's target, and the fix it checks
+  // decides the card (its dot still counts it).
   const latest: Record<string, Job> = {};
   for (const job of jobs) {
-    if (job.issue === null) {
+    if (job.issue === null || job.kind === "review") {
       continue;
     }
     const current = latest[job.issue];
@@ -312,8 +327,8 @@ export default function IssueBoard() {
   }
 
   // The issues on the board, and one for each of your open pull requests whose issue isn't there (taken off the list,
-  // or it links none), so Open PR has every one that is open on GitHub. Made from the pull request: its job's issue,
-  // else the issue it links, else the pull request itself.
+  // or it links none), so Needs action and Waiting approval have every one that is open on GitHub. Made from the pull
+  // request: its job's issue, else the issue it links, else the pull request itself.
   const items: IssueItem[] = [...issues.items];
   const listed = issues.items.map((item) => item.id.toLowerCase());
   for (const pr of prs.items) {
@@ -353,10 +368,11 @@ export default function IssueBoard() {
     });
   }
 
-  // The lines and files each job's draft waiting in the Inbox changes, by job id, for its card on Review.
+  // The lines and files each job's draft waiting in the Inbox changes, by job id, for its card on Review. Not a new
+  // title or description: its diff is text, not code.
   const draftChanges: Record<string, { additions: number; deletions: number; files: number }> = {};
   for (const draft of inbox) {
-    if (draft.job === null || draft.status !== "pending" || !draft.diff) {
+    if (draft.job === null || draft.status !== "pending" || draft.kind === "edit" || !draft.diff) {
       continue;
     }
     const counted = { additions: 0, deletions: 0, files: 0 };
@@ -377,22 +393,30 @@ export default function IssueBoard() {
     catalog: [],
     in_progress: [],
     review: [],
-    open_pr: [],
+    needs_action: [],
+    waiting_approval: [],
     finished: [],
   };
   for (const issue of items) {
     const job = latest[issue.id] ?? null;
     const repo = issue.repo.toLowerCase();
-    // Your pull request for it: sent from its job, one of yours that links the issue, or the card's own (one made
-    // from a pull request above). An open one first, when there are more.
+    // Your pull request for it: sent from one of its jobs, one of yours that links the issue, or the card's own (one
+    // made from a pull request above). An open one first, when there are more.
     const mine = prs.items.filter(
       (each) =>
         each.relation === "author" &&
-        ((job !== null && each.job === job.id) ||
+        (jobs.some((other) => other.id === each.job && other.issue !== null && other.issue.toLowerCase() === issue.id.toLowerCase()) ||
           each.id === issue.id ||
           (each.repo.toLowerCase() === repo && each.issues.some((linked) => linked.number === issue.number))),
     );
     const pr = mine.find((each) => each.state === "open") ?? (mine.length > 0 ? mine[0] : undefined);
+    // Its jobs: the ones on the issue (its fix, its reviews, follow-ups on it), and the follow-ups on its pull request.
+    const cardJobs = jobs.filter(
+      (each) =>
+        (each.issue !== null && each.issue.toLowerCase() === issue.id.toLowerCase()) ||
+        (each.thread !== null && each.thread.toLowerCase() === issue.id.toLowerCase()) ||
+        (pr !== undefined && each.thread === pr.id),
+    );
     let column = "open";
     // A paused job stays in the column it was paused in.
     const status = job !== null && job.status === "paused" ? (job.paused_from ?? "queued") : job?.status;
@@ -406,24 +430,40 @@ export default function IssueBoard() {
       column = "review";
     }
     if (job !== null && job.status === "waiting_on_maintainers") {
-      column = "open_pr";
+      column = "pull_request";
     }
     if (job !== null && job.status === "done") {
-      column = pr !== undefined && pr.state === "open" ? "open_pr" : "finished";
+      column = pr !== undefined && pr.state === "open" ? "pull_request" : "finished";
     }
-    // Open PR is what is open on GitHub: a pull request of yours that is open, even with no job (or a cancelled one),
-    // and not one merged or closed while its job still waits.
+    // Needs action and Waiting approval are what is open on GitHub: a pull request of yours that is open, even with no
+    // job (or a cancelled one), and not one merged or closed while its job still waits.
     if (column === "open" && pr !== undefined && pr.state === "open") {
-      column = "open_pr";
+      column = "pull_request";
     }
-    if (column === "open_pr" && pr !== undefined && pr.state !== "open") {
+    if (column === "pull_request" && pr !== undefined && pr.state !== "open") {
       column = "finished";
     }
-    // With its pull request open: an agent working on it (a follow-up job on the pull request), or waiting for others.
-    let prWorking = false;
-    for (const other of jobs) {
-      if (pr !== undefined && other.thread === pr.id && (other.status === "queued" || other.status === "working")) {
-        prWorking = true;
+    // With its pull request open: Review while a draft for it waits for you in the Inbox (one of its jobs', or any aimed
+    // at its pull request; not one still under its reviewer's check, which isn't in the Inbox yet), Needs action while
+    // it needs something from us, else Waiting approval (also before it is read).
+    if (column === "pull_request") {
+      column = "waiting_approval";
+      if (pr !== undefined && pr.action?.needs) {
+        column = "needs_action";
+      }
+      for (const draft of inbox) {
+        const forPr = pr !== undefined && (draft.target === pr.id || draft.update_of === pr.id);
+        if (draft.status === "pending" && (forPr || cardJobs.some((each) => each.id === draft.job))) {
+          column = "review";
+        }
+      }
+    }
+    // An agent acts on it now: one of its jobs is working, and that job's agent is in its turn or on a VM's desktop.
+    let acting = false;
+    for (const other of cardJobs) {
+      const agent = agents.find((each) => each.id === other.agent);
+      if (other.status === "working" && agent !== undefined && (agent.status === "working" || agent.status === "using_vm")) {
+        acting = true;
       }
     }
     const movable = column === "open";
@@ -478,6 +518,15 @@ export default function IssueBoard() {
       tags.push({ label: "Scope not clear", variant: "bad" });
       scopeRank = 1;
     }
+    // On Needs action (and Review, with its pull request open), first: what it needs, in red, what Claude found on hover;
+    // on Waiting approval how it stands, Ready to merge in green.
+    if ((column === "needs_action" || column === "review") && pr?.action) {
+      const detail = pr.action.detail;
+      tags.unshift(...pr.action.reasons.map((reason): Tag => ({ label: reason, variant: "bad", title: detail || undefined })));
+    }
+    if (column === "waiting_approval" && pr?.action) {
+      tags.unshift({ label: pr.action.status, variant: pr.action.status === "Ready to merge" ? "ok" : "secondary" });
+    }
     // On Finished, first: Merged or Closed, its pull request's (the issue's, when it has none).
     if (column === "finished" && pr !== undefined && pr.state === "merged") {
       tags.unshift({ label: "Merged", variant: "ok" });
@@ -486,13 +535,21 @@ export default function IssueBoard() {
     } else if (column === "finished" && pr === undefined && (issue.facts?.state ?? issue.state) === "CLOSED") {
       tags.unshift({ label: "Closed", variant: "bad" });
     }
-    // On Review, Open PR and Finished, last: the lines its change adds and removes and the files it changes, from its
-    // draft waiting in the Inbox on Review, from its pull request after.
+    // On Review, Needs action, Waiting approval and Finished, last: the lines its change adds and removes and the files
+    // it changes, from its draft waiting in the Inbox on Review (else from its open pull request), from its pull request
+    // after.
     let changes: { additions: number; deletions: number; files: number } | null = null;
-    if (column === "review" && job !== null) {
-      changes = draftChanges[job.id] ?? null;
+    if (column === "review") {
+      for (const other of cardJobs) {
+        if (other.status === "waiting_on_user" && draftChanges[other.id] !== undefined) {
+          changes = draftChanges[other.id];
+        }
+      }
     }
-    if ((column === "open_pr" || column === "finished") && pr !== undefined && pr.additions !== undefined) {
+    if (column === "review" && changes === null && pr !== undefined && pr.state === "open" && pr.additions !== undefined) {
+      changes = { additions: pr.additions, deletions: pr.deletions ?? 0, files: pr.changed_files ?? 0 };
+    }
+    if ((column === "needs_action" || column === "waiting_approval" || column === "finished") && pr !== undefined && pr.additions !== undefined) {
       changes = { additions: pr.additions, deletions: pr.deletions ?? 0, files: pr.changed_files ?? 0 };
     }
     if (changes !== null) {
@@ -514,7 +571,8 @@ export default function IssueBoard() {
     // question that must wait for a person whatever is automated (money, sensitive, GitHub, delete, no options to pick).
     let blocker = "";
     for (const draft of inbox) {
-      if (job === null || draft.job !== job.id || draft.status !== "pending") {
+      const forPr = pr !== undefined && (draft.target === pr.id || draft.update_of === pr.id);
+      if (draft.status !== "pending" || !(cardJobs.some((each) => each.id === draft.job) || forPr)) {
         continue;
       }
       if (draft.kind === "question" && (!level.questions || draft.must_wait !== null)) {
@@ -540,7 +598,7 @@ export default function IssueBoard() {
       held: issues.held.includes(issue.id),
       done: false,
       blocker: blocker,
-      prWorking: prWorking,
+      acting: acting,
       rank: [freeRank, scopeRank, complexityRank, linesRank],
       refreshed: read?.judged_at ?? null,
     });
@@ -825,9 +883,12 @@ export default function IssueBoard() {
                               <StatusDot tone="amber" className="bg-yellow-400" />
                             </span>
                           )}
-                          {card.column === "open_pr" && (
-                            <span title={card.prWorking ? "Agent working" : "Waiting for others"}>
-                              <StatusDot tone={card.prWorking ? "green" : "amber"} className={card.prWorking ? "" : "bg-yellow-400"} />
+                          {(card.column === "in_progress" ||
+                            card.column === "review" ||
+                            card.column === "needs_action" ||
+                            card.column === "waiting_approval") && (
+                            <span title={card.acting ? "An agent is working on it" : "Waiting for action"}>
+                              <StatusDot tone={card.acting ? "green" : "amber"} className={card.acting ? "" : "bg-yellow-400"} />
                             </span>
                           )}
                           {card.blocker !== "" && (
@@ -844,7 +905,7 @@ export default function IssueBoard() {
                     {card.tags.length > 0 && (
                       <span className="flex flex-wrap gap-1">
                         {card.tags.map((tag) => (
-                          <Badge key={tag.label} variant={tag.variant} className={tag.className}>
+                          <Badge key={tag.label} variant={tag.variant} className={tag.className} title={tag.title}>
                             {tag.label}
                           </Badge>
                         ))}

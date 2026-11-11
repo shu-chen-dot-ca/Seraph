@@ -9,7 +9,9 @@ started go, from Open and Catalog alike (not one our agents opened for you). The
 issues get tagged and every 15 minutes, so one that matches later goes then; each time anything goes it is one undo
 step on the Issues page.
 Right, Refresh every (minutes): how often the board's issues are read again, by column: Open (30 at first), Catalog
-(15) and In progress, Review and Open PR (5). Finished ones are read again only when they change on GitHub. Under it Max agents
+(15) and In progress and Review (5). Finished ones are read again only when they change on GitHub. Then Needs action and
+Waiting approval (10): how often your open pull requests are read again from GitHub, to see what each needs from us
+(keep_prs in backend/github_api.py). Under it Max agents
 at once: how many agents work on the board's issues at the same time (3 at first); while there is room, the backend
 gives Catalog's cards to new agents from the top, first come first served, the cards of repos with Take issues on
 (keep_catalog_agents in backend/issues_api.py). Under it Close inactive PRs after N days (14 at first; untick to turn it
@@ -38,6 +40,7 @@ type Rules = {
   refresh_open_minutes: number;
   refresh_catalog_minutes: number;
   refresh_ongoing_minutes: number;
+  refresh_prs_minutes?: number; // missing from a backend before it
   max_agents: number;
   stale_pr_days?: number | null; // missing from a backend before it; null: off
 };
@@ -60,6 +63,7 @@ export default function BoardAutomationDialog(props: { onClose: () => void }) {
   const [openMinutes, setOpenMinutes] = useState("30");
   const [catalogMinutes, setCatalogMinutes] = useState("15");
   const [ongoingMinutes, setOngoingMinutes] = useState("5");
+  const [prsMinutes, setPrsMinutes] = useState("10");
   const [maxAgents, setMaxAgents] = useState("3");
   const [stale, setStale] = useState(true);
   const [staleDays, setStaleDays] = useState("14");
@@ -80,6 +84,7 @@ export default function BoardAutomationDialog(props: { onClose: () => void }) {
         setOpenMinutes(String(rules.refresh_open_minutes));
         setCatalogMinutes(String(rules.refresh_catalog_minutes));
         setOngoingMinutes(String(rules.refresh_ongoing_minutes));
+        setPrsMinutes(String(rules.refresh_prs_minutes ?? 10));
         setMaxAgents(String(rules.max_agents));
         setStale(rules.stale_pr_days !== null);
         if (rules.stale_pr_days !== null && rules.stale_pr_days !== undefined) {
@@ -103,7 +108,7 @@ export default function BoardAutomationDialog(props: { onClose: () => void }) {
       setError("The days must be 1 or more.");
       return;
     }
-    for (const minutes of [openMinutes, catalogMinutes, ongoingMinutes]) {
+    for (const minutes of [openMinutes, catalogMinutes, ongoingMinutes, prsMinutes]) {
       if (minutes === "" || Number(minutes) < 1 || Number(minutes) > 1440) {
         setError("Refresh every 1 to 1440 minutes.");
         return;
@@ -129,6 +134,7 @@ export default function BoardAutomationDialog(props: { onClose: () => void }) {
         refresh_open_minutes: Number(openMinutes),
         refresh_catalog_minutes: Number(catalogMinutes),
         refresh_ongoing_minutes: Number(ongoingMinutes),
+        refresh_prs_minutes: Number(prsMinutes),
         max_agents: Number(maxAgents),
         stale_pr_days: stale ? Number(staleDays) : null,
       };
@@ -215,13 +221,17 @@ export default function BoardAutomationDialog(props: { onClose: () => void }) {
               />
             </label>
             <label className="flex items-center justify-between gap-2 px-2">
-              In progress, Review and Open PR
+              In progress and Review
               <Input
                 className={number}
                 inputMode="numeric"
                 value={ongoingMinutes}
                 onChange={(event) => setOngoingMinutes(event.target.value.replace(/\D/g, ""))}
               />
+            </label>
+            <label className="flex items-center justify-between gap-2 px-2">
+              Needs action and Waiting approval
+              <Input className={number} inputMode="numeric" value={prsMinutes} onChange={(event) => setPrsMinutes(event.target.value.replace(/\D/g, ""))} />
             </label>
             <label className="mt-2 flex items-center justify-between gap-2 px-2">
               Max agents
