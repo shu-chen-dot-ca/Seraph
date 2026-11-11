@@ -269,6 +269,9 @@ class Agents:
         # What long_runs.prioritize last set in each running VM (its runs and desktops, each with or without priority),
         # so it runs again only when that changed. Not saved: after a restart it is set once more.
         self.priority_set: dict[str, list] = {}
+        # The agents with priority because they work on a pull request of the user's that needs action (set_pr_priority).
+        # Not saved: the backend works it out again a moment after a restart.
+        self.pr_priority: set[str] = set()
         self.loop = None
         self.loop_thread = None
         self.saver = None
@@ -739,7 +742,8 @@ class Agents:
         agent.record["priority"] = on
         if on:
             self.queue.prioritized.add(agent_id)
-        else:
+        elif agent_id not in self.pr_priority:
+            # Still on a pull request that needs action: it keeps that priority (set_pr_priority).
             self.queue.prioritized.discard(agent_id)
         # Waiting for a VM: to the front of the line now.
         vm_name, place = self.queue.place(agent_id)
@@ -752,6 +756,36 @@ class Agents:
         agent.history.append({"type": "system", "text": text, "time": datetime.now(UTC).isoformat()})
         self.save(agent)
         self.version += 1
+
+    def set_pr_priority(self, agent_ids: set[str]) -> None:
+        """The agents working on a pull request of the user's that needs action now (backend/github_api.py, after every
+        look at the pull requests): they get priority like the user's (VMQueue.prioritized: ahead in a VM's line, more
+        CPU; an overloaded VM takes their desktop back only when nobody without priority is left), until their pull request no longer needs action or their job on it is over. An agent the
+        user gave priority keeps it either way."""
+        for agent_id in agent_ids:
+            if agent_id not in self.agents or agent_id in self.pr_priority:
+                continue
+            self.pr_priority.add(agent_id)
+            if agent_id in self.queue.prioritized:
+                continue
+            self.queue.prioritized.add(agent_id)
+            # Waiting for a VM: ahead of everyone without priority now.
+            vm_name, place = self.queue.place(agent_id)
+            if place is not None and place > 0:
+                try:
+                    self.queue.move_up(vm_name, agent_id)
+                except (ValueError, VMsError):
+                    # It left the line meanwhile.
+                    pass
+            self.version += 1
+        for agent_id in list(self.pr_priority):
+            if agent_id in agent_ids:
+                continue
+            self.pr_priority.discard(agent_id)
+            agent = self.agents.get(agent_id)
+            if agent is None or not agent.record["priority"]:
+                self.queue.prioritized.discard(agent_id)
+            self.version += 1
 
     async def delete(self, agent_id: str) -> None:
         """Stop the agent and delete it. Its open jobs become cancelled; its drafts stay in the Inbox.
@@ -771,6 +805,7 @@ class Agents:
         del self.nudges[agent_id]
         self.queue.leave_all(agent_id)
         self.queue.prioritized.discard(agent_id)
+        self.pr_priority.discard(agent_id)
         self.jobs.delete_for_agent(agent_id)
         self.version += 1
         await agent.stop()
@@ -1676,6 +1711,12 @@ class Agents:
             )
             self.notify(agent.id, text)
             return job
+        # The user's own pull request that is out there waits on it: that comes before new work.
+        if own_pr:
+            text += (
+                "\nThis goes first: before your other jobs (at a good point in the one you are on, e.g. once a run you "
+                "started ends). While the pull request needs something from us, you also go ahead in the VM's line."
+            )
         if entry["failed_sha"]:
             text += (
                 f"\nIts checks failed on {entry['failed_sha'][:10]}: see which and why on its checks page ({entry['url']}/checks, "
@@ -2036,15 +2077,25 @@ class Agents:
                     continue
                 if len(vm_record.desktops) < 2:
                     continue
-                # Overloaded: a desktop is taken back. Never from an agent the user gave priority; from one out of its
-                # turn first (nothing is cut off), then from the highest desktop.
+                # Overloaded: a desktop is taken back. Never from an agent the user gave priority; from one on a pull
+                # request that needs action only when nobody else is left. From one out of its turn first (nothing is
+                # cut off), then from the highest desktop.
                 chosen = None
+                for line in vm_record.desktops.values():
+                    agent = self.agents.get(line["holder"])
+                    if agent is None or agent.id in self.queue.prioritized:
+                        continue
+                    if chosen is None or chosen.busy or not agent.busy:
+                        chosen = agent
+                fallback = None
                 for line in vm_record.desktops.values():
                     agent = self.agents.get(line["holder"])
                     if agent is None or agent.record["priority"]:
                         continue
-                    if chosen is None or chosen.busy or not agent.busy:
-                        chosen = agent
+                    if fallback is None or fallback.busy or not agent.busy:
+                        fallback = agent
+                if chosen is None:
+                    chosen = fallback
                 if chosen is None:
                     continue
                 try:
@@ -2126,7 +2177,8 @@ class Agents:
                 if [job for job in self.jobs.for_agent(agent.id) if job["status"] in OPEN_STATUSES]:
                     continue
                 agent.record["priority"] = False
-                self.queue.prioritized.discard(agent.id)
+                if agent.id not in self.pr_priority:
+                    self.queue.prioritized.discard(agent.id)
                 agent.history.append({"type": "system", "text": "Priority ended: its tasks are over", "time": datetime.now(UTC).isoformat()})
                 self.save(agent)
                 self.version += 1

@@ -17,8 +17,9 @@ up, or one nobody holds, doesn't go to the waiting line until there is room agai
 the waiting line, asking for that desktop, and Agents removes the desktop; nothing the agent runs there is stopped.
 
 Who is next on a desktop (next_holder): the first in the waiting line that asked for this desktop or for none. An
-agent the user gave priority (prioritized) joins the waiting line
-ahead of everyone without it, and goes to its front when it gets priority while it waits (move_to_front).
+agent with priority (prioritized: the user gave it, or it works on a pull request of yours that needs action, set by
+Agents) joins the waiting line ahead of everyone without it, and moves there when it gets priority while it waits
+(move_to_front for the user's, move_up, behind the others with priority, for a pull request's).
 
 The user can take a desktop over (the agent holding it goes back to the front of the line, asking for that desktop),
 give a desktop to a waiting agent, move an agent to the front, or remove an agent from the line or from holding. An agent that loses its place because of the user is told through on_kick (Agents interrupts it; its
@@ -228,6 +229,22 @@ class VMQueue:
                 raise ValueError(f"{agent_id} is not waiting for {vm_name}")
             record.queue.remove(agent_id)
             record.queue.insert(0, agent_id)
+            record.save()
+        if self.on_change is not None:
+            self.on_change()
+
+    def move_up(self, vm_name: str, agent_id: str) -> None:
+        """An agent that got priority while it waits: ahead of everyone without it, behind the others with it, the place
+        join gives it."""
+        with self.lock:
+            record = self.vms.get(vm_name)
+            if agent_id not in record.queue:
+                raise ValueError(f"{agent_id} is not waiting for {vm_name}")
+            record.queue.remove(agent_id)
+            place = 0
+            while place < len(record.queue) and record.queue[place] in self.prioritized:
+                place += 1
+            record.queue.insert(place, agent_id)
             record.save()
         if self.on_change is not None:
             self.on_change()
