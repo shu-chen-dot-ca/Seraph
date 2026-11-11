@@ -381,12 +381,20 @@ class VMRecord:
                     self.status = "running"
                     self.save()
                 return
-            # Keep MIN_FREE_RAM_GB free for this machine after the VM takes its memory.
-            free_gb = int(Path("/proc/meminfo").read_text().split("MemAvailable:")[1].split()[0]) / 1024 / 1024
-            if free_gb - self.memory_gb < MIN_FREE_RAM_GB:
+            # Keep MIN_FREE_RAM_GB of this machine's memory for itself. A VM takes its memory bit by bit as it uses it,
+            # not all at start, so this goes by the machine's whole memory less the whole memory of every other running
+            # VM (image builds too), not by what is free right now.
+            total_gb = int(Path("/proc/meminfo").read_text().split("MemTotal:")[1].split()[0]) / 1024 / 1024
+            result = subprocess.run(["incus", "list", "--format", "json"], capture_output=True, stdin=subprocess.DEVNULL, text=True)
+            others_gb = 0
+            for instance in json.loads(result.stdout or "[]"):
+                memory = instance["expanded_config"].get("limits.memory", "")
+                if instance["name"] != self.incus_name and instance["status"] == "Running" and memory.endswith("GiB"):
+                    others_gb += int(memory.removesuffix("GiB"))
+            if total_gb - others_gb - self.memory_gb < MIN_FREE_RAM_GB:
                 raise VMsError(
-                    f"Not enough free memory: {free_gb:.1f}GB free, the VM needs {self.memory_gb}GB "
-                    f"and {MIN_FREE_RAM_GB}GB must stay free"
+                    f"Not enough memory: this computer has {total_gb:.1f}GB, other running VMs take {others_gb}GB, "
+                    f"the VM needs {self.memory_gb}GB and {MIN_FREE_RAM_GB}GB must stay free"
                 )
             self.error = None
             self.status = "starting"
