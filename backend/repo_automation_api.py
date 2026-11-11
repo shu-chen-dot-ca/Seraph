@@ -136,7 +136,7 @@ PER_RUN = 40
 # Always, under any repo's instructions.
 DEFAULT_RULES = (
     "Never take an issue that is political, politically sensitive or activist, that goes against another country's laws, "
-    "such as China's, or that is unethical or NSFW."
+    "such as China's, that is about a game, or that is unethical or NSFW."
 )
 SCHEMA = {
     "type": "object",
