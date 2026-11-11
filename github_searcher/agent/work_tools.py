@@ -26,7 +26,8 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   folder in the VM, so only the agent holding the VM can make one, with the commit it starts from
   (base_sha: Approve sends exactly that diff on that commit, github_account.py) and the branch's commits since
   (commits: replayed when it is sent, all with the user's name). Every commit must be the agent's own:
-  draft_pr refuses a branch with anyone else's commits (a cherry-pick), and nothing credits a co-author.
+  draft_pr refuses a branch with anyone else's commits (a cherry-pick), and nothing credits a co-author. A new PR's issue is read again first
+  (read_issue, within READ_SECONDS), and draft_pr refuses while someone else's open PR closes it.
   It also refuses a diff with what GitNexus writes by itself when it builds its index (its block in AGENTS.md
   and CLAUDE.md, .claude/skills/gitnexus/, .gitnexus/): running a project's required tool never puts its own
   file changes in the PR.
@@ -852,7 +853,9 @@ class WorkTools:
                 "signed off its commits as a reviewer asked. Then base is the commit your branch now starts from (e.g. origin/main "
                 "after git fetch origin), the diff is the PR's whole change on top of it, and approving force-pushes your commits "
                 "onto the PR's branch (refused if the branch moved since). The PR's own commits may stay as they are (they are "
-                "the user's); title is the subject of your last commit.",
+                "the user's); title is the subject of your last commit. "
+                "A new PR for a fix_issue job waits until you read its issue again with read_issue (within the hour), and is "
+                "refused while someone else's open PR closes it.",
                 {
                     "type": "object",
                     "properties": {
@@ -3232,6 +3235,23 @@ class WorkTools:
         if project is None and workflow is None and pr is None and repo is not None and repo.lower() not in self.pr_examples_read:
             text = f"First read how {repo}'s own people write their PRs (pr_examples), then write yours the same way."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
+        # Someone may have taken the issue while the agent worked on it (repowise#5369: someone else's PR that closes it
+        # was opened hours before the draft): a new PR's issue is read again first, and no PR goes while someone else's
+        # open PR closes it. Not on the user's own repos.
+        if project is None and workflow is None and pr is None and job["kind"] == "fix_issue" and job["issue"] is not None:
+            read_at = self.threads_read.get(job["issue"].lower())
+            if read_at is None or time.time() - read_at > READ_SECONDS:
+                text = (
+                    f"First read {job['issue']} again with read_issue (every new comment and PR): someone may have claimed it "
+                    "or opened a PR for it while you worked. Then draft."
+                )
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+            if self.threads_taken.get(job["issue"].lower()):
+                text = (
+                    f"{self.threads_taken[job['issue'].lower()]}: someone else is on it now, and its maintainers don't want a "
+                    "second fix. Don't draft it: close_issue with that link."
+                )
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
         # The job's pictures go in the body, as ![what](evidence:ev_...): the Inbox shows them there, and sending
         # uploads them to the user's fork (github_account.py).
         pictures = [item["id"] for item in job["evidence"] if item["kind"] in ["screenshot", "image"]]
