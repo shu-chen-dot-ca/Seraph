@@ -83,17 +83,20 @@ feedback feels: warm, neutral, strict or curt ("unknown" when there is too littl
 what reviewers often ask for, from the fixed list ASKS (so repos compare and rank the same way every time). Read
 again at most every ATMOSPHERE_DAYS days, or sooner when asks_for is from before ASKS. None until first judged.
 
-ai_policy comes from the files where projects say it (POLICY_FILES). Code finds the lines that mention AI, and
-Claude reads them and names the stance:
+ai_policy comes from the files where projects say it (POLICY_FILES), the organization's AI_POLICY.md (in its .github
+repo, for all its repos) and the policy pages the lines about AI link to (POLICY_LINKS). Code finds the lines that
+mention AI (the files made for AI tools are read whole), and Claude reads them and names the stance, the strictest rule
+deciding:
     welcome   AI-assisted contributions are fine
     disclose  allowed, under conditions an AI agent can meet (say so, the user reviews it, ...)
     no_ai     not for us: AI-generated contributions are banned, or AI may only help a human author (it mustn't write
-              most of the code or decide the PR's shape, or PR descriptions, issues and comments must be written by a
-              human). Our agents write the code and the text, so we don't work there at all (backend/issues_api.py)
+              most of the code or decide the PR's shape, PR descriptions, issues and comments must be written by a
+              human, or agents mustn't open PRs, issues or comments on their own). Our agents write the code and the
+              text, so we don't work there at all (backend/issues_api.py)
     unclear   AI is mentioned, but what's allowed isn't said
     none      nothing about AI in those files (no Claude call)
 basis is those lines, hashed: Claude is only asked again when they change, or when the policy is from before
-POLICY_VERSION (backend/repos_api.py keep_signals reads a disclose or unclear one again once). A failed ask is
+POLICY_VERSION (backend/repos_api.py keep_signals reads every one but no_ai again once). A failed ask is
 "unclear" with an empty basis, so the next fetch asks again.
 
 newcomer_verdict: Claude decides whether the repo is open to newcomers ("welcome") or not ("closed"), from its stars
@@ -115,8 +118,10 @@ version goes up by one on every change, like the other stores.
 """
 
 import asyncio
+import base64
 import copy
 import hashlib
+import html
 import json
 import os
 import re
@@ -125,12 +130,14 @@ import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import httpx
 from dotenv import load_dotenv
 
 from github_searcher.claude_judge import judge
 from github_searcher.search import (
     count_contributors,
     count_earlier_prs,
+    get_contents,
     get_merged_prs_since,
     get_readme,
     get_repo_activity,
@@ -175,12 +182,25 @@ POLICY_FILES = [
     ("prTemplate", ".github/PULL_REQUEST_TEMPLATE.md"),
     ("prTemplateLower", ".github/pull_request_template.md"),
     ("agentsFile", "AGENTS.md"),
+    ("agentPolicy", "AGENT_POLICY.md"),
 ]
+# The files read whole (their start, POLICY_FILE_CHARS): they exist for AI tools. Long enough for an update at the end
+# (harper's AGENT_POLICY.md bans agent-written PR descriptions in its last lines) and a rule deep in a long policy
+# (nextcloud's "No Autonomous Agent Submissions").
+WHOLE_POLICY_FILES = ["aiPolicy", "agentsFile", "agentPolicy"]
+POLICY_FILE_CHARS = 8000
+# The policy pages the lines about AI link to (an https address on a line that says policy: clippy adopts "the same
+# [LLM usage policy] as rust-lang/rust", which is on the web): at most POLICY_LINKS, each with at most PAGE_LINES of its
+# lines about AI.
+POLICY_LINKS = 3
+PAGE_LINES = 20
 CONTRIBUTING_FILES = ["contributing", "contributingRst", "githubContributing", "docsContributing"]
 PR_TEMPLATE_FILES = ["prTemplate", "prTemplateLower"]
 POLICY_TAGS = ["welcome", "disclose", "no_ai", "unclear"]
-# Goes up when what the tags mean changes: a policy from before is asked again (2: AI only as a human's helper is no_ai).
-POLICY_VERSION = 2
+# Goes up when what the tags mean or what they are read from changes: a policy from before is asked again (2: AI only
+# as a human's helper is no_ai. 3: AGENT_POLICY.md, the organization's AI_POLICY.md and the policy pages the lines about
+# AI link to are read too; harper, nextcloud, rust-clippy).
+POLICY_VERSION = 3
 TONES = ["warm", "neutral", "strict", "curt"]
 # What reviewers ask contributors for, and what each means (for Claude; the frontend has labels for them).
 ASKS = {
@@ -670,17 +690,25 @@ class RepoSignals:
                 for note in notes[:8]:
                     feedback_lines.append(f"  - {note}")
 
-        # The lines about AI. An AI policy file is read whole (its first part), AGENTS.md too: it exists for AI tools.
+        # The lines about AI. An AI policy file is read whole (its start), AGENTS.md and AGENT_POLICY.md too: they exist
+        # for AI tools. The https addresses on lines about AI that say policy are the pages it links to.
         excerpts = []
         files = []
+        links = []
         lines_left = QUOTE_LINES
         for key, path in POLICY_FILES:
             blob = data[key]
             if blob is None or not blob.get("text"):
                 continue
             text = blob["text"]
-            if key in ["aiPolicy", "agentsFile"]:
-                excerpts.append(f"=== {path} (the start of it)\n{text[:2500]}")
+            for line in text.splitlines():
+                if not AI_WORDS.search(line) or "polic" not in line.lower():
+                    continue
+                for address in re.findall(r"https://[^\s<>\"'`)\]]+", line):
+                    if address not in links:
+                        links.append(address)
+            if key in WHOLE_POLICY_FILES:
+                excerpts.append(f"=== {path} (the start of it)\n{text[:POLICY_FILE_CHARS]}")
                 files.append(path)
                 continue
             matching = []
@@ -693,6 +721,49 @@ class RepoSignals:
             if matching:
                 excerpts.append(f"=== {path} (only the lines about AI)\n" + "\n".join(matching))
                 files.append(path)
+        # The organization's own AI policy, in its .github repo, holds for all its repos (nextcloud's says agents mustn't
+        # open pull requests or comment on their own; nextcloud/calendar says nothing of its own).
+        try:
+            org_policy = await asyncio.to_thread(get_contents, owner, ".github", "AI_POLICY.md")
+        except (httpx.HTTPError, ValueError):
+            org_policy = None
+        if isinstance(org_policy, dict) and org_policy.get("encoding") == "base64":
+            text = base64.b64decode(org_policy["content"]).decode("utf-8", errors="replace")
+            path = f"{owner}/.github: AI_POLICY.md"
+            excerpts.append(f"=== {path} (the organization's policy, for all its repos; the start of it)\n{text[:POLICY_FILE_CHARS]}")
+            files.append(path)
+        # The policy pages those lines link to: their lines about AI. Only public https pages, never this computer or its
+        # network, also not after a redirect. A file on GitHub as its raw text.
+        for url in links[:POLICY_LINKS]:
+            address = url
+            match = re.match(r"https://github\.com/([^/]+)/([^/]+)/blob/(.+)", url)
+            if match:
+                address = f"https://raw.githubusercontent.com/{match.group(1)}/{match.group(2)}/{match.group(3)}"
+            try:
+                host = httpx.URL(address).host
+                if host == "localhost" or re.fullmatch(r"[0-9.]+|[0-9a-fA-F:]*:[0-9a-fA-F:]*", host):
+                    continue
+                response = await asyncio.to_thread(httpx.get, address, follow_redirects=True, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+            except (httpx.HTTPError, httpx.InvalidURL):
+                continue
+            host = response.url.host
+            if host == "localhost" or re.fullmatch(r"[0-9.]+|[0-9a-fA-F:]*:[0-9a-fA-F:]*", host) or response.url.scheme != "https":
+                continue
+            if response.status_code != 200 or not response.headers.get("content-type", "").startswith("text/"):
+                continue
+            text = response.text[:2_000_000]
+            if "html" in response.headers.get("content-type", ""):
+                text = re.sub(r"(?is)<(script|style|nav|header|footer|svg)\b.*?</\1>", " ", text)
+                text = re.sub(r"(?s)<[^>]+>", " ", text)
+                text = html.unescape(text)
+                text = re.sub(r"[ \t\r\f\v]+", " ", text)
+            matching = []
+            for line in text.splitlines():
+                if AI_WORDS.search(line) and len(matching) < PAGE_LINES:
+                    matching.append(line.strip()[:LINE_CHARS])
+            if matching:
+                excerpts.append(f"=== {url} (a policy page the lines above link to; only its lines about AI)\n" + "\n".join(matching))
+                files.append(url)
         policy_text = "\n\n".join(excerpts)
 
         # The start of the contributing guide, for the newcomer verdict: the first of those files there is. Then the
@@ -792,17 +863,20 @@ class RepoSignals:
             policy = {"tag": "none", "quote": "", "file": "", "basis": "", "version": POLICY_VERSION}
         elif policy is None or policy["basis"] != basis or policy.get("version") != POLICY_VERSION:
             prompt = (
-                f"These are the passages about AI from the contribution files of the GitHub project {name}.\n"
+                f"These are the passages about AI from the contribution files of the GitHub project {name}, its "
+                "organization's AI policy when it has one, and the policy pages they link to.\n"
                 "What is the project's stance on contributions made with AI tools (AI-generated or AI-assisted code, PRs, "
-                "issues or comments)?\n"
+                "issues or comments)? Its organization's policy and a policy it adopts by a link are its own too, and the "
+                "strictest rule among them decides.\n"
                 "- welcome: allowed with no special conditions, or encouraged. An AGENTS.md with instructions for AI coding "
                 "tools usually means this, unless other text limits it.\n"
                 "- disclose: allowed under conditions an AI coding agent that writes the code and the PR can meet, e.g. "
                 "contributors must say they used AI, or must review and understand every line themselves.\n"
                 "- no_ai: AI-generated contributions are not accepted (banned, closed on sight, humans only), or AI may only "
                 "help a human author: AI must not write most of the code, be the main author or decide the PR's structure, "
-                "or PR descriptions, issues or comments must be written by a human. Such rules exclude an AI coding agent "
-                "even when they also allow AI as a tool with disclosure.\n"
+                "PR descriptions, issues or comments must be written by a human (or AI-created ones are banned), or AI agents "
+                "must not open pull requests, issues or comments on their own. Such rules exclude an AI coding agent even when "
+                "they also allow AI as a tool with disclosure.\n"
                 "- unclear: AI is mentioned, but these passages don't say what is allowed (e.g. they are about the project's "
                 "own AI features).\n"
                 "quote: the one sentence that decides it, copied exactly, at most 200 characters; empty for unclear. "

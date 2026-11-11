@@ -360,9 +360,10 @@ async def keep_signals() -> None:
             if name not in known or "activity" not in known[name] or "merge_authors_30d" not in known[name] or "newcomer_verdict" not in known[name]:
                 todo.append(name)
                 continue
-            # An AI policy read by older rules that may mean no_ai now (POLICY_VERSION): read again once.
+            # An AI policy read by older rules, or from fewer files, that may mean no_ai now (POLICY_VERSION): read again
+            # once. A no_ai one stays.
             policy = known[name].get("ai_policy") or {}
-            if policy.get("tag") in ["disclose", "unclear"] and policy.get("version") != POLICY_VERSION:
+            if policy.get("tag") != "no_ai" and policy.get("version") != POLICY_VERSION:
                 todo.append(name)
                 continue
             # A welcome newcomer verdict from before it read the PR template and the reviews (NEWCOMER_VERSION): read
