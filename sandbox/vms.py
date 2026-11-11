@@ -594,6 +594,24 @@ class VMRecord:
         vm_status = self.vm.status()
         if vm_status is not None and not self.image_fingerprint:
             self.image_fingerprint = self.vm.base_image()
+        # CPU, memory and disk as Incus has them, so a change made there (incus config set) shows here too.
+        result = subprocess.run(
+            ["incus", "query", f"/1.0/instances/{self.incus_name}"],
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
+            text=True,
+        )
+        if result.returncode == 0:
+            instance = json.loads(result.stdout)
+            cpus = instance["config"].get("limits.cpu", "")
+            memory = instance["config"].get("limits.memory", "")
+            disk = instance["expanded_devices"].get("root", {}).get("size", "")
+            if cpus.isdigit():
+                self.cpus = int(cpus)
+            if memory.endswith("GiB"):
+                self.memory_gb = int(memory.removesuffix("GiB"))
+            if disk.endswith("GiB"):
+                self.disk_gb = int(disk.removesuffix("GiB"))
         if vm_status is None:
             self.status = "missing"
         elif self.status in ("creating", "failed"):
