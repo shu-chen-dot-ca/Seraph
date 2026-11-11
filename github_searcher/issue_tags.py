@@ -19,13 +19,16 @@ author fixing it themselves ("Are you willing to submit a PR?"), the author sayi
 maintainer confirms), claims in the comments, and whether the maintainers want it done. A fix posted in the issue or
 a comment, even with no pull request (a branch in someone's fork, a patch, the whole change or its test, "my account
 can't open PRs, a maintainer can open one from it"), counts as someone on it: we don't build on or race another
-person's fix. free: the user can take it up now. assigned: someone else is on it. The user's own claims, assignment
+person's fix. So does a problem found in code that only someone else's open pull request or unmerged feature branch has
+(a QA finding on it, its environment that branch): the fix belongs in that pull request, and main has nothing to fix
+(open-mercato#8416 and its siblings, all on #8268). free: the user can take it up now. assigned: someone else is on it. The user's own claims, assignment
 and pull requests (and our agents', made as the user) never count: status is about other people, so the user's own work
 in progress stays free. rules_version is RULES_VERSION when it was read: when these rules change it goes up, and every
 issue is read again once.
 waiting: nobody is, but it isn't ready (it needs a decision, a design, more information; a feature request no
 maintainer has said yes to, by a comment or a label like help wanted, is waiting too; so is one that builds on a pull
-request still open, a follow-up from its review, and one whose triage note leaves questions for the maintainers). A label
+request still open, a follow-up from its review, one that builds on another issue still open (tabularis#1410 reuses
+what #1409's open pull request adds), and one whose triage note leaves questions for the maintainers). A label
 that says it still waits for the maintainers' triage or approval (TRIAGE: "status: needs triage", "needs approval",
 "untriaged") makes it waiting whatever Claude says. fixed: a merged pull request
 or a commit on the default branch already does what it asks, and it only needs closing (GitHub leaves an issue open
@@ -69,7 +72,8 @@ Claude reads the comments before deciding: all of them up to 30, else the first 
 COMMENT_CHARS (a bot's to BOT_CHARS) by keeping its start and its end, where a conclusion often is ("Not implementing
 until a maintainer accepts the direction"). It also sees every pull request tied to the issue, open, closed or merged:
 the ones that say they close it, and the ones that only mention it or were linked by hand, each with its last
-comment (often why it was closed), and the ones its description mentions (search.py MENTION), with their state. Without those, a claim followed by a pull request that was then rejected
+comment (often why it was closed), and the pull requests and issues its description mentions (search.py MENTION), with
+their state (an issue's with the open pull requests that would close it). Without those, a claim followed by a pull request that was then rejected
 looked like a claim with no pull request at all. Bodies are cut to BODY_CHARS, but the template's part about the author
 fixing it themselves (WILLING finds it) is always kept. updated_at is the issue's last change on GitHub when it
 was tagged: when that changes, the backend tags it again, and a free one every hour anyway (backend/issues_api.py).
@@ -158,7 +162,10 @@ CHECKS = [
         "open",
         "Is it open to an outside contributor: no sign the maintainers keep it for themselves? No when a maintainer said "
         "they or the core team will do it, it is a roadmap item one of them owns, it is labeled for maintainers or "
-        "internal work, or the maintainers said they don't want outside pull requests for it.",
+        "internal work, or the maintainers said they don't want outside pull requests for it. Someone who acts for the "
+        "project (triages, labels or assigns its issues, answers for it) counts as a maintainer even when their role shows "
+        "CONTRIBUTOR or NONE: an organization's members often keep that hidden. So 'this will be handled by the internal "
+        "team' from them is a no, unless a maintainer opened it to others later.",
     ),
     (
         "modest",
@@ -220,8 +227,10 @@ NAME_VERSION = 3
 # a fix posted in the issue's description, is someone on it; mcp-memory-service#1910. 4: waiting for triage or approval
 # is waiting, and a closed newcomer verdict is no outside prs; mastra#28528. 5: the pull requests its description mentions,
 # a long comment's end, a follow-up to an open pull request and a triage note's open questions are waiting;
-# runanywhere-sdks#1191, oh-my-pi#17037).
-RULES_VERSION = 5
+# runanywhere-sdks#1191, oh-my-pi#17037. 6: a problem in code only an open pull request has is someone on it, an issue
+# that builds on another open issue is waiting, and the internal team taking it is maintainers only, whatever the
+# speaker's role shows; open-mercato#8416, tabularis#1410, kestra#14059).
+RULES_VERSION = 6
 EFFORT = "high"
 # A line where an issue template asks whether the author will fix it themselves: "Are you willing to submit a PR?",
 # "Would you like to work on this?", "I'm interested in implementing this", ... The line and the next few (the answer) are kept.
@@ -450,15 +459,26 @@ class IssueTags:
                     words = " ".join(comment["body"].split())
                     text += f" Its last comment, by {commenter} ({comment['authorAssociation']}): {words[:PULL_COMMENT_CHARS]}"
                 text += "\n"
-            # The pull requests its description mentions (#723) and not listed above: one still open that it builds on
-            # (a follow-up from its review, a change to code only that pull request adds) makes it waiting.
+            # The pull requests and issues its description mentions (#723) and not listed above: one still open that it
+            # builds on (a follow-up from its review, a change to code only that pull request adds, the work of another
+            # issue that isn't done yet) makes it waiting.
             said = []
             # mention, not found: found is the tags of the ones assigned on GitHub, kept below.
             for mention in MENTION.findall(issue["body"] or ""):
                 pull = data["mentioned"].get(int(mention))
-                if pull is None or int(mention) in said or (full_name, int(mention)) in pulls:
+                if pull is None or int(mention) in said or int(mention) == number or (full_name, int(mention)) in pulls:
                     continue
                 said.append(int(mention))
+                if pull["__typename"] == "Issue":
+                    state = "still open"
+                    if pull["state"] == "CLOSED":
+                        state = "closed"
+                    for closing in pull["closedByPullRequestsReferences"]["nodes"]:
+                        closing_author = closing["author"]["login"] if closing["author"] else "ghost"
+                        if closing["state"] == "OPEN":
+                            state += f", and pull request #{closing['number']} by {closing_author} that would close it is still open, not merged"
+                    text += f"Its description mentions issue #{mention} (\"{pull['title']}\"): {state}.\n"
+                    continue
                 state = "still open, not merged"
                 if pull["state"] == "MERGED":
                     state = "merged"
@@ -569,6 +589,10 @@ class IssueTags:
                 "to the issue: a branch or commit in someone's fork, a patch, the whole change or its test pasted ('my account is "
                 "blocked', 'happy for a maintainer to open a PR from it'). Someone did the work, and a newcomer shouldn't build on it or race it: assigned, like a "
                 "claim, unless a maintainer turned that fix down.\n"
+                "  So does a problem found in code that only someone else's open pull request or unmerged feature branch has: "
+                "a review or QA finding on that pull request, an issue whose environment or version is that branch or pull "
+                "request, or one that pull request's comments name as its to-do. The fix belongs in that pull request, by its "
+                "author, and the default branch has nothing to fix: assigned, until that pull request is merged.\n"
                 "  A pull request closed without merging ends its author's claim: read its last comment for why (for example "
                 "closed under the project's AI policy, or the approach was turned down) and say so in the reason when it matters. "
                 "Never say that no pull request came when the issue lists one.\n"
@@ -584,7 +608,9 @@ class IssueTags:
                 "the maintainers' triage or approval (a label like 'status: needs triage', a bot or maintainer saying not to "
                 "open a pull request until then), even when a maintainer opened it. So is one that builds on a pull request "
                 "that is still open (a follow-up from that pull request's review, or a change to code only it adds; the ones "
-                "its description mentions are listed under it with their state): it waits until that one is merged. And one "
+                "its description mentions are listed under it with their state): it waits until that one is merged. So is one "
+                "that builds on another issue that is still open (it says it reuses, extends or follows the work of that "
+                "issue, listed under it with the pull requests that would close it): it waits until that work is merged. And one "
                 "where a maintainer, a collaborator or the project's triage bot left questions for the maintainers or said to "
                 "wait for their go-ahead before anyone implements it, until a maintainer answered. A feature request no "
                 "maintainer has said yes to is waiting, however clear it is and however long it has sat.\n"

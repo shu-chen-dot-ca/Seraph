@@ -392,8 +392,9 @@ MENTIONED_LIMIT = 40
 def get_issues_for_tags(owner: str, repo: str, numbers: list[int], login: str | None) -> dict:
     # Never cached: an issue is tagged again because it changed. Returns the repository node: its description,
     # stars and language, each issue as i<number>, None when it is gone or a pull request, yourMerged: how many
-    # pull requests by login the repo merged (None without a login), and mentioned: the pull requests of the repo the
-    # issues' descriptions mention (MENTION), {number: {"title", "state"}}.
+    # pull requests by login the repo merged (None without a login), and mentioned: the pull requests and issues of the
+    # repo the issues' descriptions mention (MENTION), {number: {"__typename", "title", "state"}}, an issue's with
+    # closedByPullRequestsReferences (the pull requests that would close it, open ones only).
     aliases = ""
     for number in numbers:
         aliases += f" i{number}: issue(number: {number}) {{ ...TagIssue }}"
@@ -426,8 +427,8 @@ def get_issues_for_tags(owner: str, repo: str, numbers: list[int], login: str | 
     if login is not None:
         repository["yourMerged"] = data["data"]["yourMerged"]["issueCount"]
 
-    # The mentioned pull requests, in one more call when there are any: an issue that builds on one still open (a
-    # follow-up from its review) isn't ready until it is merged.
+    # The mentioned pull requests and issues, in one more call when there are any: an issue that builds on one still open
+    # (a follow-up from its review, the work of another issue whose pull request isn't merged yet) isn't ready until it is.
     repository["mentioned"] = {}
     mentioned = []
     for number in numbers:
@@ -439,7 +440,10 @@ def get_issues_for_tags(owner: str, repo: str, numbers: list[int], login: str | 
                 mentioned.append(int(found))
     aliases = ""
     for number in mentioned[:MENTIONED_LIMIT]:
-        aliases += f" p{number}: issueOrPullRequest(number: {number}) {{ ... on PullRequest {{ title state }} }}"
+        aliases += (
+            f" p{number}: issueOrPullRequest(number: {number}) {{ __typename ... on PullRequest {{ title state }} ... on Issue {{ title state "
+            "closedByPullRequestsReferences(first: 5) { nodes { number state author { login } } } } }"
+        )
     if aliases == "":
         return repository
     response = BALANCER.request(
@@ -449,7 +453,7 @@ def get_issues_for_tags(owner: str, repo: str, numbers: list[int], login: str | 
         timeout=60,
     )
     response.raise_for_status()
-    # An issue comes back empty, a number that doesn't exist as None.
+    # A number that doesn't exist comes back as None.
     found = (response.json().get("data") or {}).get("repository") or {}
     for number in mentioned[:MENTIONED_LIMIT]:
         if found.get(f"p{number}"):
