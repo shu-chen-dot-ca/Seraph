@@ -17,7 +17,8 @@ A dot after the name on In progress, Review, Needs action and Waiting approval c
 (a job on the issue or a follow-up on its pull request is working, and its agent is in its turn or on a VM's desktop),
 yellow while it waits for action.
 A red dot after the name, in any column: its job waits for your decision on a draft in the Inbox (one its level of
-automation doesn't send by itself, or a question that must wait for a person).
+automation doesn't send by itself, or a question that must wait for a person). A click on the dot opens that draft in
+the Inbox (#/inbox/<id>), where you decide.
 Finished ones are left off the board, so the others have more room: the job is done and its pull request merged or
 closed (or there is none), or the issue was closed. They are still sorted into board.finished, only not shown, and the
 count on top leaves them out.
@@ -170,6 +171,8 @@ type Card = {
   done: boolean;
   // Why only you can move it on ("" when nothing): the red dot.
   blocker: string;
+  // The Inbox draft the red dot opens ("" when nothing).
+  blockerDraft: string;
   // An agent acts on it now (the green dot), else it waits for action (yellow); on In progress to Waiting approval.
   acting: boolean;
   // How it sorts after its repo, lowest first: free, scope, complexity, lines.
@@ -570,6 +573,7 @@ export default function IssueBoard() {
     // A blocker only you can solve: its job waits on you for something its level of automation doesn't cover, or for a
     // question that must wait for a person whatever is automated (money, sensitive, GitHub, delete, no options to pick).
     let blocker = "";
+    let blockerDraft = "";
     for (const draft of inbox) {
       const forPr = pr !== undefined && (draft.target === pr.id || draft.update_of === pr.id);
       if (draft.status !== "pending" || !(cardJobs.some((each) => each.id === draft.job) || forPr)) {
@@ -577,12 +581,16 @@ export default function IssueBoard() {
       }
       if (draft.kind === "question" && (!level.questions || draft.must_wait !== null)) {
         blocker = "Waiting for you";
+        blockerDraft = draft.id;
       } else if ((draft.kind === "pr" || draft.kind === "edit") && !level.pull_requests) {
         blocker = "Waiting for you";
+        blockerDraft = draft.id;
       } else if (draft.kind === "comment" && !level.comments) {
         blocker = "Waiting for you";
+        blockerDraft = draft.id;
       } else if (draft.kind !== "question" && draft.kind !== "pr" && draft.kind !== "edit" && draft.kind !== "comment") {
         blocker = "Waiting for you";
+        blockerDraft = draft.id;
       }
     }
 
@@ -598,6 +606,7 @@ export default function IssueBoard() {
       held: issues.held.includes(issue.id),
       done: false,
       blocker: blocker,
+      blockerDraft: blockerDraft,
       acting: acting,
       rank: [freeRank, scopeRank, complexityRank, linesRank],
       refreshed: read?.judged_at ?? null,
@@ -892,9 +901,15 @@ export default function IssueBoard() {
                             </span>
                           )}
                           {card.blocker !== "" && (
-                            <span title={card.blocker}>
+                            <a
+                              href={`#/inbox/${card.blockerDraft}`}
+                              title={`${card.blocker}: open in Inbox`}
+                              className="-m-1 rounded-full p-1 hover:bg-accent"
+                              draggable={false}
+                              onClick={(event) => event.stopPropagation()}
+                            >
                               <StatusDot tone="red" />
-                            </span>
+                            </a>
                           )}
                         </span>
                         <span className="truncate text-xs leading-tight text-muted-foreground">
