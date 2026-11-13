@@ -131,7 +131,9 @@ was missed one review round at a time.
 
 When an issue an agent has a job for goes from free to assigned (someone else is on it now: the
 tags say so, backend/issues_api.py), issue_taken() tells the agent who has it (the assignees' logins, or else the
-tags' reason), once per job, and puts that on the job's timeline. The user isn't asked: the agent finds out who that is
+tags' reason), once per job, and puts that on the job's timeline. When someone else's open pull request comes to be
+tied to it (it says it closes it, or only mentions it: the tags' open_prs), the agent hears of it at once, once for
+each, also when the issue stays free or the user's claim went out, and reads it to decide. The user isn't asked: the agent finds out who that is
 (read_issue shows each person's role, search_issues their merged PRs there) and stops, cancelling its job with a note
 on who took it, for a maintainer, a member or someone who often gets PRs merged there; for a new, unknown or bot-like
 account it goes on. The Inbox's "taken" items from before that still decide as they did: Keep working tells the agent
@@ -233,6 +235,14 @@ TAKEN_ADVICE = (
     "job_update (status cancelled) and a note in plain words on who took it and why you stopped, then go on with your "
     "other jobs. A new, unknown or bot-like account: keep going, and say why with job_progress. When it is someone else's "
     "open PR that closes it, stop whoever they are: close_issue with the PR's link, since nobody wants a second fix."
+)
+# What an agent does when someone else's open pull request came to be tied to its job's issue (issue_taken with prs: it
+# says it closes it, or only mentions it): it reads it and decides, before any more long runs.
+PR_ADVICE = (
+    " This comes before everything else, also before a run of yours that is going: read_issue the issue and that pull "
+    "request now. When it is a fix for this issue (it says it closes it, or makes the same change), someone else is on it: "
+    "stop {job} whoever they are (run_stop what you run for it, then close_issue with the PR's link), since nobody wants "
+    "a second fix. When it only mentions the issue for something else, keep going, and say why with job_progress."
 )
 # The same news about an issue we opened ourselves (as the user): we never give one of those up.
 OURS_ADVICE = (
@@ -1671,12 +1681,17 @@ class Agents:
         self.save(agent)
         self.version += 1
 
-    def issue_taken(self, issue_id: str, reason: str, assignees: list[str]) -> None:
+    def issue_taken(self, issue_id: str, reason: str, assignees: list[str], prs: list[str] | None = None) -> None:
         """The issue went from free to assigned: someone else is on it now. The agent of every open job on it is told
         who, and decides itself whether to stop (TAKEN_ADVICE): the user isn't asked. On an issue our agents opened as the
         user it is told to keep going instead (OURS_ADVICE): we never give one of those up. assignees are their GitHub logins
         (issue_facts.py); without any, the tags' reason says who seems to be on it. Once per job at most: a job told
-        before has the notice on its timeline (the only notice the app puts there)."""
+        before has the notice on its timeline (the only notice the app puts there).
+        prs: other people's open pull requests that came to be tied to it since its last read ("owner/name#n by login",
+        the tags' open_prs, issue_tags.py: one that says it closes it, or only mentions it). Then the agent is told of
+        those (PR_ADVICE), once each, whatever it heard before, whoever is assigned and whether its claim went out:
+        DeskcommCRM#4511 only said "Refs #4495", the issue stayed free, and our agent ran five more hours of checks before
+        it found the PR at its draft."""
         # Inbox items from before agents decided this themselves: a job with one still pending isn't told as well.
         asked = [draft["job"] for draft in self.inbox.list() if draft["kind"] == "taken" and draft["status"] == "pending"]
         # Assigned to the user is never someone else taking it (often their claim going through). Without the user's
@@ -1694,12 +1709,23 @@ class Agents:
         for job in self.jobs.list():
             if job["issue"] != issue_id or job["status"] in ["done", "cancelled"] or job["id"] in asked:
                 continue
-            if you:
+            if you and not prs:
                 continue
-            if job["kind"] == "fix_issue" and job["id"] in claimed and (login is None or not assignees):
+            if job["kind"] == "fix_issue" and job["id"] in claimed and (login is None or not assignees) and not prs:
                 continue
-            told = [entry for entry in job["timeline"] if entry["kind"] == "notice"]
-            if told or job["agent"] not in self.agents:
+            if job["agent"] not in self.agents:
+                continue
+            notices = [entry for entry in job["timeline"] if entry["kind"] == "notice"]
+            # Once per job. A pull request tied to it is news of its own: once for each, whatever the job heard before, and
+            # it doesn't count as having heard of an assignment.
+            told = [entry for entry in notices if not entry["text"].startswith("Someone else's pull request")]
+            if told and not prs:
+                continue
+            fresh = []
+            for pr in prs or []:
+                if not [entry for entry in notices if pr in entry["text"]]:
+                    fresh.append(pr)
+            if prs and not fresh:
                 continue
             text = f"{issue_id} isn't free anymore on GitHub: someone else seems to be on it. {why}"
             notice = "Someone else seems to be on the issue on GitHub; told the agent"
@@ -1707,6 +1733,10 @@ class Agents:
                 text = f"{issue_id} isn't free anymore on GitHub: it is assigned to {who}."
                 notice = f"Issue was assigned to {who} on GitHub; told the agent"
             advice = TAKEN_ADVICE.format(job=job["id"], repo=job["repo"])
+            if fresh:
+                text = f"Someone else's open pull request is tied to {issue_id} on GitHub now: {', '.join(fresh)}."
+                notice = f"Someone else's pull request {', '.join(fresh)} is tied to the issue on GitHub; told the agent"
+                advice = PR_ADVICE.format(job=job["id"])
             if issue_id.lower() in ours:
                 advice = OURS_ADVICE.format(job=job["id"])
             text += f" You have {job['id']} ({job['title']}) on it." + advice
