@@ -1018,12 +1018,14 @@ class WorkTools:
             tool(
                 "vms_list",
                 "See every VM: whether it runs, CPU, memory, disk and disk in use, whether it is full right now and why, its "
-                "desktops (who holds each), how many wait, "
-                "what it started with (the OS, languages, tools, ready-made Docker images and models of its image), and its "
-                "notes: what agents and the user set up in it since (a project cloned and built, a service configured, what "
-                "was added on top), oldest first, each with who wrote it, when, and on which desktop. Use it to pick the VM "
-                "that suits your jobs (choose_vm). You can't make VMs; only the user can.",
-                {},
+                "desktops (who holds each), how many wait, what it started with (the OS, languages, tools, ready-made Docker "
+                "images and models of its image), and its notes: what agents and the user set up in it since (a project "
+                "cloned and built, a service configured, what was added on top), oldest first, each with its id, who wrote "
+                "it, when, and on which desktop. Notes come in full for the repos of your jobs that aren't over and for the "
+                "whole VM (the user's, and those naming no repo of a job); other repos with notes are only listed, with "
+                "their desktops and whether any job is still open for them. repo (owner/name): that repo's notes on every "
+                "VM, in full. Use it to pick the VM that suits your jobs (choose_vm). You can't make VMs; only the user can.",
+                {"type": "object", "properties": {"repo": {"type": "string"}}, "required": []},
             )(self.vms_list),
             tool(
                 "vm_note_add",
@@ -1037,8 +1039,8 @@ class WorkTools:
             )(self.vm_note_add),
             tool(
                 "vm_note_remove",
-                "Take notes that are no longer true off the VM you hold, by id (vms_list shows them). Notes the user wrote "
-                "can't be removed.",
+                "Take notes that are no longer true off the VM you hold, by id (vms_list shows them, and vms_list with repo "
+                "a repo's notes). Notes the user wrote can't be removed.",
                 {"type": "object", "properties": {"ids": names}, "required": ["ids"]},
             )(self.vm_note_remove),
             tool(
@@ -1192,6 +1194,8 @@ class WorkTools:
             return f"Evidence, {args.get('stage')}: {args.get('topic')} ({args.get('kind')})"
         if name == "evidence_remove":
             return "Removing evidence: " + ", ".join(args.get("ids") or [])
+        if name == "vms_list" and args.get("repo"):
+            return f"Looked at the VMs' notes on {args['repo']}"
         if name == "vms_list":
             return "Looked at the VMs"
         if name == "choose_vm":
@@ -4432,6 +4436,23 @@ class WorkTools:
         names = {}
         for agent in self.agents.agents.values():
             names[agent.id] = agent.name
+        # Notes in full only for what this agent works on. A VM's notes grow with every project set up in it: vm1 had 108
+        # (64,000 characters) and this list was 74,000 on one line, more than a tool result may be, so no agent could read
+        # it. In full: the notes for the repos of its jobs that aren't over, and the VM-wide ones (the user's, and those
+        # naming no repo any job was for). The rest only as which repos, on which desktops, and whether any job is still
+        # open for them. With repo: that repo's notes on every VM, in full.
+        known = set()
+        busy = set()
+        for job in await asyncio.to_thread(self.agents.jobs.list):
+            if job["repo"]:
+                known.add(job["repo"].lower())
+            if job["repo"] and job["status"] not in CLOSED_STATUSES:
+                busy.add(job["repo"].lower())
+        mine = set()
+        for job in self.agents.jobs.for_agent(self.agent_id):
+            if job["repo"] and job["status"] not in CLOSED_STATUSES:
+                mine.add(job["repo"].lower())
+        repo = (args.get("repo") or "").strip().lower()
         vms = []
         for vm_record in self.agents.vms.list():
             desktops = []
@@ -4443,7 +4464,16 @@ class WorkTools:
                     holder = names.get(holder, holder)
                 desktops.append({"desktop": number, "holder": holder})
             notes = []
+            others = {}
             for note in vm_record.notes:
+                # The repos it names, as owner/name (vm_note_add asks for that).
+                named = set(name.rstrip(".") for name in re.findall(r"[\w.-]+/[\w.-]+", note["text"].lower()))
+                if repo and repo not in named:
+                    continue
+                if not repo and note["by"] != "user" and named & known and not named & mine:
+                    for name in named & known:
+                        others.setdefault(name, set()).add(note.get("desktop"))
+                    continue
                 by = names.get(note["by"], note["by"])
                 if note["by"] == self.agent_id:
                     by = "you"
@@ -4451,6 +4481,16 @@ class WorkTools:
                 if "desktop" in note:
                     entry["desktop"] = note["desktop"]
                 notes.append(entry)
+            if repo:
+                vms.append({"name": vm_record.name, "notes": notes or f"none for {repo}"})
+                continue
+            other_repos = []
+            for name in sorted(others):
+                numbers = ", ".join(str(number) for number in sorted(number for number in others[name] if number is not None))
+                line = f"{name} (desktop {numbers})" if numbers else name
+                if name not in busy:
+                    line += ", no open job"
+                other_repos.append(line)
             disk_used_gb = vm_record.usage["disk_used_gb"]
             entry = {
                 "name": vm_record.name,
@@ -4467,7 +4507,8 @@ class WorkTools:
                 "your_target": vm_record.name == self.record["target_vm"],
                 "forked_from": vm_record.forked_from or None,
                 "image": vm_record.image or None,
-                "notes": notes or "none yet",
+                "notes": notes or ("none yet" if not vm_record.notes else "none for your jobs' repos or the whole VM"),
+                "other_repos_with_notes": other_repos,
                 "image_has": "not inspected yet",
             }
             inventory = await asyncio.to_thread(load_inventory, vm_record.image_fingerprint)
@@ -4569,16 +4610,31 @@ class WorkTools:
                 "(a repo's own git config wins over it, so fix that too where one is set). Never another address, and never "
                 "the email address in your own context: it is private."
             )
-        # Its notes come with it, so the agent always knows what earlier agents left in it.
-        if vm_record.notes:
-            agent_names = {}
-            for agent in self.agents.agents.values():
-                agent_names[agent.id] = agent.name
-            text += "\nIts notes (check what is really there before you rely on them):"
-            for note in vm_record.notes:
-                on = f", on desktop {note['desktop']}" if "desktop" in note else ""
-                text += f"\n- {note['id']} by {agent_names.get(note['by'], note['by'])}, {note['at'][:10]}{on}: {note['text']}"
-        else:
+        # Its notes come with it, so the agent knows what earlier agents left in it: in full only those for the repos of its
+        # open jobs here and the VM-wide ones (the user's, and those naming no repo any job was for); the other repos only by
+        # name. All of vm1's 108 notes made this 53,000 characters, cut off, and agents missed what came with it.
+        known = set(job["repo"].lower() for job in await asyncio.to_thread(self.agents.jobs.list) if job["repo"])
+        own = set(job["repo"].lower() for job in jobs if job["repo"])
+        agent_names = {}
+        for agent in self.agents.agents.values():
+            agent_names[agent.id] = agent.name
+        shown = []
+        others = set()
+        for note in vm_record.notes:
+            # The repos it names, as owner/name (vm_note_add asks for that).
+            named = set(name.rstrip(".") for name in re.findall(r"[\w.-]+/[\w.-]+", note["text"].lower()))
+            if note["by"] != "user" and named & known and not named & own:
+                others.update(named & known)
+                continue
+            shown.append(note)
+        if shown:
+            text += "\nIts notes for your jobs' repos and the whole VM (check what is really there before you rely on them):"
+        for note in shown:
+            on = f", on desktop {note['desktop']}" if "desktop" in note else ""
+            text += f"\n- {note['id']} by {agent_names.get(note['by'], note['by'])}, {note['at'][:10]}{on}: {note['text']}"
+        if others:
+            text += "\nOther repos with notes here (vms_list with repo shows a repo's notes): " + ", ".join(sorted(others)) + "."
+        if not vm_record.notes:
             text += "\nIt has no notes yet: nobody wrote down what is set up in it."
         return {"content": [{"type": "text", "text": text}]}
 

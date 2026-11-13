@@ -66,8 +66,9 @@ With room again, whoever waits gets a free desktop, or the desktop they wait for
 back, or a new one for an agent that asked for none), one a check, up to the VM's max desktops.
 The VM queue (sandbox/vm_queue.py: one line per desktop of each VM, and agents on different desktops work at
 the same time) tells Agents when an agent's turn comes (on_grant: a message
-that wakes it, with the VM's notes on what earlier agents set up in it and the user's GitHub name and noreply address
-to commit with, or the VM passes on at once
+that wakes it, with the user's GitHub name and noreply address to commit with, then the VM's notes on what earlier agents
+set up in it for its jobs' repos and the whole VM (the other repos only by name, however many notes the VM has), or the VM
+passes on at once
 if it has no open jobs there anymore) and when the
 user took the VM or its place away (on_kick: it is interrupted, and what it still ran in that
 VM is killed, except its runs).
@@ -2156,13 +2157,29 @@ class Agents:
                     "(a repo's own git config wins over it, so fix that too where one is set). Never another address, and never "
                     "the email address in your own context: it is private."
                 )
-            if notes:
-                text += "\nIts notes (check what is really there before you rely on them):"
-                for note in notes:
-                    by = self.agents[note["by"]].name if note["by"] in self.agents else note["by"]
-                    on = f", on desktop {note['desktop']}" if "desktop" in note else ""
-                    text += f"\n- {note['id']} by {by}, {note['at'][:10]}{on}: {note['text']}"
-            else:
+            # In full only the notes for the repos of its open jobs here and the VM-wide ones (the user's, and those naming
+            # no repo any job was for); the other repos only by name. All of vm1's 108 notes made this 53,000 characters,
+            # and agents missed the git identity above under them.
+            known = set(job["repo"].lower() for job in self.jobs.list() if job["repo"])
+            own = set(job["repo"].lower() for job in jobs if job["repo"])
+            shown = []
+            others = set()
+            for note in notes:
+                # The repos it names, as owner/name (vm_note_add asks for that).
+                named = set(name.rstrip(".") for name in re.findall(r"[\w.-]+/[\w.-]+", note["text"].lower()))
+                if note["by"] != "user" and named & known and not named & own:
+                    others.update(named & known)
+                    continue
+                shown.append(note)
+            if shown:
+                text += "\nIts notes for your jobs' repos and the whole VM (check what is really there before you rely on them):"
+            for note in shown:
+                by = self.agents[note["by"]].name if note["by"] in self.agents else note["by"]
+                on = f", on desktop {note['desktop']}" if "desktop" in note else ""
+                text += f"\n- {note['id']} by {by}, {note['at'][:10]}{on}: {note['text']}"
+            if others:
+                text += "\nOther repos with notes here (vms_list with repo shows a repo's notes): " + ", ".join(sorted(others)) + "."
+            if not notes:
                 text += "\nIt has no notes yet: nobody wrote down what is set up in it."
             self.notify(agent_id, text)
             return
