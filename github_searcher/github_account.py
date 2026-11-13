@@ -977,6 +977,18 @@ class GithubAccount:
         # checklist on every push (opencodex's github-actions), and the description drafted with that push ticks them again.
         now_title = thread["title"]
         now_body = (thread["body"] or "").replace("\r\n", "\n").strip()
+        sent = {
+            "kind": "edit",
+            "url": thread["html_url"],
+            "repo": repo,
+            "number": int(number),
+            "title": draft["title"],
+            "as": account["login"],
+            "at": datetime.now(UTC).isoformat(),
+        }
+        # It has this draft's text already: a send cut off by a backend restart after GitHub took it (opencodex#8598).
+        if now_title == draft["title"] and now_body == draft["body"].replace("\r\n", "\n").strip():
+            return sent
         now_body = re.sub(r"^(\s*[-*] )\[[xX]\]", r"\1[ ]", now_body, flags=re.M)
         then_body = draft["previous"]["body"].replace("\r\n", "\n").strip()
         then_body = re.sub(r"^(\s*[-*] )\[[xX]\]", r"\1[ ]", then_body, flags=re.M)
@@ -989,15 +1001,8 @@ class GithubAccount:
         self.step = "changing the title and description"
         response = client.patch(f"/repos/{repo}/issues/{number}", json={"title": draft["title"], "body": body})
         response.raise_for_status()
-        return {
-            "kind": "edit",
-            "url": thread["html_url"],
-            "repo": repo,
-            "number": int(number),
-            "title": draft["title"],
-            "as": account["login"],
-            "at": datetime.now(UTC).isoformat(),
-        }
+        sent["at"] = datetime.now(UTC).isoformat()
+        return sent
 
     def comment(self, target: str, body: str) -> dict:
         """Posts your own comment, as you, on a PR or issue (target "owner/name#n"): the comment box on the GitHub tab.
