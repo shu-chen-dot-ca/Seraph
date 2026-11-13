@@ -36,8 +36,9 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   (base_sha: Approve sends exactly that diff on that commit, github_account.py) and the branch's commits since
   (commits: replayed when it is sent, all with the user's name). Every commit must be the agent's own:
   draft_pr refuses a branch with anyone else's commits (a cherry-pick), and nothing credits a co-author. They are made
-  as the user in the VM too, with their GitHub name and noreply address (the VM-is-yours message gives them): draft_pr
-  refuses any other git address, so the user's own email never shows in a draft. A new PR's issue is read again first
+  as the user in the VM too, with their GitHub name and noreply address (the VM-is-yours message gives them, and so
+  does queue_for_vm's answer when a desktop is free at once): draft_pr refuses any other git address, so the user's own
+  email never shows in a draft, and sending makes every Signed-off-by line the user's name and noreply address. A new PR's issue is read again first
   (read_issue, within READ_SECONDS), and draft_pr refuses while someone else's open PR closes it.
   It also refuses a diff with what GitNexus writes by itself when it builds its index (its block in AGENTS.md
   and CLAUDE.md, .claude/skills/gitnexus/, .gitnexus/): running a project's required tool never puts its own
@@ -912,7 +913,8 @@ class WorkTools:
                 "the user's); title is the subject of your last commit. "
                 "A new PR for a fix_issue job waits until you read its issue again with read_issue (within the hour), and is "
                 "refused while someone else's open PR closes it. Commit with the user's GitHub name and noreply address (the "
-                "message that a VM is yours gives them); other git addresses are refused.",
+                "message that a VM is yours gives them); other git addresses are refused. Signed-off-by lines go out with the "
+                "user's name and noreply address too.",
                 {
                     "type": "object",
                     "properties": {
@@ -4556,6 +4558,17 @@ class WorkTools:
         text = f"Desktop {desktop} of {vm_name} is yours now. Your open jobs for it: {titles}. Do them all, then release_vm."
         if vm_record.status != "running":
             text += f" {vm_name} is {vm_record.status}: start it with vm_start."
+        # Commits are made as the user, the way they go out (github_account.py), as Agents.on_grant says when the VM comes
+        # later. Before the notes, so it never gets lost among them: a desktop free at once gave no word on it, and
+        # LMCache#6430's commits were made with the user's private email and a name made from it.
+        account = self.agents.your_repositories.github_account.load()
+        if account is not None:
+            text += (
+                f"\nCommit as the user, with their GitHub name and noreply address: `git config --global user.name "
+                f"\"{account['name']}\" && git config --global user.email \"{account['id']}+{account['login']}@users.noreply.github.com\"` "
+                "(a repo's own git config wins over it, so fix that too where one is set). Never another address, and never "
+                "the email address in your own context: it is private."
+            )
         # Its notes come with it, so the agent always knows what earlier agents left in it.
         if vm_record.notes:
             agent_names = {}
