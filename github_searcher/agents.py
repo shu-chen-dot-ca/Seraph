@@ -1892,7 +1892,9 @@ class Agents:
         text += (
             f"\n- Nothing, when nothing needs an answer (a thank-you, a bot's note with no findings, checks that passed, a "
             f"label, an approval without questions, anything from someone who is neither a maintainer nor a reviewer, or "
-            f"from a bot, that the merge doesn't need): job_update {job['id']} with status done and a note on "
+            f"from a bot, that the merge doesn't need), or when only the maintainers or the project's gate can move it on "
+            f"(a draft its gate keeps until their label or their OK to run the workflows; no tool of yours marks a PR "
+            f"ready for review, changes labels or approves checks): job_update {job['id']} with status done and a note on "
             "why. You own it for the user: you hear about every change there, and a new job comes with the next one."
         )
         if entry["kind"] == "pr" and not own_pr:
