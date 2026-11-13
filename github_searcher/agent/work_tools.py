@@ -2114,6 +2114,17 @@ class WorkTools:
             "edit", self.agent_id, title, body, job=job["id"], repo=repo, target=target, diff=diff, evidence=job["evidence"],
             overview=overview, previous=previous,
         )
+        # Only the newest title and description of a thread goes: an older one still waiting would go first and change the
+        # text the newer one was drafted on, so the newer one could never go (tabularis#1530).
+        for each in self.agents.inbox.list():
+            if each["kind"] != "edit" or each["status"] != "pending" or each["id"] == draft["id"]:
+                continue
+            if (each["target"] or "").lower() != target.lower():
+                continue
+            try:
+                self.agents.inbox.decide(each["id"], "rejected", f"Replaced by {draft['id']}, a newer title and description for {target}.")
+            except (KeyError, ValueError):
+                pass  # Decided or sent in the meantime.
         self.agents.jobs.update(job["id"], status="waiting_on_user", drafts=job["drafts"] + [draft["id"]])
         text = (
             f"{draft['id']} is in the user's Inbox. Nothing was changed on GitHub: the user decides, and you'll get a message "
