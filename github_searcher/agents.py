@@ -1043,8 +1043,10 @@ class Agents:
             raise ValueError(f"{agent.name} holds {queued_vm}; change its target VM after it releases it")
         if place is not None:
             raise ValueError(f"{agent.name} waits for {queued_vm}; change its target VM after it leaves the queue")
-        if vm_name is not None and vm_name not in [vm_record.name for vm_record in self.vms.list()]:
-            raise ValueError(f"No VM named {vm_name}")
+        # Every name, so an agent that guessed one (choose_vm) can pick a real one.
+        names = [vm_record.name for vm_record in self.vms.list()]
+        if vm_name is not None and vm_name not in names:
+            raise ValueError(f"No VM named {vm_name}. The VMs are: {', '.join(names) or 'none'}.")
 
         agent.record["target_vm"] = vm_name
         moved = []

@@ -4720,7 +4720,9 @@ class WorkTools:
         try:
             vm_record = self.agents.vms.get(args["vm"])
         except VMsError as error:
-            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+            # Every name, so an agent that guessed one can pick a real one.
+            names = ", ".join(vm_record.name for vm_record in self.agents.vms.list()) or "none"
+            return {"content": [{"type": "text", "text": f"{error}. The VMs are: {names}."}], "is_error": True}
         inventory = await asyncio.to_thread(load_inventory, vm_record.image_fingerprint)
         if inventory is None:
             text = f"{vm_record.name}'s image wasn't inspected yet, so its packages aren't listed. Check in the VM itself."
