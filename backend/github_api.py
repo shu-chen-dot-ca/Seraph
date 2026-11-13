@@ -24,8 +24,10 @@ PRS_CHECK_SECONDS (pr_tracking.update_actions): by rules, and by Claude (judge_p
 at a time, when it changed on GitHub or a job on it ended since it last did, never while a job on it is open. One that
 needs action, as Claude last read it, with no job open on it, goes to its agent as a follow_up job saying what it needs:
 ACTION_TRIES times at most on the same newest commit, each after a new judgment (once when part of
-it only you can do; never for a draft you approved and only have to send). The agents with a job queued or working on
-a PR that needs action get priority (agents.set_pr_priority): ahead in the VM's line, more CPU, stepped down last.
+it only you can do; never for a draft you approved and only have to send). Agents work in the Issues board's order:
+the ones with a job queued or working on a PR that needs action get priority (agents.set_pr_priority): ahead in the
+VM's line, more CPU, stepped down last; then the ones reviewing a PR draft before the Inbox, the board's Review
+(agents.set_review_priority): next in the line, stepped down after the rest; then the rest (In progress and Catalog).
 
 keep_profile_readme(), also in the background, keeps the merged pull requests table on your GitHub profile's README
 (github_searcher/profile_readme.py): at start, whenever a PR of yours shows up merged here (so within a few minutes of
@@ -676,8 +678,9 @@ async def keep_prs() -> None:
     """Runs as long as the backend. One that fails to read shows its error and is tried again next round. After every
     read, the threads that need their agent go to it; one that fails to is tried again after the next read. Every round,
     what each open PR of yours needs from us is worked out again (pr_tracking.update_actions), Claude judges the ones that
-    changed (judge_prs, one batch at a time), a PR that needs action with no job open on it goes to its agent, and the
-    agents working on one get priority (agents.set_pr_priority)."""
+    changed (judge_prs, one batch at a time), a PR that needs action with no job open on it goes to its agent, the
+    agents working on one get priority (agents.set_pr_priority), and the agents reviewing a PR draft come next
+    (agents.set_review_priority)."""
     last = None
     # The sent drafts a refresh has already seen.
     tried = set()
@@ -820,6 +823,12 @@ async def keep_prs() -> None:
                     if job["status"] in ["queued", "working"]:
                         first.add(job["agent"])
             agents.set_pr_priority(first)
+            # Then the agents reviewing a PR draft before the Inbox (the board's Review), ahead of In progress and Catalog.
+            reviewing = set()
+            for job in all_jobs:
+                if job["kind"] == "review" and job["status"] in ["queued", "working"]:
+                    reviewing.add(job["agent"])
+            agents.set_review_priority(reviewing)
         except Exception as error:
             # A file or an agent failed: the next round tries again.
             print(f"[github] could not work out what your PRs need: {error}")
