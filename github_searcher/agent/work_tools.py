@@ -4017,7 +4017,8 @@ class WorkTools:
         scope = run["scope"]
         command = run["command"]
         if ended["ended"] == "gone":
-            why = "the user stopped it" if run["stopped_by_user"] else "the VM stopped or restarted"
+            # Why, as far as the VM shows it (long_runs.check): a restart, a full disk, or its processes killed.
+            why = "the user stopped it" if run["stopped_by_user"] else ended["why"]
             if run.get("stopped_by_agent"):
                 why = "you stopped it"
             text = f"The test run ended without finishing ({why}), so it doesn't count. Run it again."
