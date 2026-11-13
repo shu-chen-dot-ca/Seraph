@@ -95,7 +95,8 @@ template's part about the author fixing it themselves (WILLING finds it) is alwa
 was tagged: when that changes, the backend tags it again, and a free one every hour anyway (backend/issues_api.py).
 The checks are kept once given: they and the kind stay from one read to the next while the issue hasn't changed on
 GitHub (Claude is told, and the old ones are kept even if it answers otherwise), so the background's reads don't flip
-the merge; only the status is judged afresh every time. A forced read (force: the pages' Refresh and Tag again) keeps
+the merge; only the status is judged afresh every time. Not across a change of the rules: answers from before
+RULES_VERSION went up are given afresh, by the questions as they are now. A forced read (force: the pages' Refresh and Tag again) keeps
 nothing: Claude answers everything afresh, with no word of the old answers. When the issue changed, Claude sees the old answers and keeps
 them unless what is new shows otherwise. lines is Claude's rough guess of the fix's size: the lines its pull request
 adds and removes together, tests included (0 when there is nothing to change); it is kept like the checks, and is
@@ -266,8 +267,13 @@ NAME_VERSION = 3
 # a long comment's end, a follow-up to an open pull request and a triage note's open questions are waiting;
 # runanywhere-sdks#1191, oh-my-pi#17037. 6: a problem in code only an open pull request has is someone on it, an issue
 # that builds on another open issue is waiting, and the internal team taking it is maintainers only, whatever the
-# speaker's role shows; open-mercato#8416, tabularis#1410, kestra#14059).
-RULES_VERSION = 6
+# speaker's role shows; open-mercato#8416, tabularis#1410, kestra#14059. 7: the pull requests that name its number without
+# GitHub tying them, and every pull request's title; a fix that needs an upstream release not out yet, a maintainer's
+# follow-up to their own open work or fresh to-do, and an approach left open are waiting; the checks any_contributor and
+# ai_ok, a fix that lives in an image built elsewhere and a host setting a shared VM can't change; and the old checks are
+# answered afresh; WeKnora#4652, runanywhere-sdks#1181, dioxus#6063, openchoreo#5371, openinference#4288,
+# DeskcommCRM#4410, hydro#3281, bambuddy#3524, openchoreo#5129).
+RULES_VERSION = 7
 EFFORT = "high"
 # A line where an issue template asks whether the author will fix it themselves: "Are you willing to submit a PR?",
 # "Would you like to work on this?", "I'm interested in implementing this", ... The line and the next few (the answer) are kept.
@@ -598,10 +604,12 @@ class IssueTags:
                 text += f"\n--- {commenter} ({comment['authorAssociation']}), {comment['createdAt'][:10]}:\n{words}"
 
             # Read before by the rules: its checks and kind stay while nothing changed on GitHub, so the merge doesn't
-            # flip between reads. Only the checks still in CHECKS: the ones from before merge are gone. Not when forced.
+            # flip between reads. Only the checks still in CHECKS: the ones from before merge are gone. Not when forced,
+            # nor when the rules changed since (RULES_VERSION): the questions may ask more now (a fix in an image built
+            # elsewhere doesn't belong, bambuddy#3524), and an old answer would keep the old mistake.
             with self.lock:
                 before = self.tags.get(issue_id)
-            if before is not None and before.get("checks") and not force:
+            if before is not None and before.get("checks") and not force and before.get("rules_version") == RULES_VERSION:
                 old = {}
                 for key, question in CHECKS:
                     if key in before["checks"]:
