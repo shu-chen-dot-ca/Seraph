@@ -499,7 +499,9 @@ class GithubAccount:
                 if part == "":
                     continue
                 fields = part.split("\t", 2)
-                if fields[0] == "-":
+                # A binary file goes when the diff carries git's binary patch for it (draft_pr: git diff --binary); a plain
+                # diff only says it differs.
+                if fields[0] == "-" and "\nGIT binary patch\n" not in diff:
                     raise SendError("The diff changes a binary file, which a diff can't carry. Download the .patch and send it yourself.")
                 paths.append(fields[2])
             # Header lines only: a changed line in a hunk always starts with " ", "+", "-" or "\".
@@ -579,7 +581,9 @@ class GithubAccount:
                     tree.append({"path": path, "mode": mode, "type": "blob", "sha": sha})
                     continue
                 text = None
-                if len(content) < INLINE_BYTES:
+                # One with a NUL byte (code git shows as text by the diff attribute, work_tools.py draft_pr) goes as
+                # base64, never inside the tree's JSON.
+                if len(content) < INLINE_BYTES and b"\0" not in content:
                     try:
                         text = content.decode("utf-8")
                     except UnicodeDecodeError:
