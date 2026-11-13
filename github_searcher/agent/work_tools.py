@@ -233,6 +233,9 @@ ALSO_TESTED_CHARS = 250
 # A question's options are buttons in the Inbox: a few, each a few words.
 QUESTION_OPTIONS_MAX = 4
 QUESTION_OPTION_CHARS = 80
+# A job that waits only on a timed question with a timer at most this long keeps its agent's desktop meanwhile (the VM
+# rule in agents.py): its answer comes within minutes. One with a longer timer gives the desktop back, like any other draft.
+QUESTION_HOLD_SECONDS = 30 * 60
 CONTEXT_CHARS = 500
 # Agents never use emoji, in drafts or anywhere (the user's rule): pictographs, dingbats and symbols drawn as emoji,
 # flags, and the joiners and selectors that make emoji. Plain arrows and math signs are fine.
@@ -679,7 +682,8 @@ class WorkTools:
                 "always waits. recommended: the option you would pick, written exactly as in options (needed with options). "
                 "With options and no must_wait the question is timed: when the user doesn't answer within the timer they set "
                 f"({TIMER_MINUTES} minutes unless they changed it), the app answers it with recommended, and you go on with "
-                "that. must_wait: money (it costs the user money), sensitive (politics or another sensitive subject), github "
+                f"that; with a timer of {QUESTION_HOLD_SECONDS // 60} minutes or less you keep your desktop meanwhile (the "
+                "result says so). must_wait: money (it costs the user money), sensitive (politics or another sensitive subject), github "
                 "(how or what gets sent to GitHub, beyond your usual drafts), delete (deleting something that can't come "
                 "back): the user answers it themselves however long it takes, unless they switched that kind off.",
                 {
@@ -1022,8 +1026,9 @@ class WorkTools:
                 "release_vm",
                 "Give your VM's desktop back so the next agent in line can use it. Do it as soon as your jobs for it are done or waiting on the user. "
                 "While you wait in a VM's queue, it takes you out of the queue instead (e.g. when your jobs there were cancelled). "
-                "Not while you wait on a run you need the result of: then just end your turn, and the app lets the next agent "
-                "in and gives the VM back to you first once the run is over.",
+                "Not while you wait on a run you need the result of, nor on a timed question with a short timer (draft_question "
+                f"says so, {QUESTION_HOLD_SECONDS // 60} minutes at most): then just end your turn and keep the desktop; the "
+                "result or the answer wakes you.",
                 {},
             )(self.release_vm),
             tool(
@@ -2493,6 +2498,14 @@ class WorkTools:
         )
         self.agents.jobs.update(job["id"], status="waiting_on_user", drafts=job["drafts"] + [draft["id"]])
         text = f"Your question is in the user's Inbox. {job['id']} waits on the user now; move on to your next job. " + answer
+        # A short timed question keeps the desktop (QUESTION_HOLD_SECONDS, the VM rule in agents.py): the answer comes
+        # within minutes, and giving the desktop back can mean days in a full VM's line (opencodex#8319).
+        vm_name, place = self.agents.queue.place(self.agent_id)
+        if answer_by is not None and settings["timer_minutes"] * 60 <= QUESTION_HOLD_SECONDS and place == 0 and vm_name == job["vm"]:
+            text += (
+                f" Keep your desktop of {vm_name} meanwhile: don't release_vm for this. Do your other jobs there, or end your "
+                "turn; the answer wakes you, and you go on there at once."
+            )
         return {"content": [{"type": "text", "text": text}]}
 
     async def paper_read(self, args: dict) -> dict:

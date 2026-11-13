@@ -35,7 +35,9 @@ change) doesn't lose them. An agent with messages waiting is woken with them aft
 one cut off in the middle of a turn gets one more saying so.
 
 After each turn the worker enforces the VM rule: an agent never holds a VM it has nothing to do in.
-- Holding a VM with no queued or working job for it: the VM is released for it.
+- Holding a VM with no queued or working job for it: the VM is released for it. Unless a job there waits only on a short
+  timed question (a timer of QUESTION_HOLD_SECONDS at most): then it keeps its desktop and sleeps, and the answer (the
+  user's, or the timer's pick) wakes it, so it doesn't wait in the VM's line again for minutes of asking.
 - Holding one while its run goes there (a test suite or build it left going, sandbox/agent/long_runs.py): it keeps
   its desktop and sleeps; watch_runs wakes it when the run ends. An agent never gives up its desktop while it has work
   there: nobody steps aside. Only the user (Take over, Give, Remove) or a full VM (watch_room, below) takes it.
@@ -175,7 +177,7 @@ from dotenv import load_dotenv
 
 from github_searcher import search
 from github_searcher.agent.agent import AGENT_HOME, Agent
-from github_searcher.agent.work_tools import WorkTools
+from github_searcher.agent.work_tools import QUESTION_HOLD_SECONDS, WorkTools
 from sandbox.agent import long_runs
 from sandbox.agent.tools import ComputerTools
 from sandbox.file_transfer import to_vm
@@ -543,8 +545,25 @@ class Agents:
             open_jobs = [job for job in jobs if job["status"] in OPEN_STATUSES]
             jobs_here = [job for job in open_jobs if vm_name is not None and job["vm"] == vm_name]
             titles = ", ".join(f"{job['id']} ({job['title']})" for job in jobs_here)
+            # A job here that waits only on a short timed question (draft_question with options, its timer at most
+            # QUESTION_HOLD_SECONDS; the newest draft of the job): it keeps its desktop and sleeps, and the answer (the
+            # user's, or the timer's pick) wakes it. Released, a claimed fix waited two days in a full vm1's line for its
+            # last test run after a 10-minute question, and the owner merged their own fix meanwhile (opencodex#8319).
+            asking = []
+            for job in jobs:
+                if place != 0 or job["vm"] != vm_name or job["status"] != "waiting_on_user" or not job["drafts"]:
+                    continue
+                try:
+                    draft = self.inbox.get(job["drafts"][-1])
+                except KeyError:
+                    continue
+                if draft["kind"] != "question" or draft["status"] != "pending" or draft["answer_by"] is None:
+                    continue
+                timer = datetime.fromisoformat(draft["answer_by"]) - datetime.fromisoformat(draft["created_at"])
+                if timer <= timedelta(seconds=QUESTION_HOLD_SECONDS):
+                    asking.append(job)
 
-            if place == 0 and not jobs_here:
+            if place == 0 and not jobs_here and not asking:
                 try:
                     self.queue.release(vm_name, agent.id)
                 except (ValueError, VMsError):
@@ -553,6 +572,9 @@ class Agents:
                 agent.history.append({"type": "system", "text": f"Released {vm_name}: no jobs left", "time": datetime.now(UTC).isoformat()})
                 self.save(agent)
                 self.version += 1
+                continue
+            # Only a short timed question waits: it keeps its desktop and sleeps until the answer comes.
+            if place == 0 and not jobs_here:
                 continue
             # Interrupted by the user: it waits for them. More messages waiting: it goes on anyway.
             if agent.stopped or self.wake[agent.id].is_set():
@@ -1980,7 +2002,11 @@ class Agents:
             if draft["kind"] in ["pr", "edit"]:
                 final = f"{draft['title']}\n\n{draft['body']}"
             text += f"\nThe user edited your draft before deciding. The final text:\n{final}\nSee what they changed, and write it their way next time."
-        if job is not None and job["status"] == "queued" and job["vm"] is not None:
+        # An agent that kept its desktop through a short timed question (the VM rule in work) goes on there at once.
+        held_vm, place = self.queue.place(draft["agent"])
+        if job is not None and job["status"] == "queued" and job["vm"] is not None and held_vm == job["vm"] and place == 0:
+            text += f"\n{job['id']} is queued again, and you still hold your desktop of {job['vm']}: go on with it there now."
+        elif job is not None and job["status"] == "queued" and job["vm"] is not None:
             text += f"\n{job['id']} is queued again; use queue_for_vm if you need {job['vm']} for it."
         self.notify(draft["agent"], text)
         return draft
