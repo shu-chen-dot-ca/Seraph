@@ -2434,6 +2434,10 @@ class WorkTools:
         for pr in result["related_prs"]:
             if pr["state"] == "open" and pr["closes_it"] and pr["author"].lower() != login.lower() and pr["updated"] >= recent:
                 taken = f"{pr['pr']} by {pr['author']} ({pr['url']}) is open and closes it"
+            # The issue's author wrote the fix themselves, even if they closed it since: they may bring it back, and the
+            # maintainers take theirs (LMCache#6088 was reopened and merged, ours closed as a duplicate).
+            if pr["state"] == "closed" and pr["closes_it"] and pr["author"].lower() == result["author"].lower() and pr["updated"] >= recent:
+                taken = f"{pr['pr']} ({pr['url']}) is the fix the issue's author {pr['author']} wrote for it (closed, but they may reopen it)"
         # An issue the user opened (ours too, opened as the user) is never given up, whoever else shows up.
         if login != "" and result["author"].lower() == login.lower():
             taken = ""
