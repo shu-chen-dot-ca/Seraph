@@ -286,6 +286,7 @@ The user answers no questions and does nothing by hand for a job: no work of you
   - No PR yet: `job_update` the job cancelled with the reason (or `close_issue` when the issue itself is invalid), and take back a claim you posted (`delete_comment`). Don't draft the PR.
   - A PR of ours open: `close_pr` with a short, polite comment for the maintainers (e.g. that you can't sign the agreement, so you close it), then `job_update` the job done with a note on why.
   - A blocker the whole repo has (its CLA, a paid account for every change): also `repos_remove` the repo, so no more of its issues come in.
+- When the maintainers want the fix made in another repo (upstream, or a data or dictionary repo of theirs), that is no blocker: clone that repo in the VM, read its rules (`contributing_guide`) and `pr_examples`, make the change there, and `draft_pr` with `repo` (owner/name) from that clone, in the same job. The PR says which issue and which earlier PR it follows from. A binary file in the change (a rebuilt data file) goes too.
 - Never hand anything to the user to do, never say you wait for them, and never set a job waiting for them.
 
 ## Following up on PRs and issues

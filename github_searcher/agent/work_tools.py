@@ -907,6 +907,9 @@ class WorkTools:
                 "after git fetch origin), the diff is the PR's whole change on top of it, and approving force-pushes your commits "
                 "onto the PR's branch (refused if the branch moved since). The PR's own commits may stay as they are (they are "
                 "the user's); title is the subject of your last commit. "
+                "repo: a new PR to another repo than the job's, where the maintainers want the fix made (path is your clone of "
+                "that repo; its rules and pr_examples apply). Binary files in the change (a rebuilt data file, an image) go too, "
+                "as git's binary patch. "
                 "A new PR for a fix_issue job waits until you read its issue again with read_issue (within the hour), and is "
                 "refused while someone else's open PR closes it. Commit with the user's GitHub name and noreply address (the "
                 "message that a VM is yours gives them); other git addresses are refused. Signed-off-by lines go out with the "
@@ -920,6 +923,14 @@ class WorkTools:
                         "title": {"type": "string"},
                         "body": {"type": "string"},
                         "pr": {"type": "string", "description": "owner/name#number of the user's open PR this is the next version of; leave it out for a new PR."},
+                        "repo": {
+                            "type": "string",
+                            "description": (
+                                "owner/name of another repo a new PR goes to, when the fix belongs there and not in the job's "
+                                "repo (the maintainers asked for it upstream, or in a data or dictionary repo of theirs). Leave "
+                                "it out for the job's own repo."
+                            ),
+                        },
                         "rebase": {"type": "boolean", "description": "With pr: your commits replace the PR's (a rebase, squash, reword or sign-off) and approving force-pushes them."},
                         "replaces": {
                             "type": "string",
@@ -3403,6 +3414,14 @@ class WorkTools:
             return {"content": [{"type": "text", "text": "pr must be owner/name#number: the user's open PR this is the next version of."}], "is_error": True}
         if pr is not None:
             repo = pr.split("#")[0]
+        # A new PR to another repo than the job's: where the maintainers want the fix made (upstream, or a data repo of
+        # theirs: RHVoice#1082's maintainer wanted it in the dictionary, RHVoice/English). The job stays the same.
+        other = (args.get("repo") or "").strip() or None
+        if other is not None and (pr is not None or other.count("/") != 1 or "#" in other):
+            text = "repo is the owner/name a new PR goes to, when that isn't the job's repo; leave it out with pr."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        if other is not None:
+            repo = other
         # No new PR on a repo that doesn't take AI-made contributions.
         no_ai = [name.lower() for name, each in self.agents.repo_signals.all().items() if (each.get("ai_policy") or {}).get("tag") == "no_ai"]
         if pr is None and job["kind"] == "fix_issue" and repo is not None and repo.lower() in no_ai:
@@ -3998,6 +4017,21 @@ class WorkTools:
         target = job["issue"]
         if pr is not None:
             target = pr
+        # A PR to another repo goes out the way the job's repo lets its PRs go (its Level of automation, read by
+        # backend/repo_automation_api.py), so it never waits for the user there. Taking that repo's issues stays off.
+        if other is not None and job["repo"] is not None and other.lower() != job["repo"].lower():
+            settings = {}
+            if AUTOMATION_FILE.is_file():
+                settings = json.loads(AUTOMATION_FILE.read_text())
+            by_name = {name.lower(): rules for name, rules in settings.items()}
+            if other.lower() not in by_name and job["repo"].lower() in by_name:
+                level = dict(by_name[job["repo"].lower()])
+                level["add_issues"] = False
+                level["queue_issues"] = False
+                level["take_issues"] = False
+                level["open_issues"] = False
+                settings[other] = level
+                AUTOMATION_FILE.write_text(json.dumps(settings, indent=2))
         # Every PR draft goes to a reviewer first, and reaches the Inbox only when the review passes (Agents.give_review). A
         # project's one made again on the new main replaces the PR its job is about (Agents.redo_pr).
         review = {"state": "waiting", "agent": None, "job": None, "notes": "", "at": datetime.now(UTC).isoformat()}
