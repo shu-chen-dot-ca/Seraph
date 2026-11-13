@@ -606,7 +606,8 @@ async def judge_prs(due: list[dict], jobs: list[dict], failed_at: dict) -> None:
                 text += "What our agents' newest jobs on it said:\n"
             for job in own[-3:]:
                 said = job.get("notes") or job.get("headline") or ""
-                text += f"- {job['updated_at']} {job['kind']}, {job['status']}: {said[:800]}\n"
+                # Which thread: a follow-up on the issue it fixes answers that issue's comments there.
+                text += f"- {job['updated_at']} {job['kind']} on {job['thread'] or job['issue']}, {job['status']}: {said[:800]}\n"
             texts.append(text)
         if not texts:
             continue
@@ -620,6 +621,9 @@ async def judge_prs(due: list[dict], jobs: list[dict], failed_at: dict) -> None:
             "promises it, without the commit, is not done. What our agents' jobs said is no proof: check the commits.\n"
             "- Once we pushed and/or replied to a request, it waits on the reviewer: no action, even while GitHub still "
             "shows changes requested.\n"
+            "- A comment on the issue the PR fixes is answered on that issue, by its own follow-up job (below, \"on\" "
+            "that issue): it needs action on the PR only when it asks for a change to the PR's code or text that isn't "
+            "done yet.\n"
             "- Failed checks need action only when our change causes them or we must fix them (lint, tests of our code, "
             "a DCO sign-off, a check of the PR's text). A failure of infrastructure, a flaky test, a check of other code, "
             "or a gate that waits for a maintainer's label or approval: no action.\n"

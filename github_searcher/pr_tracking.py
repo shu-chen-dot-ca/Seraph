@@ -65,7 +65,8 @@ needs (the Issues board's Needs action) when reasons isn't empty. Rules give som
 says CONFLICTING), CLA not signed (a failed check about a Contributor License Agreement), Not sent (a draft for it you
 approved without sending), Changes requested (a reviewer's, newer than our newest commit and comment). Until Claude
 reads what happened since our newest step, it gives New comment, New review, Bot review or Checks failing (failures on
-a commit or of checks it didn't see), also New comment for a comment on an issue it fixes that the app follows. Claude's
+a commit or of checks it didn't see), also New comment for a comment on an issue it fixes that the app follows, unless
+that issue's own agent was given it (it is the issue's follow-up, not the PR's). Claude's
 judgment (set_judgment, from judge_prs in backend/github_api.py) adds its own reasons and detail (what to do) when it
 says action is needed: Draft only from there (a GitHub draft the project waits for us to make ready; not one its gate or
 a maintainer holds), and never Merge conflicts unless GitHub says so. "judgments" keeps it by PR id: {"key", "needs",
@@ -444,7 +445,10 @@ class PRTracking:
             other = issue["last_activity"]
             if issue_id.lower() not in linked or other is None:
                 continue
-            if other["at"] > (issue["your_last_at"] or "") and other["at"] > judged_at:
+            # One the issue's own agent was given already (needs_reply) is that issue's follow-up, not the PR's
+            # (openmed#5516 got a job for a maintainer's comment on #5427, which #5427's own job had answered).
+            answered = self.data["agent_settings"].get(issue_id, {}).get("answered_at") or ""
+            if other["at"] > (issue["your_last_at"] or "") and other["at"] > judged_at and other["at"] > answered:
                 reasons.append("New comment")
         # Claude's judgment: what only reading the thread tells. Whether it conflicts is GitHub's to say (mergeable
         # CONFLICTING, the rule above), never Claude's reading: not while GitHub still works it out, nor for a branch that
