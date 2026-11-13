@@ -47,8 +47,9 @@ After each turn the worker enforces the VM rule: an agent never holds a VM it ha
 An agent with open work never just stops: every HEARTBEAT_CHECK_SECONDS (keep_going), one with a job queued or working
 that has been out of its turn for HEARTBEAT_SECONDS is told to carry on, whatever ended it (a turn that failed,
 reminders that ran out, a VM released for it, a backend restart, a blocker it reported). Only a real wait is left alone:
-its place in a VM's line (the grant wakes it), a run of its going (watch_runs wakes it), the user (waiting_on_user, or
-the user stopped it), or being archived. How long it has been out: since the newest entry in its history with a time
+its place in a VM's line (the grant wakes it), a run of its going (watch_runs wakes it), the user (waiting_on_user, a
+draft of the job still waiting with its reviewer or in the Inbox whatever the job's status says, or the user stopped it),
+or being archived. How long it has been out: since the newest entry in its history with a time
 (its turn's end, an error, a message), so restarts don't put it off.
 A VM steps down when it runs out of room (watch_room, every ROOM_CHECK_SECONDS, from the VM's load, free memory and free
 disk). Full (the load of the last minute at its number of CPUs or more, less than ROOM_MEMORY_PERCENT of its memory free,
@@ -1858,9 +1859,10 @@ class Agents:
         return job
 
     def decide(self, draft_id: str, decision: str, reply: str = "", answered_by: str = "user") -> dict:
-        """The user's decision on a draft (approved, rejected or replied) goes to its agent, and its job is open again.
-        answered_by is "timer" when the app answers a timed question with the agent's recommendation (answer_questions),
-        "automation" when the repo's or issue's Level of automation does, at once (backend/repo_automation_api.py)."""
+        """The user's decision on a draft (approved, rejected or replied) goes to its agent, and its job is open again,
+        unless another draft of it still waits (a PR draft with its reviewer or in the Inbox, a question). answered_by is
+        "timer" when the app answers a timed question with the agent's recommendation (answer_questions), "automation"
+        when the repo's or issue's Level of automation does, at once (backend/repo_automation_api.py)."""
         if decision == "replied" and self.inbox.get(draft_id)["kind"] == "taken":
             raise ValueError("Keep working or stop the agent; this one takes no reply")
         draft = self.inbox.decide(draft_id, decision, reply, answered_by)
@@ -1902,7 +1904,21 @@ class Agents:
         # A fix_issue job's one comment is its claim (WorkTools.draft_comment). It never held the job up, so deciding it
         # leaves the job as it is (it may wait on the user for its PR by now).
         claim = draft["kind"] == "comment" and job is not None and job["kind"] == "fix_issue"
-        if job is not None and job["status"] == "waiting_on_user" and not claim:
+        # Another draft of the job still waits (a PR draft with its reviewer or in the Inbox, a question): the job keeps
+        # waiting on the user until that one is decided too (openmed#5511: an approved new description put the job back
+        # in the queue while its PR draft was still with the reviewer, so the heartbeat and the VM's reminders woke it
+        # over and over, and job_progress made it working). A claim waits for nothing.
+        others = []
+        if job is not None:
+            for other_id in job["drafts"]:
+                try:
+                    other = self.inbox.get(other_id)
+                except KeyError:
+                    # Deleted from the Inbox.
+                    continue
+                if other_id != draft_id and other["status"] == "pending" and not (other["kind"] == "comment" and job["kind"] == "fix_issue"):
+                    others.append(other_id)
+        if job is not None and job["status"] == "waiting_on_user" and not claim and not others:
             job = self.jobs.update(job["id"], status="queued")
 
         kinds = {"pr": "PR", "comment": "comment", "question": "question", "report": "report", "edit": "title and description"}
@@ -2008,6 +2024,11 @@ class Agents:
             text += f"\n{job['id']} is queued again, and you still hold your desktop of {job['vm']}: go on with it there now."
         elif job is not None and job["status"] == "queued" and job["vm"] is not None:
             text += f"\n{job['id']} is queued again; use queue_for_vm if you need {job['vm']} for it."
+        if job is not None and job["status"] == "waiting_on_user" and others:
+            text += (
+                f"\n{job['id']} still waits on your other draft {', '.join(others)}: nothing to do for it until that one is "
+                "decided (you hear it then). Go on with your other jobs."
+            )
         self.notify(draft["agent"], text)
         return draft
 
@@ -2065,17 +2086,33 @@ class Agents:
     async def keep_going(self) -> None:
         """The heartbeat (module docstring), every HEARTBEAT_CHECK_SECONDS: an agent with a job queued or working, out of
         its turn for HEARTBEAT_SECONDS, is woken to carry on, unless it waits in a VM's line, a run of its goes, the user
-        stopped it, or it is archived. A job waiting on the user isn't open work here: the user's answer wakes it."""
+        stopped it, or it is archived. A job waiting on the user isn't open work here: the user's answer wakes it. Nor is
+        one with a draft that still waits (a PR draft with its reviewer or in the Inbox, a question), whatever its status
+        says: the reviewer's verdict or the user's decision wakes it. A fix_issue job's claim holds nothing up."""
         while True:
             await asyncio.sleep(HEARTBEAT_CHECK_SECONDS)
             now = datetime.now(UTC)
             running = []
             for vm_record in self.vms.list():
                 running += [run["agent"] for run in vm_record.runs]
+            # The open jobs with a draft that still waits (openmed#5511: woken again and again while its PR draft was with
+            # the reviewer; itsaplan#826: while its question waited for the user, after the agent set the job working).
+            waiting = []
+            for job in self.jobs.list():
+                if job["status"] not in OPEN_STATUSES:
+                    continue
+                for draft_id in job["drafts"]:
+                    try:
+                        draft = self.inbox.get(draft_id)
+                    except KeyError:
+                        # Deleted from the Inbox.
+                        continue
+                    if draft["status"] == "pending" and not (draft["kind"] == "comment" and job["kind"] == "fix_issue"):
+                        waiting.append(job["id"])
             for agent in list(self.agents.values()):
                 if agent.record["archived_at"] is not None or agent.busy or agent.stopped or self.wake[agent.id].is_set():
                     continue
-                open_jobs = [job for job in self.jobs.for_agent(agent.id) if job["status"] in OPEN_STATUSES]
+                open_jobs = [job for job in self.jobs.for_agent(agent.id) if job["status"] in OPEN_STATUSES and job["id"] not in waiting]
                 # A run of its goes: watch_runs wakes it when it ends.
                 if not open_jobs or agent.id in running:
                     continue
