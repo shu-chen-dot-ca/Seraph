@@ -51,7 +51,11 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   PR template, AGENTS.md, its AI or agent policy and its organization's, and the guides and policies the README and
   CONTRIBUTING link to, on GitHub or on the project's website) and shows them in parts that each fit one answer, pr_examples shows its main contributors' latest
   merged PRs and some outside ones, and draft_pr refuses until the agent read both for that repo (the guide to its last
-  part). On a repo whose AI policy is disclose, a new PR that doesn't say AI helped is refused too. Which repos it read is kept in its record, so a backend restart doesn't ask for them again. The job's before and
+  part). On a repo whose AI policy is disclose, a new PR that doesn't say AI helped is refused too. Which repos it read is kept in its record, so a backend restart doesn't ask for them again.
+  contributing_guide with paths (the files a change touches) shows only the rules and CI checks that cover them,
+  wherever they are: the AGENTS.md, CLAUDE.md and CONTRIBUTING files of their folders or that name them, and the
+  workflows that name them (runanywhere-sdks#1316: a rule for .claude/skills lived in scripts/AGENTS.md, with a CI
+  gate). run_tests' after run waits until every file of its diff was given so (paths_checked). The job's before and
   after pictures go in the PR body as ![before](evidence:ev_...): the Inbox shows them in place,
   and sending uploads them to the user's fork (or the user does, sending by hand).
   draft_pr with pr ("owner/name#n") is the next version of the user's own open PR instead: base must be that PR's
@@ -297,6 +301,12 @@ GUIDE_PAGES = 5
 GUIDE_CHARS = 30_000
 GUIDE_TOTAL_CHARS = 120_000
 GUIDE_PART_CHARS = 40_000
+# contributing_guide with paths (the files a change touches): the AGENTS.md, CLAUDE.md and CONTRIBUTING files anywhere in
+# the repo and its .github/workflows files, at most GUIDE_PATH_FILES of them read (the nearest the top first), are shown
+# when they name a changed file or one of its folders, or sit in one of those folders. Each is cut at GUIDE_PATH_CHARS,
+# all of them together at GUIDE_PART_CHARS, so it is one answer.
+GUIDE_PATH_FILES = 60
+GUIDE_PATH_CHARS = 10_000
 # A picture made with matplotlib says so in its file ("Software: Matplotlib version ..."): the agent drew it.
 MATPLOTLIB_MARK = b"matplotlib"
 # repos_list: the Repos list in all its fields was 226,000 characters for 302 repos, more than a tool result may be. So
@@ -336,6 +346,9 @@ class WorkTools:
         # The last part of each repo's rules for contributors it read (owner/name, lower case): a call without a part
         # reads the next one, and part 1 again after the last.
         self.guide_parts = {}
+        # The changed files whose rules and CI checks it read with contributing_guide's paths, per repo (owner/name, lower
+        # case): a set of paths. run_tests' after run waits for every file of the diff. Until a backend restart only.
+        self.paths_checked = {}
         # When it last read each issue or PR in full with read_issue (owner/name#n, lower case): time.time().
         self.threads_read = {}
         # What read_issue found someone else on it with (owner/name#n, lower case): their open PR that closes it, as a
@@ -503,7 +516,8 @@ class WorkTools:
             tool(
                 "run_tests",
                 "Run the project's tests in the VM for one of your fix jobs (only while you hold the VM), and keep the result on "
-                "the job and as evidence. Read the project's rules first (contributing_guide). scope: full (the project's official "
+                "the job and as evidence. Read the project's rules first (contributing_guide), and before an after run the rules "
+                "and CI checks that cover the files you changed (contributing_guide with paths: refused until then). scope: full (the project's official "
                 "checks: what its rules ask to run before a PR, as one command, e.g. `pytest -n 2 && ruff check .`, however long "
                 "they take) or focused (the basic checks, when the rules ask for no more: the test files and folders that cover "
                 "the code you change, e.g. `pytest tests/test_parser.py tests/cli/`). command: what runs them "
@@ -879,8 +893,18 @@ class WorkTools:
                 "owner/name. A long guide comes in parts: the answer says how many, and part (1, 2, ...) reads each one; "
                 "without part, each call gives the next part. "
                 "run_tests and draft_pr refuse until you read it, to the last part, for the job's repo; that stays read "
-                "after a backend restart.",
-                {"type": "object", "properties": {"name": {"type": "string"}, "part": {"type": "integer"}}, "required": ["name"]},
+                "after a backend restart. "
+                "paths: once you know which files your change touches (git diff --name-only against your base, new files "
+                "too), call it again with them: it then gives only the rules and CI checks that cover those files, wherever "
+                "they are in the repo: the AGENTS.md, CLAUDE.md and CONTRIBUTING files of their folders or that name them "
+                "or their folders, and the workflows (.github/workflows) whose paths or steps name them (a rule for one "
+                "folder is often written in another, with a CI gate that checks it). Do what they ask before the tests that "
+                "count: run_tests' after run refuses until every changed file was given here (again after a backend restart).",
+                {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}, "part": {"type": "integer"}, "paths": names},
+                    "required": ["name"],
+                },
             )(self.contributing_guide),
             tool(
                 "draft_pr",
@@ -3177,6 +3201,97 @@ class WorkTools:
             if item["type"] == "blob":
                 files.add(item["path"])
 
+        # With paths (the files a change touches): only the rules and CI checks that cover them, wherever they are. A
+        # folder's AGENTS.md or CLAUDE.md holds for what is in it, and the rule for one folder is often written in another,
+        # with the CI gate that checks it (runanywhere-sdks#1316: editing .claude/skills needs the .agents/skills mirror
+        # made again, said only in scripts/AGENTS.md and checked by agent-skills-gate.yml; two pushes went out without it).
+        changed = []
+        for path in args.get("paths") or []:
+            path = str(path).strip().removeprefix("./").strip("/")
+            if path and path not in changed:
+                changed.append(path)
+        if changed:
+            # Each changed file and every folder it is in, the way rules and workflows name them (.claude/skills/**).
+            names = []
+            for path in changed:
+                parts = path.split("/")
+                for end in range(len(parts), 0, -1):
+                    if "/".join(parts[:end]) not in names:
+                        names.append("/".join(parts[:end]))
+            # The AGENTS.md, CLAUDE.md and CONTRIBUTING files (not their translations) and the workflows. Read first: the
+            # workflows and the files of the changed folders, then the rest, the ones nearest the top first.
+            sources = []
+            for path in files:
+                lower = path.lower()
+                base = lower.split("/")[-1]
+                folder = posixpath.dirname(path)
+                rules = base in ["agents.md", "claude.md"] or ("contribut" in base and not base.startswith("contributors") and base.endswith(GUIDE_TEXT_ENDINGS))
+                workflow = lower.startswith(".github/workflows/") and lower.endswith((".yml", ".yaml"))
+                near = workflow or folder == "" or any(each.startswith(folder + "/") for each in changed)
+                if not rules and not workflow:
+                    continue
+                if re.search(r"\.[a-z]{2}(-[a-z]{2})?\.[a-z]+$", base):
+                    continue
+                if any(skip in lower for skip in GUIDE_SKIP_FOLDERS) and not near:
+                    continue
+                sources.append((0 if near else 1, path.count("/"), path))
+            sources.sort()
+            sources = [path for near, depth, path in sources]
+            results = await asyncio.gather(*[asyncio.to_thread(get_contents, owner, repo, path, ref) for path in sources[:GUIDE_PATH_FILES]], return_exceptions=True)
+            blocks = []
+            left = []
+            total = 0
+            for path, data in zip(sources, results):
+                if isinstance(data, Exception) or isinstance(data, list) or data.get("encoding") != "base64":
+                    continue
+                text = base64.b64decode(data["content"]).decode("utf-8", errors="replace")
+                named = [each for each in names if re.search(r"(?<![\w-])" + re.escape(each) + r"(?![\w-])", text)]
+                folder = posixpath.dirname(path)
+                inside = folder not in ["", ".github/workflows"] and any(each.startswith(folder + "/") for each in changed)
+                if not named and not inside:
+                    continue
+                if total >= GUIDE_PART_CHARS:
+                    left.append(path)
+                    continue
+                if len(text) > GUIDE_PATH_CHARS:
+                    line = text[:GUIDE_PATH_CHARS].count("\n") + 1
+                    text = text[:GUIDE_PATH_CHARS] + f"\n[cut at line {line}: read on with read_files, start_line {line}]"
+                total += len(text)
+                why = "the rules of a folder your files are in"
+                if named:
+                    why = "names " + ", ".join(named[:5])
+                blocks.append(f"=== {path} ({why}) ===\n{text}")
+            checked = self.paths_checked.get(name.lower(), set())
+            checked.update(changed)
+            self.paths_checked[name.lower()] = checked
+            lines = [
+                f"The rules and CI checks in {name} that cover the {len(changed)} files you gave: the AGENTS.md, CLAUDE.md and "
+                "CONTRIBUTING files of the folders they are in or that name them, and the workflows (.github/workflows) whose "
+                "paths or steps name them. Do what each asks for these files (a script to run, files to make again, a check to "
+                "pass) before the tests that count, and run the checks those workflows run on them."
+            ]
+            if not blocks:
+                lines = [
+                    f"Nothing in {name}'s AGENTS.md, CLAUDE.md, CONTRIBUTING files or workflows names the {len(changed)} files "
+                    "you gave or their folders: the rules contributing_guide gave without paths are all there is for them."
+                ]
+            for block in blocks:
+                lines.append("")
+                lines.append(block)
+            if left:
+                lines.append("")
+                lines.append("Too much to show at once, read these with read_files too: " + ", ".join(left))
+            if len(sources) > GUIDE_PATH_FILES:
+                lines.append("")
+                lines.append(
+                    f"{len(sources) - GUIDE_PATH_FILES} more such files weren't read (too many): read the ones near your files "
+                    "with read_files, e.g. " + ", ".join(sources[GUIDE_PATH_FILES:GUIDE_PATH_FILES + 20])
+                )
+            if tree.get("truncated"):
+                lines.append("")
+                lines.append("GitHub listed only part of this big repo: look with list_files for more rules near your files.")
+            return {"content": [{"type": "text", "text": "\n".join(lines)}]}
+
         # The repo's files with rules for contributors, wherever they are (see GUIDE_FILES): the contributing guides and
         # PR templates first, then AGENTS.md and the like, the ones nearest the top first. A translation
         # (CONTRIBUTING.es.md) says the same as its original.
@@ -3366,6 +3481,12 @@ class WorkTools:
         if folder_rules:
             lines.append("")
             lines.append("These folders have rules of their own: read the one for each folder you change (read_files): " + ", ".join(folder_rules))
+        # The rules for the files a change touches may be in any of them, or in a workflow: asked for by paths, later.
+        lines.append("")
+        lines.append(
+            "Once you know which files you change, call contributing_guide again with paths (those files): it shows the "
+            "rules and CI checks anywhere in the repo that cover them. run_tests' after run waits for it."
+        )
         if tree.get("truncated"):
             lines.append("")
             lines.append("GitHub listed only part of this big repo: look with list_files for more guides in its docs.")
@@ -4289,6 +4410,24 @@ class WorkTools:
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         if when == "after" and not diff.strip():
             text = f"{args['path']} doesn't differ from {args['base']} yet: there is no change to test."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
+        # The rules and CI checks that cover the changed files may be anywhere in the repo (contributing_guide with paths):
+        # read before the run that counts, so what they ask for is in it (runanywhere-sdks#1316 went out twice without the
+        # mirror scripts/AGENTS.md asks for). draft_pr needs this run on exactly the code it drafts, so the PR waits too.
+        # Not on the user's own repos, whose rules are their own files.
+        unchecked = []
+        if when == "after" and job["repo"] is not None and self.agents.projects.get(job["repo"]) is None and self.agents.workflow.get(job["repo"]) is None:
+            checked = self.paths_checked.get(job["repo"].lower(), set())
+            for chunk in diff.split("\ndiff --git "):
+                file = chunk.split("\n")[0].split(" b/")[-1]
+                if file not in checked and file not in unchecked:
+                    unchecked.append(file)
+        if unchecked:
+            text = (
+                f"First call contributing_guide with name {job['repo']} and paths, the files your change touches: "
+                f"{json.dumps(unchecked)}. It shows the rules and CI checks anywhere in the repo that cover them (a folder's "
+                "AGENTS.md, a rule in another folder's, a workflow that checks them). Do what they ask, then run the tests."
+            )
             return {"content": [{"type": "text", "text": text}], "is_error": True}
 
         # The step it is on shows in the user's progress view while the suite runs. A run on the unchanged code (the last
