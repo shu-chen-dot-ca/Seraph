@@ -63,12 +63,12 @@ sent, or a comment the app posted on it), else off.
 action is what your open PR needs from us now (update_actions, called by backend/github_api.py every few seconds):
 needs (the Issues board's Needs action) when reasons isn't empty. Rules give some: Merge conflicts (only when GitHub
 says CONFLICTING), CLA not signed (a failed check about a Contributor License Agreement), Not sent (a draft for it you
-approved without sending), Changes requested (a reviewer's, newer than our newest commit and comment), Draft (a GitHub
-draft). Until Claude reads what happened since our newest step, it gives New comment, New review, Bot review or Checks
-failing (failures on a commit or of checks it didn't see), also New comment for a comment on an issue it fixes that the
-app follows. Claude's
+approved without sending), Changes requested (a reviewer's, newer than our newest commit and comment). Until Claude
+reads what happened since our newest step, it gives New comment, New review, Bot review or Checks failing (failures on
+a commit or of checks it didn't see), also New comment for a comment on an issue it fixes that the app follows. Claude's
 judgment (set_judgment, from judge_prs in backend/github_api.py) adds its own reasons and detail (what to do) when it
-says action is needed, and never Merge conflicts unless GitHub says so. "judgments" keeps it by PR id: {"key", "needs",
+says action is needed: Draft only from there (a GitHub draft the project waits for us to make ready; not one its gate or
+a maintainer holds), and never Merge conflicts unless GitHub says so. "judgments" keeps it by PR id: {"key", "needs",
 "who": "agent" | "you" | "none", "reasons", "detail", "judged_at", "head", "failed_checks", "version"}, where key
 (judgment_key) is what it was made on, so it is made again once that changes. who:
 you when part of it only you can do. status is how it waits otherwise, as GitHub says it: Ready to merge (approved,
@@ -415,8 +415,9 @@ class PRTracking:
         for reviewer in pr["reviewers"]:
             if reviewer["role"] != "BOT" and reviewer["state"] == "changes_requested" and reviewer["at"] > ours:
                 reasons.append("Changes requested")
-        if pr["draft"]:
-            reasons.append("Draft")
+        # A GitHub draft isn't a rule: only reading the thread tells whether the project waits for us to make it ready, or
+        # its gate or a maintainer holds it (opencodex#8556: the gate bot kept it a draft while its runs waited for a
+        # maintainer's OK, and the agents got "Draft" again and again with nothing they could do). Claude's judgment says.
         # A new version for it you approved but didn't send (one made on its newest commit), or a comment or new title.
         head = pr["head"]["sha"] if pr["head"] is not None else ""
         for draft in unsent:

@@ -626,8 +626,11 @@ async def judge_prs(due: list[dict], jobs: list[dict], failed_at: dict) -> None:
             "- Merge conflicts only when the line above says YES. A branch that is only behind its base is no conflict and "
             "needs no rebase, unless a maintainer or the project's rules ask for one.\n"
             "- A CLA that isn't signed: action, who you.\n"
-            "- A GitHub draft PR the project waits for us to mark ready (or a bot made it a draft until a checklist is "
-            "done): action.\n"
+            "- A GitHub draft PR: our agents can't mark it ready for review (no tool does). When a bot or the project's "
+            "gate keeps it a draft until a checklist or check passes, only what of that is ours and not done yet is "
+            "action (a box to tick in the description, a failing check of our change); once that is done it waits on "
+            "the gate or a maintainer (their label, their OK to run the workflows, the gate's next run): no action. When "
+            "the project only waits for its author to mark it ready and nothing else is left: action, who you.\n"
             "- A bot or maintainer saying something the project requires is missing (a template field, a changelog "
             "entry, an attachment, a rebase): action.\n"
             "- A description that claims what the commits don't have: action.\n"
@@ -639,7 +642,11 @@ async def judge_prs(due: list[dict], jobs: list[dict], failed_at: dict) -> None:
             "every line the project asks of the human, an account or legal step); agent for code, replies, rebases, "
             "descriptions; none when no action. reasons: the kinds of what is needed (Changes requested also for a "
             "request made in a comment). detail: when action is needed, one to three plain sentences saying exactly what "
-            "has to be done, with who asked and when (it is handed to the agent as its task); empty otherwise.\n"
+            "has to be done, with who asked and when (it is handed to the agent as its task); empty otherwise. Only what "
+            "our agents can do (code, a new version or rebase, a reply, a new title or description), or with who you "
+            "what only the user can: never ask the agents to mark it ready for review, change its labels, request "
+            "reviewers, or approve or re-run checks, which no tool of theirs does. When only the maintainers or the "
+            "project's gate can move it on: no action.\n"
             "Answer for every pull request, by its id.\n\n" + "\n\n".join(texts)
         )
         try:
