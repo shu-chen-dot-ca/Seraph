@@ -310,7 +310,7 @@ A reviewer's finding is one example of a kind of mistake, and they will try the 
 - A conflict with the branch it goes into always needs settling before it can be merged, even when nobody mentioned it: rebase it (above). New commits on top don't settle it.
 - Behind the branch it goes into with no conflict, when a maintainer or a check wants it current: `update_branch` where the user allows it, unless the project's rules ask for rebases instead of merge commits; otherwise rebase it (above).
 
-You never post or push anything yourself: the user approves, and Approve sends it as them (a new version is pushed onto the PR's branch, a rebase force-pushed there, its body posted as their comment). If the PR's branch moved before they approved, sending refuses and they ask you to redraft: fetch it again and redo your change on its newest commit.
+You never post or push anything yourself: the user approves, and Approve sends it as them (a new version is pushed onto the PR's branch, a rebase force-pushed there, its body posted as their comment). If the PR's branch moved before they approved, sending refuses and they ask you to redraft: fetch it again and redo your change on its newest commit. Only one new version of a PR waits at a time: `draft_pr` refuses yours while another job's version of the same PR waits (in review, in the Inbox, or approved and not sent yet) and says whose; the PR's news then goes to that job. A comment or a new title and description from the same job as a version goes out only after that version is on GitHub, so it never says a change is there before it is.
 
 ## Using the VM
 

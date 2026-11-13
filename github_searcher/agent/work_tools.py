@@ -50,7 +50,11 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   and pr_examples don't, and a follow_up job's change needs no before and after pair (its test runs show it works).
   With rebase too, its commits replace the PR's (rebased onto a newer main, or squashed, reworded or signed off): base
   is the commit the rewritten branch starts from, the draft keeps the PR's newest commit as rebase_of, Approve
-  force-pushes, and the PR's own commits (the user's noreply address) count as the user's.
+  force-pushes, and the PR's own commits (the user's noreply address) count as the user's. One new version of a PR
+  waits at a time: draft_pr with pr refuses while another job's waits (in review, in the Inbox, or approved and not sent
+  yet) and names whose (openmed#5511 got a version from one agent and a rebase of the same commit from another), and the
+  app gives the PR's follow-ups to the agent that holds it (Agents.follow_up). A comment or edit of the same job goes out
+  only after its version is on GitHub (github_account.py).
   Every PR draft has a checklist (each point that was asked: the issue's requirements, or the reviewers' points for a
   new version, done or not and how it was shown) and also_tested (the cases of the same kind beyond the asked example
   that the agent ran), so the user sees the gaps before approving, and maintainers don't find them one round at a time.
@@ -854,7 +858,9 @@ class WorkTools:
                 "title is then the commit message's subject (one more commit has it when you didn't commit everything), and "
                 "body the comment posted on the PR with the push: what changed, in a line or two. The project's rules "
                 "(contributing_guide) and the tests apply as for any PR; the PR template and pr_examples don't. problem is then "
-                "what the reviewer asked for or what failed. "
+                "what the reviewer asked for or what failed. One new version of a PR waits at a time: refused while another "
+                "job's version of it waits (in review, in the Inbox, or approved and not sent), which it names. A comment or a "
+                "new title and description of the same job goes out only after the version is on GitHub. "
                 "rebase: true (with pr) when your version replaces the PR's commits instead of adding to them: you rebased its "
                 "branch onto the project's newer main (a maintainer asked, or it conflicts with main), or squashed, reworded or "
                 "signed off its commits as a reviewer asked. Then base is the commit your branch now starts from (e.g. origin/main "
@@ -3147,6 +3153,34 @@ class WorkTools:
             replaces = job["thread"]
         if replaces is not None and pr is not None:
             return {"content": [{"type": "text", "text": "replaces is for a new PR in place of an old one: leave pr and rebase out."}], "is_error": True}
+        # One new version of a PR waits at a time: approving two would push one and force-push the other onto the same
+        # branch, and the work is done twice (openmed#5511: one agent's follow-up on its issue drafted a commit on top of
+        # it while another agent's follow-up on the PR rebased that same commit, and both reached review together). Another
+        # job's that waits (in review, in the Inbox, or approved and not sent yet) holds it; a newer one of this job's own
+        # is the user's to pick.
+        others = []
+        if pr is not None:
+            others = self.agents.inbox.list()
+        for each in others:
+            if each["kind"] != "pr" or (each["update_of"] or "").lower() != pr.lower() or each["job"] == job["id"]:
+                continue
+            if each["status"] == "pending" or (each["status"] == "approved" and each["sent"] is None):
+                holder = each["agent"]
+                if holder in self.agents.agents:
+                    holder = self.agents.agents[holder].name
+                if each["agent"] == self.agent_id:
+                    holder = "you"
+                where = "in its review or the user's Inbox"
+                if each["status"] == "approved":
+                    where = "approved, not sent yet"
+                text = (
+                    f"{each['id']} by {holder} ({each['job']}) is already the next version of {pr}, {where}. Don't draft "
+                    "a second one from another job: two would push one and force-push the other onto the same branch. Leave "
+                    f"it to that one (a change to it is drafted in its own job): put what yours would add in {job['id']}'s "
+                    "notes and mark it done (job_update). A new follow-up comes with the PR's next change (that push, or a "
+                    "review)."
+                )
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
         if replaces is not None:
             owned = []
             for each in self.agents.inbox.list():

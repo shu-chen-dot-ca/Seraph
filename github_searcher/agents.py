@@ -93,7 +93,8 @@ reply ("I pick: ..."), answered_by "timer", and the agent hears that the user di
 
 The GitHub tab's side: follow_up() is called when someone else wrote on a PR or issue of the user's that an
 agent follows (agent mode Drafts), or the PR's checks failed (pr_tracking.needs_reply). The agent gets a
-follow_up job for that thread (an open one it has for it hears the news instead), and an archived agent comes
+follow_up job for that thread (an open one it has for it hears the news instead; an open job whose next version of
+that PR waits hears it, whoever's it is, so only one agent works on a PR at a time), and an archived agent comes
 back for it. It reads the thread and suggests a reply (draft_comment), a new version of the user's own PR made
 on that PR's branch (draft_pr with pr: Approve pushes it there and posts its text on the PR as a comment), or
 nothing (it marks the job done). It never posts anything itself.
@@ -1716,8 +1717,26 @@ class Agents:
         entry of pr_tracking.needs_reply ({"id", "kind", "relation", "state", "title", "url", "agent", "reason", "at",
         "failed_sha", "head", "base", "signals"}; only the user's own open PR, relation author, gets offered a new version
         or a rebase, and only the user's own PR or issue a new title or description). The agent's open follow_up job for
-        that thread hears about it; else a new one is made. Returns the job, or None when the agent is gone. Any thread."""
-        agent = self.agents.get(entry["agent"])
+        that thread hears about it; else a new one is made. When an open job of any agent has the PR's next version waiting
+        (draft_pr with pr), that job hears it instead: one agent per PR at a time. Returns the job, or None when the agent
+        is gone. Any thread."""
+        # One agent per PR at a time: when an open job's next version of this PR waits (in review, in the Inbox, or
+        # approved and not sent yet), the news goes to that job and its agent, which hold the work, instead of a second
+        # agent starting on it (openmed#5511: a follow-up on the PR went to its owner while another agent's version, drafted
+        # from a follow-up on its issue, waited, and both drafted one). draft_pr refuses a second one from another job too.
+        agent_id = entry["agent"]
+        holder_job = None
+        for draft in self.inbox.list():
+            waiting = draft["status"] == "pending" or (draft["status"] == "approved" and draft["sent"] is None)
+            if draft["kind"] != "pr" or not waiting or (draft["update_of"] or "").lower() != entry["id"].lower():
+                continue
+            if draft["job"] is None or draft["agent"] not in self.agents:
+                continue
+            open_jobs = [job["id"] for job in self.jobs.for_agent(draft["agent"]) if job["status"] not in ["done", "cancelled"]]
+            if draft["job"] in open_jobs:
+                agent_id = draft["agent"]
+                holder_job = draft["job"]
+        agent = self.agents.get(agent_id)
         if agent is None:
             return None
         thread = entry["id"]
@@ -1738,7 +1757,11 @@ class Agents:
             self.loop.call_soon_threadsafe(self.unarchive, agent.id)
 
         for job in self.jobs.for_agent(agent.id):
-            if job["kind"] != "follow_up" or job["thread"] != thread or job["status"] in ["done", "cancelled"]:
+            if job["status"] in ["done", "cancelled"]:
+                continue
+            if holder_job is not None and job["id"] != holder_job:
+                continue
+            if holder_job is None and (job["kind"] != "follow_up" or job["thread"] != thread):
                 continue
             text = (
                 f"More on {thread} ({entry['title']}) for {job['id']}: {entry['reason']}. Read it again with read_issue and take "
