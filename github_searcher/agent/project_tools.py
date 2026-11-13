@@ -18,7 +18,8 @@ The reviewer (role "reviewer"): a project's, or the reviewer of another repo's P
 Agents.give_review), which checks them in the author's folder on the author's desktop instead of its own:
 - sync_code, as above (a project's reviewer only);
 - review_read: a PR draft it was given to review, as the user would see it (title, text, overview with its checklist,
-  commits, diff, the test runs, the evidence with its pictures as pictures), and, while it holds the VM, the diff in
+  commits, diff, the test runs, the evidence with its pictures as pictures), the repo's AI policy now and what it means
+  for the PR's text (only a disclose repo's PRs say AI helped), and, while it holds the VM, the diff in
   ~/review-<draft id>.diff;
 - review_done: pass (the draft goes to the user's Inbox) or changes (back to its author, with the notes).
 
@@ -129,8 +130,9 @@ class ProjectTools:
                     "review_read",
                     "Read a PR draft you were given to review (draft_...): its title and text as they would go to GitHub, the "
                     "overview for the user (with the author's checklist of every point asked, and the cases it also tested), its "
-                    "commits, the diff, the test runs and the evidence, with the pictures. While you hold the VM, the whole diff "
-                    "is also put in ~/review-<draft id>.diff, to apply on the commit it starts from (base_sha).",
+                    "commits, the diff, the test runs and the evidence, with the pictures, and the repo's AI policy as it is now "
+                    "with what it means for the PR's text (ai_policy: only a disclose repo's PRs say AI helped). While you hold "
+                    "the VM, the whole diff is also put in ~/review-<draft id>.diff, to apply on the commit it starts from (base_sha).",
                     {"draft_id": str},
                 )(self.review_read),
                 tool(
@@ -365,6 +367,24 @@ class ProjectTools:
         for item in draft["evidence"]:
             each = {key: item.get(key) for key in ["id", "kind", "stage", "topic", "context", "caption", "command", "exit_code", "output_tail"]}
             report["evidence"].append(each)
+        # The repo's AI policy as the app has it now (repo_signals.py), and the rule draft_pr holds the author to: kestra's
+        # reviewer asked for an AI line because our older kestra drafts had one, from when its tag was disclose; it is
+        # welcome now, and a PR there says nothing about AI.
+        if draft["repo"] is not None:
+            signals = self.agents.repo_signals.get(draft["repo"])
+            policy = "none"
+            if signals is not None and signals.get("ai_policy"):
+                policy = signals["ai_policy"]["tag"]
+            rule = (
+                "Its PRs say nothing about AI helping: no AI section, no line that an AI or agent prepared it. Never ask for "
+                "one. This is the repo's tag now: go by it, not by older drafts or PRs."
+            )
+            if policy == "disclose":
+                rule = (
+                    "Its PRs say plainly that AI tools helped, the way its rules or PR template ask: ask for that when it is "
+                    "missing. This is the repo's tag now: go by it, not by older drafts or PRs."
+                )
+            report["ai_policy"] = {"tag": policy, "rule": rule}
         text = json.dumps(report) + "\n\nThe diff" + (f" (cut at {REVIEW_DIFF_CHARS:,} characters; all of it is in the VM's file)" if cut else "") + ":\n" + diff[:REVIEW_DIFF_CHARS]
 
         # The diff as a file in the VM, while it holds one: to apply on base_sha and run the tests on.

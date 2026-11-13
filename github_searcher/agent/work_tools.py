@@ -259,11 +259,12 @@ CONTEXT_CHARS = 500
 # marker the project's own rules require in comments (draft_comment's emoji_rule).
 EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u231A\u231B\u23E9-\u23FA\u203C\u2049\u2139\u3030\u303D\u3297\u3299\uFE0F\u200D\u20E3]")
 NO_EMOJI = "No emoji anywhere, also where the project's template has them: write its words without them. Found: "
-# A PR saying AI helped write it: an "AI assistance" heading, "AI-assisted", "prepared with the help of an AI", "Generated
-# with Claude". Only a repo whose AI policy is disclose asks for that (repo_signals.py); elsewhere it stays out. Not a
-# plain mention of AI, which a PR about an AI feature has.
+# A PR saying AI helped write it: an "AI assistance" or "AI Authors" heading (kestra's PR template has the latter, for AI
+# agents, though its policy is welcome), "AI-assisted", "prepared with the help of an AI", "Generated with Claude". Only a
+# repo whose AI policy is disclose asks for that (repo_signals.py); elsewhere it stays out. Not a plain mention of AI,
+# which a PR about an AI feature has.
 AI_NOTE = re.compile(
-    r"^#+\s*AI (assistance|usage|use|disclosure|tools?)\b|\bAI[- ](assisted|assistance|generated|disclosure)\b"
+    r"^#+\s*AI (assistance|usage|use|disclosure|tools?|authors?)\b|\bAI[- ](assisted|assistance|generated|disclosure)\b"
     r"|with the help of (an? )?(AI|LLM)\b"
     r"|\b(prepared|written|made|generated|created|developed|drafted|authored) (with|by|using) (the help of )?(an? )?(AI|LLM|Claude|Copilot|ChatGPT)\b",
     re.IGNORECASE | re.MULTILINE,
