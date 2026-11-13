@@ -12,7 +12,7 @@ Runs (sandbox/agent/long_runs.py) are long commands agents left going in the VM:
 are kept here with the VM, from add_run until finish_run, each with its desktop. An agent keeps its desktop while its
 run goes: nobody steps aside.
 
-A VM with no room (its CPUs or memory used up: full, set by Agents.watch_room) takes nobody new: a desktop that frees
+A VM with no room (its CPUs, memory or disk used up: full, set by Agents.watch_room) takes nobody new: a desktop that frees
 up, or one nobody holds, doesn't go to the waiting line until there is room again. Overloaded, the app takes a desktop back from its agent (step_down): the agent goes to the front of
 the waiting line, asking for that desktop, and Agents removes the desktop; nothing the agent runs there is stopped.
 
@@ -51,8 +51,9 @@ class VMQueue:
         # The agents the user gave priority, set by Agents (which saves it with each agent): they join a waiting line
         # ahead of everyone without it.
         self.prioritized: set[str] = set()
-        # The VMs (names) with no room right now, set by Agents (watch_room): nobody new gets a desktop there.
-        self.full: set[str] = set()
+        # The VMs with no room right now, set by Agents (watch_room), each with why ("a load of 17 on 16 CPUs, 9 GB of
+        # its disk free"): nobody new gets a desktop there. {VM name: why}.
+        self.full: dict[str, str] = {}
         # Set by Agents. on_grant(vm_name, agent_id): an agent became the holder of a desktop while it waited.
         # on_kick(vm_name, agent_id, reason): the user took the desktop or its place away.
         # on_change(): any holder, line or run changed.
