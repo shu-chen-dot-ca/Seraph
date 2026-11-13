@@ -2,7 +2,9 @@
 
 A run goes on by itself in the VM (setsid, its output in a file there), so it keeps going while its agent does
 other things or sleeps, loses its desktop (sandbox/vm_queue.py), or the backend restarts. Only the VM stopping or
-restarting, the user's Stop (stop) or RUN_LIMIT_SECONDS end it early.
+restarting, the user's Stop (stop) or RUN_LIMIT_SECONDS end it early, or trouble inside the VM (its disk full, the
+memory guard killing it): check() tells its agent which, as far as the VM shows it. A stop of the VM that is still
+going on (status stopping) ends nothing: the VM may run on (sandbox/vm.py).
 
 Its agent either waits for it (the bash and run_tests tools wait up to FOREGROUND_SECONDS, then leave it going in
 the background), or starts it in the background at once (background: true). A run nobody waits for anymore is
@@ -51,6 +53,9 @@ CHECK_SECONDS = 2
 RUN_LIMIT_SECONDS = 12 * 3600
 # check() gives back the last this many bytes of the output, where results and errors are.
 OUTPUT_LIMIT = 50_000
+# A run that ended without its exit code while its home had less than this free (GB) ran out of room, as far as
+# check() can tell (ENOSPC, SQLITE_FULL on vm1, 2026-11-11).
+DISK_FULL_GB = 2
 # The share of the CPU (systemd's CPUWeight, default 100) of a desktop and a run, and of those of an agent the user gave
 # priority (prioritize): ten times as much. Its runs are also ended last when memory runs out, but still before the
 # desktop (VM.exec's OOM_SCORE_ADJ for the others, GNOME's own at 100 to 200).
@@ -102,18 +107,25 @@ def start(record: VMRecord, agent_id: str, desktop: int, kind: str, command: str
 def check(record: VMRecord, run: dict) -> dict | None:
     """None while the run goes. Once it ended: {"ended", "exit_code", "output", "seconds"}, where ended is "exit"
     (it finished, with exit_code), "timeout" (stopped after RUN_LIMIT_SECONDS) or "gone" (it ended without
-    finishing: the user stopped it, or the VM stopped or restarted). Blocking (an incus call); raises when the
-    VM doesn't answer."""
+    finishing: the user or its agent stopped it, the VM stopped or restarted, the disk filled up, or something else
+    ended its processes); a gone one also has "why", that cause as far as the VM shows it. Blocking (an incus call);
+    raises when the VM doesn't answer."""
     seconds = round((datetime.now(UTC) - datetime.fromisoformat(run["started_at"])).total_seconds())
-    if record.status != "running":
-        return {"ended": "gone", "exit_code": None, "output": "", "seconds": seconds}
+    # Only a VM that is really off ended it. The record's status alone never does: a stop or start in the middle may
+    # still be going on, or hang (vm1 sat in "stopping" for a quarter of an hour on 2026-11-11 while it ran on, and every
+    # run in it was reported ended: prb_7b8fd5), so Incus says whether the VM runs.
+    if record.status != "running" and record.vm.status() != "Running":
+        return {"ended": "gone", "exit_code": None, "output": "", "seconds": seconds, "why": "the VM stopped or restarted"}
     pattern = shlex.quote(f" sandbox-{run['id']}$")
     exit_file = run["log"].removesuffix(".log") + ".exit"
-    # Still going is asked first: once it isn't, its exit code (if any) is already written.
+    # Still going is asked first: once it isn't, its exit code (if any) is already written. An empty exit file (a full
+    # disk let it make the file but not write the code) counts as none. With none: the seconds since the VM booted, the
+    # KB free in the home, and whether its log is still there, to tell why it ended.
     script = (
         f"if pgrep -f -- {pattern} > /dev/null; then echo running; "
-        f"elif [ -f {exit_file} ]; then echo exit $(cat {exit_file}); tail -c {OUTPUT_LIMIT} {run['log']}; "
-        f"else echo gone; tail -c {OUTPUT_LIMIT} {run['log']} 2>/dev/null; fi"
+        f"elif [ -s {exit_file} ]; then echo exit $(cat {exit_file}); tail -c {OUTPUT_LIMIT} {run['log']}; "
+        f"else echo gone $(cut -d . -f 1 /proc/uptime) $(df -Pk ~ | awk 'NR == 2 {{print $4}}') "
+        f"$([ -f {run['log']} ] && echo kept || echo deleted); tail -c {OUTPUT_LIMIT} {run['log']} 2>/dev/null; fi"
     )
     # Runs from before desktops have none: they were all on desktop 1.
     vm = record.desktop_vm(run.get("desktop", 1))
@@ -127,8 +139,19 @@ def check(record: VMRecord, run: dict) -> dict | None:
         return {"ended": "timeout", "exit_code": None, "output": output, "seconds": seconds}
     if first.startswith("exit "):
         return {"ended": "exit", "exit_code": int(first.split()[1]), "output": output, "seconds": seconds}
-    if first == "gone":
-        return {"ended": "gone", "exit_code": None, "output": output, "seconds": seconds}
+    if first.startswith("gone"):
+        # Why it ended without its exit code: the VM booted after it started, its folder of runs was deleted (a clean-up
+        # of ~/.cache), the disk is full (whatever it ran failed for lack of room, or it couldn't write its result), or
+        # else something ended its processes.
+        words = first.split()
+        why = "something ended its processes (the memory guard, or a kill), while the VM kept running"
+        if len(words) == 4 and words[1].isdigit() and int(words[1]) < seconds:
+            why = "the VM restarted"
+        elif len(words) == 4 and words[3] == "deleted":
+            why = f"its log and result were deleted ({RUNS_DIR} is the app's: never clean it up)"
+        elif len(words) == 4 and words[2].isdigit() and int(words[2]) < DISK_FULL_GB * 1024 * 1024:
+            why = f"the disk is full ({int(words[2]) / 1024 / 1024:.1f} GB free), so it ran out of room or couldn't write its result"
+        return {"ended": "gone", "exit_code": None, "output": output, "seconds": seconds, "why": why}
     raise ValueError(f"Could not check the run: {result.stderr.strip()}")
 
 

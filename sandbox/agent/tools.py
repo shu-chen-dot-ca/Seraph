@@ -532,7 +532,7 @@ class ComputerTools:
         if result["ended"] == "gone" and run["stopped_by_user"]:
             text = f"The user stopped it after {took}"
         if result["ended"] == "gone" and not run["stopped_by_user"]:
-            text = "It ended without finishing: the VM stopped or restarted"
+            text = f"It ended without finishing after {took}: {result['why']}"
         if result["ended"] == "gone" and run.get("stopped_by_agent"):
             text = f"You stopped it after {took}"
         output = result["output"]
