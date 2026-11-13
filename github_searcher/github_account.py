@@ -45,6 +45,9 @@ A PR waits for the claim of its job (every fix_issue job claims its issue first)
 approved on a repo whose rules want a maintainer's confirmation before a PR (the claim's wait_for_assignment), until
 GitHub shows you assigned to the claimed issue (mcp-memory-service#1912 went out 16 minutes after its claim,
 unassigned, and its claim check failed).
+A comment or an edit from a job whose newest new version of a PR (update_of) isn't on GitHub yet waits for that version:
+pending or approved, or sent back by its reviewer when the comment was drafted with it (it is drafted again). It may say
+the change is there.
 A comment is posted on its issue or PR (its pictures go to your fork the same way); one with reply_to goes inside that
 conversation on lines of code of the PR instead (on the PR, linking to it, when GitHub refuses that: an organization
 that restricts OAuth Apps), and with resolve that conversation is marked resolved after it.
@@ -309,6 +312,31 @@ class GithubAccount:
                         f"Not sent yet: the project's rules ask for a maintainer to assign you to {claim['target']} before a PR, "
                         "and GitHub doesn't show you assigned yet. It can go once they do."
                     )
+            # A comment or a new title and description from a job whose new version of a PR isn't on GitHub yet goes after
+            # that version: it often says the change is there (openmed#5413's comment and #5511's new description said
+            # new tests were "now added to #5511" while that push still waited for its review, and it never went). Only the
+            # job's newest version counts. One its reviewer sent back still holds what was drafted with it: the agent
+            # drafts it again. One you rejected holds nothing.
+            if draft["kind"] in ["comment", "edit"] and draft["job"] is not None:
+                versions = []
+                for other in self.inbox.list():
+                    if other["job"] == draft["job"] and other["kind"] == "pr" and other["update_of"] is not None:
+                        versions.append(other)
+                # inbox.list() is newest first.
+                if versions and versions[0]["sent"] is None:
+                    version = versions[0]
+                    if version["status"] in ["pending", "approved"]:
+                        raise SendError(
+                            f"Not sent yet: send {version['title']} first. It is the new version of {version['update_of']} "
+                            "this goes with, and it isn't on GitHub yet, so this could say a change is there that isn't."
+                        )
+                    sent_back = version["status"] == "rejected" and (version["review"] or {}).get("state") == "changes"
+                    if sent_back and datetime.fromisoformat(draft["created_at"]) < datetime.fromisoformat(version["decided_at"]):
+                        raise SendError(
+                            f"Not sent yet: it goes with {version['title']}, the new version of {version['update_of']} it was "
+                            "drafted with, which its reviewer sent back and the agent drafts again. It can go once that is on "
+                            "GitHub. Reject it if it no longer fits."
+                        )
             self.step = "starting"
             self.sending_draft = draft_id
             # What this send already knows from GitHub (tree()): each tree's file list by its sha, and each file's
