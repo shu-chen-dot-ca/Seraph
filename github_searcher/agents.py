@@ -1857,7 +1857,8 @@ class Agents:
         if entry["kind"] == "pr":
             text += (
                 "\n- A reviewer's comment on a line of code (a person's, not a bot's): answer it in its conversation, draft_comment with reply_to (the "
-                "comment's id from read_issue's conversations), not below the PR. On the user's own PR, add resolve: true "
+                "comment's id from read_issue's conversations), not below the PR, unless the organization doesn't let the app "
+                "answer there (draft_comment says so): then in the round's one comment. On the user's own PR, add resolve: true "
                 "once the change it asked for is pushed there, when the project wants every conversation resolved before a "
                 "merge or lets the author resolve them. A bot's conversation gets no answer."
             )

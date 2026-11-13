@@ -20,7 +20,8 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   after it (some projects only merge once every conversation is; refused for an organization that restricts OAuth Apps,
   once a resolve there failed for it). Only the project's maintainers (read_issue's maintainer: OWNER, MEMBER,
   COLLABORATOR, or someone who merged its PRs) and the PR's reviewers (people, not bots) get answers: reply_to is
-  refused in a conversation only bots wrote in (unless it resolves it). A follow_up job's thread gets one comment of ours per round: a comment below it, or a new version with a body
+  refused in a conversation only bots wrote in (unless it resolves it), and in an organization where an earlier one had
+  to go below the PR. A follow_up job's thread gets one comment of ours per round: a comment below it, or a new version with a body
   (its comment), is refused while one of ours is there or waits with nobody else writing since (threads_other_at, from
   read_issue; grimmory#3112 got eleven). A fix_issue job takes one comment only: the claim on its issue, made
   on every one once the agent decided the issue still stands and took the job past understand (repowise#5421's claim
@@ -540,7 +541,8 @@ class WorkTools:
                 "waits in the Inbox with nobody else writing since, a new version's comment too, so say it all in one. "
                 "body is the comment as it would be posted. reply_to: on a PR, the id of a comment in one of its conversations "
                 "on lines of code (read_issue's conversations), to answer in that conversation instead of below the PR: only "
-                "one a person wrote in, not only bots (or with resolve). "
+                "one a person wrote in, not only bots (or with resolve), and refused in an organization that doesn't let the app answer "
+                "there (an earlier answer went below the PR). "
                 "resolve: true (with reply_to, on the user's own PR) marks that conversation resolved once the answer is "
                 "posted: when the change it asked for is on the PR, and the project lets the author resolve (its rules or "
                 "its merged PRs show it, or it wants every conversation resolved before a merge). project, problem and why "
@@ -1925,11 +1927,24 @@ class WorkTools:
                 text = f"{target} is {author}'s PR, not the user's: they can't resolve its conversations. Leave resolve out."
                 return {"content": [{"type": "text", "text": text}], "is_error": True}
             # An organization that restricts OAuth Apps doesn't let the app resolve anything on its repos (openchoreo): a
-            # resolve that failed for that once says so for all of them.
+            # resolve that failed for that once says so for all of them. Nor answer inside a conversation: the answer went
+            # below the PR instead, each as a comment of its own (github_account.post_comment), so none goes there again.
             restricted = []
+            below = []
             for each in self.agents.inbox.list():
-                if each["kind"] == "comment" and each["sent"] is not None and "OAuth App access restrictions" in (each["sent"].get("resolve_error") or ""):
+                if each["kind"] != "comment" or each["sent"] is None:
+                    continue
+                if "OAuth App access restrictions" in (each["sent"].get("resolve_error") or ""):
                     restricted.append((each.get("repo") or "").split("/")[0].lower())
+                if each.get("reply_to") is not None and "#issuecomment-" in (each["sent"].get("url") or ""):
+                    below.append((each.get("repo") or "").split("/")[0].lower())
+            if name.split("/")[0].lower() in below:
+                text = (
+                    f"The {name.split('/')[0]} organization doesn't let the app answer inside a conversation on its repos: an "
+                    "earlier answer went below the PR as a comment of its own. Leave reply_to out and say it in the round's one "
+                    "comment below the PR (the new version's comment, when you push one)."
+                )
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
             if resolve is not None and name.split("/")[0].lower() in restricted:
                 text = (
                     f"The {name.split('/')[0]} organization restricts what apps may do on its repos, so the app can't resolve "
