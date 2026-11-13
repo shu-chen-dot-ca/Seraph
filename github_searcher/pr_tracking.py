@@ -61,14 +61,16 @@ each record are what holds: your pick, else drafts with the agent of the first d
 sent, or a comment the app posted on it), else off.
 
 action is what your open PR needs from us now (update_actions, called by backend/github_api.py every few seconds):
-needs (the Issues board's Needs action) when reasons isn't empty. Rules give some: Merge conflicts, CLA not signed (a
-failed check about a Contributor License Agreement), Not sent (a draft for it you approved without sending), Changes
-requested (a reviewer's, newer than our newest commit and comment), Draft (a GitHub draft). Until Claude reads what
-happened since our newest step, it gives New comment, New review, Bot review or Checks failing (failures on a commit
-or of checks it didn't see), also New comment for a comment on an issue it fixes that the app follows. Claude's
+needs (the Issues board's Needs action) when reasons isn't empty. Rules give some: Merge conflicts (only when GitHub
+says CONFLICTING), CLA not signed (a failed check about a Contributor License Agreement), Not sent (a draft for it you
+approved without sending), Changes requested (a reviewer's, newer than our newest commit and comment), Draft (a GitHub
+draft). Until Claude reads what happened since our newest step, it gives New comment, New review, Bot review or Checks
+failing (failures on a commit or of checks it didn't see), also New comment for a comment on an issue it fixes that the
+app follows. Claude's
 judgment (set_judgment, from judge_prs in backend/github_api.py) adds its own reasons and detail (what to do) when it
-says action is needed. "judgments" keeps it by PR id: {"key", "needs", "who": "agent" | "you" | "none", "reasons",
-"detail", "judged_at", "head", "failed_checks", "version"}, where key (judgment_key) is what it was made on, so it is made again once that changes. who:
+says action is needed, and never Merge conflicts unless GitHub says so. "judgments" keeps it by PR id: {"key", "needs",
+"who": "agent" | "you" | "none", "reasons", "detail", "judged_at", "head", "failed_checks", "version"}, where key
+(judgment_key) is what it was made on, so it is made again once that changes. who:
 you when part of it only you can do. status is how it waits otherwise, as GitHub says it: Ready to merge (approved,
 checks passed, no conflicts), Awaiting CI (checks running or waiting for a maintainer's OK), else Awaiting approval.
 agent_settings also keeps "action_base", "action_key" and "action_tries" (mark_action_given): what its agent was last
@@ -443,11 +445,17 @@ class PRTracking:
                 continue
             if other["at"] > (issue["your_last_at"] or "") and other["at"] > judged_at:
                 reasons.append("New comment")
-        # Claude's judgment: what only reading the thread tells.
+        # Claude's judgment: what only reading the thread tells. Whether it conflicts is GitHub's to say (mergeable
+        # CONFLICTING, the rule above), never Claude's reading: not while GitHub still works it out, nor for a branch that
+        # is only behind (reticle#2221: a rebase was asked for a PR GitHub showed as MERGEABLE). A judgment left with
+        # nothing else is no judgment, and its detail goes with it.
         who = "agent"
         detail = ""
+        kept = []
         if judgment is not None and judgment["needs"]:
-            reasons += judgment["reasons"]
+            kept = [reason for reason in judgment["reasons"] if reason != "Merge conflicts" or pr["mergeable"] == "conflicts"]
+        if kept:
+            reasons += kept
             detail = judgment["detail"]
             if judgment["who"] == "you":
                 who = "you"

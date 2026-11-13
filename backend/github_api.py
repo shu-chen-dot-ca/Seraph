@@ -559,7 +559,7 @@ async def judge_prs(due: list[dict], jobs: list[dict], failed_at: dict) -> None:
                 failed_at[pr["id"]] = time.monotonic()
                 continue
             text = f"## PR {pr['id']}: {thread['title']}\n{thread['url']}\n"
-            conflicts = {"yes": "no", "conflicts": "YES, it has merge conflicts", "unknown": "not known yet"}[pr["mergeable"]]
+            conflicts = {"yes": "no", "conflicts": "YES, it has merge conflicts", "unknown": "not known yet (GitHub is still working it out: don't count it as a conflict)"}[pr["mergeable"]]
             text += f"GitHub draft: {'yes' if thread['draft'] else 'no'}. Merge conflicts with {thread['base']}: {conflicts}. "
             text += f"Checks of the newest commit: {pr['checks']}"
             if pr.get("failed_checks"):
@@ -623,6 +623,8 @@ async def judge_prs(due: list[dict], jobs: list[dict], failed_at: dict) -> None:
             "- Failed checks need action only when our change causes them or we must fix them (lint, tests of our code, "
             "a DCO sign-off, a check of the PR's text). A failure of infrastructure, a flaky test, a check of other code, "
             "or a gate that waits for a maintainer's label or approval: no action.\n"
+            "- Merge conflicts only when the line above says YES. A branch that is only behind its base is no conflict and "
+            "needs no rebase, unless a maintainer or the project's rules ask for one.\n"
             "- A CLA that isn't signed: action, who you.\n"
             "- A GitHub draft PR the project waits for us to mark ready (or a bot made it a draft until a checklist is "
             "done): action.\n"
