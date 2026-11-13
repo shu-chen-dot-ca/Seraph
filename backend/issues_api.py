@@ -105,6 +105,8 @@ never give an agent an issue of a no_ai repo.
 
 When an issue goes from free to assigned either way, Agents.issue_taken tells the agent with a job on it who has it
 (the assignees from its facts, or the tags' reason), and the agent decides itself whether to keep working or stop.
+Each read also tells it of every open pull request of someone else's tied to the issue (issue_tags.open_prs: it says
+it closes it, or only mentions it), once each, whatever the status: with nobody assigned, that is the news.
 """
 
 import asyncio
@@ -508,14 +510,23 @@ async def refresh_tags(body: IdsRequest) -> dict:
     after = issue_tags.all()
     failed = [issue_id for issue_id in body.ids if issue_id not in tagged]
     taken = []
+    # The issues an agent has an open job on.
+    active = [job["issue"] for job in jobs.list() if job["status"] not in ("done", "cancelled")]
     for issue_id in tagged:
         if issue_id in before and before[issue_id]["status"] == "free" and after[issue_id]["status"] != "free":
             taken.append(issue_id)
-        # Someone else is on it now: an agent working on it decides whether to go on.
+        prs = issue_tags.open_prs.get(issue_id, [])
+        # Someone else is on it now: an agent working on it decides whether to go on. With nobody assigned, other
+        # people's pull requests tied to it say who (below).
         if issue_id in before and before[issue_id]["status"] == "free" and after[issue_id]["status"] == "assigned":
             facts = issue_facts.all().get(issue_id)
             assignees = facts["assignees"] if facts else []
-            agents.issue_taken(issue_id, after[issue_id]["reason"], assignees)
+            if assignees or not prs:
+                agents.issue_taken(issue_id, after[issue_id]["reason"], assignees)
+        # Someone else's open pull request tied to it (it says it closes it, or only mentions it): the agent with a job on
+        # it hears of each one, also while the issue stays free (DeskcommCRM#4511 only said "Refs #4495").
+        if prs and issue_id in active:
+            agents.issue_taken(issue_id, after[issue_id]["reason"], [], prs)
     return {"tagged": len(tagged), "failed": failed, "taken": taken}
 
 
@@ -736,13 +747,21 @@ async def keep_tags() -> None:
         if todo:
             tagged = await issue_tags.tag(todo)
             TAGGED.set()
-            # Someone else is on it now: an agent working on it decides whether to go on.
+            # Someone else is on it now: an agent working on it decides whether to go on. With nobody assigned, other
+            # people's pull requests tied to it say who (below).
             after = issue_tags.all()
             for issue_id in tagged:
+                prs = issue_tags.open_prs.get(issue_id, [])
                 if issue_id in known and known[issue_id]["status"] == "free" and after[issue_id]["status"] == "assigned":
                     facts = issue_facts.all().get(issue_id)
                     assignees = facts["assignees"] if facts else []
-                    agents.issue_taken(issue_id, after[issue_id]["reason"], assignees)
+                    if assignees or not prs:
+                        agents.issue_taken(issue_id, after[issue_id]["reason"], assignees)
+                # Someone else's open pull request tied to it (it says it closes it, or only mentions it): the agent with a
+                # job on it hears of each one at once, also while the issue stays free. DeskcommCRM#4511 only said "Refs
+                # #4495", and our agent ran five more hours of checks before it found it at its draft.
+                if prs and issue_id in active:
+                    agents.issue_taken(issue_id, after[issue_id]["reason"], [], prs)
             # What didn't get tagged (GitHub or Claude failed, Claude left it out, it is gone) waits for TAGS_RETRY_SECONDS.
             for issue_id in todo:
                 if issue_id not in tagged:
