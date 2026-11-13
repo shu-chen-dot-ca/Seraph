@@ -19,7 +19,9 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   conversations on lines of code instead of below it, and with resolve Approve marks that conversation resolved
   after it (some projects only merge once every conversation is; refused for an organization that restricts OAuth Apps,
   once a resolve there failed for it). A fix_issue job takes one comment only: the claim on its issue, made
-  first on every one, so nobody else takes the issue meanwhile ("Claim owner/name#n" in the Inbox); wait_for_assignment
+  on every one once the agent decided the issue still stands and took the job past understand (repowise#5421's claim
+  was posted by its repo's Level of automation two seconds after it was drafted, and then the issue turned out fixed),
+  so nobody else takes the issue meanwhile ("Claim owner/name#n" in the Inbox); wait_for_assignment
   when the repo's rules want a maintainer to assign contributors before a PR. The claim holds nothing up: the job goes on
   to its PR while the claim waits for the user, and nobody waits for the maintainers to assign the user (we assume nobody
   answers). The user approves the claim, then the PR; with wait_for_assignment, the PR is only sent once GitHub shows
@@ -508,9 +510,10 @@ class WorkTools:
             tool(
                 "draft_comment",
                 "Draft a follow_up job's reply on an issue or PR (target: its thread, owner/name#number) for the user's Inbox, or a "
-                "claim. On a fix_issue job only the claim, first thing on every one (unless the user is already assigned or "
-                "already said they are on it): one short comment on the job's issue saying the user is taking it on, so "
-                "nobody else does meanwhile; never a question. wait_for_assignment: true when the issue or the repo's rules "
+                "claim. On a fix_issue job only the claim, on every one (unless the user is already assigned or already said "
+                "they are on it), once you decided the issue still stands and took the job past understand (job_progress "
+                "set_up; refused before), before the VM: one short comment on the job's issue saying the user is taking it on, "
+                "so nobody else does meanwhile; never a question. wait_for_assignment: true when the issue or the repo's rules "
                 "say a maintainer must assign contributors before they start or open a PR (the PR then waits until GitHub "
                 "shows the user assigned). On a follow_up job a claim goes on the issue the PR closes. Never ask anyone on GitHub for anything "
                 "(to assign, review, run checks, decide, answer): assume nobody replies. Nothing is posted: the user decides, "
@@ -1760,6 +1763,17 @@ class WorkTools:
                 if draft["kind"] == "comment" and draft["status"] != "rejected":
                     text = f"{job['id']} already has its claim, {draft_id} ({draft['status']}). One claim per job: don't comment again."
                     return {"content": [{"type": "text", "text": text}], "is_error": True}
+            # A claim takes the issue, so it comes once the agent decided the issue still stands and took it past understand
+            # (job_progress checks it was read and nobody else is on it). repowise#5421's claim was drafted right after the
+            # first read, posted by its repo's Level of automation two seconds later, and then its agent found the fix merged
+            # days before and closed the job.
+            if job["step"] in [None, "understand"]:
+                text = (
+                    f"First decide whether {job['issue']} still stands (Fixing an issue in the VM, step 1): not fixed already by a "
+                    "merged PR or commit, not a duplicate, nobody else on it, no maintainer said no. If it doesn't, close_issue "
+                    f"and claim nothing. If it does, take it: job_progress {job['id']} with step set_up, then claim it."
+                )
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
             title = f"Claim {target}"
 
         # Everything about the thread is read first, recently: someone may be on it, or it may be settled already.
