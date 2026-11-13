@@ -27,7 +27,9 @@ One JSON file, DATA_DIR/repo_signals.json, by repo (owner/name):
                "ai_policy": {"tag", "quote", "file", "basis", "version"},
                "newcomer_verdict": {"verdict", "reason", "version", "judged_at"} | None}
 
-Outside contributors are PR authors who aren't owners, members or collaborators, and not bots.
+Outside contributors are PR authors who aren't owners, members or collaborators, and not bots, nor anyone who merged
+one of its finished PRs (staff whose membership is private, whom GitHub shows as CONTRIBUTOR); staff's reviews and
+comments count as a maintainer's.
 - Of their PRs that ended in the last 90 days (among the repo's 100 most recently updated finished PRs, fewer
   for huge repos): outside_merge_rate is merged / (merged + closed without merging), None with fewer than
   MIN_SAMPLE of those; median_days_to_merge is from opening to merge. Finished PRs, not new ones: in a repo
@@ -354,6 +356,14 @@ class RepoSignals:
             if datetime.fromisoformat(pull["createdAt"]) >= window_start:
                 contributors.add(author["login"])
 
+        # The project's own people GitHub shows as outsiders: a private member is a CONTRIBUTOR, but merges PRs. Whoever
+        # merged one of its finished PRs is staff, not an outsider (surveyjs: 47 of its 48 "outside" PRs were its staff's,
+        # so 95% looked merged, and the one real outsider's, ours, #8169, was closed).
+        staff = set()
+        for pull in pulls["finished"]["nodes"]:
+            if pull["mergedBy"] is not None:
+                staff.add(pull["mergedBy"]["login"])
+
         # Outside contributors' PRs in that window, kept per PR for the newcomers below.
         window_prs = []
         replies = []
@@ -361,7 +371,7 @@ class RepoSignals:
             author = pull["author"]
             if pull["authorAssociation"] not in OUTSIDE or author is None or author["__typename"] != "User":
                 continue
-            if author["login"].lower().endswith("bot"):
+            if author["login"].lower().endswith("bot") or author["login"] in staff:
                 continue
             opened = datetime.fromisoformat(pull["createdAt"])
             if opened < window_start:
@@ -382,7 +392,7 @@ class RepoSignals:
                     continue
                 if other["login"] == author["login"] or other["login"].lower().endswith("bot"):
                     continue
-                if item["authorAssociation"] not in MAINTAINERS:
+                if item["authorAssociation"] not in MAINTAINERS and other["login"] not in staff:
                     continue
                 human = True
                 at = datetime.fromisoformat(item["createdAt"])
@@ -430,7 +440,7 @@ class RepoSignals:
             author = pull["author"]
             if pull["authorAssociation"] not in OUTSIDE or author is None or author["__typename"] != "User":
                 continue
-            if author["login"].lower().endswith("bot") or pull["closedAt"] is None:
+            if author["login"].lower().endswith("bot") or author["login"] in staff or pull["closedAt"] is None:
                 continue
             if datetime.fromisoformat(pull["closedAt"]) < now - timedelta(days=90):
                 continue
@@ -486,7 +496,7 @@ class RepoSignals:
             author = pull.get("author")
             if pull.get("authorAssociation") not in OUTSIDE or author is None or author["__typename"] != "User":
                 continue
-            if author["login"].lower().endswith("bot"):
+            if author["login"].lower().endswith("bot") or author["login"] in staff:
                 continue
             # Merged by its own author: a maintainer's PR, whatever GitHub calls them.
             if pull["mergedBy"] is not None and pull["mergedBy"]["login"] == author["login"]:
@@ -539,14 +549,14 @@ class RepoSignals:
             author = pull["author"]
             if pull["authorAssociation"] not in OUTSIDE or author is None or author["__typename"] != "User":
                 continue
-            if datetime.fromisoformat(pull["createdAt"]) > now - timedelta(days=30):
+            if datetime.fromisoformat(pull["createdAt"]) > now - timedelta(days=30) or author["login"] in staff:
                 continue
             replied = False
             for item in pull["reviews"]["nodes"] + pull["comments"]["nodes"]:
                 other = item["author"]
                 if other is None or other["__typename"] != "User":
                     continue
-                if other["login"].lower().endswith("bot") or item["authorAssociation"] not in MAINTAINERS:
+                if other["login"].lower().endswith("bot") or (item["authorAssociation"] not in MAINTAINERS and other["login"] not in staff):
                     continue
                 if other["login"] != author["login"]:
                     replied = True
@@ -663,20 +673,20 @@ class RepoSignals:
                 author = pull["author"]
                 if pull["authorAssociation"] not in OUTSIDE or author is None or author["__typename"] != "User":
                     continue
-                if author["login"].lower().endswith("bot") or prs_used >= FEEDBACK_PRS:
+                if author["login"].lower().endswith("bot") or author["login"] in staff or prs_used >= FEEDBACK_PRS:
                     continue
                 notes = []
                 for comment in pull["comments"]["nodes"]:
                     other = comment["author"]
                     if other is None or other["__typename"] != "User" or other["login"] == author["login"]:
                         continue
-                    if comment["authorAssociation"] in MAINTAINERS and comment["body"].strip():
+                    if (comment["authorAssociation"] in MAINTAINERS or other["login"] in staff) and comment["body"].strip():
                         notes.append(" ".join(comment["body"].split())[:NOTE_CHARS])
                 for review in pull["reviews"]["nodes"]:
                     other = review["author"]
                     if other is None or other["__typename"] != "User" or other["login"] == author["login"]:
                         continue
-                    if review["authorAssociation"] not in MAINTAINERS:
+                    if review["authorAssociation"] not in MAINTAINERS and other["login"] not in staff:
                         continue
                     for text in [review["body"] or ""] + [line["body"] for line in review["comments"]["nodes"]]:
                         if text.strip():
