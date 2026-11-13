@@ -358,7 +358,14 @@ def get_issue_facts(owner: str, repo: str, number: int) -> dict:
 # the commits that mention it ("(#822)" in a squash merge's message), with the pull request each came from: GitHub
 # leaves an issue open when the PR said "Addresses #123" instead of "Fixes", and doesn't always list the PR itself.
 # The pull requests an issue's description mentions are looked up apart (get_issues_for_tags): GitHub ties them to it
-# only when they mention the issue back.
+# only when they mention the issue back. So are the pull requests that name the issue's number in their text without
+# GitHub tying them to it (TAG_PULL_FRAGMENT is theirs too, with their title: what each one did).
+TAG_PULL_FRAGMENT = """
+fragment TagPull on PullRequest {
+  number title state createdAt updatedAt closedAt author { login } repository { nameWithOwner }
+  comments(last: 1) { nodes { body createdAt authorAssociation author { login __typename } } }
+}
+"""
 TAG_ISSUE_FRAGMENT = """
 fragment TagIssue on Issue {
   number title body state createdAt updatedAt authorAssociation author { login }
@@ -380,25 +387,25 @@ fragment TagIssue on Issue {
   }
 }
 fragment TagComment on IssueComment { body createdAt authorAssociation author { login __typename } }
-fragment TagPull on PullRequest {
-  number state createdAt updatedAt closedAt author { login } repository { nameWithOwner }
-  comments(last: 1) { nodes { body createdAt authorAssociation author { login __typename } } }
-}
-"""
+""" + TAG_PULL_FRAGMENT
 
 
 # "#723" in an issue's description: a pull request or issue of the same repo (not owner/name#723, not a link's #part).
 MENTION = re.compile(r"(?<![\w/#])#(\d+)\b")
 # get_issues_for_tags looks up at most this many of those for one batch.
 MENTIONED_LIMIT = 40
+# And at most this many pull requests that name each issue's number, the best matches of GitHub's search, as read_issue
+# finds them.
+NAMED_LIMIT = 5
 
 
 def get_issues_for_tags(owner: str, repo: str, numbers: list[int], login: str | None) -> dict:
     # Never cached: an issue is tagged again because it changed. Returns the repository node: its description,
     # stars and language, each issue as i<number>, None when it is gone or a pull request, yourMerged: how many
-    # pull requests by login the repo merged (None without a login), and mentioned: the pull requests and issues of the
+    # pull requests by login the repo merged (None without a login), mentioned: the pull requests and issues of the
     # repo the issues' descriptions mention (MENTION), {number: {"__typename", "title", "state"}}, an issue's with
-    # closedByPullRequestsReferences (the pull requests that would close it, open ones only).
+    # closedByPullRequestsReferences (the pull requests that would close it, open ones only), and named: by issue number,
+    # the pull requests of the repo that name that number in their text (TagPull, with body), at most NAMED_LIMIT.
     aliases = ""
     for number in numbers:
         aliases += f" i{number}: issue(number: {number}) {{ ...TagIssue }}"
@@ -431,7 +438,7 @@ def get_issues_for_tags(owner: str, repo: str, numbers: list[int], login: str | 
     if login is not None:
         repository["yourMerged"] = data["data"]["yourMerged"]["issueCount"]
 
-    # The mentioned pull requests and issues, in one more call when there are any: an issue that builds on one still open
+    # The mentioned pull requests and issues, in one more call: an issue that builds on one still open
     # (a follow-up from its review, the work of another issue whose pull request isn't merged yet) isn't ready until it is.
     repository["mentioned"] = {}
     mentioned = []
@@ -448,20 +455,38 @@ def get_issues_for_tags(owner: str, repo: str, numbers: list[int], login: str | 
             f" p{number}: issueOrPullRequest(number: {number}) {{ __typename ... on PullRequest {{ title state }} ... on Issue {{ title state "
             "closedByPullRequestsReferences(first: 5) { nodes { number state author { login } } } } }"
         )
-    if aliases == "":
+    # In the same call, the pull requests that name each issue's number in their text, the way read_issue finds them
+    # ("repo:owner/name is:pr 4652"): GitHub doesn't tie every one to the issue (WeKnora#4655 said "Closes #4652", was
+    # merged and never tied, so #4652 looked untouched and an agent was given it), and a pull request that fixed it under
+    # another issue's number names it only in its text.
+    repository["named"] = {}
+    params = "$owner: String!, $name: String!"
+    variables = {"owner": owner, "name": repo}
+    searches = ""
+    for number in numbers:
+        if repository.get(f"i{number}") is None:
+            continue
+        params += f", $n{number}: String!"
+        variables[f"n{number}"] = f"repo:{owner}/{repo} is:pr {number}"
+        searches += f" n{number}: search(query: $n{number}, type: ISSUE, first: {NAMED_LIMIT}) {{ nodes {{ ... on PullRequest {{ ...TagPull body }} }} }}"
+    if searches == "":
         return repository
     response = BALANCER.request(
         "POST",
         "https://api.github.com/graphql",
-        json={"query": "query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {" + aliases + " } }", "variables": {"owner": owner, "name": repo}},
+        json={"query": "query(" + params + ") { repository(owner: $owner, name: $name) { id" + aliases + " }" + searches + " }" + TAG_PULL_FRAGMENT, "variables": variables},
         timeout=60,
     )
     response.raise_for_status()
     # A number that doesn't exist comes back as None.
-    found = (response.json().get("data") or {}).get("repository") or {}
+    data = response.json().get("data") or {}
+    found = data.get("repository") or {}
     for number in mentioned[:MENTIONED_LIMIT]:
         if found.get(f"p{number}"):
             repository["mentioned"][number] = found[f"p{number}"]
+    for number in numbers:
+        if data.get(f"n{number}"):
+            repository["named"][number] = [node for node in data[f"n{number}"]["nodes"] if node]
     return repository
 
 

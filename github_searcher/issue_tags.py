@@ -32,7 +32,9 @@ what #1409's open pull request adds), and one whose triage note leaves questions
 that says it still waits for the maintainers' triage or approval (TRIAGE: "status: needs triage", "needs approval",
 "untriaged") makes it waiting whatever Claude says. fixed: a merged pull request
 or a commit on the default branch already does what it asks, and it only needs closing (GitHub leaves an issue open
-when the PR said "Addresses #n" instead of "Fixes #n"; the commits that mention it show that, see search.py).
+when the PR said "Addresses #n" instead of "Fixes #n"; the commits that mention it show that, see search.py; it doesn't
+tie every PR that says "Closes #n" either, so the PRs that name its number are looked up too: WeKnora#4655; and a
+closed PR whose last comment says the fix is already in points at the merged ones that did it: runanywhere-sdks#1181).
 
 merge is whether a pull request from us would get merged: not how hard the code is (our agent writes hard code), but
 what stood in the way of the ones that went badly. It is decided by fixed rules, not by Claude's feel: from Claude's
@@ -76,7 +78,10 @@ until a maintainer accepts the direction"). It also sees every pull request tied
 the ones that say they close it, and the ones that only mention it or were linked by hand, each with its last
 comment (often why it was closed), and the pull requests and issues its description mentions (search.py MENTION), with
 their state (an issue's with the open pull requests that would close it). Without those, a claim followed by a pull request that was then rejected
-looked like a claim with no pull request at all. Bodies are cut to BODY_CHARS, but the template's part about the author
+looked like a claim with no pull request at all. Each pull request shows its title; the ones GitHub didn't tie to it that
+name its number in their text (search.py NAMED_LIMIT, GitHub's best matches) show the start of their description too
+(PULL_BODY_CHARS): most name the number for something else, and Claude counts one only when it is about this issue.
+Bodies are cut to BODY_CHARS, but the template's part about the author
 fixing it themselves (WILLING finds it) is always kept. updated_at is the issue's last change on GitHub when it
 was tagged: when that changes, the backend tags it again, and a free one every hour anyway (backend/issues_api.py).
 The checks are kept once given: they and the kind stay from one read to the next while the issue hasn't changed on
@@ -208,6 +213,8 @@ BODY_CHARS = 2000
 COMMENT_CHARS = 1000
 BOT_CHARS = 200
 PULL_COMMENT_CHARS = 400
+# The start of the description of a pull request that names an issue's number without GitHub tying it to the issue.
+PULL_BODY_CHARS = 500
 REASON_CHARS = 240
 # The short name: at most this long, and how it should read: general words, nothing only the project's people know.
 NAME_CHARS = 60
@@ -462,6 +469,13 @@ class IssueTags:
                         how = "was linked to it"
                 if (pull["repository"]["nameWithOwner"], pull["number"]) not in pulls:
                     pulls[(pull["repository"]["nameWithOwner"], pull["number"])] = (pull, how)
+            # Then the ones that name its number in their text but that GitHub didn't tie to it (search.py): a merged one
+            # may have done it (WeKnora#4655 said "Closes #4652", was merged and never tied), but most name the number for
+            # something else.
+            for pull in data["named"].get(number, []):
+                if (pull["repository"]["nameWithOwner"], pull["number"]) not in pulls:
+                    how = "names its number in its text, but GitHub didn't tie it to the issue (count it only when its title and description show it is about this issue)"
+                    pulls[(pull["repository"]["nameWithOwner"], pull["number"])] = (pull, how)
             if not pulls and not commits:
                 text += "No pull request or commit is tied to it.\n"
             for event in commits:
@@ -474,13 +488,17 @@ class IssueTags:
                 if pull_repo != full_name:
                     where = f"{pull_repo}#{pull_number}"
                 pull_author = pull["author"]["login"] if pull["author"] else "ghost"
-                text += f"Pull request {where} by {pull_author} {how}: opened {pull['createdAt'][:10]}, "
+                text += f"Pull request {where} (\"{pull['title']}\") by {pull_author} {how}: opened {pull['createdAt'][:10]}, "
                 if pull["state"] == "OPEN":
                     text += f"still open, last updated {pull['updatedAt'][:10]}."
                 elif pull["state"] == "MERGED":
                     text += f"merged {(pull['closedAt'] or '')[:10]}."
                 else:
                     text += f"closed without merging {(pull['closedAt'] or '')[:10]}."
+                # A named one's description (only those come with it): whether it is about this issue, and what it did.
+                if pull.get("body") is not None:
+                    words = " ".join(TEMPLATE_HINT.sub("", pull["body"]).split())
+                    text += f" Its description starts: {words[:PULL_BODY_CHARS]}"
                 for comment in pull["comments"]["nodes"]:
                     commenter = comment["author"]["login"] if comment["author"] else "ghost"
                     words = " ".join(comment["body"].split())
@@ -643,8 +661,11 @@ class IssueTags:
                 "maintainer has said yes to is waiting, however clear it is and however long it has sat.\n"
                 "- fixed: it is open, but a merged pull request or a commit on the default branch already does what it asks, "
                 "and it only needs closing. GitHub leaves an issue open when the pull request said \"Addresses #n\" or "
-                "\"Part of #n\" instead of \"Fixes #n\", so read the merged pull requests and commits listed under it and "
-                "judge by what they did: when one did only part of what it asks, it isn't fixed.\n\n"
+                "\"Part of #n\" instead of \"Fixes #n\", or when it didn't tie the pull request to the issue at all, so read "
+                "the merged pull requests and commits listed under it, also the ones that only name its number, and judge by "
+                "what they did: when one did only part of what it asks, it isn't fixed. A pull request closed because the fix "
+                "was already in (its last comment says redundant, already on main, superseded) points at the merged ones that "
+                "did it: when those, listed under it, cover what it asks, it is fixed.\n\n"
                 f"The checks, for whether a pull request from us would get merged. {SANDBOX} Answer each one yes (true) or no "
                 "(false) on its own, from what the issue and its comments say; when it is unclear, answer no.\n"
                 + "".join(f"- {key}: {question}\n" for key, question in CHECKS)
