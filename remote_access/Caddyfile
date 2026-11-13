@@ -18,6 +18,11 @@
 }
 
 {$REMOTE_ACCESS_DOMAIN} {
+	# The desktop (~/dev/fedora_remote): this computer's screen, mouse and keyboard. It checks the sign in itself,
+	# with the same passkeys. While it doesn't run, the page in handle_errors below comes back.
+	handle /desktop* {
+		reverse_proxy 127.0.0.1:8020
+	}
 	handle /api/* {
 		reverse_proxy 127.0.0.1:{$BACKEND_PORT}
 	}
