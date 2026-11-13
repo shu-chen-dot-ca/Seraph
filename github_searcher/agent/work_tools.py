@@ -962,7 +962,8 @@ class WorkTools:
             )(self.evidence_remove),
             tool(
                 "vms_list",
-                "See every VM: whether it runs, CPU, memory and disk, its desktops (who holds each), how many wait, "
+                "See every VM: whether it runs, CPU, memory, disk and disk in use, whether it is full right now and why, its "
+                "desktops (who holds each), how many wait, "
                 "what it started with (the OS, languages, tools, ready-made Docker images and models of its image), and its "
                 "notes: what agents and the user set up in it since (a project cloned and built, a service configured, what "
                 "was added on top), oldest first, each with who wrote it, when, and on which desktop. Use it to pick the VM "
@@ -4170,12 +4171,15 @@ class WorkTools:
                 if "desktop" in note:
                     entry["desktop"] = note["desktop"]
                 notes.append(entry)
+            disk_used_gb = vm_record.usage["disk_used_gb"]
             entry = {
                 "name": vm_record.name,
                 "status": vm_record.status,
                 "cpus": vm_record.cpus,
                 "memory_gb": vm_record.memory_gb,
                 "disk_gb": vm_record.disk_gb,
+                "disk_used_gb": round(disk_used_gb, 1) if disk_used_gb is not None else None,
+                "full": self.agents.queue.full.get(vm_record.name),
                 "internet": vm_record.internet,
                 "desktops": desktops,
                 "max_desktops": vm_record.max_desktops,
@@ -4265,7 +4269,7 @@ class WorkTools:
             which = f"desktop {desktop}" if desktop is not None else "the first desktop that frees up"
             text = f"You are number {place} in {vm_name}'s queue, for {which}. End your turn; you'll get a message when it's yours."
             if vm_name in self.agents.queue.full:
-                text += f" {vm_name} is full right now (its CPUs or memory are used up): nobody new gets a desktop until there is room."
+                text += f" {vm_name} is full right now ({self.agents.queue.full.get(vm_name)}): nobody new gets a desktop until there is room."
             if following:
                 text += " You are at the front: a follow-up on an open PR goes before new work."
             return {"content": [{"type": "text", "text": text}]}
@@ -4294,7 +4298,7 @@ class WorkTools:
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         if vm_name in self.agents.queue.full:
             text = (
-                f"{vm_name} is full right now (its CPUs or memory are used up): no desktop is added until there is room. "
+                f"{vm_name} is full right now ({self.agents.queue.full.get(vm_name)}): no desktop is added until there is room. "
                 "queue_for_vm and end your turn: you get a message when a desktop is yours."
             )
             return {"content": [{"type": "text", "text": text}], "is_error": True}
