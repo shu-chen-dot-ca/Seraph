@@ -8,7 +8,8 @@ each issue instead and gives it tags we define. One JSON file, DATA_DIR/issue_ta
     {"owner/name#n": {"status": "free" | "assigned" | "waiting" | "fixed",
                       "merge": "likely" | "fixed" | "out of scope" | "claimed" | "maintainers only" | "waiting" |
                                "no outside prs" | "large feature" | "big change" | "can't validate",
-                      "checks": {"belongs", "linux", "apolitical", "not_game", "open", "modest", "validatable": bool} | None,
+                      "checks": {"belongs", "linux", "apolitical", "not_game", "open", "any_contributor", "modest",
+                                 "validatable": bool} | None,
                       "kind": "bug" | "feature" | "docs" | "question" | None, "lines": int | None,
                       "name": str | None, "name_version": int, "rules_version": int, "complexity": "easy" | "medium" | "hard" | None, "scope_clear": bool | None,
                       "reason", "updated_at", "judged_at"}, ...}
@@ -54,7 +55,9 @@ requests the repo merged. The first that holds:
                       Linux (it is about how something looks or behaves on Windows, macOS, a phone or other hardware,
                       even when its files can be edited on Linux: we have no way to validate it)
     claimed           someone is on it (status assigned)
-    maintainers only  the maintainers keep it for themselves
+    maintainers only  the maintainers keep it for themselves, or for first-time contributors while the user already
+                      has a merged pull request in the repo (DeskcommCRM#4410: "if you already contribute, leave this
+                      one to a newcomer")
     waiting           it isn't ready to pick up (status waiting)
     no outside prs    the repo doesn't merge outsiders' pull requests: its AI policy says no AI, most newcomers' first
                       PRs are closed or left waiting, of MIN_SAMPLE or more outside PRs that ended in 90 days none
@@ -179,6 +182,13 @@ CHECKS = [
         "team' from them is a no, unless a maintainer opened it to others later.",
     ),
     (
+        "any_contributor",
+        "Is it for any contributor, not kept for first-time contributors? No when the issue or the project's rules keep it "
+        "for people who have no merged pull request in the repo yet ('first-timers only', 'if you already contribute here, "
+        "leave this one to a newcomer'). A 'good first issue' label alone doesn't: only words that keep it for them. Yes "
+        "when nothing says so.",
+    ),
+    (
         "modest",
         "Is it a fix or a modest change, not a large new feature? No when it adds a new subsystem, integration, driver, "
         "backend, file format or major screen that the maintainers would have to keep up after it lands.",
@@ -277,10 +287,11 @@ SCHEMA = {
                     "apolitical": {"type": "boolean"},
                     "not_game": {"type": "boolean"},
                     "open": {"type": "boolean"},
+                    "any_contributor": {"type": "boolean"},
                     "modest": {"type": "boolean"},
                     "validatable": {"type": "boolean"},
                 },
-                "required": ["number", "status", "kind", "lines", "name", "complexity", "scope_clear", "reason", "belongs", "linux", "apolitical", "not_game", "open", "modest", "validatable"],
+                "required": ["number", "status", "kind", "lines", "name", "complexity", "scope_clear", "reason", "belongs", "linux", "apolitical", "not_game", "open", "any_contributor", "modest", "validatable"],
             },
         }
     },
@@ -766,6 +777,11 @@ class IssueTags:
                 elif not checks["open"]:
                     merge = "maintainers only"
                     why = "the maintainers keep it for themselves"
+                elif not checks["any_contributor"] and merged > 0:
+                    # Kept for people with no merged pull request here, and the user has one: their bot asked us to give
+                    # back two of three such issues our agents claimed at once (DeskcommCRM#4410, #4411, #4412).
+                    merge = "maintainers only"
+                    why = "it is kept for first-time contributors, and you already have a merged pull request in this repo"
                 elif item["status"] == "waiting":
                     merge = "waiting"
                     why = "it isn't ready to pick up"
