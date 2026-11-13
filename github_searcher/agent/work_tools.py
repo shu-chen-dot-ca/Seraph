@@ -77,7 +77,9 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   the Dashboard's Actions (Inbox.add_action), like every sent draft.
 - Reading first: read_issue reads an issue or PR in full, right then (never cached): every comment, where it was
   mentioned (issues, PRs, commits), the PRs linked to it or that would close it with their checks and newest comments,
-  assignments and labels, and the checks on the default branch. draft_comment on a thread, a fix_issue job going past
+  assignments and labels, and the checks on the default branch. What the user wrote there (ours too, sent as them) is
+  marked by_user, with their login, so an agent never takes the user's own claim for someone else's (QwenPaw#8698).
+  draft_comment on a thread, a fix_issue job going past
   understand (taking it) and close_issue refuse until it was read so within READ_SECONDS. close_issue ends a fix_issue
   job whose issue turns out invalid before anything was claimed or made (fixed already, a duplicate, someone else's
   open PR, a maintainer said no): the job is cancelled with why, a pending draft of it withdrawn, and the issue is taken
@@ -623,7 +625,9 @@ class WorkTools:
                 "review, checks and newest comments, the PRs that only name its number in their text (GitHub didn't link "
                 "them; read the ones that may be about it), who was assigned and when, its labels, and the checks on the repo's "
                 "default branch (and a PR's own reviews, checks and conversations on lines of code, each comment with the id "
-                "draft_comment's reply_to takes). Read it before you take an issue, claim it, comment on it "
+                "draft_comment's reply_to takes). user_login is the user's GitHub login, and by_user marks what they "
+                "wrote (comments, reviews, related PRs): that is ours (a claim, a reply or a PR the app sent from a draft, as "
+                "them), never someone else taking the issue, whatever role it shows. Read it before you take an issue, claim it, comment on it "
                 "or close it: draft_comment, close_issue and a fix_issue job going past understand refuse until you read it "
                 "within the hour. Read all of it, and every related PR it shows: someone may be on it, it may be fixed "
                 "already or a duplicate, or a maintainer may have said how (or whether) they want it done.",
@@ -2145,6 +2149,7 @@ class WorkTools:
             return {"content": [{"type": "text", "text": f"Could not read it from GitHub: {error}"}], "is_error": True}
         if data is None:
             return {"content": [{"type": "text", "text": f"{repo} has no issue or PR #{number}."}], "is_error": True}
+        login = self.agents.your_repositories.github_account.status().get("login") or ""
 
         result = {
             "kind": "pr" if data["__typename"] == "PullRequest" else "issue",
@@ -2153,6 +2158,8 @@ class WorkTools:
             "state": data["state"].lower(),
             "opened": data["createdAt"],
             "updated": data["updatedAt"],
+            # The user's GitHub login (None without their sign-in): what it wrote is the user's, so ours.
+            "user_login": login or None,
             "author": data["author"]["login"] if data["author"] else "ghost",
             "author_role": data["authorAssociation"],
             "labels": [label["name"] for label in data["labels"]["nodes"]],
@@ -2165,11 +2172,17 @@ class WorkTools:
         if data["__typename"] == "Issue":
             result["state_reason"] = data["stateReason"]
             result["milestone"] = data["milestone"]["title"] if data["milestone"] else None
-        # Every comment, in full.
+        # Every comment, in full. What the user wrote is marked by_user: that is us too (a claim, a reply or a version the
+        # app sent from a draft, as them). On QwenPaw#8698 a reviewer took the user's own claim (role NONE, nothing more)
+        # for someone else's and sent the PR back.
         for comment in data["comments"]["nodes"]:
             author = comment["author"]["login"] if comment["author"] else "ghost"
             role = "BOT" if comment["author"] and comment["author"]["__typename"] != "User" else comment["authorAssociation"]
-            result["comments"].append({"at": comment["createdAt"], "author": author, "role": role, "text": comment["body"]})
+            by_user = login != "" and author.lower() == login.lower()
+            result["comments"].append({
+                "at": comment["createdAt"], "author": author, "role": role, "by_user": by_user,
+                "text": comment["body"],
+            })
 
         # The PRs tied to it: the ones that would close it, and every one that mentions it. Each once.
         related = []
@@ -2234,6 +2247,8 @@ class WorkTools:
                     "state": state,
                     "draft": each["isDraft"],
                     "author": each["author"]["login"] if each["author"] else "ghost",
+                    # The user's own PR (one of ours, opened as them): never someone else on it.
+                    "by_user": login != "" and each["author"] is not None and each["author"]["login"].lower() == login.lower(),
                     "opened": each["createdAt"],
                     "updated": each["updatedAt"],
                     "review": each["reviewDecision"],
@@ -2299,8 +2314,12 @@ class WorkTools:
             for review in data["reviews"]["nodes"]:
                 author = review["author"]["login"] if review["author"] else "ghost"
                 role = "BOT" if review["author"] and review["author"]["__typename"] != "User" else review["authorAssociation"]
+                by_user = login != "" and author.lower() == login.lower()
                 code = [{"path": comment["path"], "text": comment["body"]} for comment in review["comments"]["nodes"]]
-                result["pr"]["reviews"].append({"at": review["createdAt"], "author": author, "role": role, "state": review["state"], "text": review["body"], "on_code": code})
+                result["pr"]["reviews"].append({
+                    "at": review["createdAt"], "author": author, "role": role, "by_user": by_user,
+                    "state": review["state"], "text": review["body"], "on_code": code,
+                })
             # The conversations on lines of code, with their replies: a comment's id is what draft_comment's reply_to
             # answers in that conversation.
             result["pr"]["conversations"] = []
@@ -2309,7 +2328,11 @@ class WorkTools:
                 for comment in conversation["comments"]["nodes"]:
                     author = comment["author"]["login"] if comment["author"] else "ghost"
                     role = "BOT" if comment["author"] and comment["author"]["__typename"] != "User" else comment["authorAssociation"]
-                    comments.append({"id": comment["databaseId"], "at": comment["createdAt"], "author": author, "role": role, "text": comment["body"]})
+                    by_user = login != "" and author.lower() == login.lower()
+                    comments.append({
+                        "id": comment["databaseId"], "at": comment["createdAt"], "author": author, "role": role,
+                        "by_user": by_user, "text": comment["body"],
+                    })
                 result["pr"]["conversations"].append({
                     "file": conversation["path"],
                     "line": conversation["line"],
@@ -2320,7 +2343,6 @@ class WorkTools:
 
         # Someone else's open PR that says it closes it, not abandoned (TAKEN_PR_DAYS, like the issue tags): someone is on
         # it, and its maintainers don't want a second fix. The user's own PRs (ours too, made as the user) don't count.
-        login = self.agents.your_repositories.github_account.status().get("login") or ""
         recent = (datetime.now(UTC) - timedelta(days=TAKEN_PR_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
         taken = ""
         for pr in result["related_prs"]:

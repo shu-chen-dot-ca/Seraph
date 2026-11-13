@@ -1092,6 +1092,14 @@ class Agents:
         text = f"New job {job['id']}: {title}"
         if instructions:
             text += f"\nInstructions from the user: {instructions}"
+        # The user's own words on the issue (an earlier claim of theirs, an issue we opened as them) are ours, never someone
+        # else on it (QwenPaw#8698: the user's claim, taken for someone else's).
+        login = self.your_repositories.github_account.status().get("login")
+        if login:
+            text += (
+                f"\nThe user's GitHub login is {login}: whatever {login} wrote or opened on the issue is ours (an earlier claim "
+                "of theirs too; read_issue marks it by_user), never someone else on it."
+            )
         if vm_name is None:
             text += "\nYou have no target VM: pick the VM that suits the job with vms_list and choose_vm, then queue_for_vm when ready."
         else:
@@ -1504,6 +1512,14 @@ class Agents:
             f"It was made in {draft['path']} on desktop {desktop} of {draft['vm']}, where the project is set up and built: "
             f"queue_for_vm with desktop {desktop} once you have read it, check in that folder, and leave it as you found it."
         )
+        # What the user wrote on the thread is ours (the author's claim, an earlier version, a reply the app sent as them):
+        # on QwenPaw#8698 the reviewer took the user's own claim for someone else's and sent the PR back.
+        login = self.your_repositories.github_account.status().get("login")
+        if login:
+            text += (
+                f"\nThe user's GitHub login is {login}: whatever {login} wrote or opened there is ours (the author's claim, "
+                "an earlier version, a reply the app sent as the user; read_issue marks it by_user), never someone else on it."
+            )
         if vm_name != draft["vm"]:
             text += f"\nYour target VM is {vm_name}: once you hold none, choose_vm {draft['vm']} for this one."
         self.notify(reviewer, text)
@@ -1868,6 +1884,13 @@ class Agents:
         )
         if entry["kind"] == "pr" and not own_pr:
             text += "\nThe PR's code isn't the user's to change: a reply or nothing."
+        # The user's own words there are ours, not someone else's to answer or step aside for (QwenPaw#8698).
+        login = self.your_repositories.github_account.status().get("login")
+        if login:
+            text += (
+                f"\nThe user's GitHub login is {login}: whatever {login} wrote there is ours (read_issue marks it by_user): "
+                "never answer it, and never take it for someone else."
+            )
         if vm_name is None:
             text += (
                 "\nYou have no target VM. Reproducing and a new version need one: pick it with vms_list and choose_vm, then "
