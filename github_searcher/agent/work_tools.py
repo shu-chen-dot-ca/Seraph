@@ -204,6 +204,8 @@ CLOSED_STATUSES = ["done", "cancelled"]
 # A PR draft's diff can't be bigger than this. A real fix is far smaller; a bigger diff
 # almost always has build output, a lockfile or a virtualenv in it.
 DIFF_LIMIT = 500_000
+# A draft whose binary files go as git's binary patch (draft_pr): a rebuilt data file or an image, never build output.
+BINARY_DIFF_LIMIT = 5_000_000
 EVIDENCE_KINDS = ["screenshot", "image", "command"]
 EVIDENCE_STAGES = ["before", "after", "other"]
 # Evidence screenshots are for the user to read, so sharper than the agent's own (60).
@@ -3724,6 +3726,27 @@ class WorkTools:
             text = f"There is no difference between {args['path']} and {args['base']}: nothing to draft."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
 
+        # A file git calls binary has no lines in the plain diff: tabularis's notebookUndo.ts (a NUL byte in its code),
+        # RHVoice/English's cmulex.fst (a built dictionary). The draft then carries git's binary patch for it, which sending
+        # applies the same way (github_account.py). The plain diff stays the one the tests' run is compared with.
+        draft_diff = diff
+        if re.search(r"^Binary files .+ differ$", diff, re.M):
+            command = f"set -o pipefail; cd {folder} && git diff --binary {base} | head -c {BINARY_DIFF_LIMIT + 1}"
+            try:
+                result = await asyncio.to_thread(vm.exec, command, 120)
+            except Exception as error:
+                return {"content": [{"type": "text", "text": f"Could not reach the VM: {error}"}], "is_error": True}
+            if len(result.stdout.encode()) > BINARY_DIFF_LIMIT:
+                text = (
+                    f"With its binary files the diff is over the {BINARY_DIFF_LIMIT // 1_000_000} MB limit. A fix's binary file is "
+                    "small (a rebuilt data file, an image): leave build output out (restore it, or add it to .git/info/exclude), "
+                    "then try again."
+                )
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+            if result.returncode != 0:
+                return {"content": [{"type": "text", "text": f"git diff --binary failed: {result.stderr.strip()}"}], "is_error": True}
+            draft_diff = result.stdout
+
         # The diff is shown in the Inbox, sent to the browser and downloaded as it is: a secret (a VM env
         # value, e.g. written into a .env file) must never be in it. Named by its variable, never its value.
         for env_name, value in list(vm_record.global_env.items()) + list(vm_record.env.items()):
@@ -3988,7 +4011,7 @@ class WorkTools:
             job=job["id"],
             repo=repo,
             target=target,
-            diff=diff,
+            diff=draft_diff,
             branch=branch,
             base=args["base"].strip(),
             base_sha=base_sha,
