@@ -20,7 +20,9 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   after it (some projects only merge once every conversation is; refused for an organization that restricts OAuth Apps,
   once a resolve there failed for it). Only the project's maintainers (read_issue's maintainer: OWNER, MEMBER,
   COLLABORATOR, or someone who merged its PRs) and the PR's reviewers (people, not bots) get answers: reply_to is
-  refused in a conversation only bots wrote in (unless it resolves it). A fix_issue job takes one comment only: the claim on its issue, made
+  refused in a conversation only bots wrote in (unless it resolves it). A follow_up job's thread gets one comment of ours per round: a comment below it, or a new version with a body
+  (its comment), is refused while one of ours is there or waits with nobody else writing since (threads_other_at, from
+  read_issue; grimmory#3112 got eleven). A fix_issue job takes one comment only: the claim on its issue, made
   on every one once the agent decided the issue still stands and took the job past understand (repowise#5421's claim
   was posted by its repo's Level of automation two seconds after it was drafted, and then the issue turned out fixed),
   so nobody else takes the issue meanwhile ("Claim owner/name#n" in the Inbox). A job that ends (close_issue, job_update
@@ -332,6 +334,9 @@ class WorkTools:
         # What read_issue found someone else on it with (owner/name#n, lower case): their open PR that closes it, as a
         # line for the agent ("" when nobody). A claim and taking the issue refuse while it is set.
         self.threads_taken = {}
+        # When someone other than the user last wrote on each issue or PR it read (owner/name#n, lower case): GitHub's
+        # time, None when nobody did. Our round there ends with it: one comment of ours until then (draft_comment, draft_pr).
+        self.threads_other_at = {}
 
     def list(self) -> list:
         names = {"type": "array", "items": {"type": "string"}}
@@ -531,7 +536,8 @@ class WorkTools:
                 "straight on with the fix, without waiting for the user or the maintainers. "
                 "On a follow_up job, answer only the project's maintainers and the PR's reviewers (read_issue's maintainer and "
                 "reviewers): nobody else, even when they ask something, and no review bot, unless the merge needs it (a CLA "
-                "bot's sign line, a bot command or a resolved conversation the rules require). "
+                "bot's sign line, a bot command or a resolved conversation the rules require). One comment of ours below a thread per round: refused while one is there or "
+                "waits in the Inbox with nobody else writing since, a new version's comment too, so say it all in one. "
                 "body is the comment as it would be posted. reply_to: on a PR, the id of a comment in one of its conversations "
                 "on lines of code (read_issue's conversations), to answer in that conversation instead of below the PR: only "
                 "one a person wrote in, not only bots (or with resolve). "
@@ -886,7 +892,10 @@ class WorkTools:
                 "for changes, its checks failed, or a bot found a real bug in the change). Then base is the PR's newest commit (the sha the follow-up message gave), "
                 "and your work is on top of it; approving pushes your commits onto the PR's branch instead of opening a new PR. "
                 "title is then the commit message's subject (one more commit has it when you didn't commit everything), and "
-                "body the comment posted on the PR with the push: what changed, in a line or two. The project's rules "
+                "body the comment posted on the PR with the push: what changed, in a line or two, and your answers to what the "
+                "maintainers and reviewers wrote this round (it is the round's one comment: refused when one of ours is there already, with "
+                "nobody else writing since). Leave body empty when no maintainer or reviewer asked for this version (a bot's real bug, a "
+                "failing check): the push then goes without a comment. The project's rules "
                 "(contributing_guide) and the tests apply as for any PR; the PR template and pr_examples don't. problem is then "
                 "what the reviewer asked for or what failed. One new version of a PR waits at a time: refused while another "
                 "job's version of it waits (in review, in the Inbox, or approved and not sent), which it names. A comment or a "
@@ -1931,6 +1940,27 @@ class WorkTools:
             title = f"Reply in a conversation on {target}"
             if resolve is not None:
                 title = f"Reply and resolve a conversation on {target}"
+        # One comment of ours below a thread per round: once one is there or waits in the Inbox, with nothing anyone else
+        # wrote after it, no other (grimmory#3112: an answer, then the push's comment saying the same). A new version's
+        # comment counts.
+        since = self.threads_other_at.get(target.lower())
+        ours = []
+        if job["kind"] == "follow_up" and reply_to is None:
+            ours = self.agents.inbox.list()
+        for each in ours:
+            if each["status"] not in ["pending", "approved"]:
+                continue
+            if since is not None and datetime.fromisoformat(each["created_at"]) <= datetime.fromisoformat(since):
+                continue
+            said = each["kind"] == "comment" and each.get("reply_to") is None and (each["target"] or "").lower() == target.lower()
+            pushed = each["kind"] == "pr" and (each["update_of"] or "").lower() == target.lower() and each["body"].strip() != ""
+            if said or pushed:
+                text = (
+                    f"{each['id']} ({each['status']}) already speaks for this round on {target}: nobody else wrote there since. "
+                    "One comment per round, with all of it. When that one is a new version still waiting, draft the version "
+                    "again with everything in its comment; otherwise nothing more until someone writes there again."
+                )
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
         draft = self.agents.inbox.create(
             "comment", self.agent_id, title, args["body"], job=job["id"], repo=name, target=target, evidence=job["evidence"], overview=overview,
             wait_for_assignment=(args.get("wait_for_assignment") is True) if job["kind"] == "fix_issue" else None,
@@ -2394,6 +2424,13 @@ class WorkTools:
             taken = ""
         self.threads_read[thread.lower()] = time.time()
         self.threads_taken[thread.lower()] = taken
+        # When someone other than the user last wrote there (a bot too: a CLA bot's request needs its answer).
+        times = [comment["at"] for comment in result["comments"] if comment["author"].lower() != login.lower()]
+        if "pr" in result:
+            times += [review["at"] for review in result["pr"]["reviews"] if review["author"].lower() != login.lower()]
+            for conversation in result["pr"]["conversations"]:
+                times += [comment["at"] for comment in conversation["comments"] if comment["author"].lower() != login.lower()]
+        self.threads_other_at[thread.lower()] = max(times) if times else None
         if taken:
             result["someone_else_is_on_it"] = (
                 f"{taken}: someone else is on it. Don't claim it, comment that you'd like it or start a second fix: on a "
@@ -3302,6 +3339,25 @@ class WorkTools:
             replaces = job["thread"]
         if replaces is not None and pr is not None:
             return {"content": [{"type": "text", "text": "replaces is for a new PR in place of an old one: leave pr and rebase out."}], "is_error": True}
+        # A new version's body is posted below the PR: one comment of ours per round there (draft_comment). When ours
+        # already speaks for it, with nothing anyone else wrote after it, the push goes without one. An older version
+        # still waiting doesn't count: this one replaces it.
+        since = None
+        ours = []
+        if pr is not None and args["body"].strip():
+            since = self.threads_other_at.get(pr.lower())
+            ours = self.agents.inbox.list()
+        for each in ours:
+            if since is not None and datetime.fromisoformat(each["created_at"]) <= datetime.fromisoformat(since):
+                continue
+            said = each["kind"] == "comment" and each["status"] in ["pending", "approved"] and each.get("reply_to") is None and (each["target"] or "").lower() == pr.lower()
+            pushed = each["kind"] == "pr" and each["status"] == "approved" and (each["update_of"] or "").lower() == pr.lower() and each["body"].strip() != ""
+            if said or pushed:
+                text = (
+                    f"{each['id']} ({each['status']}) already speaks for this round on {pr}: nobody else wrote there since. "
+                    "One comment per round: leave body empty, so the push goes without a comment."
+                )
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
         # One new version of a PR waits at a time: approving two would push one and force-push the other onto the same
         # branch, and the work is done twice (openmed#5511: one agent's follow-up on its issue drafted a commit on top of
         # it while another agent's follow-up on the PR rebased that same commit, and both reached review together). Another

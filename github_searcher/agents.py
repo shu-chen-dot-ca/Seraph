@@ -98,7 +98,8 @@ that PR waits hears it, whoever's it is, so only one agent works on a PR at a ti
 back for it. It reads the thread and suggests a reply (draft_comment), a new version of the user's own PR made
 on that PR's branch (draft_pr with pr: Approve pushes it there and posts its text on the PR as a comment), or
 nothing (it marks the job done). It never posts anything itself. It answers only the project's maintainers and the
-PR's reviewers (anyone else, a bot too, only when the merge needs it; agent/work_tools.py).
+PR's reviewers (anyone else, a bot too, only when the merge needs it), in one comment of ours per round
+(agent/work_tools.py).
 
 A repository's agent (the Workspace tab's Live, frontend/src/RepoLive.tsx) belongs to one of the user's own
 repositories for good: its record's "repo" is that repo, and "live" how far its set-up is:
@@ -1838,7 +1839,8 @@ class Agents:
             "every review bot (CodeRabbit, Copilot) get no reply, no thanks and no 'fixed', unless the merge needs one (a CLA bot's sign line, a claim, a bot command or a resolved conversation the project's rules "
             "require). Their code points only when one is a real bug in what the PR changes that a maintainer would send back, "
             "and then silently in the next version, never style, nitpicks, tests they want or corner cases beyond the issue: "
-            "a bot reviews every push again and always finds a next one.\n"
+            "a bot reviews every push again and always finds a next one. One comment of ours per round (until someone else "
+            "writes): the new version's comment when you push one, else one draft_comment; never both, never one per point.\n"
             "First read the whole thread with read_issue: every comment and review, the mentions, the related PRs and the checks. Then reproduce what it reports or asks about, in the VM, before "
             "you change code or answer: the bug a reviewer saw, the failing check, the conflict with main, whether something "
             "works. Never act on reading alone; add what you saw as evidence. When it doesn't happen, change nothing and say "
@@ -1871,7 +1873,8 @@ class Agents:
                 "when: before run on the main branch: the PR's first version already had one. Then draft_pr with pr "
                 f"{thread} and "
                 f"base {head['sha']}: its title is the commit message's subject, its body the comment posted on the PR with "
-                "the push (what changed, in a line or two)."
+                "the push (what changed, in a line or two, and your answers to the maintainers and reviewers this round); "
+                "leave the body empty when none of them asked for it."
                 "\n- A rebase of the PR, when a maintainer asks for one, it conflicts with main, or a reviewer asks to squash, "
                 f"reword or sign off its commits. Fetch its branch the same way, then on pr-{number} `git fetch origin && git "
                 "rebase origin/<the branch it goes into>` (or rewrite the commits as asked), settle each conflict keeping what "
