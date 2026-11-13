@@ -64,7 +64,9 @@ repo's numbers or the user's first merged PR there shows at the next read. reaso
 status, then "Merge: <label>, <why>." An issue with an assignee on GitHub is claimed without asking Claude; its checks
 and kind stay None. So is one with someone else's open pull request that says it closes it (GitHub's closing reference),
 updated in the last TAKEN_PR_DAYS days: its maintainers don't want a second fix. An older one may be abandoned: Claude
-weighs that.
+weighs that. open_prs (in memory, not in the file) is what each issue's last read found of other people's open pull
+requests tied to it, updated in that time, the ones that only mention it too ("owner/name#n by login"): an agent with a
+job on the issue hears of each one at once (backend/issues_api.py, Agents.issue_taken), whatever the status says.
 
 Issues go in batches, not one Claude run each: up to BATCH issues of one repo take one GitHub call, and as many
 of them as fit in CHARS_PER_RUN take one Claude run, the repo said once; AT_ONCE batches run at the same time.
@@ -286,6 +288,9 @@ class IssueTags:
         self.tags = {}
         if self.path.exists():
             self.tags = json.loads(self.path.read_text())
+        # What the last read of each issue found of other people's open pull requests tied to it (see the top of this
+        # file), "owner/name#n by login": backend/issues_api.py tells an agent with a job on it of each one. In memory only.
+        self.open_prs = {}
 
     def save(self) -> None:
         """Write the tags to disk. Called with the lock held, after every change."""
@@ -379,6 +384,28 @@ class IssueTags:
                     continue
                 if login is None or pull_author.lower() != login.lower():
                     reason = f"Open pull request #{pull['number']} by {pull_author} says it closes it."
+            # Every open pull request of someone else's tied to it, not abandoned: the ones that say they close it, and the
+            # ones that only mention it, were linked to it by hand or have a commit that mentions it. An agent with a job on
+            # it hears of each at once, also while the issue stays free (DeskcommCRM#4511 only said "Refs #4495", and our
+            # agent ran five more hours of checks on a fix nobody wanted).
+            tied = list(issue["closedByPullRequestsReferences"]["nodes"])
+            for event in issue["timelineItems"]["nodes"]:
+                if event["__typename"] == "ReferencedEvent" and event["commit"] is not None:
+                    tied += event["commit"]["associatedPullRequests"]["nodes"]
+                    continue
+                pull = event.get("source") or event.get("subject")
+                if pull is not None and pull.get("__typename") == "PullRequest":
+                    tied.append(pull)
+            prs = []
+            for pull in tied:
+                pull_author = pull["author"]["login"] if pull["author"] else "ghost"
+                where = f"{pull['repository']['nameWithOwner']}#{pull['number']} by {pull_author}"
+                if where in prs or pull["state"] != "OPEN" or pull["updatedAt"] < recent:
+                    continue
+                if login is None or pull_author.lower() != login.lower():
+                    prs.append(where)
+            with self.lock:
+                self.open_prs[issue_id] = prs
             if reason:
                 found[issue_id] = {
                     "status": "assigned",
