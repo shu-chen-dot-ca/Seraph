@@ -299,6 +299,10 @@ GUIDE_TOTAL_CHARS = 120_000
 GUIDE_PART_CHARS = 40_000
 # A picture made with matplotlib says so in its file ("Software: Matplotlib version ..."): the agent drew it.
 MATPLOTLIB_MARK = b"matplotlib"
+# repos_list: the Repos list in all its fields was 226,000 characters for 302 repos, more than a tool result may be. So
+# one short line per repo, REPOS_PAGE a page, and the fields in full only for a search, the first REPOS_FULL it matches.
+REPOS_PAGE = 100
+REPOS_FULL = 15
 # paper_read shows at most this many pages at once, each as a JPEG this many pixels on its long side (still sharp
 # enough for formulas and small print in tables).
 PAPER_PAGES = 10
@@ -347,13 +351,16 @@ class WorkTools:
             tool(
                 "repos_list",
                 "See the Repos list the user sees, and the user's types of repo (the tags that classify repos, each with what it is). "
-                "Each repo with its stars, description, your note, its type, who added it (an agent id, "
-                "user, or explore), how many of its issues are in the Issues list, and its signals: AI policy "
+                f"Without search: one short line a repo (its type, AI policy and how many of its issues are in the Issues list), "
+                f"{REPOS_PAGE} a page (page: which one). search: a name or word, matched in each repo's name, description, note "
+                f"and type; the first {REPOS_FULL} matches come in full, the rest by name. In full, each repo has its stars, "
+                "description, your note, its type, who added it (an agent id, user, or explore), how many of its issues are in "
+                "the Issues list, and its signals: AI policy "
                 "(welcome, disclose, no_ai, unclear, none), outside contributors' merge rate and median days to a first reply "
                 "from a maintainer, stale outside PRs, how many people merged PRs in the last 30 days, how newcomers fare "
                 "(welcomes, ok, turned_away, left_waiting, few), PRs, issues and commits a month, and the review tone (warm, neutral, strict, curt) with what reviewers "
                 "often ask for.",
-                {},
+                {"type": "object", "properties": {"search": {"type": "string"}, "page": {"type": "integer"}}, "required": []},
             )(self.repos_list),
             tool(
                 "repos_add",
@@ -1097,6 +1104,8 @@ class WorkTools:
         Also for the GitHub tools, a repository's agent's tools (repo_tools.py) and TodoWrite; the VM tools have their own
         (ComputerTools.describe).
         """
+        if name == "repos_list" and args.get("search"):
+            return f"Searched the Repos list for `{args['search']}`"
         if name == "repos_list":
             return "Looked at the Repos list"
         if name == "repos_add":
@@ -1262,8 +1271,39 @@ class WorkTools:
         type_names = {}
         for lane in self.agents.explore.profile["lanes"]:
             type_names[lane["id"]] = lane["label"]
-        repos = []
+        types = [{"name": lane["label"], "what_it_is": lane["about"]} for lane in self.agents.explore.profile["lanes"]]
+        # Short by default, every field only for a search (REPOS_PAGE, REPOS_FULL): all of it no longer fits one answer.
+        # search is matched in a repo's name, description, note and type.
+        search = (args.get("search") or "").strip().lower()
+        page = max(int(args.get("page") or 1), 1)
+        matched = []
         for item in await asyncio.to_thread(self.agents.repos.items):
+            type_name = type_names.get(item.get("lane"), item.get("lane") or "")
+            words = " ".join([item["full_name"], item["description"] or "", item["note"] or "", type_name]).lower()
+            if search in words:
+                matched.append(item)
+
+        # Without a search: one short line a repo, a page at a time.
+        if not search:
+            pages = max((len(matched) + REPOS_PAGE - 1) // REPOS_PAGE, 1)
+            lines = []
+            for item in matched[(page - 1) * REPOS_PAGE:page * REPOS_PAGE]:
+                count = len([issue for issue in issues if issue["repo"] == item["full_name"]])
+                repo_signals = signals.get(item["full_name"])
+                policy = repo_signals["ai_policy"]["tag"] if repo_signals is not None else "not checked"
+                type_name = type_names.get(item.get("lane"), item.get("lane") or "no type")
+                lines.append(f"{item['full_name']}: {type_name}, AI policy {policy}, {count} issues in the list")
+            result = {
+                "types": types,
+                "page": f"{page} of {pages}",
+                "repos": lines,
+                "more": "page for the next ones; search (a name or a word) for a repo's every field and signal",
+            }
+            return {"content": [{"type": "text", "text": json.dumps(result)}]}
+
+        # A search: the first REPOS_FULL it matches with every field, the rest by name.
+        repos = []
+        for item in matched[:REPOS_FULL]:
             count = len([issue for issue in issues if issue["repo"] == item["full_name"]])
             repo_signals = signals.get(item["full_name"])
             summary = {
@@ -1293,8 +1333,10 @@ class WorkTools:
                     summary["review_tone"] = repo_signals["atmosphere"]["tone"]
                     summary["reviewers_ask_for"] = repo_signals["atmosphere"]["asks_for"]
             repos.append(summary)
-        types = [{"name": lane["label"], "what_it_is": lane["about"]} for lane in self.agents.explore.profile["lanes"]]
-        return {"content": [{"type": "text", "text": json.dumps({"types": types, "repos": repos})}]}
+        result = {"types": types, "found": len(matched), "repos": repos}
+        if len(matched) > REPOS_FULL:
+            result["more_by_name"] = [item["full_name"] for item in matched[REPOS_FULL:]]
+        return {"content": [{"type": "text", "text": json.dumps(result)}]}
 
     async def repos_add(self, args: dict) -> dict:
         # The type, by its name, as the tag the repos get.
