@@ -24,7 +24,10 @@ PRS_CHECK_SECONDS (pr_tracking.update_actions): by rules, and by Claude (judge_p
 at a time, when it changed on GitHub or a job on it ended since it last did, never while a job on it is open. One that
 needs action, as Claude last read it, with no job open on it, goes to its agent as a follow_up job saying what it needs:
 ACTION_TRIES times at most on the same newest commit, each after a new judgment (once when part of
-it only you can do; never for a draft you approved and only have to send). Agents work in the Issues board's order:
+it only you can do; never for a draft you approved and only have to send), and again only once something really changed
+on it since its last job was given it (a commit, checks, a conflict, the draft state, labels, someone else's comment or
+review, a comment on an issue it fixes): a job that ended finding nothing we can do isn't given the same need again for
+nothing. Agents work in the Issues board's order:
 the ones with a job queued or working on a PR that needs action get priority (agents.set_pr_priority): ahead in the
 VM's line, more CPU, stepped down last; then the ones reviewing a PR draft before the Inbox, the board's Review
 (agents.set_review_priority): next in the line, stepped down after the rest; then the rest (In progress and Catalog).
@@ -76,6 +79,7 @@ JUDGE_BODY_CHARS = 3000
 JUDGE_COMMENT_CHARS = 1500
 JUDGE_LINE_CHARS = 600
 # How many times the same need (the same reasons on the same newest commit) goes to its agent; once when only you can do it.
+# A try after the first only once something changed on the PR since the last one (keep_prs).
 ACTION_TRIES = 3
 JUDGE_REASONS = ["Changes requested", "Reply needed", "Checks failing", "Merge conflicts", "Rebase needed", "CLA not signed",
                  "Draft", "Description out of date", "Other"]
@@ -626,7 +630,8 @@ async def judge_prs(due: list[dict], jobs: list[dict], failed_at: dict) -> None:
             "done yet.\n"
             "- Failed checks need action only when our change causes them or we must fix them (lint, tests of our code, "
             "a DCO sign-off, a check of the PR's text). A failure of infrastructure, a flaky test, a check of other code, "
-            "or a gate that waits for a maintainer's label or approval: no action.\n"
+            "or a gate that waits for a maintainer's label or approval: no action. Failures we already explained on the "
+            "PR as not our change's (a reply of ours after them), with no newer commit or check run since: no action.\n"
             "- Merge conflicts only when the line above says YES. A branch that is only behind its base is no conflict and "
             "needs no rebase, unless a maintainer or the project's rules ask for one.\n"
             "- A CLA that isn't signed: action, who you.\n"
@@ -785,8 +790,10 @@ async def keep_prs() -> None:
                     judging = asyncio.create_task(judge_prs(due, all_jobs, failed_at))
 
             # One that needs action with no job open on it goes to its agent, ACTION_TRIES times at most on the same newest
-            # commit (once when only you can do it), each time after a new judgment. Only once
+            # commit (once when only you can do it), each time after a new judgment, and again only once something changed
+            # on it since the last time. Only once
             # Claude read it as it is now: what happened since needs_reply gives already, and may need nothing.
+            followed_issues = pr_tracking.summary()["issues"]
             for pr in prs:
                 action = pr.get("action")
                 if action is None or not action["needs"] or pr["agent"] is None or pr["agent"] not in agents.agents:
@@ -811,20 +818,37 @@ async def keep_prs() -> None:
                 limit = 1 if action["who"] == "you" else ACTION_TRIES
                 if setting.get("action_key") == key or tries >= limit:
                     continue
+                # Nothing changed on it since its last job was given this, apart from what we did ourselves (a reply): that
+                # job ended, having settled it or found nothing we can do (lancedb#4922: failures it had explained on the
+                # PR as not ours, given again on the same commit; opencodex#8556: a draft only the project's gate or a
+                # maintainer could lift, given three times). It goes again only once something really changed: a new
+                # commit, its checks, a conflict (GitHub's word), the draft state, its labels, someone else's comment or
+                # review (a bot's too, a gate's), or a new comment on an issue it fixes.
+                linked = [f"{pr['repo']}#{issue['number']}".lower() for issue in pr["issues"]]
+                issues_at = ""
+                for issue in followed_issues:
+                    if issue["id"].lower() in linked and issue["last_activity"] is not None:
+                        issues_at = max(issues_at, issue["last_activity"]["at"])
+                state = [
+                    head, pr["checks"], sorted(set(pr.get("failed_checks", []))), pr["mergeable"] == "conflicts", pr["draft"],
+                    sorted(pr["labels"]), (pr["last_activity"] or {}).get("at"), (pr["bot_activity"] or {}).get("at"), issues_at,
+                ]
+                if setting.get("action_state") == state:
+                    continue
                 reason = "it needs action from us: " + ", ".join(action["reasons"])
                 if action["detail"]:
                     reason += f" ({action['detail']})"
                 if action["who"] == "you":
                     reason += ". Part of it only the user can do: tell them exactly what and how with draft_question, and do the rest yourself"
                 if tries > 0:
-                    reason += f". Your last job on it ended without settling this; this is try {tries + 1} of {limit}"
+                    reason += f". Your last job on it ended without settling this, and something changed on it since; this is try {tries + 1} of {limit}"
                 entry = {
                     "id": pr["id"], "kind": "pr", "relation": "author", "state": "open", "title": pr["title"], "url": pr["url"],
                     "agent": pr["agent"], "reason": reason, "at": None, "failed_sha": None, "head": pr["head"],
                     "base": pr["base"], "signals": None,
                 }
                 if agents.follow_up(entry) is not None:
-                    pr_tracking.mark_action_given(pr["id"], base, key)
+                    pr_tracking.mark_action_given(pr["id"], base, key, state)
 
             # The agents working on a PR that needs action go first in the VM's line.
             first = set()

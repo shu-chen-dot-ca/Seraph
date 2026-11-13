@@ -74,8 +74,8 @@ a maintainer holds), and never Merge conflicts unless GitHub says so. "judgments
 (judgment_key) is what it was made on, so it is made again once that changes. who:
 you when part of it only you can do. status is how it waits otherwise, as GitHub says it: Ready to merge (approved,
 checks passed, no conflicts), Awaiting CI (checks running or waiting for a maintainer's OK), else Awaiting approval.
-agent_settings also keeps "action_base", "action_key" and "action_tries" (mark_action_given): what its agent was last
-given of that, and how many times on the same newest commit.
+agent_settings also keeps "action_base", "action_key", "action_state" and "action_tries" (mark_action_given): what its
+agent was last given of that, the PR as others had left it then, and how many times on the same newest commit.
 
 needs_reply() lists the open threads in drafts mode with an agent where someone else wrote after you and after
 answered_at, or (your PR) the checks failed on a newest commit no agent was given yet, or anything else changed on
@@ -369,9 +369,10 @@ class PRTracking:
             self.data["judgments"][pr_id] = {**judgment, "version": JUDGMENT_VERSION}
             self.save()
 
-    def mark_action_given(self, pr_id: str, base: str, key: str) -> None:
+    def mark_action_given(self, pr_id: str, base: str, key: str, state: list | None = None) -> None:
         """Its agent was given what the PR needs (backend/github_api.py): base is the newest commit, key the reasons, that
-        commit and the judgment; tries counts the gives on the same base."""
+        commit and the judgment, state the PR as others left it then (its commit, checks, conflict, draft, labels, the
+        newest comment or review by someone else); tries counts the gives on the same base."""
         with self.lock:
             empty = {"mode": None, "agent": None, "answered_at": None, "failed_sha": None, "told": None}
             setting = self.data["agent_settings"].setdefault(pr_id, empty)
@@ -379,6 +380,7 @@ class PRTracking:
                 setting["action_tries"] = 0
             setting["action_base"] = base
             setting["action_key"] = key
+            setting["action_state"] = state
             setting["action_tries"] = setting.get("action_tries", 0) + 1
             self.save()
 
