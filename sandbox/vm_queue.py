@@ -16,10 +16,12 @@ A VM with no room (its CPUs, memory or disk used up: full, set by Agents.watch_r
 up, or one nobody holds, doesn't go to the waiting line until there is room again. Overloaded, the app takes a desktop back from its agent (step_down): the agent goes to the front of
 the waiting line, asking for that desktop, and Agents removes the desktop; nothing the agent runs there is stopped.
 
-Who is next on a desktop (next_holder): the first in the waiting line that asked for this desktop or for none. An
-agent with priority (prioritized: the user gave it, or it works on a pull request of yours that needs action, set by
-Agents) joins the waiting line ahead of everyone without it, and moves there when it gets priority while it waits
-(move_to_front for the user's, move_up, behind the others with priority, for a pull request's).
+Who is next on a desktop (next_holder): the first in the waiting line that asked for this desktop or for none. The
+line goes in the Issues board's order: an agent with priority (prioritized: the user gave it, or it works on a pull
+request of yours that needs action, set by Agents) joins the waiting line ahead of everyone without it, then an agent
+reviewing a PR draft (reviewing: the board's Review, set by Agents), then the rest (In progress and Catalog). One that
+gets priority or a review while it waits moves up to that place (move_to_front for the user's priority, move_up for
+the others).
 
 The user can take a desktop over (the agent holding it goes back to the front of the line, asking for that desktop),
 give a desktop to a waiting agent, move an agent to the front, or remove an agent from the line or from holding. An agent that loses its place because of the user is told through on_kick (Agents interrupts it; its
@@ -51,6 +53,9 @@ class VMQueue:
         # The agents the user gave priority, set by Agents (which saves it with each agent): they join a waiting line
         # ahead of everyone without it.
         self.prioritized: set[str] = set()
+        # The agents reviewing a PR draft, set by Agents: they join a waiting line behind everyone with priority, ahead of
+        # the rest. Not saved.
+        self.reviewing: set[str] = set()
         # The VMs with no room right now, set by Agents (watch_room), each with why ("a load of 17 on 16 CPUs, 9 GB of
         # its disk free"): nobody new gets a desktop there. {VM name: why}.
         self.full: dict[str, str] = {}
@@ -108,11 +113,15 @@ class VMQueue:
                 record.save()
                 place = 0
             else:
-                # With priority: behind the others with priority, ahead of the rest.
+                # With priority: behind the others with priority. Reviewing: behind everyone with priority and the
+                # other reviews. Both ahead of the rest.
                 place = len(record.queue)
-                if agent_id in self.prioritized:
+                if agent_id in self.prioritized or agent_id in self.reviewing:
                     place = 0
                     while place < len(record.queue) and record.queue[place] in self.prioritized:
+                        place += 1
+                if agent_id in self.reviewing and agent_id not in self.prioritized:
+                    while place < len(record.queue) and record.queue[place] in self.reviewing:
                         place += 1
                 record.queue.insert(place, agent_id)
                 if desktop is not None:
@@ -141,14 +150,22 @@ class VMQueue:
 
     def step_down(self, vm_name: str, agent_id: str) -> int:
         """The VM is overloaded (Agents.watch_room): the agent gives its desktop back and goes to the front of the waiting
-        line, asking for that desktop again. Returns the desktop's number, for Agents to remove it. No on_kick: Agents tells the agent, and nothing it runs is stopped."""
+        line, asking for that desktop again, but behind the work that goes first: everyone with priority, then the
+        reviews, when it is neither. Returns the desktop's number, for Agents to remove it. No on_kick: Agents tells the agent, and nothing it runs is stopped."""
         with self.lock:
             record = self.vms.get(vm_name)
             number = record.holding(agent_id)
             if number is None:
                 raise ValueError(f"{agent_id} doesn't hold a desktop of {vm_name}")
             record.desktops[number]["holder"] = None
-            record.queue.insert(0, agent_id)
+            place = 0
+            if agent_id not in self.prioritized:
+                while place < len(record.queue) and record.queue[place] in self.prioritized:
+                    place += 1
+            if agent_id not in self.prioritized and agent_id not in self.reviewing:
+                while place < len(record.queue) and record.queue[place] in self.reviewing:
+                    place += 1
+            record.queue.insert(place, agent_id)
             record.wants[agent_id] = number
             record.stepped_down_at = datetime.now(UTC).isoformat()
             record.save()
@@ -235,8 +252,8 @@ class VMQueue:
             self.on_change()
 
     def move_up(self, vm_name: str, agent_id: str) -> None:
-        """An agent that got priority while it waits: ahead of everyone without it, behind the others with it, the place
-        join gives it."""
+        """An agent that got priority or a review while it waits: the place join gives it (behind the others with
+        priority, then the reviews, ahead of the rest)."""
         with self.lock:
             record = self.vms.get(vm_name)
             if agent_id not in record.queue:
@@ -245,6 +262,9 @@ class VMQueue:
             place = 0
             while place < len(record.queue) and record.queue[place] in self.prioritized:
                 place += 1
+            if agent_id not in self.prioritized:
+                while place < len(record.queue) and record.queue[place] in self.reviewing:
+                    place += 1
             record.queue.insert(place, agent_id)
             record.save()
         if self.on_change is not None:

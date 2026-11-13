@@ -55,8 +55,10 @@ of getting a free desktop or adding one, and are told why. When its disk runs lo
 told once to free what they can in their own homes (the folders of jobs that are over, caches); nobody else can.
 Overloaded (the load of the last 5 minutes at OVERLOAD_TIMES its CPUs, or less than OVERLOAD_MEMORY_PERCENT free), it
 also takes one desktop back from its agent, at most every STEP_DOWN_SECONDS, and removes that desktop
-(VMQueue.step_down): the agent goes to the front of the line asking for it, and nothing it runs is stopped (its runs,
-servers and files stay). Never an agent the user gave priority; one out of its turn first, then the highest desktop.
+(VMQueue.step_down): the agent goes to the front of the line asking for it (behind the work that goes first, below),
+and nothing it runs is stopped (its runs, servers and files stay). Never an agent the user gave priority; one on a pull
+request that needs action only when nobody else is left, one reviewing a PR draft only when nobody else but those is;
+one out of its turn first, then the highest desktop.
 With room again, whoever waits gets a free desktop, or the desktop they wait for is added back (one that was taken
 back, or a new one for an agent that asked for none), one a check, up to the VM's max desktops.
 The VM queue (sandbox/vm_queue.py: one line per desktop of each VM, and agents on different desktops work at
@@ -141,6 +143,11 @@ open job, no run going and no turn (watch_runs then takes it back by itself). It
 everyone without priority (VMQueue.prioritized), and in the VM its runs and the desktops it holds or runs on get ten
 times the CPU share and its runs are ended last when memory runs out (long_runs.prioritize, set again by watch_runs
 whenever that changes).
+
+Agents work on the Issues board in its order: Needs action, then Review, then In progress and Catalog. The agents on a
+pull request of the user's that needs action get priority like the user's (set_pr_priority); the agents reviewing a PR
+draft (a review job queued or working, set_review_priority) come next in a VM's waiting line (VMQueue.reviewing), and
+the rest after them. Both are worked out again by backend/github_api.py every few seconds.
 
 Everything here runs in the backend's event loop. notify() and the queue callbacks may be called
 from request threads, so they hand their work to the loop. version goes up on every change the
@@ -795,6 +802,32 @@ class Agents:
                 self.queue.prioritized.discard(agent_id)
             self.version += 1
 
+    def set_review_priority(self, agent_ids: set[str]) -> None:
+        """The agents with a review job queued or working, a PR draft's check before the Inbox (the Issues board's Review;
+        backend/github_api.py, every few seconds): they go next in a VM's line, behind everyone with priority (the user's,
+        a pull request that needs action) and ahead of the rest (In progress and Catalog), and an overloaded VM takes their
+        desktop back only after the rest's (watch_room), until their review jobs are over."""
+        for agent_id in agent_ids:
+            if agent_id not in self.agents or agent_id in self.queue.reviewing:
+                continue
+            self.queue.reviewing.add(agent_id)
+            if agent_id in self.queue.prioritized:
+                continue
+            # Waiting for a VM: ahead of everyone without priority now.
+            vm_name, place = self.queue.place(agent_id)
+            if place is not None and place > 0:
+                try:
+                    self.queue.move_up(vm_name, agent_id)
+                except (ValueError, VMsError):
+                    # It left the line meanwhile.
+                    pass
+            self.version += 1
+        for agent_id in list(self.queue.reviewing):
+            if agent_id in agent_ids:
+                continue
+            self.queue.reviewing.discard(agent_id)
+            self.version += 1
+
     async def delete(self, agent_id: str) -> None:
         """Stop the agent and delete it. Its open jobs become cancelled; its drafts stay in the Inbox.
         Not an agent that made PRs: it keeps its conversation for updates on them (archive it instead)."""
@@ -813,6 +846,7 @@ class Agents:
         del self.nudges[agent_id]
         self.queue.leave_all(agent_id)
         self.queue.prioritized.discard(agent_id)
+        self.queue.reviewing.discard(agent_id)
         self.pr_priority.discard(agent_id)
         self.jobs.delete_for_agent(agent_id)
         self.version += 1
@@ -2136,15 +2170,22 @@ class Agents:
                 if len(vm_record.desktops) < 2:
                     continue
                 # Overloaded: a desktop is taken back. Never from an agent the user gave priority; from one on a pull
-                # request that needs action only when nobody else is left. From one out of its turn first (nothing is
-                # cut off), then from the highest desktop.
+                # request that needs action only when nobody else is left, from one reviewing a PR draft only when
+                # nobody but those is. From one out of its turn first (nothing is cut off), then from the highest desktop.
                 chosen = None
+                for line in vm_record.desktops.values():
+                    agent = self.agents.get(line["holder"])
+                    if agent is None or agent.id in self.queue.prioritized or agent.id in self.queue.reviewing:
+                        continue
+                    if chosen is None or chosen.busy or not agent.busy:
+                        chosen = agent
+                reviewer = None
                 for line in vm_record.desktops.values():
                     agent = self.agents.get(line["holder"])
                     if agent is None or agent.id in self.queue.prioritized:
                         continue
-                    if chosen is None or chosen.busy or not agent.busy:
-                        chosen = agent
+                    if reviewer is None or reviewer.busy or not agent.busy:
+                        reviewer = agent
                 fallback = None
                 for line in vm_record.desktops.values():
                     agent = self.agents.get(line["holder"])
@@ -2152,6 +2193,8 @@ class Agents:
                         continue
                     if fallback is None or fallback.busy or not agent.busy:
                         fallback = agent
+                if chosen is None:
+                    chosen = reviewer
                 if chosen is None:
                     chosen = fallback
                 if chosen is None:
@@ -2163,8 +2206,8 @@ class Agents:
                 text = (
                     f"{vm_record.name} ran out of room (a load of {load_5:g} on {cpus} CPUs, {free:.0f}% of its memory free), so "
                     f"the app took desktop {number} back for now. Nothing you started there was stopped: your runs, servers and "
-                    "files are all still there. You are first in its queue and get the desktop back, with a message, once there "
-                    "is room. End your turn now."
+                    "files are all still there. You are at the front of its queue (behind the work that goes first) and get the "
+                    "desktop back, with a message, once there is room. End your turn now."
                 )
                 chosen.history.append({"type": "system", "text": text, "time": datetime.now(UTC).isoformat()})
                 # It hears it with its next message (the one giving the desktop back), or now if it is in a turn: the turn
