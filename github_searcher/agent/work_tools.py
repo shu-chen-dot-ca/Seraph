@@ -3422,6 +3422,10 @@ class WorkTools:
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         if other is not None:
             repo = other
+        # A task's job has no repo of its own, and a draft without one can never be sent (tabularis's column usage PR).
+        if repo is None:
+            text = f"{job['id']} has no repo of its own: give repo, the owner/name the PR goes to."
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
         # No new PR on a repo that doesn't take AI-made contributions.
         no_ai = [name.lower() for name, each in self.agents.repo_signals.all().items() if (each.get("ai_policy") or {}).get("tag") == "no_ai"]
         if pr is None and job["kind"] == "fix_issue" and repo is not None and repo.lower() in no_ai:
