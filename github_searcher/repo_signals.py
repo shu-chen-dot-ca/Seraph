@@ -86,19 +86,23 @@ what reviewers often ask for, from the fixed list ASKS (so repos compare and ran
 again at most every ATMOSPHERE_DAYS days, or sooner when asks_for is from before ASKS. None until first judged.
 
 ai_policy comes from the files where projects say it (POLICY_FILES), the organization's AI_POLICY.md (in its .github
-repo, for all its repos) and the policy pages the lines about AI link to (POLICY_LINKS). Code finds the lines that
-mention AI (the files made for AI tools are read whole), and Claude reads them and names the stance, the strictest rule
-deciding:
-    welcome   AI-assisted contributions are fine
-    disclose  allowed, under conditions an AI agent can meet (say so, the user reviews it, ...)
+repo, for all its repos) and the policy or guide pages the lines about AI link to (POLICY_LINKS). Code finds the lines
+that mention AI (the files made for AI tools are read whole), and Claude reads them, with the atmosphere's summary of
+how reviews of outside PRs go, and names the stance, the strictest rule deciding:
+    welcome   AI-assisted contributions are fine, also when they say there is no need to say AI helped (bulwarkmail's
+              guide: "You don't need to say that you did"; it was disclose before, and our PRs carried an AI line)
+    disclose  allowed, under conditions an AI agent can meet (say so, the user reviews it, ...). A PR template's field
+              or checkbox for the AI tools used is one; a line there addressed to AI agents that asks for something
+              else isn't (kestra's "AI Authors" section only checks that the template was read)
     no_ai     not for us: AI-generated contributions are banned, or AI may only help a human author (it mustn't write
               most of the code or decide the PR's shape, PR descriptions, issues and comments must be written by a
               human, or agents mustn't open PRs, issues or comments on their own). Our agents write the code and the
               text, so we don't work there at all (backend/issues_api.py)
-    unclear   AI is mentioned, but what's allowed isn't said
+    unclear   AI is mentioned, but what's allowed isn't said; or its files welcome AI but its maintainers close outside
+              PRs that look AI-made (hydro: AGENTS.md, yet #3295 was closed as "an autonomously generated PR")
     none      nothing about AI in those files (no Claude call)
-basis is those lines, hashed: Claude is only asked again when they change, or when the policy is from before
-POLICY_VERSION (backend/repos_api.py keep_signals reads every one but no_ai again once). A failed ask is
+basis is those lines and that summary, hashed: Claude is only asked again when they change, or when the policy is from
+before POLICY_VERSION (backend/repos_api.py keep_signals reads every one but no_ai again once). A failed ask is
 "unclear" with an empty basis, so the next fetch asks again.
 
 newcomer_verdict: Claude decides whether the repo is open to newcomers ("welcome") or not ("closed"), from its stars
@@ -192,8 +196,9 @@ POLICY_FILES = [
 WHOLE_POLICY_FILES = ["aiPolicy", "agentsFile", "agentPolicy"]
 POLICY_FILE_CHARS = 8000
 # The policy pages the lines about AI link to (an https address on a line that says policy: clippy adopts "the same
-# [LLM usage policy] as rust-lang/rust", which is on the web): at most POLICY_LINKS, each with at most PAGE_LINES of its
-# lines about AI.
+# [LLM usage policy] as rust-lang/rust", which is on the web; or one that points to a guide or rules: bulwarkmail's "The
+# guide's [AI-assisted contributions] section explains what we expect", where the page says "You don't need to say that
+# you did"): at most POLICY_LINKS, each with at most PAGE_LINES of its lines about AI.
 POLICY_LINKS = 3
 PAGE_LINES = 20
 CONTRIBUTING_FILES = ["contributing", "contributingRst", "githubContributing", "docsContributing"]
@@ -201,8 +206,10 @@ PR_TEMPLATE_FILES = ["prTemplate", "prTemplateLower"]
 POLICY_TAGS = ["welcome", "disclose", "no_ai", "unclear"]
 # Goes up when what the tags mean or what they are read from changes: a policy from before is asked again (2: AI only
 # as a human's helper is no_ai. 3: AGENT_POLICY.md, the organization's AI_POLICY.md and the policy pages the lines about
-# AI link to are read too; harper, nextcloud, rust-clippy).
-POLICY_VERSION = 3
+# AI link to are read too; harper, nextcloud, rust-clippy. 4: a guide the lines about AI point to is read too, allowing AI
+# with no need to say so is welcome, an AI section of the PR template that asks for no disclosure isn't disclose, and
+# maintainers closing PRs that look AI-made make it unclear; bulwarkmail, kestra, hydro).
+POLICY_VERSION = 4
 TONES = ["warm", "neutral", "strict", "curt"]
 # What reviewers ask contributors for, and what each means (for Claude; the frontend has labels for them).
 ASKS = {
@@ -701,7 +708,8 @@ class RepoSignals:
                     feedback_lines.append(f"  - {note}")
 
         # The lines about AI. An AI policy file is read whole (its start), AGENTS.md and AGENT_POLICY.md too: they exist
-        # for AI tools. The https addresses on lines about AI that say policy are the pages it links to.
+        # for AI tools. The https addresses on lines about AI that say policy, or point to a guide or rules, are the pages
+        # it links to.
         excerpts = []
         files = []
         links = []
@@ -712,7 +720,9 @@ class RepoSignals:
                 continue
             text = blob["text"]
             for line in text.splitlines():
-                if not AI_WORDS.search(line) or "polic" not in line.lower():
+                if not AI_WORDS.search(line):
+                    continue
+                if "polic" not in line.lower() and "guide" not in line.lower() and "rules" not in line.lower():
                     continue
                 for address in re.findall(r"https://[^\s<>\"'`)\]]+", line):
                     if address not in links:
@@ -854,8 +864,8 @@ class RepoSignals:
         """Add Claude's three judgments to what fetch() found: the AI policy and the review atmosphere at once, then the
         newcomer verdict, which reads the atmosphere too.
 
-        The policy and the atmosphere are only asked when they have to be (the policy text changed; the atmosphere is a
-        week old); the newcomer verdict every time, since it reads the numbers just read.
+        The policy and the atmosphere are only asked when they have to be (the policy text or the atmosphere's summary it
+        reads changed; the atmosphere is a week old); the newcomer verdict every time, since it reads the numbers just read.
         """
         signals = dict(signals)
         policy_text = signals.pop("_policy_text", "")
@@ -869,28 +879,44 @@ class RepoSignals:
 
         asks = []
         policy = signals["ai_policy"]
+        # How reviews of outside PRs go (the atmosphere read before: a new one is read below, at the same time) counts too:
+        # hydro's AGENTS.md welcomes AI agents, but its maintainers closed #3295, our kind of fix, as "an autonomously
+        # generated PR". It is part of the basis, so a new summary asks again.
+        reviews = ""
+        if signals["atmosphere"] is not None and signals["atmosphere"]["tone"] != "unknown":
+            reviews = signals["atmosphere"]["summary"]
+        if basis != "" and reviews != "":
+            basis = hashlib.sha256((policy_text + "\n" + reviews).encode()).hexdigest()[:16]
         if policy_text == "":
             policy = {"tag": "none", "quote": "", "file": "", "basis": "", "version": POLICY_VERSION}
         elif policy is None or policy["basis"] != basis or policy.get("version") != POLICY_VERSION:
             prompt = (
                 f"These are the passages about AI from the contribution files of the GitHub project {name}, its "
-                "organization's AI policy when it has one, and the policy pages they link to.\n"
+                "organization's AI policy when it has one, and the policy and guide pages they link to.\n"
                 "What is the project's stance on contributions made with AI tools (AI-generated or AI-assisted code, PRs, "
                 "issues or comments)? Its organization's policy and a policy it adopts by a link are its own too, and the "
                 "strictest rule among them decides.\n"
                 "- welcome: allowed with no special conditions, or encouraged. An AGENTS.md with instructions for AI coding "
-                "tools usually means this, unless other text limits it.\n"
+                "tools usually means this, unless other text limits it. So does text that allows AI and says contributors "
+                "don't need to say they used it, even when it asks them to understand, run and stand behind what they "
+                "submit, as with any code.\n"
                 "- disclose: allowed under conditions an AI coding agent that writes the code and the PR can meet, e.g. "
-                "contributors must say they used AI, or must review and understand every line themselves.\n"
+                "contributors must say they used AI (a line in the PR, a label, a field or checkbox in the PR template for "
+                "the AI tools used), or must review and understand every line themselves. A line in the PR template "
+                "addressed to AI agents that asks them for something other than saying they used AI (proof they read the "
+                "template) isn't such a condition.\n"
                 "- no_ai: AI-generated contributions are not accepted (banned, closed on sight, humans only), or AI may only "
                 "help a human author: AI must not write most of the code, be the main author or decide the PR's structure, "
                 "PR descriptions, issues or comments must be written by a human (or AI-created ones are banned), or AI agents "
                 "must not open pull requests, issues or comments on their own. Such rules exclude an AI coding agent even when "
                 "they also allow AI as a tool with disclosure.\n"
                 "- unclear: AI is mentioned, but these passages don't say what is allowed (e.g. they are about the project's "
-                "own AI features).\n"
+                "own AI features). Also when they would be welcome or disclose, but how reviews of outside pull requests go "
+                "(below, when known) says the maintainers close ones that look AI-made or auto-generated: no_ai still wins "
+                "when the passages say so.\n"
                 "quote: the one sentence that decides it, copied exactly, at most 200 characters; empty for unclear. "
                 "file: the file it is from.\n\n"
+                f"How reviews of outside pull requests go lately: {reviews or 'not known'}\n\n"
                 f"{policy_text}"
             )
             schema = {
