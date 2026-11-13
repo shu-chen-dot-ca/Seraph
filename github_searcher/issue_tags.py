@@ -28,7 +28,11 @@ issue is read again once.
 waiting: nobody is, but it isn't ready (it needs a decision, a design, more information; a feature request no
 maintainer has said yes to, by a comment or a label like help wanted, is waiting too; so is one that builds on a pull
 request still open, a follow-up from its review, one that builds on another issue still open (tabularis#1410 reuses
-what #1409's open pull request adds), and one whose triage note leaves questions for the maintainers). A label
+what #1409's open pull request adds), and one whose triage note leaves questions for the maintainers; so is one whose
+fix needs a release of a dependency or upstream project that isn't out yet (dioxus#6063), a maintainer's follow-up to
+their own work still in progress (openchoreo#5371: their open pull request reworks the same code), one that leaves the
+approach open for the maintainers to pick, and a fresh one a maintainer opened days ago as their own to-do with nothing
+inviting others (openinference#4288 went to the team hours after its lead opened it). A label
 that says it still waits for the maintainers' triage or approval (TRIAGE: "status: needs triage", "needs approval",
 "untriaged") makes it waiting whatever Claude says. fixed: a merged pull request
 or a commit on the default branch already does what it asks, and it only needs closing (GitHub leaves an issue open
@@ -81,8 +85,8 @@ their state (an issue's with the open pull requests that would close it). Withou
 looked like a claim with no pull request at all. Each pull request shows its title; the ones GitHub didn't tie to it that
 name its number in their text (search.py NAMED_LIMIT, GitHub's best matches) show the start of their description too
 (PULL_BODY_CHARS): most name the number for something else, and Claude counts one only when it is about this issue.
-Bodies are cut to BODY_CHARS, but the template's part about the author
-fixing it themselves (WILLING finds it) is always kept. updated_at is the issue's last change on GitHub when it
+Claude is told today's date, so it can tell a fresh issue from an old one. Bodies are cut to BODY_CHARS, but the
+template's part about the author fixing it themselves (WILLING finds it) is always kept. updated_at is the issue's last change on GitHub when it
 was tagged: when that changes, the backend tags it again, and a free one every hour anyway (backend/issues_api.py).
 The checks are kept once given: they and the kind stay from one read to the next while the issue hasn't changed on
 GitHub (Claude is told, and the old ones are kept even if it answers otherwise), so the background's reads don't flip
@@ -616,7 +620,8 @@ class IssueTags:
         for run in runs:
             prompt = (
                 f"Below are {len(run)} issues of the GitHub project {data['nameWithOwner']} ({data['stargazerCount']} stars, "
-                f"written in {language}): {data['description'] or 'no description'}\n\n"
+                f"written in {language}): {data['description'] or 'no description'}\n"
+                f"Today is {now[:10]}.\n\n"
                 "Tag each one for a capable programmer who is new to the project and is looking for an issue to fix. "
                 "Read each issue's comments to the end before deciding: they often change the answer.\n\n"
                 "status: who may take it. " + yours + "Weigh everything together: the labels ('good first issue', 'help wanted' and the like "
@@ -659,6 +664,13 @@ class IssueTags:
                 "where a maintainer, a collaborator or the project's triage bot left questions for the maintainers or said to "
                 "wait for their go-ahead before anyone implements it, until a maintainer answered. A feature request no "
                 "maintainer has said yes to is waiting, however clear it is and however long it has sat.\n"
+                "  So is one whose fix needs a release that isn't out yet, of a dependency or the upstream project it builds on "
+                "(the change is merged there, but the version this project uses doesn't have it): it waits for that release. So "
+                "is a maintainer's or core developer's follow-up to their own work still in progress (their open pull request or "
+                "branch reworks the same code), and one that leaves the approach open between options for the maintainers to "
+                "pick. And a fresh one a maintainer opened only days ago as their own planned work, with nothing inviting others "
+                "to take it (no label like help wanted, no call for contributors): a project's lead often opens issues as their "
+                "own to-do and takes them within days.\n"
                 "- fixed: it is open, but a merged pull request or a commit on the default branch already does what it asks, "
                 "and it only needs closing. GitHub leaves an issue open when the pull request said \"Addresses #n\" or "
                 "\"Part of #n\" instead of \"Fixes #n\", or when it didn't tie the pull request to the issue at all, so read "
