@@ -103,11 +103,8 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
 - report_problem puts what went wrong in how the app made the agent work (a rule or tool that led it the wrong way,
   something a maintainer or the user had to correct) on the Dashboard's Problems list (problems.py), for the user to
   fix all at one time. Nobody answers it.
-- Questions: draft_question is only for what matters to the user; small choices the agent makes itself and says so in
-  its progress. A question with options names the one the agent recommends, and is timed: when the user doesn't answer
-  within the timer of their Settings, the app answers it with that recommendation (Agents.answer_questions). One about
-  money, a sensitive subject, what gets sent to GitHub or deleting what can't come back is marked must_wait and waits
-  for the user, unless they switched that kind off; so does one without options (inbox.py).
+- Questions: agents ask the user nothing (there is no tool for it). They decide themselves, and give a job up when it
+  can only go on with something only the user could do, or they aren't sure (prompt.md, Nothing waits on the user).
 - Projects: on one of the user's own repositories that agents develop all the time (github_searcher/projects.py), the
   rules are the repo's own files, so draft_pr and run_tests don't wait for contributing_guide or pr_examples; a PR's
   title must be a Conventional Commit. A fix_issue job with a thread there makes that PR again on the new main: its
@@ -187,7 +184,7 @@ from claude_agent_sdk import tool
 from github_searcher.artifacts import ArtifactsError
 from github_searcher.claude_judge import JudgeError, judge
 from github_searcher.github_account import SendError
-from github_searcher.inbox import ASK_SETTINGS_FILE, AUTOMATION_FILE, MUST_WAIT, TIMER_MINUTES
+from github_searcher.inbox import AUTOMATION_FILE
 from github_searcher.issue_tags import CHECKS, TAKEN_PR_DAYS
 from github_searcher.jobs import EVIDENCE_DIR
 from github_searcher.projects import TITLE, TITLE_CHARS
@@ -252,9 +249,6 @@ CHECKLIST_ITEM_CHARS = 200
 CHECKLIST_HOW_CHARS = 300
 ALSO_TESTED_MAX = 15
 ALSO_TESTED_CHARS = 250
-# A question's options are buttons in the Inbox: a few, each a few words.
-QUESTION_OPTIONS_MAX = 4
-QUESTION_OPTION_CHARS = 80
 # A job that waits only on a timed question with a timer at most this long keeps its agent's desktop meanwhile (the VM
 # rule in agents.py): its answer comes within minutes. One with a longer timer gives the desktop back, like any other draft.
 QUESTION_HOLD_SECONDS = 30 * 60
@@ -734,37 +728,6 @@ class WorkTools:
                 },
             )(self.report_problem),
             tool(
-                "draft_question",
-                "Ask the user a question through their Inbox, only when the answer matters. Small choices are yours (how to "
-                "test, names, which of two reasonable ways): decide, say what you chose and why with job_progress, and go on; "
-                "never ask about them. Ask before a long passive run or a long hold on a machine others wait for (a timed "
-                "question: options and recommended), or about money, politics or another sensitive subject, how or what gets "
-                "sent to GitHub, or deleting what can't come back (must_wait). Not for a secret to fill in (env_var_add, then "
-                "say so in your message), nor to ask whether to go on. job_id is the job it is about (leave it out if none); "
-                "it waits on the user until the question is answered. question: for someone with no technical context: one "
-                "plain sentence on what you need, then what each choice means, with no file, test or function names. options: "
-                "the 2 to 4 answers they can pick, each a few words that say what happens; the Inbox shows each as a button, "
-                "and you hear which one was picked. Leave them out only when the user must answer in their own words: then it "
-                "always waits. recommended: the option you would pick, written exactly as in options (needed with options). "
-                "With options and no must_wait the question is timed: when the user doesn't answer within the timer they set "
-                f"({TIMER_MINUTES} minutes unless they changed it), the app answers it with recommended, and you go on with "
-                f"that; with a timer of {QUESTION_HOLD_SECONDS // 60} minutes or less you keep your desktop meanwhile (the "
-                "result says so). must_wait: money (it costs the user money), sensitive (politics or another sensitive subject), github "
-                "(how or what gets sent to GitHub, beyond your usual drafts), delete (deleting something that can't come "
-                "back): the user answers it themselves however long it takes, unless they switched that kind off.",
-                {
-                    "type": "object",
-                    "properties": {
-                        "job_id": {"type": "string"},
-                        "question": {"type": "string"},
-                        "options": {"type": "array", "items": {"type": "string"}},
-                        "recommended": {"type": "string", "description": "The option you would pick, exactly as written in options."},
-                        "must_wait": {"type": "string", "enum": MUST_WAIT},
-                    },
-                    "required": ["question"],
-                },
-            )(self.draft_question),
-            tool(
                 "paper_read",
                 "Read the paper of one of your reproduce_paper jobs: its pages as pictures (formulas, tables and figures as "
                 f"printed), then their text. pages: one page ('3') or a range ('1-5'), at most {PAPER_PAGES} at a time. The "
@@ -1110,9 +1073,8 @@ class WorkTools:
                 "release_vm",
                 "Give your VM's desktop back so the next agent in line can use it. Do it as soon as your jobs for it are done or waiting on the user. "
                 "While you wait in a VM's queue, it takes you out of the queue instead (e.g. when your jobs there were cancelled). "
-                "Not while you wait on a run you need the result of, nor on a timed question with a short timer (draft_question "
-                f"says so, {QUESTION_HOLD_SECONDS // 60} minutes at most): then just end your turn and keep the desktop; the "
-                "result or the answer wakes you.",
+                "Not while you wait on a run you need the result of: then just end your turn and keep the desktop; the "
+                "result wakes you.",
                 {},
             )(self.release_vm),
             tool(
@@ -1177,8 +1139,6 @@ class WorkTools:
             return f"Running {tests} {code}: `{args.get('command')}`"
         if name == "draft_comment":
             return f"Drafting a comment on {args.get('target')}"
-        if name == "draft_question":
-            return "Asking: " + (args.get("question") or "").split("\n")[0][:120]
         if name == "draft_edit":
             return f"Drafting a new title and description for {args.get('target')}"
         if name == "open_issue":
@@ -2711,88 +2671,6 @@ class WorkTools:
         text = f"Reported as {item['id']} on the Dashboard's Problems list; the user fixes them all at one time. Go on with your work."
         return {"content": [{"type": "text", "text": text}]}
 
-    async def draft_question(self, args: dict) -> dict:
-        question = args["question"].strip()
-        if not question:
-            return {"content": [{"type": "text", "text": "The question is empty."}], "is_error": True}
-        options = [option.strip() for option in (args.get("options") or []) if option.strip()]
-        if len(options) == 1 or len(options) > QUESTION_OPTIONS_MAX:
-            text = f"Give 2 to {QUESTION_OPTIONS_MAX} options, or none when the user answers in their own words."
-            return {"content": [{"type": "text", "text": text}], "is_error": True}
-        for option in options:
-            if len(option) > QUESTION_OPTION_CHARS:
-                text = f"An option is {len(option)} characters; keep each under {QUESTION_OPTION_CHARS}: it is a button. The question says what each means."
-                return {"content": [{"type": "text", "text": text}], "is_error": True}
-        recommended = (args.get("recommended") or "").strip() or None
-        must_wait = (args.get("must_wait") or "").strip() or None
-        if options and recommended not in options:
-            text = (
-                "Give recommended: the option you would pick, written exactly as in options. Unless the question must wait, "
-                "the app picks it for the user when they don't answer in time."
-            )
-            return {"content": [{"type": "text", "text": text}], "is_error": True}
-        if must_wait is not None and must_wait not in MUST_WAIT:
-            text = f"must_wait is one of: {', '.join(MUST_WAIT)}. Leave it out for anything else."
-            return {"content": [{"type": "text", "text": text}], "is_error": True}
-        found = EMOJI.findall(" ".join([question] + options))
-        if found:
-            return {"content": [{"type": "text", "text": NO_EMOJI + " ".join(sorted(set(found)))}], "is_error": True}
-        job = None
-        if args.get("job_id"):
-            try:
-                job = self.agents.jobs.get(args["job_id"])
-            except KeyError:
-                return {"content": [{"type": "text", "text": f"No job {args['job_id']}."}], "is_error": True}
-            if job["agent"] != self.agent_id:
-                return {"content": [{"type": "text", "text": f"{job['id']} is not your job."}], "is_error": True}
-            if job["status"] in CLOSED_STATUSES:
-                text = f"{job['id']} is {job['status']} (the user may have cancelled it): no questions about it anymore. Move on."
-                return {"content": [{"type": "text", "text": text}], "is_error": True}
-
-        # Timed, unless it must wait (inbox.py): one without options always does ("open"), and so does one marked with a
-        # kind the user's Settings keep waiting. A kind they switched off is timed like any other.
-        settings = {"timer_minutes": TIMER_MINUTES, "must_wait": list(MUST_WAIT)}
-        if ASK_SETTINGS_FILE.is_file():
-            settings.update(json.loads(ASK_SETTINGS_FILE.read_text()))
-        answer_by = None
-        if not options:
-            recommended = None
-            must_wait = "open"
-        elif must_wait not in settings["must_wait"]:
-            must_wait = None
-            answer_by = (datetime.now(UTC) + timedelta(minutes=settings["timer_minutes"])).isoformat()
-        answer = "You'll get a message with their answer."
-        if answer_by is not None:
-            answer = (
-                f"If they don't answer within {settings['timer_minutes']} minutes, the app picks your recommendation "
-                f"({recommended}), and you get a message saying so."
-            )
-
-        # The subject line is the question's first line.
-        title = question.split("\n")[0][:120]
-        if job is None:
-            self.agents.inbox.create("question", self.agent_id, title, question, options=options, recommended=recommended, answer_by=answer_by, must_wait=must_wait)
-            text = "Your question is in the user's Inbox. " + answer
-            return {"content": [{"type": "text", "text": text}]}
-
-        # A follow-up's question is about its PR or issue.
-        target = job["thread"] or job["issue"]
-        draft = self.agents.inbox.create(
-            "question", self.agent_id, title, question, job=job["id"], repo=job["repo"], target=target, evidence=job["evidence"], options=options,
-            recommended=recommended, answer_by=answer_by, must_wait=must_wait
-        )
-        self.agents.jobs.update(job["id"], status="waiting_on_user", drafts=job["drafts"] + [draft["id"]])
-        text = f"Your question is in the user's Inbox. {job['id']} waits on the user now; move on to your next job. " + answer
-        # A short timed question keeps the desktop (QUESTION_HOLD_SECONDS, the VM rule in agents.py): the answer comes
-        # within minutes, and giving the desktop back can mean days in a full VM's line (opencodex#8319).
-        vm_name, place = self.agents.queue.place(self.agent_id)
-        if answer_by is not None and settings["timer_minutes"] * 60 <= QUESTION_HOLD_SECONDS and place == 0 and vm_name == job["vm"]:
-            text += (
-                f" Keep your desktop of {vm_name} meanwhile: don't release_vm for this. Do your other jobs there, or end your "
-                "turn; the answer wakes you, and you go on there at once."
-            )
-        return {"content": [{"type": "text", "text": text}]}
-
     async def paper_read(self, args: dict) -> dict:
         try:
             job = self.agents.jobs.get(args["job_id"])
@@ -3900,7 +3778,7 @@ class WorkTools:
             if pull is None:
                 return {"content": [{"type": "text", "text": f"{pr} is not a PR on GitHub."}], "is_error": True}
             if pull["state"] != "OPEN":
-                text = f"{pr} is {pull['state'].lower()}: only an open PR takes a new version. Tell the user in a draft_comment or draft_question instead."
+                text = f"{pr} is {pull['state'].lower()}: only an open PR takes a new version. Make a new PR with draft_pr (without pr), or end the job if it is no longer needed."
                 return {"content": [{"type": "text", "text": text}], "is_error": True}
             newest = ""
             if pull["commits"]["nodes"]:
@@ -4590,7 +4468,7 @@ class WorkTools:
             advice = (
                 "It fails on the unchanged code too. Compare which tests fail here with the after run: the ones failing here as "
                 "well aren't your change's doing (check your setup first: dependencies, services, settings the project's docs or "
-                "CI ask for). Ask the user with draft_question about leaving out exactly those, and wait for the decision."
+                "CI ask for). Leave out exactly those in the command, run_tests with when: after again, and say so in the PR."
             )
         elif passed:
             advice = "It passes with your change: you may draft the PR (it must be this exact code)."

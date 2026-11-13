@@ -2083,7 +2083,7 @@ class Agents:
             text = f"The user rejected {about}."
             if reply:
                 text += f" Their note: {reply}"
-            text += f" Don't draft it again as it is: change course, or cancel {job_name} with job_update if it no longer makes sense. Ask with draft_question if unsure."
+            text += f" Don't draft it again as it is: change course, or cancel {job_name} with job_update if it no longer makes sense or you aren't sure."
         elif answered_by == "automation":
             # Its repo's (or issue's) Level of automation answers questions at once (backend/repo_automation_api.py).
             text = (
@@ -2238,7 +2238,7 @@ class Agents:
                 text = (
                     f"Heartbeat: you have open jobs and nothing is running: {titles}. Carry on with them now, from where you "
                     "left off (queue_for_vm when you need the VM). Don't stop or wait without a reason. When one is truly "
-                    "blocked on something only the user can give, ask with draft_question; when it can't be done, cancel it "
+                    "blocked on something only the user could give, or can't be done, give it up: cancel it "
                     "with job_update and say why. A blocker in the app you reported may be fixed by now: try again first."
                 )
                 self.pending[agent.id].append({"from": "System", "text": text, "shown": False})
