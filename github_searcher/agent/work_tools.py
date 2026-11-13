@@ -654,7 +654,8 @@ class WorkTools:
                 "close_issue",
                 "Close a fix_issue job's issue for us when reading it in full (read_issue) shows it is invalid, before you claim "
                 "or make anything: fixed already (a merged PR, a commit, the newest code), a duplicate, someone else's open "
-                "PR for it, a maintainer said it won't be done or wants it done another way, or it can't be what it says. The "
+                "PR for it, a maintainer said it won't be done or wants it done another way, it can't be what it says, or it is "
+                "kept for first-time contributors and a PR of the user's was merged in the repo already. The "
                 "job is cancelled with your reason, a pending draft of it is withdrawn, and the issue leaves the Issues board "
                 "for good, so no agent takes it again. Nothing on GitHub changes; when your claim was posted already, it says "
                 "so, and you take it back (delete_comment). reason: one or two plain sentences, with "
