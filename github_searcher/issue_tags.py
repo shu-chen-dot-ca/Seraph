@@ -8,7 +8,7 @@ each issue instead and gives it tags we define. One JSON file, DATA_DIR/issue_ta
     {"owner/name#n": {"status": "free" | "assigned" | "waiting" | "fixed",
                       "merge": "likely" | "fixed" | "out of scope" | "claimed" | "maintainers only" | "waiting" |
                                "no outside prs" | "large feature" | "big change" | "can't validate",
-                      "checks": {"belongs", "linux", "apolitical", "not_game", "open", "any_contributor", "modest",
+                      "checks": {"belongs", "linux", "apolitical", "not_game", "open", "any_contributor", "ai_ok", "modest",
                                  "validatable": bool} | None,
                       "kind": "bug" | "feature" | "docs" | "question" | None, "lines": int | None,
                       "name": str | None, "name_version": int, "rules_version": int, "complexity": "easy" | "medium" | "hard" | None, "scope_clear": bool | None,
@@ -62,7 +62,8 @@ requests the repo merged. The first that holds:
     no outside prs    the repo doesn't merge outsiders' pull requests: its AI policy says no AI, most newcomers' first
                       PRs are closed or left waiting, of MIN_SAMPLE or more outside PRs that ended in 90 days none
                       was merged, or the newcomer verdict (repo_signals.py) is closed: its contributing guide says so,
-                      or its people write the code (mastra: pull requests disabled for outside contributors)
+                      or its people write the code (mastra: pull requests disabled for outside contributors). Or this
+                      issue's maintainers closed a pull request for it that looked AI-made (hydro#3281): ours would be too
     large feature     a new subsystem, integration, driver or the like the maintainers would have to keep up
     big change        over BIG_LINES lines while the user has no merged pull request in the repo yet
     can't validate    our agent can't prove the fix works in its VM (long builds and tests are fine)
@@ -189,6 +190,13 @@ CHECKS = [
         "when nothing says so.",
     ),
     (
+        "ai_ok",
+        "Would its maintainers take a pull request for it that an AI agent wrote? No when a maintainer closed a pull request "
+        "for this issue because it looked AI-made or agent-made ('appears to be an autonomously generated PR', 'AI slop'), "
+        "or said in the issue or its pull requests that they don't want such pull requests: ours would be closed the same way. "
+        "Yes when nothing says so.",
+    ),
+    (
         "modest",
         "Is it a fix or a modest change, not a large new feature? No when it adds a new subsystem, integration, driver, "
         "backend, file format or major screen that the maintainers would have to keep up after it lands.",
@@ -288,10 +296,11 @@ SCHEMA = {
                     "not_game": {"type": "boolean"},
                     "open": {"type": "boolean"},
                     "any_contributor": {"type": "boolean"},
+                    "ai_ok": {"type": "boolean"},
                     "modest": {"type": "boolean"},
                     "validatable": {"type": "boolean"},
                 },
-                "required": ["number", "status", "kind", "lines", "name", "complexity", "scope_clear", "reason", "belongs", "linux", "apolitical", "not_game", "open", "any_contributor", "modest", "validatable"],
+                "required": ["number", "status", "kind", "lines", "name", "complexity", "scope_clear", "reason", "belongs", "linux", "apolitical", "not_game", "open", "any_contributor", "ai_ok", "modest", "validatable"],
             },
         }
     },
@@ -788,6 +797,9 @@ class IssueTags:
                 elif closed != "":
                     merge = "no outside prs"
                     why = closed
+                elif not checks["ai_ok"]:
+                    merge = "no outside prs"
+                    why = "its maintainers closed a pull request for it that looked AI-made, and ours would be too"
                 elif not checks["modest"]:
                     merge = "large feature"
                     why = "a large new feature the maintainers would have to keep up"
