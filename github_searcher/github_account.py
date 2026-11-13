@@ -107,6 +107,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 import subprocess
 import tempfile
@@ -972,10 +973,14 @@ class GithubAccount:
         if thread["user"]["login"].lower() != account["login"].lower():
             raise SendError(f"{repo}#{number} isn't yours: it was opened by {thread['user']['login']}.")
         # Someone may have changed it since (you, on GitHub): nothing of theirs is written over. Line ends as GitHub's
-        # web editor saves them don't count.
+        # web editor saves them don't count, nor ticked or unticked checklist boxes: some projects' bots untick the PR's
+        # checklist on every push (opencodex's github-actions), and the description drafted with that push ticks them again.
         now_title = thread["title"]
         now_body = (thread["body"] or "").replace("\r\n", "\n").strip()
-        if now_title != draft["previous"]["title"] or now_body != draft["previous"]["body"].replace("\r\n", "\n").strip():
+        now_body = re.sub(r"^(\s*[-*] )\[[xX]\]", r"\1[ ]", now_body, flags=re.M)
+        then_body = draft["previous"]["body"].replace("\r\n", "\n").strip()
+        then_body = re.sub(r"^(\s*[-*] )\[[xX]\]", r"\1[ ]", then_body, flags=re.M)
+        if now_title != draft["previous"]["title"] or now_body != then_body:
             raise SendError("Its title or description changed since the agent drafted this: Redraft, so the agent works on the text as it is now.")
         body = draft["body"]
         if any(item["file"] is not None and f"evidence:{item['id']}" in body for item in draft["evidence"]):
