@@ -21,7 +21,8 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   once a resolve there failed for it). A fix_issue job takes one comment only: the claim on its issue, made
   on every one once the agent decided the issue still stands and took the job past understand (repowise#5421's claim
   was posted by its repo's Level of automation two seconds after it was drafted, and then the issue turned out fixed),
-  so nobody else takes the issue meanwhile ("Claim owner/name#n" in the Inbox); wait_for_assignment
+  so nobody else takes the issue meanwhile ("Claim owner/name#n" in the Inbox). A job that ends (close_issue, job_update
+  cancelled or done) withdraws its claim while that waits, and a claim of an ended job is never sent; wait_for_assignment
   when the repo's rules want a maintainer to assign contributors before a PR. The claim holds nothing up: the job goes on
   to its PR while the claim waits for the user, and nobody waits for the maintainers to assign the user (we assume nobody
   answers). The user approves the claim, then the PR; with wait_for_assignment, the PR is only sent once GitHub shows
@@ -78,7 +79,7 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   understand (taking it) and close_issue refuse until it was read so within READ_SECONDS. close_issue ends a fix_issue
   job whose issue turns out invalid before anything was claimed or made (fixed already, a duplicate, someone else's
   open PR, a maintainer said no): the job is cancelled with why, a pending draft of it withdrawn, and the issue is taken
-  off the Issues board for good (nothing on GitHub changes).
+  off the Issues board for good (nothing on GitHub changes; a claim posted already is named, for the agent to take back).
 - Taking back, only what the agent itself sent and where the repo's Level of automation allows it (Comments, Pull
   requests): delete_comment (a comment posted from its draft), close_pr (a PR opened from its draft, with a comment
   saying why posted on it first) and drop_commits
@@ -441,7 +442,8 @@ class WorkTools:
             tool(
                 "job_update",
                 "Update one of your jobs. status: working when you start on it, done when it is finished, cancelled when it can't or "
-                "shouldn't be done. notes replaces the job's notes: a few lines on where it stands (what you did, what is left, "
+                "shouldn't be done (a fix_issue job's claim that still waits for the user is withdrawn then). notes replaces the "
+                "job's notes: a few lines on where it stands (what you did, what is left, "
                 "where the work is in the VM), so you or the user can pick it up later.",
                 {
                     "type": "object",
@@ -622,7 +624,8 @@ class WorkTools:
                 "or make anything: fixed already (a merged PR, a commit, the newest code), a duplicate, someone else's open "
                 "PR for it, a maintainer said it won't be done or wants it done another way, or it can't be what it says. The "
                 "job is cancelled with your reason, a pending draft of it is withdrawn, and the issue leaves the Issues board "
-                "for good, so no agent takes it again. Nothing on GitHub changes. reason: one or two plain sentences, with "
+                "for good, so no agent takes it again. Nothing on GitHub changes; when your claim was posted already, it says "
+                "so, and you take it back (delete_comment). reason: one or two plain sentences, with "
                 "the link that shows it (the PR, the comment).",
                 {
                     "type": "object",
@@ -1654,6 +1657,22 @@ class WorkTools:
             self.agents.jobs.add_timeline(job["id"], "status", said)
         job = self.agents.jobs.update(job["id"], **fields)
         text = f"{job['id']} is {job['status']}."
+        # A fix_issue job that ends takes back its claim while that still waits for the user, as close_issue does (and
+        # github_account.py never posts the claim of a job that ended): nobody works on the issue for the user anymore.
+        if job["kind"] == "fix_issue" and job["status"] in CLOSED_STATUSES:
+            for draft_id in job["drafts"]:
+                try:
+                    draft = self.agents.inbox.get(draft_id)
+                except KeyError:
+                    continue
+                if draft["kind"] != "comment" or draft["status"] != "pending":
+                    continue
+                try:
+                    self.agents.inbox.decide(draft_id, "rejected", f"Withdrawn by {self.record['name']}: {job['id']} is {job['status']}")
+                    text += f" Its claim {draft_id} is withdrawn."
+                except ValueError:
+                    # Decided in the meantime.
+                    pass
         # Holding the VM with nothing left to do there means it should go back now.
         vm_name, place = self.agents.queue.place(self.agent_id)
         left = [other for other in self.agents.jobs.for_agent(self.agent_id) if other["status"] in OPEN_STATUSES and other["vm"] == vm_name]
@@ -2302,19 +2321,36 @@ class WorkTools:
         if read_at is None or time.time() - read_at > READ_SECONDS:
             text = f"First read {job['issue']} in full with read_issue, then decide."
             return {"content": [{"type": "text", "text": text}], "is_error": True}
+        # The job ends first, so its claim isn't posted from now on (github_account.py refuses one whose job ended); then
+        # what still waits for the user is withdrawn.
+        self.agents.jobs.add_timeline(job["id"], "status", f"Closed by {self.record['name']}: {reason}")
+        self.agents.jobs.update(job["id"], status="cancelled", notes=reason)
+        posted = []
         for draft_id in job["drafts"]:
             try:
                 draft = self.agents.inbox.get(draft_id)
             except KeyError:
                 continue
             if draft["status"] == "pending":
-                self.agents.inbox.decide(draft_id, "rejected", f"Withdrawn by {self.record['name']}: {reason}")
-        self.agents.jobs.add_timeline(job["id"], "status", f"Closed by {self.record['name']}: {reason}")
-        self.agents.jobs.update(job["id"], status="cancelled", notes=reason)
+                try:
+                    draft = self.agents.inbox.decide(draft_id, "rejected", f"Withdrawn by {self.record['name']}: {reason}")
+                except ValueError:
+                    # Decided in the meantime.
+                    draft = self.agents.inbox.get(draft_id)
+            # On GitHub already: repowise#5421's repo's Level of automation posted the claim two seconds after it was drafted,
+            # before its agent found the fix merged days before, and the agent took close_issue's silence for a withdrawal.
+            # It takes it back.
+            if draft["kind"] == "comment" and draft["sent"] is not None and draft["sent"].get("deleted_at") is None:
+                posted.append(f"{draft['id']} ({draft['sent']['url']})")
         result = await asyncio.to_thread(self.agents.issues.dismiss, [job["issue"]])
         text = f"Closed: {job['id']} is cancelled, and {job['issue']} is off the Issues board for good. Nothing on GitHub changed."
         if result["working"]:
             text = f"{job['id']} is cancelled. {job['issue']} stays on the Issues board: another job on it is still open."
+        if posted:
+            text += (
+                f" But your claim was posted already: {', '.join(posted)}. Take it back with delete_comment (where the repo's "
+                "Level of automation allows comments); otherwise tell the user in one line, so they delete it."
+            )
         vm_name, place = self.agents.queue.place(self.agent_id)
         left = [other for other in self.agents.jobs.for_agent(self.agent_id) if other["status"] in OPEN_STATUSES and other["vm"] == vm_name]
         if place == 0 and not left:
