@@ -37,7 +37,9 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   It also refuses a diff with what GitNexus writes by itself when it builds its index (its block in AGENTS.md
   and CLAUDE.md, .claude/skills/gitnexus/, .gitnexus/): running a project's required tool never puts its own
   file changes in the PR.
-  No draft has emoji in it (EMOJI, the user's rule; a template's emoji are written as words). A PR is
+  No draft has emoji in it (EMOJI, the user's rule; a template's emoji are written as words), except a comment's marker
+  the project's own rules require (draft_comment's emoji_rule, checked in the repo file it quotes: horizon wants every
+  agent comment to start with the robot emoji and "Agent:", and its claim bot ignored ours without). A PR is
   written from the project's contribution rules and its recently merged PRs: contributing_guide
   gathers the rules wherever they are (CONTRIBUTING in any folder, developer guides in the docs, the
   PR template, AGENTS.md, its AI or agent policy and its organization's, and the guides and policies the README and
@@ -245,7 +247,8 @@ QUESTION_OPTION_CHARS = 80
 QUESTION_HOLD_SECONDS = 30 * 60
 CONTEXT_CHARS = 500
 # Agents never use emoji, in drafts or anywhere (the user's rule): pictographs, dingbats and symbols drawn as emoji,
-# flags, and the joiners and selectors that make emoji. Plain arrows and math signs are fine.
+# flags, and the joiners and selectors that make emoji. Plain arrows and math signs are fine. The one exception is a
+# marker the project's own rules require in comments (draft_comment's emoji_rule).
 EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u231A\u231B\u23E9-\u23FA\u203C\u2049\u2139\u3030\u303D\u3297\u3299\uFE0F\u200D\u20E3]")
 NO_EMOJI = "No emoji anywhere, also where the project's template has them: write its words without them. Found: "
 # A PR saying AI helped write it: an "AI assistance" heading, "AI-assisted", "prepared with the help of an AI", "Generated
@@ -526,7 +529,13 @@ class WorkTools:
                 "resolve: true (with reply_to, on the user's own PR) marks that conversation resolved once the answer is "
                 "posted: when the change it asked for is on the PR, and the project lets the author resolve (its rules or "
                 "its merged PRs show it, or it wants every conversation resolved before a merge). project, problem and why "
-                "are only for the user, in the Inbox's overview. " + PLAIN,
+                "are only for the user, in the Inbox's overview. " + PLAIN + " "
+                "No emoji, unless the project's own rules require them in comments (a marker every agent comment starts "
+                "with, such as the robot emoji and 'Agent:'): then write the marker exactly as the rules do, and give that "
+                "rule word for word (emoji_rule) with the repo file it is in (emoji_rule_file, e.g. AGENTS.md): it is checked "
+                "there, and only its emoji are let through. A claim bot's command then follows the form of an earlier claim "
+                "there the bot accepted (read_issue: the claim, then the bot assigning its author); with none, the marker on "
+                "the first line and the command alone on the next.",
                 {
                     "type": "object",
                     "properties": {
@@ -535,6 +544,8 @@ class WorkTools:
                         "body": {"type": "string"},
                         "reply_to": {"type": "integer"},
                         "resolve": {"type": "boolean"},
+                        "emoji_rule": {"type": "string", "description": "Only when the project's rules require emoji in comments: that rule, word for word as the repo writes it."},
+                        "emoji_rule_file": {"type": "string", "description": "The repo file emoji_rule is in, e.g. 'AGENTS.md' or 'docs/CONTRIBUTING.md'."},
                         "project": {"type": "string", "description": "One line: what the project is, e.g. 'matplotlib: a Python library that draws charts'."},
                         "problem": {"type": "string", "description": "What the issue is about: what goes wrong, for whom, when. Specific, 1 to 2 sentences."},
                         "why": {"type": "string", "description": "Why post this comment now, in 1 to 2 sentences. For a claim, that the user takes it on, and the rule that asks for it if any."},
@@ -1755,9 +1766,34 @@ class WorkTools:
             if len(text) > limit:
                 text = f"{part} is {len(text)} characters; keep it under {limit}. Short and plain: the user reads it at a glance."
                 return {"content": [{"type": "text", "text": text}], "is_error": True}
+        # A project's own rule for comments may ask for emoji (horizon-rust/horizon's AGENTS.md: every agent comment starts
+        # with the robot emoji and "Agent:"; our claim went out as "Agent: /claim" and its claim bot never assigned the user). That rule wins
+        # over the no-emoji rule, for the emoji in it only: the agent quotes it word for word (emoji_rule) with the repo
+        # file it is in (emoji_rule_file), and it is checked there.
         found = EMOJI.findall(" ".join([args["body"]] + list(overview.values())))
+        rule = " ".join((args.get("emoji_rule") or "").split())
+        rule_file = (args.get("emoji_rule_file") or "").strip().removeprefix("./").strip("/")
+        if found and rule:
+            try:
+                data = await asyncio.to_thread(get_contents, name.split("/")[0], name.split("/")[1], rule_file)
+            except (httpx.HTTPError, ValueError) as error:
+                return {"content": [{"type": "text", "text": f"Could not read {rule_file or 'emoji_rule_file'} in {name}: {error}"}], "is_error": True}
+            rules = ""
+            if rule_file and isinstance(data, dict) and data.get("encoding") == "base64":
+                rules = " ".join(base64.b64decode(data["content"]).decode("utf-8", errors="replace").split())
+            if rule not in rules:
+                text = (
+                    f"{rule_file or 'emoji_rule_file'} in {name} doesn't say \"{rule}\". Quote the project's rule word for word, "
+                    "with the file it is in (emoji_rule_file), or leave the emoji out."
+                )
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+            found = [each for each in found if each not in EMOJI.findall(rule)]
         if found:
-            return {"content": [{"type": "text", "text": NO_EMOJI + " ".join(sorted(set(found)))}], "is_error": True}
+            text = (
+                NO_EMOJI + " ".join(sorted(set(found))) + ". Only a marker the project's own rules require in comments may "
+                "have them: then give that rule word for word (emoji_rule) and the file it is in (emoji_rule_file)."
+            )
+            return {"content": [{"type": "text", "text": text}], "is_error": True}
         try:
             job = self.agents.jobs.get(args["job_id"])
         except KeyError:
