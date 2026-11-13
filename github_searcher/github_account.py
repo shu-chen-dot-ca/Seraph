@@ -31,11 +31,12 @@ send(draft_id) sends a PR, comment or edit draft once, as it was shown in the In
    from GitHub (tree()). Nothing comes from the VM, so what goes out is exactly the diff you reviewed.
    The branch's own commits (the draft's "commits", kept by draft_pr) are replayed the same way, one by
    one, with their messages. Every one is the agent's and goes out as yours: your GitHub name and
-   private noreply address (the VM's git address, also in a message's Signed-off-by, becomes that).
+   private noreply address (the VM's git address in a message becomes that, and every Signed-off-by
+   line becomes your name and that address, so a DCO check passes).
    Nobody else's commit goes out and nothing credits a co-author: draft_pr refuses such a branch, and
    a draft from before that rule with someone else's commit in it isn't sent. If they don't end at
-   exactly the reviewed diff, one more commit does, with the PR's title as its message. If they can't
-   be replayed (a binary file in one), it is that one commit alone.
+   exactly the reviewed diff, one more commit does, with the PR's title as its message (signed off too
+   when they are). If they can't be replayed (a binary file in one), it is that one commit alone.
 4. The last commit on a new branch in your fork: the agent's branch name (fix-<issue> when it worked on
    the main branch), with -2, -3, ... when the name is taken.
 5. The PR, from that branch into the branch the agent started from (base "origin/main" is main; else
@@ -660,6 +661,15 @@ class GithubAccount:
                 message = each["message"]
                 if each["vm_email"] != "":
                     message = message.replace(each["vm_email"], you["email"])
+                # A Signed-off-by line is the agent's sign-off, so yours: your name and address both, the same as the
+                # commit's author, or a DCO check fails (LMCache#6430's kept the VM's git name, "djivjrmkf", next to your
+                # noreply address).
+                lines = []
+                for line in message.split("\n"):
+                    if line.lower().startswith("signed-off-by:"):
+                        line = f"Signed-off-by: {you['name']} <{you['email']}>"
+                    lines.append(line)
+                message = "\n".join(lines)
                 payload = {"message": message, "tree": each_tree, "parents": [commit], "author": you, "committer": you}
                 response = client.post(f"/repos/{fork}/git/commits", json=payload)
                 response.raise_for_status()
@@ -673,6 +683,13 @@ class GithubAccount:
         if commit_tree != tree:
             self.step = "making the commit"
             message = draft["title"]
+            # When the agent's commits are signed off (a project's DCO asks for it), this one is too.
+            signed = False
+            for each in draft["commits"]:
+                if "signed-off-by:" in each["message"].lower():
+                    signed = True
+            if signed:
+                message += f"\n\nSigned-off-by: {you['name']} <{you['email']}>"
             response = client.post(f"/repos/{fork}/git/commits", json={"message": message, "tree": tree, "parents": [commit], "author": you})
             response.raise_for_status()
             commit = response.json()["sha"]
@@ -808,6 +825,15 @@ class GithubAccount:
                 message = each["message"]
                 if each["vm_email"] != "":
                     message = message.replace(each["vm_email"], you["email"])
+                # A Signed-off-by line is the agent's sign-off, so yours: your name and address both, the same as the
+                # commit's author, or a DCO check fails (LMCache#6430's kept the VM's git name, "djivjrmkf", next to your
+                # noreply address).
+                lines = []
+                for line in message.split("\n"):
+                    if line.lower().startswith("signed-off-by:"):
+                        line = f"Signed-off-by: {you['name']} <{you['email']}>"
+                    lines.append(line)
+                message = "\n".join(lines)
                 payload = {"message": message, "tree": each_tree, "parents": [commit], "author": you, "committer": you}
                 response = client.post(f"/repos/{fork}/git/commits", json=payload)
                 response.raise_for_status()
@@ -821,6 +847,13 @@ class GithubAccount:
         if commit_tree != tree:
             self.step = "making the commit"
             message = draft["title"]
+            # When the agent's commits are signed off (a project's DCO asks for it), this one is too.
+            signed = False
+            for each in draft["commits"]:
+                if "signed-off-by:" in each["message"].lower():
+                    signed = True
+            if signed:
+                message += f"\n\nSigned-off-by: {you['name']} <{you['email']}>"
             response = client.post(f"/repos/{fork}/git/commits", json={"message": message, "tree": tree, "parents": [commit], "author": you})
             response.raise_for_status()
             commit = response.json()["sha"]
