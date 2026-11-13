@@ -51,7 +51,8 @@ requests the repo merged. The first that holds:
                       China's), it is about a game (we don't work on games: no game, game engine, mod, game server or
                       plugin, emulator or ROM manager, or tool for playing games), it isn't a pull request to this repo
                       for its own users (a plugin or add-on for a third-party product's users, a separate repository
-                      the project wants), or it can't be seen on
+                      the project wants, a fix that lives in a prebuilt image or package built elsewhere: bambuddy#3524),
+                      or it can't be seen on
                       Linux (it is about how something looks or behaves on Windows, macOS, a phone or other hardware,
                       even when its files can be edited on Linux: we have no way to validate it)
     claimed           someone is on it (status assigned)
@@ -142,8 +143,9 @@ DATA_DIR = PROJECT_ROOT / os.environ["DATA_DIR"]
 SANDBOX = (
     "Our agent (Claude Code) fixes the issue inside a sandbox VM: a Linux desktop (Ubuntu, Debian or Fedora) with a "
     "shell, mouse and keyboard, a browser, Docker and internet, 2 to 16 CPUs, up to 32 GB of RAM, and an NVIDIA GPU when "
-    "one is handed in. It clones the repo, reproduces the problem, writes the fix, runs the project's tests before and "
-    "after, and takes screenshots or command output as proof."
+    "one is handed in. Other agents work in the same VM at the same time, each on its own desktop, so it may not change "
+    "the VM's machine-wide setup (its firewall, kernel, network or system services). It clones the repo, reproduces the "
+    "problem, writes the fix, runs the project's tests before and after, and takes screenshots or command output as proof."
 )
 # The yes / no questions merge is decided from (with the status, the repo's numbers and the user's merged pull
 # requests there): (key, question).
@@ -152,7 +154,9 @@ CHECKS = [
         "belongs",
         "Does the work belong in this repo as a pull request, for the project's own users? No when it is a plugin, "
         "extension, integration, theme or add-on meant for the users of a third-party product, or when the project wants "
-        "it as a new, separate repository (a plugin, driver or port it keeps outside its main code).",
+        "it as a new, separate repository (a plugin, driver or port it keeps outside its main code). No too when the fix "
+        "lives outside this repo's code: in a prebuilt image, package or binary the repo only pulls in, built from another "
+        "repository or by a script only the maintainers run, so no pull request here can change it.",
     ),
     (
         "linux",
@@ -206,7 +210,9 @@ CHECKS = [
         "Can our agent prove the fix works in its VM: build the project, see the problem (a failing test, an error or "
         "wrong output, a wrong screen) or the missing behavior, then show it fixed with a test or a plain look? Long builds "
         "and long test suites are fine. No when it needs a paid service, an account or an API key, or several machines, "
-        "or when nothing it can run or look at would show that it works.",
+        "or when nothing it can run or look at would show that it works. No too when the problem only shows under a "
+        "machine-wide setting the agent may not change in a VM other agents share (a default-deny host firewall, kernel or "
+        "network settings, system services).",
     ),
 ]
 # Lines over which a change is big for someone with no merged pull request in the repo yet.
@@ -776,7 +782,7 @@ class IssueTags:
                     why = "it is about a game, which we don't work on"
                 elif not checks["belongs"]:
                     merge = "out of scope"
-                    why = "it isn't a pull request to this repo for its own users"
+                    why = "it isn't a pull request to this repo for its own users, or its fix lives outside this repo's code"
                 elif not checks["linux"]:
                     merge = "out of scope"
                     why = "it can only be seen on Windows, macOS, a phone or other hardware, so we can't validate it in our Linux VM"
