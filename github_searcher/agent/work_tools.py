@@ -3524,6 +3524,11 @@ class WorkTools:
         # open PR closes it. Not on the user's own repos.
         if project is None and workflow is None and pr is None and job["kind"] == "fix_issue" and job["issue"] is not None:
             read_at = self.threads_read.get(job["issue"].lower())
+            # Told since that someone else seems to be on it (Agents.issue_taken): only a read after that counts. LMCache#6430
+            # went out on a read from before LiRunGuo's PR #6429, the notice lost among restart messages, and was closed.
+            noticed = [datetime.fromisoformat(entry["at"]).timestamp() for entry in job["timeline"] if entry["kind"] == "notice"]
+            if noticed and read_at is not None and read_at < max(noticed):
+                read_at = None
             if read_at is None or time.time() - read_at > READ_SECONDS:
                 text = (
                     f"First read {job['issue']} again with read_issue (every new comment and PR): someone may have claimed it "
