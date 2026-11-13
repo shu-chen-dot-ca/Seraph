@@ -136,6 +136,7 @@ READ_ISSUE_QUERY = """
 query($owner: String!, $name: String!, $number: Int!, $comments: String, $timeline: String) {
   repository(owner: $owner, name: $name) {
     defaultBranchRef { name target { ... on Commit { oid CHECKS } } }
+    mergedPulls: pullRequests(states: MERGED, last: 100) { nodes { mergedBy { login } } }
     issueOrPullRequest(number: $number) {
       __typename
       ... on Issue {
@@ -206,8 +207,10 @@ fragment Duplicate on MarkedAsDuplicateEvent {
 
 
 def get_issue_in_full(owner: str, repo: str, number: int) -> dict | None:
-    """READ_ISSUE_QUERY's issue or PR with every comment and timeline item (None: no issue or PR with that number), and
-    its repo's default branch as "default_branch". Never cached: it is read right before an agent decides."""
+    """READ_ISSUE_QUERY's issue or PR with every comment and timeline item (None: no issue or PR with that number), its
+    repo's default branch as "default_branch", and who merged its repo's newest PRs as "mergers" (logins): maintainers,
+    also the ones whose membership is private, whom GitHub shows as CONTRIBUTOR. Never cached: it is read right before
+    an agent decides."""
     thread = None
     after = {"comments": None, "timeline": None}
     while True:
@@ -229,6 +232,7 @@ def get_issue_in_full(owner: str, repo: str, number: int) -> dict | None:
         if thread is None:
             thread = page
             thread["default_branch"] = data["data"]["repository"]["defaultBranchRef"]
+            thread["mergers"] = [pull["mergedBy"]["login"] for pull in data["data"]["repository"]["mergedPulls"]["nodes"] if pull["mergedBy"]]
         else:
             thread["comments"]["nodes"] += page["comments"]["nodes"]
             thread["timelineItems"]["nodes"] += page["timelineItems"]["nodes"]

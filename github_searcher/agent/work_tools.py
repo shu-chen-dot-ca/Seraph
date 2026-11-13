@@ -18,7 +18,9 @@ The GitHub tools (github_tools.py) only read GitHub; these change what the user 
   in the user's Inbox and its job waits on the user. A comment with reply_to answers inside one of a PR's
   conversations on lines of code instead of below it, and with resolve Approve marks that conversation resolved
   after it (some projects only merge once every conversation is; refused for an organization that restricts OAuth Apps,
-  once a resolve there failed for it). A fix_issue job takes one comment only: the claim on its issue, made
+  once a resolve there failed for it). Only the project's maintainers (read_issue's maintainer: OWNER, MEMBER,
+  COLLABORATOR, or someone who merged its PRs) and the PR's reviewers (people, not bots) get answers: reply_to is
+  refused in a conversation only bots wrote in (unless it resolves it). A fix_issue job takes one comment only: the claim on its issue, made
   on every one once the agent decided the issue still stands and took the job past understand (repowise#5421's claim
   was posted by its repo's Level of automation two seconds after it was drafted, and then the issue turned out fixed),
   so nobody else takes the issue meanwhile ("Claim owner/name#n" in the Inbox). A job that ends (close_issue, job_update
@@ -181,6 +183,7 @@ from github_searcher.inbox import ASK_SETTINGS_FILE, AUTOMATION_FILE, MUST_WAIT,
 from github_searcher.issue_tags import CHECKS, TAKEN_PR_DAYS
 from github_searcher.jobs import EVIDENCE_DIR
 from github_searcher.projects import TITLE, TITLE_CHARS
+from github_searcher.repo_signals import MAINTAINERS
 from github_searcher.search import get_contents, get_issue_in_full, get_issue_status, get_merged_prs, get_pr_status, get_readme, get_repository, get_thread, get_tree, search_issues
 from sandbox.agent import long_runs
 from sandbox.agent.computer_use import Computer, ComputerError
@@ -526,8 +529,12 @@ class WorkTools:
                 "(to assign, review, run checks, decide, answer): assume nobody replies. Nothing is posted: the user decides, "
                 "and you get a message with their decision. A reply's job waits on the user meanwhile; a claim's doesn't: go "
                 "straight on with the fix, without waiting for the user or the maintainers. "
+                "On a follow_up job, answer only the project's maintainers and the PR's reviewers (read_issue's maintainer and "
+                "reviewers): nobody else, even when they ask something, and no review bot, unless the merge needs it (a CLA "
+                "bot's sign line, a bot command or a resolved conversation the rules require). "
                 "body is the comment as it would be posted. reply_to: on a PR, the id of a comment in one of its conversations "
-                "on lines of code (read_issue's conversations), to answer in that conversation instead of below the PR. "
+                "on lines of code (read_issue's conversations), to answer in that conversation instead of below the PR: only "
+                "one a person wrote in, not only bots (or with resolve). "
                 "resolve: true (with reply_to, on the user's own PR) marks that conversation resolved once the answer is "
                 "posted: when the change it asked for is on the PR, and the project lets the author resolve (its rules or "
                 "its merged PRs show it, or it wants every conversation resolved before a merge). project, problem and why "
@@ -625,7 +632,9 @@ class WorkTools:
                 "review, checks and newest comments, the PRs that only name its number in their text (GitHub didn't link "
                 "them; read the ones that may be about it), who was assigned and when, its labels, and the checks on the repo's "
                 "default branch (and a PR's own reviews, checks and conversations on lines of code, each comment with the id "
-                "draft_comment's reply_to takes). user_login is the user's GitHub login, and by_user marks what they "
+                "draft_comment's reply_to takes). maintainer marks the project's own people (OWNER, MEMBER, COLLABORATOR, or "
+                "someone who merges its PRs: private members show as CONTRIBUTOR), and a PR's reviewers lists the people who "
+                "reviewed it: only these two get answers. user_login is the user's GitHub login, and by_user marks what they "
                 "wrote (comments, reviews, related PRs): that is ours (a claim, a reply or a PR the app sent from a draft, as "
                 "them), never someone else taking the issue, whatever role it shows. Read it before you take an issue, claim it, comment on it "
                 "or close it: draft_comment, close_issue and a fix_issue job going past understand refuse until you read it "
@@ -873,8 +882,8 @@ class WorkTools:
                 "risks are only for the user, who reads them first to understand and judge the PR. " + PLAIN + " "
                 "checklist and also_tested are for the user and the reviewer: every point that was asked, each done or not and "
                 "how you showed it, and the cases of the same kind you ran beyond the asked example. "
-                "pr: only for the next version of the user's own open PR (owner/name#number; a follow_up job: a reviewer asked "
-                "for changes, or its checks failed). Then base is the PR's newest commit (the sha the follow-up message gave), "
+                "pr: only for the next version of the user's own open PR (owner/name#number; a follow_up job: a maintainer asked "
+                "for changes, its checks failed, or a bot found a real bug in the change). Then base is the PR's newest commit (the sha the follow-up message gave), "
                 "and your work is on top of it; approving pushes your commits onto the PR's branch instead of opening a new PR. "
                 "title is then the commit message's subject (one more commit has it when you didn't commit everything), and "
                 "body the comment posted on the PR with the push: what changed, in a line or two. The project's rules "
@@ -933,8 +942,8 @@ class WorkTools:
                             },
                             "description": "Every point that was asked, one by one. A new PR: each requirement of the issue (every "
                             "acceptance criterion and every part of its spec or request; for a plain bug, the behaviour it asks for). "
-                            "A new version: each point the reviewers and bots raised on the PR, and any requirement of the issue still "
-                            "open. item: the point in a few plain words. done: whether this draft does it. how: for done, what you ran "
+                            "A new version: each point the maintainers and reviewers raised on the PR, the bots' real bugs in the change you fixed, "
+                            "and any requirement of the issue still open. item: the point in a few plain words. done: whether this draft does it. how: for done, what you ran "
                             "that shows it (the test, on which drivers, platforms or backends); for not done, why not, and that the PR "
                             "text says so. Never done for something you didn't run.",
                         },
@@ -1868,18 +1877,40 @@ class WorkTools:
             if thread is not None and thread["__typename"] == "PullRequest":
                 conversations = thread["reviewThreads"]["nodes"]
             first = None
+            found = None
             for conversation in conversations:
                 ids = [comment["databaseId"] for comment in conversation["comments"]["nodes"]]
                 if reply_to not in ids:
                     continue
                 first = ids[0]
+                found = conversation
                 if args.get("resolve") is True and not conversation["isResolved"]:
                     resolve = conversation["id"]
             if first is None:
                 text = f"{reply_to} isn't a comment in a conversation on lines of code of {target}: use a comment's id from read_issue's conversations."
                 return {"content": [{"type": "text", "text": text}], "is_error": True}
-            # Only the PR's author (and its maintainers) may resolve its conversations.
+            # We only answer the project's maintainers and the PR's reviewers: a person writing in a conversation on lines
+            # of code is reviewing it. One only review bots wrote in gets no answer (grimmory#3112: six answers to
+            # CodeRabbit), unless the merge needs it: the project wants every conversation resolved first.
             login = self.agents.your_repositories.github_account.status().get("login") or ""
+            people = []
+            reviewers = []
+            for comment in found["comments"]["nodes"]:
+                person = comment["author"]["login"] if comment["author"] else "ghost"
+                if person.lower() == login.lower():
+                    continue
+                people.append(person)
+                if comment["author"] is not None and comment["author"]["__typename"] == "User":
+                    reviewers.append(person)
+            if not reviewers and resolve is None:
+                text = (
+                    f"Only a bot wrote in that conversation ({', '.join(people) or 'nobody but the user'}). We only answer the "
+                    "project's maintainers and the PR's reviewers: don't reply to it. Only when the project wants every "
+                    "conversation resolved before a merge, answer it with resolve: true. A real bug it found in your change goes "
+                    "into the next version, without a reply."
+                )
+                return {"content": [{"type": "text", "text": text}], "is_error": True}
+            # Only the PR's author (and its maintainers) may resolve its conversations.
             author = thread["author"]["login"] if thread["author"] else "ghost"
             if resolve is not None and login and author.lower() != login.lower():
                 text = f"{target} is {author}'s PR, not the user's: they can't resolve its conversations. Leave resolve out."
@@ -2172,15 +2203,18 @@ class WorkTools:
         if data["__typename"] == "Issue":
             result["state_reason"] = data["stateReason"]
             result["milestone"] = data["milestone"]["title"] if data["milestone"] else None
-        # Every comment, in full. What the user wrote is marked by_user: that is us too (a claim, a reply or a version the
-        # app sent from a draft, as them). On QwenPaw#8698 a reviewer took the user's own claim (role NONE, nothing more)
-        # for someone else's and sent the PR back.
+        # Every comment, in full. A maintainer is one of the project's own people: OWNER, MEMBER, COLLABORATOR, or someone
+        # who merged its PRs (a private member shows as CONTRIBUTOR, like grimmory's imnotjames). Only they get answers.
+        # What the user wrote is marked by_user: that is us too (a claim, a reply or a version the app sent from a draft,
+        # as them). On QwenPaw#8698 a reviewer took the user's own claim (role NONE, nothing more) for someone else's and
+        # sent the PR back.
         for comment in data["comments"]["nodes"]:
             author = comment["author"]["login"] if comment["author"] else "ghost"
             role = "BOT" if comment["author"] and comment["author"]["__typename"] != "User" else comment["authorAssociation"]
+            maintainer = role in MAINTAINERS or (role != "BOT" and author in data["mergers"])
             by_user = login != "" and author.lower() == login.lower()
             result["comments"].append({
-                "at": comment["createdAt"], "author": author, "role": role, "by_user": by_user,
+                "at": comment["createdAt"], "author": author, "role": role, "maintainer": maintainer, "by_user": by_user,
                 "text": comment["body"],
             })
 
@@ -2310,14 +2344,20 @@ class WorkTools:
                 "review": data["reviewDecision"],
                 "checks": {"state": rollup["state"] if rollup else None, "failing": failing},
                 "reviews": [],
+                # The people who reviewed it (bots aren't): they get answers, like the maintainers.
+                "reviewers": sorted(set(
+                    review["author"]["login"] for review in data["reviews"]["nodes"]
+                    if review["author"] and review["author"]["__typename"] == "User" and review["author"]["login"].lower() != login.lower()
+                )),
             }
             for review in data["reviews"]["nodes"]:
                 author = review["author"]["login"] if review["author"] else "ghost"
                 role = "BOT" if review["author"] and review["author"]["__typename"] != "User" else review["authorAssociation"]
+                maintainer = role in MAINTAINERS or (role != "BOT" and author in data["mergers"])
                 by_user = login != "" and author.lower() == login.lower()
                 code = [{"path": comment["path"], "text": comment["body"]} for comment in review["comments"]["nodes"]]
                 result["pr"]["reviews"].append({
-                    "at": review["createdAt"], "author": author, "role": role, "by_user": by_user,
+                    "at": review["createdAt"], "author": author, "role": role, "maintainer": maintainer, "by_user": by_user,
                     "state": review["state"], "text": review["body"], "on_code": code,
                 })
             # The conversations on lines of code, with their replies: a comment's id is what draft_comment's reply_to
@@ -2328,9 +2368,10 @@ class WorkTools:
                 for comment in conversation["comments"]["nodes"]:
                     author = comment["author"]["login"] if comment["author"] else "ghost"
                     role = "BOT" if comment["author"] and comment["author"]["__typename"] != "User" else comment["authorAssociation"]
+                    maintainer = role in MAINTAINERS or (role != "BOT" and author in data["mergers"])
                     by_user = login != "" and author.lower() == login.lower()
                     comments.append({
-                        "id": comment["databaseId"], "at": comment["createdAt"], "author": author, "role": role,
+                        "id": comment["databaseId"], "at": comment["createdAt"], "author": author, "role": role, "maintainer": maintainer,
                         "by_user": by_user, "text": comment["body"],
                     })
                 result["pr"]["conversations"].append({
@@ -3347,8 +3388,8 @@ class WorkTools:
         if not checklist or len(checklist) > CHECKLIST_MAX:
             text = (
                 f"Give the checklist, 1 to {CHECKLIST_MAX} points: every point that was asked, one by one (each requirement of "
-                "the issue, its acceptance criteria and every part of its spec; for a new version, each point the reviewers and "
-                "bots raised), done or not, and how you showed it. Go through the issue and the thread again for it."
+                "the issue, its acceptance criteria and every part of its spec; for a new version, each point the maintainers "
+                "and reviewers raised), done or not, and how you showed it. Go through the issue and the thread again for it."
             )
             return {"content": [{"type": "text", "text": text}], "is_error": True}
         also_tested = [str(case).strip() for case in (args.get("also_tested") or []) if str(case).strip()]

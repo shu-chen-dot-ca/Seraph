@@ -97,7 +97,8 @@ follow_up job for that thread (an open one it has for it hears the news instead;
 that PR waits hears it, whoever's it is, so only one agent works on a PR at a time), and an archived agent comes
 back for it. It reads the thread and suggests a reply (draft_comment), a new version of the user's own PR made
 on that PR's branch (draft_pr with pr: Approve pushes it there and posts its text on the PR as a comment), or
-nothing (it marks the job done). It never posts anything itself.
+nothing (it marks the job done). It never posts anything itself. It answers only the project's maintainers and the
+PR's reviewers (anyone else, a bot too, only when the merge needs it; agent/work_tools.py).
 
 A repository's agent (the Workspace tab's Live, frontend/src/RepoLive.tsx) belongs to one of the user's own
 repositories for good: its record's "repo" is that repo, and "live" how far its set-up is:
@@ -1828,33 +1829,40 @@ class Agents:
                 "(a flaky test, a broken main branch) needs no new version: a short reply saying so, or nothing."
             )
         text += (
-            "\nYou follow it for the user: whatever someone else writes there (a question, a review, a request, a bug report) "
-            "or when its checks fail, you do the work it needs yourself and draft it, and the user approves every push and "
-            "comment before it goes out (Approve sends it as them). Never ask the user to do any of it by hand: no push, "
-            "rebase, conflict or edit for them to do. You never post, push or send anything yourself.\n"
+            "\nYou follow it for the user: whatever the project's maintainers and the PR's reviewers write there (a question, a review, a request, a "
+            "bug report) or when its checks fail, you do the work it needs yourself and draft it, and the user approves every "
+            "push and comment before it goes out (Approve sends it as them). Never ask the user to do any of it by hand: no "
+            "push, rebase, conflict or edit for them to do. You never post, push or send anything yourself.\n"
+            "Only maintainers and reviewers get answers (read_issue's maintainer: OWNER, MEMBER, COLLABORATOR, or someone who "
+            "merges its PRs; and the PR's reviewers, people who reviewed it). Anyone else, even when they ask something, and "
+            "every review bot (CodeRabbit, Copilot) get no reply, no thanks and no 'fixed', unless the merge needs one (a CLA bot's sign line, a claim, a bot command or a resolved conversation the project's rules "
+            "require). Their code points only when one is a real bug in what the PR changes that a maintainer would send back, "
+            "and then silently in the next version, never style, nitpicks, tests they want or corner cases beyond the issue: "
+            "a bot reviews every push again and always finds a next one.\n"
             "First read the whole thread with read_issue: every comment and review, the mentions, the related PRs and the checks. Then reproduce what it reports or asks about, in the VM, before "
             "you change code or answer: the bug a reviewer saw, the failing check, the conflict with main, whether something "
             "works. Never act on reading alone; add what you saw as evidence. When it doesn't happen, change nothing and say "
             "so in a reply, with what you ran. A reviewer's case is one example of a kind: once it reproduces, find and test "
             "the rest of that kind too (other values, types, inputs, drivers, platforms, the same mistake elsewhere in the PR) "
-            "and fix the kind, not the example. Before a new version, go through every point anyone raised on the thread and "
-            "every requirement of the issue again (draft_pr's checklist). Then do one of these (see Following up on PRs and "
+            "and fix the kind, not the example. Before a new version, go through every point a maintainer or reviewer raised "
+            "on the thread and every requirement of the issue again (draft_pr's checklist). Then do one of these (see Following up on PRs and "
             "issues):\n"
-            f"- A reply, when someone asked something or waits for an answer: draft_comment with target {thread}. Short, "
+            f"- A reply, when a maintainer or reviewer asked something or waits for an answer: draft_comment with target {thread}. Short, "
             "friendly, in the project's tone, the way the user would write it. Never ask them or anyone else for anything, "
             "and never wait for an answer: assume nobody replies. When their point leaves a choice, make it and say what "
             "you did."
         )
         if entry["kind"] == "pr":
             text += (
-                "\n- A reviewer's comment on a line of code (a bot's too): answer it in its conversation, draft_comment with "
-                "reply_to (the comment's id from read_issue's conversations), not below the PR. On the user's own PR, add "
-                "resolve: true once the change it asked for is pushed there, when the project wants every conversation "
-                "resolved before a merge or lets the author resolve them."
+                "\n- A reviewer's comment on a line of code (a person's, not a bot's): answer it in its conversation, draft_comment with reply_to (the "
+                "comment's id from read_issue's conversations), not below the PR. On the user's own PR, add resolve: true "
+                "once the change it asked for is pushed there, when the project wants every conversation resolved before a "
+                "merge or lets the author resolve them. A bot's conversation gets no answer."
             )
         if own_pr:
             text += (
-                "\n- A new version of the PR, when a reviewer asked for changes or its checks failed. Its branch is "
+                "\n- A new version of the PR, when a maintainer or reviewer asked for changes, its checks failed, or a bot found a real bug "
+                "in the change. Its branch is "
                 f"{head['branch']} in the user's fork {head['repo']}, newest commit {head['sha']}. In the VM, in the project's "
                 f"folder (~/{repo.split('/')[1]}; clone it if it isn't there): `git fetch https://github.com/{head['repo']} "
                 f"{head['branch']} && git switch -C pr-{number} {head['sha']}`, and work on top of that commit. Commit your "
@@ -1879,8 +1887,9 @@ class Agents:
             )
         text += (
             f"\n- Nothing, when nothing needs an answer (a thank-you, a bot's note with no findings, checks that passed, a "
-            f"label, an approval without questions): job_update {job['id']} with status done and a note on why. You own it "
-            "for the user: you hear about every change there, and a new job comes with the next one."
+            f"label, an approval without questions, anything from someone who is neither a maintainer nor a reviewer, or "
+            f"from a bot, that the merge doesn't need): job_update {job['id']} with status done and a note on "
+            "why. You own it for the user: you hear about every change there, and a new job comes with the next one."
         )
         if entry["kind"] == "pr" and not own_pr:
             text += "\nThe PR's code isn't the user's to change: a reply or nothing."
