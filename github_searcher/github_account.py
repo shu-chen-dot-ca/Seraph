@@ -45,9 +45,10 @@ A PR waits for the claim of its job (every fix_issue job claims its issue first)
 approved on a repo whose rules want a maintainer's confirmation before a PR (the claim's wait_for_assignment), until
 GitHub shows you assigned to the claimed issue (mcp-memory-service#1912 went out 16 minutes after its claim,
 unassigned, and its claim check failed).
-A comment or an edit from a job whose newest new version of a PR (update_of) isn't on GitHub yet waits for that version:
-pending or approved, or sent back by its reviewer when the comment was drafted with it (it is drafted again). It may say
-the change is there.
+A fix_issue job's claim isn't posted once its job is cancelled or done (jobs, set by backend/shared.py). A comment or an
+edit from a job whose newest new version of a PR (update_of) isn't on GitHub yet waits for that version: pending or
+approved, or sent back by its reviewer when the comment was drafted with it (it is drafted again). It may say the
+change is there.
 A comment is posted on its issue or PR (its pictures go to your fork the same way); one with reply_to goes inside that
 conversation on lines of code of the PR instead (on the PR, linking to it, when GitHub refuses that: an organization
 that restricts OAuth Apps), and with resolve that conversation is marked resolved after it.
@@ -152,6 +153,8 @@ class GithubAccount:
         # started here can sign you in. One at a time; a newer one replaces it.
         self.sign_in_state = None
         self.send_lock = threading.Lock()
+        # The jobs (jobs.py), set by backend/shared.py: a claim whose job ended isn't posted (send()). None: not checked.
+        self.jobs = None
         # The step a send is at, for its error message and for the Inbox while it waits (backend/github_account_api.py).
         # Only changed with send_lock held. sending_draft is the draft being sent, None between sends.
         self.step = ""
@@ -311,6 +314,19 @@ class GithubAccount:
                     raise SendError(
                         f"Not sent yet: the project's rules ask for a maintainer to assign you to {claim['target']} before a PR, "
                         "and GitHub doesn't show you assigned yet. It can go once they do."
+                    )
+            # A claim whose job ended (cancelled or done: the issue turned out fixed already, someone else took it, or you
+            # stopped it) is never posted: nobody works on that issue for you anymore (repowise#5421's claim went out
+            # after its agent found the fix merged days before).
+            if draft["kind"] == "comment" and draft["job"] is not None and self.jobs is not None:
+                try:
+                    job = self.jobs.get(draft["job"])
+                except KeyError:
+                    job = None
+                if job is not None and job["kind"] == "fix_issue" and job["status"] in ["done", "cancelled"]:
+                    raise SendError(
+                        f"Not sent: this claim is for {job['id']}, which is {job['status']}, so nobody works on "
+                        f"{draft['target']} for you anymore. Reject it."
                     )
             # A comment or a new title and description from a job whose new version of a PR isn't on GitHub yet goes after
             # that version: it often says the change is there (openmed#5413's comment and #5511's new description said

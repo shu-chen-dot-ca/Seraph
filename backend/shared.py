@@ -58,6 +58,8 @@ tracked_issues = TrackedIssues()
 explore = Explore(repos, tracked, repo_signals)
 inbox = Inbox()
 github_account = GithubAccount(inbox)
+# A claim whose job ended isn't posted (github_account.py send).
+github_account.jobs = jobs
 # Its merge reads the repos' numbers and your merged pull requests (by your login).
 issue_tags = IssueTags(repo_signals, github_account)
 pr_tracking = PRTracking(inbox, github_account)
