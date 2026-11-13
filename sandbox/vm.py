@@ -46,6 +46,8 @@ TERMINAL_PORT = int(os.environ["SANDBOX_VM_TERMINAL_PORT"])
 NO_DESKTOP_FILE = "/etc/sandbox-no-desktop"
 # A VM whose agent doesn't answer this long after it was started hung while booting (wait_agent).
 HUNG_BOOT_SECONDS = 180
+# The longest one `incus stop` may take (stop): the clean shut down's own 60 seconds and some, then the forced one.
+STOP_SECONDS = 120
 # The most desktops any VM can have (each VM's own max desktops is set up to this), and the screen size of desktops 2
 # and up (desktop 1's comes with the image). Desktop n's ports and screens (above) don't run into each other up to here.
 MAX_DESKTOPS = 32
@@ -315,13 +317,22 @@ class VM:
             responds = subprocess.run(["incus", "exec", self.name, "--", "true"], capture_output=True, stdin=subprocess.DEVNULL, timeout=10).returncode == 0
         except subprocess.TimeoutExpired:
             responds = False
-        if not responds:
-            subprocess.run(["incus", "stop", self.name, "--force"], capture_output=True, stdin=subprocess.DEVNULL)
-        else:
+        # Each incus stop has a time limit of its own: one that hangs must not hold the VM in "stopping" for good, while
+        # it runs on and answers commands (vm1 on 2026-11-11, its disk full: every run in it was reported ended,
+        # prb_3e5cac). Still running after both, it raises, and its status goes back to running (sandbox/vms.py).
+        stopped = False
+        if responds:
             # Ask the VM to shut down; force it off if it takes too long.
-            result = subprocess.run(["incus", "stop", self.name, "--timeout", "60"], capture_output=True, stdin=subprocess.DEVNULL)
-            if result.returncode != 0:
-                subprocess.run(["incus", "stop", self.name, "--force"], capture_output=True, stdin=subprocess.DEVNULL)
+            try:
+                result = subprocess.run(["incus", "stop", self.name, "--timeout", "60"], capture_output=True, stdin=subprocess.DEVNULL, timeout=STOP_SECONDS)
+                stopped = result.returncode == 0
+            except subprocess.TimeoutExpired:
+                stopped = False
+        if not stopped:
+            try:
+                subprocess.run(["incus", "stop", self.name, "--force"], capture_output=True, stdin=subprocess.DEVNULL, timeout=STOP_SECONDS)
+            except subprocess.TimeoutExpired:
+                pass
         if self.status() == "Running":
             raise VMError(f"Could not stop {self.name}")
 

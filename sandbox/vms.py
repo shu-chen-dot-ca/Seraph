@@ -71,7 +71,8 @@ SCAN_SECONDS. The image builder VM is never one of them.
 
 Status: creating -> running -> stopping -> stopped -> starting -> running, or failed.
 "missing" means the Incus VM is gone. Only one lifecycle action runs on a VM at a time;
-a second one gets VMsError.
+a second one gets VMsError. Stopping and starting last only while that action goes on (a stop's incus calls have a
+time limit, sandbox/vm.py): the watcher sets one left behind to what Incus says.
 
 VMs.version goes up on every record change and every usage sample, so the live feed
 (backend /api/live) sends the VM list whenever anything in it changed.
@@ -915,6 +916,11 @@ class VMs:
                 # Started from outside (Incus autostart after the backend came up, `incus start`).
                 if usage["on"] and record.status == "stopped" and not record.lock.locked():
                     record.status = "running"
+                    record.save()
+                # A stop or start that isn't going on anymore never leaves its status behind: it is what Incus says, so a
+                # VM never shows as stopping to the agents while it runs on (vm1, 2026-11-11).
+                if record.status in ("stopping", "starting") and not record.lock.locked():
+                    record.status = "running" if usage["on"] else "stopped"
                     record.save()
                 if changed:
                     self.changed()
