@@ -2,9 +2,10 @@
 merged pull requests, kept up to date as long as Seraph runs (backend/github_api.py's keep_profile_readme()).
 
 update(your_repositories) searches GitHub, as you, for every pull request of yours merged into a public repository
-that isn't yours (is:pr is:merged is:public author:<you> -user:<you>), and writes them as a table: one row per
-repository with its stars, the most starred first, with a link to each pull request and, in a column of their own,
-its lines added (green) and removed (red). Only the part between START and END changes; everything else in README.md
+that isn't yours (is:pr is:merged is:public author:<you> -user:<you>), and writes how many there are and in how many
+repositories ("Seraph merged PRs: 12 in 8 repositories"), then a table: one row per repository with its stars, the
+most starred first, with a link to each pull request and, in a column of their own, its lines added (green) and
+removed (red). Only the part between START and END changes; everything else in README.md
 stays as you wrote it. When nothing changed, nothing is committed. A README.md without both markers is left alone.
 
 The first time, when the repository isn't there yet, it is made, public, with a README.md that is FIRST_TEXT and the
@@ -35,8 +36,8 @@ query($query: String!, $after: String) {
 
 
 def table(your_repositories, login: str) -> str:
-    """The table, in Markdown: one row per repository with its stars, the most starred first, each one's pull requests
-    newest first."""
+    """The totals line and the table, in Markdown: one row per repository with its stars, the most starred first, each
+    one's pull requests newest first."""
     query = f"is:pr is:merged is:public author:{login} -user:{login}"
     nodes = []
     after = None
@@ -62,7 +63,10 @@ def table(your_repositories, login: str) -> str:
 
     if not repos:
         return "No merged pull requests yet."
-    lines = ["| Repository 🚀 | Stars 🌟 | Merged PR | Lines changed |", "| --- | --- | --- | --- |"]
+    # Above the table, the totals. The empty line keeps the table from running into it.
+    lines = [f"Seraph merged PRs: {len(nodes):,} in {len(repos):,} repositories", ""]
+    lines.append("| Repository 🚀 | Stars 🌟 | Merged PR | Lines changed |")
+    lines.append("| --- | --- | --- | --- |")
     # The most starred first.
     for name, repo in sorted(repos.items(), key=lambda item: item[1]["stars"], reverse=True):
         # A table cell can't hold a new line in Markdown: <br> puts each pull request on its own line.
