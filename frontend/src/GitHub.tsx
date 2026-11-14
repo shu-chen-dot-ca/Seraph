@@ -33,7 +33,8 @@ asks whether Seraph may act as you (about all you can do on github.com: your rep
 organizations, gists, notifications, your profile), and after Authorize comes back here signed in, with a message
 "Signed in as @login" (or, in red on top, why not, e.g. after Cancel there). With more than one account on
 github.com, GitHub asks which one first. Signed in: "Signed in as @login", what it may do, and Sign out, which forgets
-it (Approve then sends nothing again). Nothing about the sign-in ever comes back to the browser but who it is.
+it (Approve then sends nothing again). A sign-in from before Seraph deleted unused forks (no delete_repo) gets a line
+asking to sign in again, with Sign in again, which goes to GitHub's page the same way. Nothing about the sign-in ever comes back to the browser but who it is.
 The first time, the page shows how to register the app on GitHub, once: a link to GitHub's form for a new OAuth app,
 the three values to fill in (name, homepage, callback address; click one to select it), then the Client ID and client
 secret to paste here and Save. Change app settings shows that again. Use a token instead (both views) takes a
@@ -456,6 +457,15 @@ export default function GitHub(props: { section: string; repo: string | null; st
                   </div>
                 </div>
               )}
+              {account !== null && account.connected && account.can_sign_in && !(account.scopes ?? []).includes("delete_repo") && (
+                <div className="mt-2 flex items-center gap-2">
+                  <span className="text-muted-foreground">Sign in again so Seraph can delete forks nothing uses anymore.</span>
+                  <Button size="sm" onClick={signIn} disabled={signingIn}>
+                    {signingIn && <Loader2 className="animate-spin" />}
+                    Sign in again
+                  </Button>
+                </div>
+              )}
               {account !== null && !account.connected && account.can_sign_in && !settingUp && !useToken && (
                 <div className="space-y-2">
                   <Button onClick={signIn} disabled={signingIn}>
@@ -583,7 +593,7 @@ export default function GitHub(props: { section: string; repo: string | null; st
                   <p className="text-xs text-muted-foreground">
                     For an organization that blocks apps it hasn't approved. Paste a classic token (
                     <a
-                      href="https://github.com/settings/tokens/new?scopes=repo,workflow,read:org,gist,notifications,user&description=Seraph"
+                      href="https://github.com/settings/tokens/new?scopes=repo,workflow,read:org,gist,notifications,user,delete_repo&description=Seraph"
                       target="_blank"
                       rel="noreferrer"
                       className="text-primary hover:underline"
