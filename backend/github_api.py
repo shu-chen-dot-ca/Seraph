@@ -33,9 +33,10 @@ VM's line, more CPU, stepped down last; then the ones reviewing a PR draft befor
 (agents.set_review_priority): next in the line, stepped down after the rest; then the rest (In progress and Catalog).
 
 keep_profile_readme(), also in the background, keeps the merged pull requests table on your GitHub profile's README
-(github_searcher/profile_readme.py): at start, whenever a PR of yours shows up merged here (so within a few minutes of
-the merge), and every PROFILE_README_SECONDS for the ones not followed here. It commits as you without the Inbox: only
-that one file in your own profile repository.
+(github_searcher/profile_readme.py): every time Seraph starts, whenever a PR of yours shows up merged here (so within a
+few minutes of the merge), and every PROFILE_README_SECONDS for the ones not followed here. One that fails (GitHub or
+the network down, say right after the computer starts) is tried again PROFILE_README_RETRY_SECONDS later. It commits as
+you without the Inbox: only that one file in your own profile repository.
 
 The buttons (each asks "are you sure?" in the browser first): post a comment as you, delete one of your comments
 (refused when it isn't yours; a draft that posted it keeps when it was deleted), close or reopen one of your PRs,
@@ -131,6 +132,7 @@ query($after: String) {
 }
 """
 PROFILE_README_SECONDS = 24 * 60 * 60
+PROFILE_README_RETRY_SECONDS = 5 * 60
 PR_ACTIONS = ["close", "reopen", "delete_branch"]
 THREAD_ID = r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)#(\d+)"
 NAME = r"[A-Za-z0-9_.-]+"
@@ -602,22 +604,28 @@ async def keep_forks_trimmed() -> None:
 async def keep_profile_readme() -> None:
     """Runs as long as the backend: brings your profile README's merged pull requests table up to date at start, when a
     PR of yours newly shows up merged, and every PROFILE_README_SECONDS (see the top of this file). One that fails is
-    tried again on the next of those."""
+    tried again PROFILE_README_RETRY_SECONDS later."""
     merged = None
     last = None
+    failed = False
     while True:
         now_merged = set()
         for pr in pr_tracking.summary()["items"]:
             if pr["relation"] == "author" and pr["state"] == "merged":
                 now_merged.add(pr["id"])
-        if merged is None or not now_merged.issubset(merged) or time.monotonic() - last > PROFILE_README_SECONDS:
+        due = merged is None or not now_merged.issubset(merged) or time.monotonic() - last > PROFILE_README_SECONDS
+        if failed and time.monotonic() - last > PROFILE_README_RETRY_SECONDS:
+            due = True
+        if due:
             merged = now_merged
             last = time.monotonic()
+            failed = False
             try:
                 done = await asyncio.to_thread(profile_readme.update, your_repositories)
                 print(f"[profile readme] {done}")
             except Exception as error:
                 print(f"[profile readme] could not update: {error}")
+                failed = True
         await asyncio.sleep(PRS_CHECK_SECONDS)
 
 
