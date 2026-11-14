@@ -577,9 +577,9 @@ export type TrackedPR = {
   your_last_at: string | null; // your newest comment or review there
   failed_checks?: string[]; // the newest commit's checks that failed, by name
   head_at?: string | null; // when its newest commit was made
-  // Your open PR: what it needs from us now (needs: the Issues board's Needs action), else how it waits (status: Waiting
-  // approval). who: you when part of it only you can do. detail: what Claude found it needs, in words. null otherwise.
-  action?: { needs: boolean; reasons: string[]; who: "agent" | "you"; detail: string; status: string } | null;
+  // Your open PR: what it needs from us now (needs: the Issues board's Needs action, always its agent's to do), else how it
+  // waits (status: Waiting approval). detail: what Claude found it needs, in words. null otherwise.
+  action?: { needs: boolean; reasons: string[]; detail: string; status: string } | null;
   checked_at: string;
   error: string | null; // why the last read failed (the status before stays)
 };
