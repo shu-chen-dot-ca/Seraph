@@ -27,7 +27,7 @@ It keeps, in DATA_DIR/pr_tracking.json, by "owner/name#number", each PR in "prs"
      "signals": {"state", "draft", "title", "head", "checks", "mergeable", "labels", "bot_at"},
      "draft_id": "draft_..." | None, "job": "job_..." | None,
      "agent": "<agent id>" | None, "agent_mode": "drafts" | "off",
-     "action": {"needs", "reasons", "who", "detail", "status"} | None (your open PR only, update_actions),
+     "action": {"needs", "reasons", "detail", "status"} | None (your open PR only, update_actions),
      "checked_at", "error": str | None}
 
 and each issue in "issues":
@@ -70,9 +70,9 @@ that issue's own agent was given it (it is the issue's follow-up, not the PR's).
 judgment (set_judgment, from judge_prs in backend/github_api.py) adds its own reasons and detail (what to do) when it
 says action is needed: Draft only from there (a GitHub draft the project waits for us to make ready; not one its gate or
 a maintainer holds), and never Merge conflicts unless GitHub says so. "judgments" keeps it by PR id: {"key", "needs",
-"who": "agent" | "you" | "none", "reasons", "detail", "judged_at", "head", "failed_checks", "version"}, where key
-(judgment_key) is what it was made on, so it is made again once that changes. who:
-you when part of it only you can do. status is how it waits otherwise, as GitHub says it: Ready to merge (approved,
+"reasons", "detail", "judged_at", "head", "failed_checks", "version"}, where key (judgment_key) is what it was made on,
+so it is made again once that changes. Every need is the agents' to settle, never yours (a CLA too: its agent finds out
+whether it really blocks the merge). status is how it waits otherwise, as GitHub says it: Ready to merge (approved,
 checks passed, no conflicts), Awaiting CI (checks running or waiting for a maintainer's OK), else Awaiting approval.
 agent_settings also keeps "action_base", "action_key", "action_state" and "action_tries" (mark_action_given): what its
 agent was last given of that, the PR as others had left it then, and how many times on the same newest commit.
@@ -115,8 +115,8 @@ AGENT_MODES = ["drafts", "off"]
 CLA = re.compile(r"\bcla\b|cla[-_]|license/cla|contributor license", re.IGNORECASE)
 # The labels of what a PR of yours needs from us (update_actions), in the order they show.
 # Judgments made by older rules are dropped when the file is read (1 told Claude about conflicts the wrong way round, 2
-# didn't keep the commit and failed checks it saw).
-JUDGMENT_VERSION = 3
+# didn't keep the commit and failed checks it saw, 3 left part of it to you).
+JUDGMENT_VERSION = 4
 ACTION_LABELS = ["Merge conflicts", "CLA not signed", "Not sent", "Changes requested", "Checks failing", "Reply needed", "Draft",
                  "Rebase needed", "Description out of date", "New comment", "New review", "Bot review", "Other"]
 
@@ -362,9 +362,9 @@ class PRTracking:
         return "|".join([pr["updated_at"], head, pr["mergeable"], pr["checks"], ",".join(sorted(pr.get("failed_checks", []))), issues, ended])
 
     def set_judgment(self, pr_id: str, judgment: dict) -> None:
-        """Claude's judgment of what the PR needs from us (backend/github_api.py judge_prs): {"key", "needs", "who",
-        "reasons", "detail", "judged_at", "head", "failed_checks"} (head and failed_checks: the newest commit and its
-        failed checks it saw)."""
+        """Claude's judgment of what the PR needs from us (backend/github_api.py judge_prs): {"key", "needs", "reasons",
+        "detail", "judged_at", "head", "failed_checks"} (head and failed_checks: the newest commit and its failed checks
+        it saw)."""
         with self.lock:
             self.data["judgments"][pr_id] = {**judgment, "version": JUDGMENT_VERSION}
             self.save()
@@ -402,7 +402,7 @@ class PRTracking:
                 self.save()
 
     def action_of(self, pr: dict, jobs: list[dict], unsent: list[dict]) -> dict:
-        """One open PR of yours, with the lock held: {"needs", "reasons", "who", "detail", "status"}. unsent: the drafts
+        """One open PR of yours, with the lock held: {"needs", "reasons", "detail", "status"}. unsent: the drafts
         you approved without sending."""
         judgment = self.data["judgments"].get(pr["id"])
         judged_at = judgment["judged_at"] if judgment is not None else ""
@@ -456,7 +456,6 @@ class PRTracking:
         # CONFLICTING, the rule above), never Claude's reading: not while GitHub still works it out, nor for a branch that
         # is only behind (reticle#2221: a rebase was asked for a PR GitHub showed as MERGEABLE). A judgment left with
         # nothing else is no judgment, and its detail goes with it.
-        who = "agent"
         detail = ""
         kept = []
         if judgment is not None and judgment["needs"]:
@@ -464,10 +463,6 @@ class PRTracking:
         if kept:
             reasons += kept
             detail = judgment["detail"]
-            if judgment["who"] == "you":
-                who = "you"
-        if "CLA not signed" in reasons or "Not sent" in reasons:
-            who = "you"
         reasons = [label for label in ACTION_LABELS if label in reasons]
         # How it waits otherwise, in GitHub's words.
         status = "Awaiting approval"
@@ -475,7 +470,7 @@ class PRTracking:
             status = "Awaiting CI"
         if pr["review"] == "approved" and pr["checks"] in ["passed", "none"] and pr["mergeable"] == "yes":
             status = "Ready to merge"
-        return {"needs": len(reasons) > 0, "reasons": reasons, "who": who, "detail": detail, "status": status}
+        return {"needs": len(reasons) > 0, "reasons": reasons, "detail": detail, "status": status}
 
     def refresh(self) -> None:
         """Read every PR and issue to follow from GitHub again. Runs in a thread; a second call waits for the first."""

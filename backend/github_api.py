@@ -23,11 +23,11 @@ What each open PR of yours needs from us (the Issues board's Needs action, else 
 PRS_CHECK_SECONDS (pr_tracking.update_actions): by rules, and by Claude (judge_prs), which reads a PR again, JUDGE_BATCH
 at a time, when it changed on GitHub or a job on it ended since it last did, never while a job on it is open. One that
 needs action, as Claude last read it, with no job open on it, goes to its agent as a follow_up job saying what it needs:
-ACTION_TRIES times at most on the same newest commit, each after a new judgment (once when part of
-it only you can do; never for a draft you approved and only have to send), and again only once something really changed
-on it since its last job was given it (a commit, checks, a conflict, the draft state, labels, someone else's comment or
-review, a comment on an issue it fixes): a job that ended finding nothing we can do isn't given the same need again for
-nothing. Agents work in the Issues board's order:
+ACTION_TRIES times at most on the same newest commit, each after a new judgment (never for a draft you approved and
+only have to send), and again only once something really changed on it since its last job was given it (a commit,
+checks, a conflict, the draft state, labels, someone else's comment or review, a comment on an issue it fixes): a job
+that ended finding nothing we can do isn't given the same need again for nothing. Every need is the agent's, never
+yours: it settles a CLA too (Nothing waits on the user in agent/prompt.md). Agents work in the Issues board's order:
 the ones with a job queued or working on a PR that needs action get priority (agents.set_pr_priority): ahead in the
 VM's line, more CPU, stepped down last; then the ones reviewing a PR draft before the Inbox, the board's Review
 (agents.set_review_priority): next in the line, stepped down after the rest; then the rest (In progress and Catalog).
@@ -89,7 +89,7 @@ JUDGE_BATCH = 4
 JUDGE_BODY_CHARS = 3000
 JUDGE_COMMENT_CHARS = 1500
 JUDGE_LINE_CHARS = 600
-# How many times the same need (the same reasons on the same newest commit) goes to its agent; once when only you can do it.
+# How many times the same need (the same reasons on the same newest commit) goes to its agent.
 # A try after the first only once something changed on the PR since the last one (keep_prs).
 ACTION_TRIES = 3
 JUDGE_REASONS = ["Changes requested", "Reply needed", "Checks failing", "Merge conflicts", "Rebase needed", "CLA not signed",
@@ -104,11 +104,10 @@ JUDGE_SCHEMA = {
                 "properties": {
                     "id": {"type": "string"},
                     "needs_action": {"type": "boolean"},
-                    "who": {"type": "string", "enum": ["agent", "you", "none"]},
                     "reasons": {"type": "array", "items": {"type": "string", "enum": JUDGE_REASONS}},
                     "detail": {"type": "string"},
                 },
-                "required": ["id", "needs_action", "who", "reasons", "detail"],
+                "required": ["id", "needs_action", "reasons", "detail"],
             },
         },
     },
@@ -719,12 +718,12 @@ async def judge_prs(due: list[dict], jobs: list[dict], failed_at: dict) -> None:
             "PR as not our change's (a reply of ours after them), with no newer commit or check run since: no action.\n"
             "- Merge conflicts only when the line above says YES. A branch that is only behind its base is no conflict and "
             "needs no rebase, unless a maintainer or the project's rules ask for one.\n"
-            "- A CLA that isn't signed: action, who you.\n"
+            "- A CLA that isn't signed: action (our agent finds out whether it really blocks the merge and settles it).\n"
             "- A GitHub draft PR: our agents can't mark it ready for review (no tool does). When a bot or the project's "
             "gate keeps it a draft until a checklist or check passes, only what of that is ours and not done yet is "
             "action (a box to tick in the description, a failing check of our change); once that is done it waits on "
-            "the gate or a maintainer (their label, their OK to run the workflows, the gate's next run): no action. When "
-            "the project only waits for its author to mark it ready and nothing else is left: action, who you.\n"
+            "the gate or a maintainer (their label, their OK to run the workflows, the gate's next run): no action. Also "
+            "when the project only waits for its author to mark it ready: nothing of ours can.\n"
             "- A bot or maintainer saying something the project requires is missing (a template field, a changelog "
             "entry, an attachment, a rebase): action.\n"
             "- A description that claims what the commits don't have: action.\n"
@@ -732,15 +731,13 @@ async def judge_prs(due: list[dict], jobs: list[dict], failed_at: dict) -> None:
             "already answered or that don't apply: no.\n"
             "- Thank-yous, approvals with no asks, a maintainer saying they'll look later, bot notes with no findings, "
             "coverage reports: no action.\n"
-            "who: you only when only the user can do it (sign a CLA, upload a file on GitHub's web page, a review of "
-            "every line the project asks of the human, an account or legal step); agent for code, replies, rebases, "
-            "descriptions; none when no action. reasons: the kinds of what is needed (Changes requested also for a "
-            "request made in a comment). detail: when action is needed, one to three plain sentences saying exactly what "
-            "has to be done, with who asked and when (it is handed to the agent as its task); empty otherwise. Only what "
-            "our agents can do (code, a new version or rebase, a reply, a new title or description), or with who you "
-            "what only the user can: never ask the agents to mark it ready for review, change its labels, request "
-            "reviewers, or approve or re-run checks, which no tool of theirs does. When only the maintainers or the "
-            "project's gate can move it on: no action.\n"
+            "reasons: the kinds of what is needed (Changes requested also for a request made in a comment). detail: when "
+            "action is needed, one to three plain sentences saying exactly what has to be done, with who asked and when "
+            "(it is handed to our agent as its task); empty otherwise. Everything that needs action is our agents' to "
+            "settle, never the user's: they write code, new versions and rebases, replies, new titles and descriptions, "
+            "and close the PR when only something they can't do would move it on. Never ask them to mark it ready for "
+            "review, change its labels, request reviewers, or approve or re-run checks, which no tool of theirs does. "
+            "When only the maintainers or the project's gate can move it on: no action.\n"
             "Answer for every pull request, by its id.\n\n" + "\n\n".join(texts)
         )
         try:
@@ -760,13 +757,11 @@ async def judge_prs(due: list[dict], jobs: list[dict], failed_at: dict) -> None:
             reasons = [reason for reason in each["reasons"] if reason in JUDGE_REASONS]
             if each["needs_action"] and not reasons:
                 reasons = ["Other"]
-            who = each["who"]
             if not each["needs_action"]:
-                who = "none"
                 reasons = []
             pr = [one for one in batch if one["id"] == each["id"]][0]
             judgment = {
-                "key": keys[each["id"]], "needs": each["needs_action"], "who": who, "reasons": reasons,
+                "key": keys[each["id"]], "needs": each["needs_action"], "reasons": reasons,
                 "detail": each["detail"] if each["needs_action"] else "", "judged_at": now,
                 "head": pr["head"]["sha"] if pr["head"] is not None else "", "failed_checks": pr.get("failed_checks", []),
             }
@@ -875,9 +870,8 @@ async def keep_prs() -> None:
                     judging = asyncio.create_task(judge_prs(due, all_jobs, failed_at))
 
             # One that needs action with no job open on it goes to its agent, ACTION_TRIES times at most on the same newest
-            # commit (once when only you can do it), each time after a new judgment, and again only once something changed
-            # on it since the last time. Only once
-            # Claude read it as it is now: what happened since needs_reply gives already, and may need nothing.
+            # commit, each time after a new judgment, and again only once something changed on it since the last time. Only
+            # once Claude read it as it is now: what happened since needs_reply gives already, and may need nothing.
             followed_issues = pr_tracking.summary()["issues"]
             for pr in prs:
                 action = pr.get("action")
@@ -900,8 +894,7 @@ async def keep_prs() -> None:
                 key = ",".join(action["reasons"]) + "|" + head + "|" + judged_at
                 setting = settings.get(pr["id"], {})
                 tries = setting.get("action_tries", 0) if setting.get("action_base") == base else 0
-                limit = 1 if action["who"] == "you" else ACTION_TRIES
-                if setting.get("action_key") == key or tries >= limit:
+                if setting.get("action_key") == key or tries >= ACTION_TRIES:
                     continue
                 # Nothing changed on it since its last job was given this, apart from what we did ourselves (a reply): that
                 # job ended, having settled it or found nothing we can do (lancedb#4922: failures it had explained on the
@@ -923,10 +916,13 @@ async def keep_prs() -> None:
                 reason = "it needs action from us: " + ", ".join(action["reasons"])
                 if action["detail"]:
                     reason += f" ({action['detail']})"
-                if action["who"] == "you":
-                    reason += ". Part of it only the user can do: tell them exactly what and how with draft_question, and do the rest yourself"
+                if "CLA not signed" in action["reasons"]:
+                    reason += (
+                        ". The user signs nothing: settle the CLA as Nothing waits on the user says (no blocker when it is "
+                        "signed or on its way, or the project merges the user's PRs with it pending; else close the PR)"
+                    )
                 if tries > 0:
-                    reason += f". Your last job on it ended without settling this, and something changed on it since; this is try {tries + 1} of {limit}"
+                    reason += f". Your last job on it ended without settling this, and something changed on it since; this is try {tries + 1} of {ACTION_TRIES}"
                 entry = {
                     "id": pr["id"], "kind": "pr", "relation": "author", "state": "open", "title": pr["title"], "url": pr["url"],
                     "agent": pr["agent"], "reason": reason, "at": None, "failed_sha": None, "head": pr["head"],
