@@ -115,7 +115,7 @@ AGENT_MODES = ["drafts", "off"]
 CLA = re.compile(r"\bcla\b|cla[-_]|license/cla|contributor license", re.IGNORECASE)
 # The labels of what a PR of yours needs from us (update_actions), in the order they show.
 # Judgments made by older rules are dropped when the file is read (1 told Claude about conflicts the wrong way round, 2
-# didn't keep the commit and failed checks it saw, 3 left part of it to you).
+# didn't keep the commit and failed checks it saw, 3 left part of it to you and counted a review bot's nitpicks).
 JUDGMENT_VERSION = 4
 ACTION_LABELS = ["Merge conflicts", "CLA not signed", "Not sent", "Changes requested", "Checks failing", "Reply needed", "Draft",
                  "Rebase needed", "Description out of date", "New comment", "New review", "Bot review", "Other"]
