@@ -24,8 +24,10 @@ read.
 
 send(draft_id) sends a PR, comment or edit draft once, as it was shown in the Inbox. A PR:
 1. Your fork of the project, made the first time (GitHub keeps it). Your own repo is its own fork.
-2. The pictures the body shows (evidence:ev_...) go on your fork's pr-pictures branch, one folder per
-   draft, and the body links to them there: GitHub's API has no way to attach a picture to a PR.
+2. The pictures the body shows (evidence:ev_...) go on the pr-pictures branch of your profile repository
+   (github.com/you/you, which profile_readme.py keeps), one folder per draft, and the body links to them
+   there: GitHub's API has no way to attach a picture to a PR. Only without a profile repository, the fork
+   holds them.
 3. The commits, on top of the commit the agent started from (base_sha). The draft's diff is applied
    here, with git apply in a temporary folder, to that commit's copies of the files it touches, read
    from GitHub (tree()). Nothing comes from the VM, so what goes out is exactly the diff you reviewed.
@@ -433,49 +435,55 @@ class GithubAccount:
                 raise SendError("GitHub is still making your fork. Try again in a minute.")
             time.sleep(2)
 
-    def pictures(self, client: httpx.Client, account: dict, fork: str, draft: dict) -> str:
-        """The draft's body, with its pictures (evidence:ev_...) put on the fork's pr-pictures branch and linked there."""
+    def pictures(self, client: httpx.Client, account: dict, repo: str, draft: dict) -> str:
+        """The draft's body, with its pictures (evidence:ev_...) put on your profile repository's pr-pictures branch and
+        linked there (the top of this file). repo is the project (or your fork of it): your fork of it holds them only
+        when you have no profile repository."""
         body = draft["body"]
         shown = [item for item in draft["evidence"] if item["file"] is not None and f"evidence:{item['id']}" in body]
         if not shown:
             return body
         self.step = "uploading the pictures"
-        response = client.get(f"/repos/{fork}/git/ref/heads/{PICTURES_BRANCH}")
+        store = f"{account['login']}/{account['login']}"
+        response = client.get(f"/repos/{store}")
+        if response.status_code != 200:
+            store = self.fork(client, account, repo)
+        response = client.get(f"/repos/{store}/git/ref/heads/{PICTURES_BRANCH}")
         parents = []
         payload = {"tree": []}
         if response.status_code == 200:
             parents = [response.json()["object"]["sha"]]
-            response = client.get(f"/repos/{fork}/git/commits/{parents[0]}")
+            response = client.get(f"/repos/{store}/git/commits/{parents[0]}")
             response.raise_for_status()
             payload["base_tree"] = response.json()["tree"]["sha"]
         elif response.status_code != 404:
             response.raise_for_status()
         for item in shown:
             content = base64.b64encode((EVIDENCE_DIR / item["file"]).read_bytes()).decode()
-            response = client.post(f"/repos/{fork}/git/blobs", json={"content": content, "encoding": "base64"})
+            response = client.post(f"/repos/{store}/git/blobs", json={"content": content, "encoding": "base64"})
             response.raise_for_status()
             payload["tree"].append({"path": f"{draft['id']}/{item['file']}", "mode": "100644", "type": "blob", "sha": response.json()["sha"]})
-        response = client.post(f"/repos/{fork}/git/trees", json=payload)
+        response = client.post(f"/repos/{store}/git/trees", json=payload)
         response.raise_for_status()
         author = {"name": account["name"], "email": f"{account['id']}+{account['login']}@users.noreply.github.com"}
         message = f"Pictures for {draft['title']}"
-        response = client.post(f"/repos/{fork}/git/commits", json={"message": message, "tree": response.json()["sha"], "parents": parents, "author": author})
+        response = client.post(f"/repos/{store}/git/commits", json={"message": message, "tree": response.json()["sha"], "parents": parents, "author": author})
         response.raise_for_status()
         commit = response.json()["sha"]
         if parents:
-            response = client.patch(f"/repos/{fork}/git/refs/heads/{PICTURES_BRANCH}", json={"sha": commit})
+            response = client.patch(f"/repos/{store}/git/refs/heads/{PICTURES_BRANCH}", json={"sha": commit})
         else:
-            response = client.post(f"/repos/{fork}/git/refs", json={"ref": f"refs/heads/{PICTURES_BRANCH}", "sha": commit})
+            response = client.post(f"/repos/{store}/git/refs", json={"ref": f"refs/heads/{PICTURES_BRANCH}", "sha": commit})
         response.raise_for_status()
         # By the commit, so a link never changes. A private repo's raw files need a sign-in that raw.githubusercontent.com
         # never gets from a page: there GitHub's own address shows them, to whoever may see the repo.
-        response = client.get(f"/repos/{fork}")
+        response = client.get(f"/repos/{store}")
         response.raise_for_status()
         private = response.json()["private"]
         for item in shown:
-            link = f"https://raw.githubusercontent.com/{fork}/{commit}/{draft['id']}/{item['file']}"
+            link = f"https://raw.githubusercontent.com/{store}/{commit}/{draft['id']}/{item['file']}"
             if private:
-                link = f"https://github.com/{fork}/blob/{commit}/{draft['id']}/{item['file']}?raw=true"
+                link = f"https://github.com/{store}/blob/{commit}/{draft['id']}/{item['file']}?raw=true"
             body = body.replace(f"evidence:{item['id']}", link)
         return body
 
@@ -916,11 +924,7 @@ class GithubAccount:
         repo, _, number = (draft["target"] or "").rpartition("#")
         if repo == "" or not number.isdigit():
             raise SendError("This comment has no issue or PR to go on.")
-        body = draft["body"]
-        # Pictures need a place on GitHub: your fork.
-        if any(item["file"] is not None and f"evidence:{item['id']}" in body for item in draft["evidence"]):
-            fork = self.fork(client, account, repo)
-            body = self.pictures(client, account, fork, draft)
+        body = self.pictures(client, account, repo, draft)
         self.step = "posting the comment"
         if draft["reply_to"] is not None:
             response = client.post(f"/repos/{repo}/pulls/{number}/comments/{draft['reply_to']}/replies", json={"body": body})
@@ -994,10 +998,7 @@ class GithubAccount:
         then_body = re.sub(r"^(\s*[-*] )\[[xX]\]", r"\1[ ]", then_body, flags=re.M)
         if now_title != draft["previous"]["title"] or now_body != then_body:
             raise SendError("Its title or description changed since the agent drafted this: Redraft, so the agent works on the text as it is now.")
-        body = draft["body"]
-        if any(item["file"] is not None and f"evidence:{item['id']}" in body for item in draft["evidence"]):
-            fork = self.fork(client, account, repo)
-            body = self.pictures(client, account, fork, draft)
+        body = self.pictures(client, account, repo, draft)
         self.step = "changing the title and description"
         response = client.patch(f"/repos/{repo}/issues/{number}", json={"title": draft["title"], "body": body})
         response.raise_for_status()
