@@ -43,8 +43,18 @@ delete a closed or merged PR's branch from your fork. After a change to a PR, th
 
 keep_branches_clean(), also in the background, does that last one by itself: every BRANCHES_CHECK_SECONDS, each PR of
 yours that is no longer open (merged or closed) and still has its branch in your own fork gets that branch deleted, like
-GitHub's Delete branch button (the PR's page on GitHub has Restore branch, to reopen one). Only branches in your fork,
-only PRs that aren't open; one GitHub refuses is tried again only when the branch has a newer commit. Check now
+GitHub's Delete branch button (the PR's page on GitHub has Restore branch, to reopen one, while its fork is there). Only
+branches in your fork, only PRs that aren't open; one GitHub refuses is tried again only when the branch has a newer
+commit.
+
+keep_forks_trimmed(), also in the background, keeps your GitHub account from filling up with forks (Approve makes one
+per project): every BRANCHES_CHECK_SECONDS, each fork in your account that nothing uses anymore is deleted. A fork
+stays while it has any branch besides its default one and pr-pictures (an open PR's: keep_branches_clean deletes the
+finished ones first; or one that isn't ours to judge), an open PR of yours comes from it, or a job on its project
+isn't done or cancelled (a PR may go there soon). Never a repository of your own, never while a draft is being sent,
+and only once you signed in with the delete_repo permission (the Account page asks you to sign in again). A later PR
+to the same project makes the fork again. Pictures on PRs live in your profile repository, not the fork
+(github_account.pictures). Check now
 (POST /api/github/refresh) reads them all at once. The PRs and issues reach the browser through /api/live (topic
 "prs"), the drafts with the Inbox (topic "inbox").
 """
@@ -62,7 +72,7 @@ from pydantic import BaseModel
 from backend.issues_api import AUTO_REMOVE_FILE, AUTO_REMOVE_OFF
 from backend.shared import agents, github_account, inbox, pr_tracking, workflow, your_repositories
 from github_searcher.claude_judge import judge
-from github_searcher.github_account import SendError
+from github_searcher.github_account import PICTURES_BRANCH, SendError
 from github_searcher import profile_readme
 from github_searcher.pr_tracking import AGENT_MODES, ROLLUP
 from github_searcher.search import get_action_runs, get_check_runs, get_commit_statuses, get_full_thread, get_issue_comment, get_pr_files
@@ -104,6 +114,22 @@ JUDGE_SCHEMA = {
     "required": ["prs"],
 }
 BRANCHES_CHECK_SECONDS = 10 * 60
+# Your forks, with the repo each was forked from and its first branches (keep_forks_trimmed).
+FORKS_QUERY = """
+query($after: String) {
+  viewer {
+    repositories(first: 100, after: $after, isFork: true, ownerAffiliations: [OWNER]) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        nameWithOwner
+        parent { nameWithOwner }
+        defaultBranchRef { name }
+        refs(refPrefix: "refs/heads/", first: 10) { totalCount nodes { name } }
+      }
+    }
+  }
+}
+"""
 PROFILE_README_SECONDS = 24 * 60 * 60
 PR_ACTIONS = ["close", "reopen", "delete_branch"]
 THREAD_ID = r"([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)#(\d+)"
@@ -519,6 +545,57 @@ async def keep_branches_clean() -> None:
             except SendError:
                 continue
             pr_tracking.wanted = True
+        await asyncio.sleep(BRANCHES_CHECK_SECONDS)
+
+
+async def keep_forks_trimmed() -> None:
+    """Runs as long as the backend: deletes each fork in your account that nothing uses anymore (see the top of this
+    file). One GitHub refuses is tried again next round."""
+    while True:
+        account = github_account.status()
+        if account["connected"] and "delete_repo" in account["scopes"] and github_account.sending_draft is None:
+            forks = []
+            try:
+                after = None
+                for _ in range(10):
+                    found = await asyncio.to_thread(your_repositories.graphql, FORKS_QUERY, {"after": after})
+                    forks += found["viewer"]["repositories"]["nodes"]
+                    if not found["viewer"]["repositories"]["pageInfo"]["hasNextPage"]:
+                        break
+                    after = found["viewer"]["repositories"]["pageInfo"]["endCursor"]
+            except Exception as error:
+                print(f"[github] could not list your forks: {error}")
+                forks = []
+            # What is in use: the forks your open PRs come from, and the projects with a job not done or cancelled.
+            prs = pr_tracking.summary()["items"]
+            used_forks = []
+            for pr in prs:
+                if pr["relation"] == "author" and pr["state"] == "open" and pr["head"] is not None:
+                    used_forks.append(pr["head"]["repo"].lower())
+            used_repos = []
+            for job in agents.jobs.list():
+                if job["status"] not in ["done", "cancelled"] and job["repo"] is not None:
+                    used_repos.append(job["repo"].lower())
+            for fork in forks:
+                name = fork["nameWithOwner"]
+                if fork["parent"] is None or fork["defaultBranchRef"] is None:
+                    continue
+                branches = [ref["name"] for ref in fork["refs"]["nodes"]]
+                others = [branch for branch in branches if branch not in [fork["defaultBranchRef"]["name"], PICTURES_BRANCH]]
+                if others or fork["refs"]["totalCount"] > len(branches):
+                    continue
+                if name.lower() in used_forks or fork["parent"]["nameWithOwner"].lower() in used_repos:
+                    continue
+                # A send may have started since this round began.
+                if github_account.sending_draft is not None:
+                    break
+                try:
+                    done = await asyncio.to_thread(github_account.manage, "delete_fork", name, 0)
+                    print(f"[github] {done}")
+                except SendError as error:
+                    print(f"[github] could not delete your fork {name}: {error}")
+                    continue
+                your_repositories.wanted = True
         await asyncio.sleep(BRANCHES_CHECK_SECONDS)
 
 

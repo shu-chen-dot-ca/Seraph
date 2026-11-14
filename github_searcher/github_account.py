@@ -26,8 +26,9 @@ send(draft_id) sends a PR, comment or edit draft once, as it was shown in the In
 1. Your fork of the project, made the first time (GitHub keeps it). Your own repo is its own fork.
 2. The pictures the body shows (evidence:ev_...) go on the pr-pictures branch of your profile repository
    (github.com/you/you, which profile_readme.py keeps), one folder per draft, and the body links to them
-   there: GitHub's API has no way to attach a picture to a PR. Only without a profile repository, the fork
-   holds them.
+   there: GitHub's API has no way to attach a picture to a PR. Not in the project's fork: a fork is deleted
+   once nothing uses it (keep_forks_trimmed in backend/github_api.py), and its pictures would break on every
+   finished PR. Only without a profile repository, the fork holds them.
 3. The commits, on top of the commit the agent started from (base_sha). The draft's diff is applied
    here, with git apply in a temporary folder, to that commit's copies of the files it touches, read
    from GitHub (tree()). Nothing comes from the VM, so what goes out is exactly the diff you reviewed.
@@ -131,7 +132,8 @@ load_dotenv(PROJECT_ROOT / ".env", override=True)
 DATA_DIR = PROJECT_ROOT / os.environ["DATA_DIR"]
 API = "https://api.github.com"
 # What signing in asks GitHub for (module docstring).
-SCOPES = "repo workflow read:org gist notifications user"
+# delete_repo: only for your forks that nothing uses anymore (manage's delete_fork).
+SCOPES = "repo workflow read:org gist notifications user delete_repo"
 PICTURES_BRANCH = "pr-pictures"
 # The comment that claims an issue opened as you where GitHub doesn't let you assign yourself (open_issue).
 CLAIM_TEXT = "I'm working on a fix for this and will open a PR."
@@ -1105,8 +1107,9 @@ class GithubAccount:
         """One change on GitHub from the GitHub tab, as you. action: "close" or "reopen" your PR repo#number,
         "update_branch" (your open PR: GitHub merges its base in), "reset_branch" (your open PR's branch in your fork goes
         back to sha, force-pushed, only while its newest commit is still expected_head), "delete_branch" (a closed or
-        merged PR's branch, from your fork), or "delete_comment" (number is the comment's id on GitHub). Returns what
-        happened, in words; SendError says why it didn't. Runs in a thread."""
+        merged PR's branch, from your fork), "delete_comment" (number is the comment's id on GitHub), or "delete_fork"
+        (repo is a fork in your account, never a repository of your own; number isn't used). Returns what happened, in
+        words; SendError says why it didn't. Runs in a thread."""
         account = self.load()
         if account is None:
             raise SendError("Sign in with GitHub first: the GitHub tab, Account.")
@@ -1119,6 +1122,19 @@ class GithubAccount:
                         return "The comment is gone already."
                     response.raise_for_status()
                     return "Deleted the comment."
+                if action == "delete_fork":
+                    response = client.get(f"/repos/{repo}")
+                    if response.status_code == 404:
+                        return "The fork is gone already."
+                    response.raise_for_status()
+                    found = response.json()
+                    if found["owner"]["login"].lower() != account["login"].lower() or not found["fork"]:
+                        raise SendError(f"{repo} isn't a fork in your account.")
+                    response = client.delete(f"/repos/{repo}")
+                    if response.status_code == 404:
+                        return "The fork is gone already."
+                    response.raise_for_status()
+                    return f"Deleted your fork {repo}."
 
                 response = client.get(f"/repos/{repo}/pulls/{number}")
                 response.raise_for_status()
