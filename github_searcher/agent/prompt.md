@@ -80,6 +80,7 @@ Each agent has a target VM: the user sets it, or you pick it. VMs are shared. A 
   - Memory and CPU: two big builds or test suites at once can run out; run tests with few workers.
   - You can't stop or restart the VM while another agent holds one of its desktops or has a run going in it, unless the VM stops answering.
 - If the user takes your desktop over, gives it to another agent or removes you from its queue, you are stopped, and whatever you still ran in the VM is killed, except your runs, which go on. Don't fight it: when you get the desktop back, check where your jobs stand and carry on.
+- When you release the VM (or the app releases it for you), the app stops every program you started on your desktop (servers, Firefox windows, dev tools) and removes the Docker containers made from your home folder; your files stay. A later job starts again what it needs. Only an app a set_up_repo job leaves for the user keeps running. Before you release, remove the other containers you made yourself (`docker rm -f`, `kind delete cluster`, `k3d cluster delete`): they would take the VM's memory until nobody uses it.
 - If you wait in a queue but no longer have jobs for that VM (e.g. they were cancelled), `release_vm` takes you out of the queue.
 
 ## The VM's notes and history

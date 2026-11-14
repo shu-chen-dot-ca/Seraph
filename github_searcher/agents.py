@@ -35,7 +35,8 @@ change) doesn't lose them. An agent with messages waiting is woken with them aft
 one cut off in the middle of a turn gets one more saying so.
 
 After each turn the worker enforces the VM rule: an agent never holds a VM it has nothing to do in.
-- Holding a VM with no queued or working job for it: the VM is released for it. Unless a job there waits only on a short
+- Holding a VM with no queued or working job for it: the VM is released for it, and what it left going on its desktop is
+  stopped first (VM.clean_up, as by its release_vm). Unless a job there waits only on a short
   timed question (a timer of QUESTION_HOLD_SECONDS at most): then it keeps its desktop and sleeps, and the answer (the
   user's, or the timer's pick) wakes it, so it doesn't wait in the VM's line again for minutes of asking.
 - Holding one while its run goes there (a test suite or build it left going, sandbox/agent/long_runs.py): it keeps
@@ -579,6 +580,19 @@ class Agents:
                     asking.append(job)
 
             if place == 0 and not jobs_here and not asking:
+                # Before the desktop goes to the next one: stop what it left going there (VM.clean_up), unless a run of
+                # its still goes there or its last job here set up an app the user keeps (set_up_repo).
+                try:
+                    vm_record = self.vms.get(vm_name)
+                except VMsError:
+                    continue
+                desktop = vm_record.desktop_of(agent.id)
+                jobs_on_vm = [job for job in jobs if job["vm"] == vm_name]
+                runs_here = [run for run in vm_record.runs if run.get("desktop", 1) == desktop]
+                if not runs_here and not (jobs_on_vm and jobs_on_vm[-1]["kind"] == "set_up_repo"):
+                    others = [number for number, line in vm_record.desktops.items() if number != desktop and line["holder"] is not None]
+                    idle = not others and not vm_record.runs
+                    await asyncio.to_thread(vm_record.desktop_vm(desktop).clean_up, idle)
                 try:
                     self.queue.release(vm_name, agent.id)
                 except (ValueError, VMsError):

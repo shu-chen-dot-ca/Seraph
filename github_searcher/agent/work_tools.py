@@ -4835,6 +4835,19 @@ class WorkTools:
         if place > 0:
             self.agents.queue.leave_all(self.agent_id)
             return {"content": [{"type": "text", "text": f"You left {vm_name}'s queue."}]}
+        # Before the desktop goes to the next one: stop what this agent left going there (VM.clean_up), unless a run of
+        # its still goes there or its last job here set up an app the user keeps (set_up_repo).
+        try:
+            record = self.agents.vms.get(vm_name)
+        except VMsError as error:
+            return {"content": [{"type": "text", "text": str(error)}], "is_error": True}
+        desktop = record.desktop_of(self.agent_id)
+        jobs_here = [job for job in self.agents.jobs.for_agent(self.agent_id) if job["vm"] == vm_name]
+        runs_here = [run for run in record.runs if run.get("desktop", 1) == desktop]
+        if not runs_here and not (jobs_here and jobs_here[-1]["kind"] == "set_up_repo"):
+            others = [number for number, line in record.desktops.items() if number != desktop and line["holder"] is not None]
+            idle = not others and not record.runs
+            await asyncio.to_thread(record.desktop_vm(desktop).clean_up, idle)
         try:
             self.agents.queue.release(vm_name, self.agent_id)
         except (ValueError, VMsError) as error:
