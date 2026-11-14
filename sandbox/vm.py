@@ -410,6 +410,36 @@ class VM:
         command = f'for sid in $(pgrep -f -- {pattern}); do pkill -KILL -s "$sid"; done; true'
         self.exec_root(command, timeout=30)
 
+    def clean_up(self, idle: bool) -> None:
+        """Stop what an agent left going on this desktop, as root, for when it is done there. Blocking (an incus call).
+        Never raises: a VM that is stopped or doesn't answer has nothing going on.
+
+        Programs: everything started through exec has SANDBOX_DESKTOP set to this desktop (servers, Firefox windows,
+        dev tools, and what they started), so every such process of this desktop's user is killed. The desktop itself
+        (its screen, GNOME, the agents' browser, the demo service) is started by systemd without it, so it stays.
+        Docker containers: Docker doesn't keep who made one, so only those made from this desktop's home (a compose
+        project there, or a folder of it mounted in) are removed. idle (no other desktop has a holder and no run goes):
+        also every container made from no home folder (kind and k3d clusters, a plain docker run), as nobody uses them.
+        Files, images and volumes stay.
+        """
+        user = '"$(id -nu 1000)"'
+        if self.desktop != 1:
+            user = f"desktop{self.desktop}"
+        script = f"user={user}; home=$(getent passwd $user | cut -d: -f6); "
+        script += f"for pid in $(pgrep -u $user); do grep -qxz SANDBOX_DESKTOP={self.desktop} /proc/$pid/environ 2> /dev/null && kill -KILL $pid; done; "
+        # Without a home, "$home/" would be "/", which every container has.
+        script += '[ -n "$home" ] || exit 0; command -v docker > /dev/null || exit 0; '
+        script += "for id in $(docker ps -aq); do "
+        script += "paths=$(docker inspect -f '{{index .Config.Labels \"com.docker.compose.project.working_dir\"}}/ {{range .Mounts}}{{.Source}}/ {{end}}' $id); "
+        script += 'if echo "$paths" | grep -qF "$home/"; then docker rm -f $id > /dev/null; continue; fi; '
+        if idle:
+            script += 'if ! echo "$paths" | grep -qF /home/; then docker rm -f $id > /dev/null; fi; '
+        script += "done; docker network prune -f > /dev/null; true"
+        try:
+            self.exec_root(script, timeout=300)
+        except subprocess.TimeoutExpired:
+            pass
+
     def exec_root(self, command: str, timeout: float = 120) -> subprocess.CompletedProcess:
         """Run a shell command as root (for system things like the login screen)."""
         return subprocess.run(
