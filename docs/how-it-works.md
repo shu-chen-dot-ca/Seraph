@@ -66,7 +66,7 @@ Before you decide, you can edit the text, **Redraft** with a note, or **Discuss*
 **What Approve sends:**
 1. The reviewed diff is applied on your computer, to the project's files read from GitHub. Nothing comes from the VM.
 2. The agent's commits are replayed under your name and your noreply email address.
-3. Evidence pictures go on a `pr-pictures` branch in your fork.
+3. Evidence pictures go on a `pr-pictures` branch in your profile repository (github.com/you/you), so they stay when the fork goes.
 4. The change is pushed to a new branch in your fork, and the PR is opened from there.
 
 Every issue an agent takes starts with a claim, a short comment that you are taking it on, so nobody else does meanwhile (not when you are already assigned). The claim comes to the Inbox before the PR. When the project's rules ask for a maintainer to assign contributors first, the PR also waits until they assign you on GitHub, after the claim is out; until then Approve says it can't go yet, and with the repo's **Pull requests** automation on it goes by itself once you are assigned.
@@ -101,4 +101,4 @@ When something goes wrong because of how the app made an agent work (a rule or t
 
 Where the repo's Comments or Pull requests setting is on, an agent can also take back what it sent itself: delete its own comment, close its own PR, or drop its newest commits from its own PR.
 
-Once a PR of yours is merged or closed, its branch in your fork is deleted by itself (the PR's page on GitHub has **Restore branch** if you want to reopen it).
+Once a PR of yours is merged or closed, its branch in your fork is deleted by itself. A fork that nothing uses anymore (no open PR from it, no branch left in it, no job on its project) is deleted too, so your account doesn't fill up with forks; the next PR to that project makes it again. This needs the delete_repo permission: the GitHub tab's Account page asks you to sign in again once.
