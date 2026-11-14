@@ -22,12 +22,12 @@ goes to its agent as a follow_up job (agents.follow_up); what the agent drafts t
 What each open PR of yours needs from us (the Issues board's Needs action, else Waiting approval) is worked out every
 PRS_CHECK_SECONDS (pr_tracking.update_actions): by rules, and by Claude (judge_prs), which reads a PR again, JUDGE_BATCH
 at a time, when it changed on GitHub or a job on it ended since it last did, never while a job on it is open. One that
-needs action, as Claude last read it, with no job open on it, goes to its agent as a follow_up job saying what it needs:
-ACTION_TRIES times at most on the same newest commit, each after a new judgment (never for a draft you approved and
-only have to send), and again only once something really changed on it since its last job was given it (a commit,
-checks, a conflict, the draft state, labels, someone else's comment or review, a comment on an issue it fixes): a job
-that ended finding nothing we can do isn't given the same need again for nothing. Every need is the agent's, never
-yours: it settles a CLA too (Nothing waits on the user in agent/prompt.md). Agents work in the Issues board's order:
+needs action, as Claude last read it, with no job open on it, goes to its agent as a follow_up job saying what it needs
+(never for a draft you approved and only have to send). Every need is the agent's, never yours: it settles a CLA too
+(Nothing waits on the user in agent/prompt.md). Once that job ended, the PR waits for others until something really
+changes on it (pr_tracking's action state: a commit, checks, a conflict, the draft state, labels, someone else's comment
+or review, a comment on an issue it fixes), so Needs action only has PRs an agent works on, and a job that ended finding
+nothing we can do isn't given the same need again for nothing. Agents work in the Issues board's order:
 the ones with a job queued or working on a PR that needs action get priority (agents.set_pr_priority): ahead in the
 VM's line, more CPU, stepped down last; then the ones reviewing a PR draft before the Inbox, the board's Review
 (agents.set_review_priority): next in the line, stepped down after the rest; then the rest (In progress and Catalog).
@@ -89,9 +89,6 @@ JUDGE_BATCH = 4
 JUDGE_BODY_CHARS = 3000
 JUDGE_COMMENT_CHARS = 1500
 JUDGE_LINE_CHARS = 600
-# How many times the same need (the same reasons on the same newest commit) goes to its agent.
-# A try after the first only once something changed on the PR since the last one (keep_prs).
-ACTION_TRIES = 3
 JUDGE_REASONS = ["Changes requested", "Reply needed", "Checks failing", "Merge conflicts", "Rebase needed", "CLA not signed",
                  "Draft", "Description out of date", "Other"]
 JUDGE_SCHEMA = {
@@ -872,10 +869,9 @@ async def keep_prs() -> None:
                 if due:
                     judging = asyncio.create_task(judge_prs(due, all_jobs, failed_at))
 
-            # One that needs action with no job open on it goes to its agent, ACTION_TRIES times at most on the same newest
-            # commit, each time after a new judgment, and again only once something changed on it since the last time. Only
-            # once Claude read it as it is now: what happened since needs_reply gives already, and may need nothing.
-            followed_issues = pr_tracking.summary()["issues"]
+            # One that needs action with no job open on it goes to its agent, each time after a new judgment. Only once
+            # Claude read it as it is now: what happened since needs_reply gives already, and may need nothing. Once that
+            # job ended, it needs action again only when something changed on it since (pr_tracking.action_of).
             for pr in prs:
                 action = pr.get("action")
                 if action is None or not action["needs"] or pr["agent"] is None or pr["agent"] not in agents.agents:
@@ -897,24 +893,7 @@ async def keep_prs() -> None:
                 key = ",".join(action["reasons"]) + "|" + head + "|" + judged_at
                 setting = settings.get(pr["id"], {})
                 tries = setting.get("action_tries", 0) if setting.get("action_base") == base else 0
-                if setting.get("action_key") == key or tries >= ACTION_TRIES:
-                    continue
-                # Nothing changed on it since its last job was given this, apart from what we did ourselves (a reply): that
-                # job ended, having settled it or found nothing we can do (lancedb#4922: failures it had explained on the
-                # PR as not ours, given again on the same commit; opencodex#8556: a draft only the project's gate or a
-                # maintainer could lift, given three times). It goes again only once something really changed: a new
-                # commit, its checks, a conflict (GitHub's word), the draft state, its labels, someone else's comment or
-                # review (a bot's too, a gate's), or a new comment on an issue it fixes.
-                linked = [f"{pr['repo']}#{issue['number']}".lower() for issue in pr["issues"]]
-                issues_at = ""
-                for issue in followed_issues:
-                    if issue["id"].lower() in linked and issue["last_activity"] is not None:
-                        issues_at = max(issues_at, issue["last_activity"]["at"])
-                state = [
-                    head, pr["checks"], sorted(set(pr.get("failed_checks", []))), pr["mergeable"] == "conflicts", pr["draft"],
-                    sorted(pr["labels"]), (pr["last_activity"] or {}).get("at"), (pr["bot_activity"] or {}).get("at"), issues_at,
-                ]
-                if setting.get("action_state") == state:
+                if setting.get("action_key") == key:
                     continue
                 reason = "it needs action from us: " + ", ".join(action["reasons"])
                 if action["detail"]:
@@ -925,14 +904,14 @@ async def keep_prs() -> None:
                         "signed or on its way, or the project merges the user's PRs with it pending; else close the PR)"
                     )
                 if tries > 0:
-                    reason += f". Your last job on it ended without settling this, and something changed on it since; this is try {tries + 1} of {ACTION_TRIES}"
+                    reason += ". Your last job on it ended without settling this, and something changed on it since"
                 entry = {
                     "id": pr["id"], "kind": "pr", "relation": "author", "state": "open", "title": pr["title"], "url": pr["url"],
                     "agent": pr["agent"], "reason": reason, "at": None, "failed_sha": None, "head": pr["head"],
                     "base": pr["base"], "signals": None,
                 }
                 if agents.follow_up(entry) is not None:
-                    pr_tracking.mark_action_given(pr["id"], base, key, state)
+                    pr_tracking.mark_action_given(pr["id"], base, key, action["state"])
 
             # The agents working on a PR that needs action go first in the VM's line.
             first = set()

@@ -27,7 +27,7 @@ It keeps, in DATA_DIR/pr_tracking.json, by "owner/name#number", each PR in "prs"
      "signals": {"state", "draft", "title", "head", "checks", "mergeable", "labels", "bot_at"},
      "draft_id": "draft_..." | None, "job": "job_..." | None,
      "agent": "<agent id>" | None, "agent_mode": "drafts" | "off",
-     "action": {"needs", "reasons", "detail", "status"} | None (your open PR only, update_actions),
+     "action": {"needs", "reasons", "detail", "status", "state"} | None (your open PR only, update_actions),
      "checked_at", "error": str | None}
 
 and each issue in "issues":
@@ -74,8 +74,13 @@ a maintainer holds), and never Merge conflicts unless GitHub says so. "judgments
 so it is made again once that changes. Every need is the agents' to settle, never yours (a CLA too: its agent finds out
 whether it really blocks the merge). status is how it waits otherwise, as GitHub says it: Ready to merge (approved,
 checks passed, no conflicts), Awaiting CI (checks running or waiting for a maintainer's OK), else Awaiting approval.
-agent_settings also keeps "action_base", "action_key", "action_state" and "action_tries" (mark_action_given): what its
-agent was last given of that, the PR as others had left it then, and how many times on the same newest commit.
+state is the PR as others left it: its newest commit, checks, failed checks, a conflict (GitHub's word), the draft
+state, labels, the newest comment or review by someone else (a bot's too) and the newest comment on an issue it fixes.
+agent_settings also keeps "action_base", "action_key", "action_state", "action_tries" and "action_version"
+(mark_action_given): what its agent was last given of that, the state then, how many times on the same newest commit,
+and the JUDGMENT_VERSION it was given under. Once that job ended with the state unchanged, the agent has decided: it
+did what we can, or found nothing for us to do, and the PR waits for others (Waiting approval) until the state changes.
+So Needs action only has PRs an agent is on, or is about to be given.
 
 needs_reply() lists the open threads in drafts mode with an agent where someone else wrote after you and after
 answered_at, or (your PR) the checks failed on a newest commit no agent was given yet, or anything else changed on
@@ -115,7 +120,8 @@ AGENT_MODES = ["drafts", "off"]
 CLA = re.compile(r"\bcla\b|cla[-_]|license/cla|contributor license", re.IGNORECASE)
 # The labels of what a PR of yours needs from us (update_actions), in the order they show.
 # Judgments made by older rules are dropped when the file is read (1 told Claude about conflicts the wrong way round, 2
-# didn't keep the commit and failed checks it saw, 3 left part of it to you and counted a review bot's nitpicks).
+# didn't keep the commit and failed checks it saw, 3 left part of it to you and counted a review bot's nitpicks), and
+# so is what their agent was given under them: it is given again under these.
 JUDGMENT_VERSION = 4
 ACTION_LABELS = ["Merge conflicts", "CLA not signed", "Not sent", "Changes requested", "Checks failing", "Reply needed", "Draft",
                  "Rebase needed", "Description out of date", "New comment", "New review", "Bot review", "Other"]
@@ -141,6 +147,9 @@ class PRTracking:
         self.data.setdefault("agent_settings", {})
         self.data.setdefault("judgments", {})
         self.data["judgments"] = {pr_id: each for pr_id, each in self.data["judgments"].items() if each.get("version") == JUDGMENT_VERSION}
+        for setting in self.data["agent_settings"].values():
+            if setting.get("action_state") is not None and setting.get("action_version") != JUDGMENT_VERSION:
+                setting["action_state"] = None
         # PRs read before these were kept have them from their next read on.
         for pr in self.data["prs"].values():
             pr.setdefault("relation", "author")
@@ -371,8 +380,8 @@ class PRTracking:
 
     def mark_action_given(self, pr_id: str, base: str, key: str, state: list | None = None) -> None:
         """Its agent was given what the PR needs (backend/github_api.py): base is the newest commit, key the reasons, that
-        commit and the judgment, state the PR as others left it then (its commit, checks, conflict, draft, labels, the
-        newest comment or review by someone else); tries counts the gives on the same base."""
+        commit and the judgment, state the PR as others left it then (its action's state); tries counts the gives on the
+        same base."""
         with self.lock:
             empty = {"mode": None, "agent": None, "answered_at": None, "failed_sha": None, "told": None}
             setting = self.data["agent_settings"].setdefault(pr_id, empty)
@@ -382,6 +391,7 @@ class PRTracking:
             setting["action_key"] = key
             setting["action_state"] = state
             setting["action_tries"] = setting.get("action_tries", 0) + 1
+            setting["action_version"] = JUDGMENT_VERSION
             self.save()
 
     def update_actions(self, jobs: list[dict]) -> None:
@@ -402,7 +412,7 @@ class PRTracking:
                 self.save()
 
     def action_of(self, pr: dict, jobs: list[dict], unsent: list[dict]) -> dict:
-        """One open PR of yours, with the lock held: {"needs", "reasons", "detail", "status"}. unsent: the drafts
+        """One open PR of yours, with the lock held: {"needs", "reasons", "detail", "status", "state"}. unsent: the drafts
         you approved without sending."""
         judgment = self.data["judgments"].get(pr["id"])
         judged_at = judgment["judged_at"] if judgment is not None else ""
@@ -464,13 +474,38 @@ class PRTracking:
             reasons += kept
             detail = judgment["detail"]
         reasons = [label for label in ACTION_LABELS if label in reasons]
+        # The PR as others left it (our own replies don't count): its agent is given what it needs again only once this
+        # changed (backend/github_api.py).
+        issues_at = ""
+        for issue_id, issue in self.data["issues"].items():
+            if issue_id.lower() in linked and issue["last_activity"] is not None:
+                issues_at = max(issues_at, issue["last_activity"]["at"])
+        state = [
+            head, pr["checks"], sorted(set(failed)), pr["mergeable"] == "conflicts", pr["draft"],
+            sorted(pr["labels"]), (pr["last_activity"] or {}).get("at"), (pr["bot_activity"] or {}).get("at"), issues_at,
+        ]
+        # Its agent was given what it needs with the PR as it is now, and that job ended: the agent decided. It did what
+        # we can, or found nothing for us to do (a CLA the project merges without, a review bot's nitpick, failures it
+        # explained on the PR as not ours, a draft only the project's gate can lift), so the PR waits for others until
+        # something changes on it. Needs action has no PR that nobody works on (openchoreo#5419 and tabularis#1542 sat
+        # there for a day after their agents found only a bot's nitpick, xerj#3062 for a CLA signed in another PR).
+        setting = self.data["agent_settings"].get(pr["id"], {})
+        open_jobs = []
+        for job in jobs:
+            if job["status"] not in ["queued", "working", "waiting_on_user", "paused"]:
+                continue
+            if job["thread"] == pr["id"] or (job["issue"] or "").lower() in linked or (job["thread"] or "").lower() in linked:
+                open_jobs.append(job)
+        if reasons and setting.get("action_state") == state and not open_jobs:
+            reasons = []
+            detail = ""
         # How it waits otherwise, in GitHub's words.
         status = "Awaiting approval"
         if pr["checks"] in ["running", "waiting"]:
             status = "Awaiting CI"
         if pr["review"] == "approved" and pr["checks"] in ["passed", "none"] and pr["mergeable"] == "yes":
             status = "Ready to merge"
-        return {"needs": len(reasons) > 0, "reasons": reasons, "detail": detail, "status": status}
+        return {"needs": len(reasons) > 0, "reasons": reasons, "detail": detail, "status": status, "state": state}
 
     def refresh(self) -> None:
         """Read every PR and issue to follow from GitHub again. Runs in a thread; a second call waits for the first."""
